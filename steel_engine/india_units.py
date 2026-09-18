@@ -4,8 +4,8 @@ Wave 1 SI rewrite (2026-09-18): ENGINE_UNITS is **N-mm-sec**. Metric briefs norm
 millimetres without kip-inch conversion for normal India jobs. OpenSees / steel_engine
 geometry, section packs, E/G/g, and gravity masses use this system when activated.
 
-Legacy kip+inch converters remain for remaining kip islands (report HTML labels, some
-design_post / AISC twin paths, USA archetypes). Opt in with cfg['units']='kip-in' or
+Wave 2: report/design_pipeline/viewer SI labels + display scales. Legacy kip+inch
+converters remain for USA archetypes and explicit units='kip-in'. Opt in with cfg['units']='kip-in' or
 cfg['force_kip_in']=True.
 
 load_plan RAG provenance strings stay in whatever units the standard cites (usually SI);
@@ -50,12 +50,12 @@ LEGACY_KIP_IN_UNITS = {
 
 # Remaining kip islands after wave 1 (honest inventory — not yet SI-native)
 KIP_ISLANDS = [
-    "report.py HTML labels (kip / k-ft / ksi) — banner notes SI; numeric labels deferred",
-    "design_post / design_pipeline AISC formula scaffolding still written in ksi/kip",
     "engine3d CFG['B*'] USA archetypes (inch geometry; unused by India briefs)",
     "aisc_shapes.csv / built-in W/_GEOM tables (inch) — dual-path fallback only",
-    "viewer3d / viz3d / frame_diagram axis annotations (cosmetic)",
-    "static_model one-way gravity moment helpers when unit_system still kip-in",
+    "static_model / design_post legacy kip-in branches (opt-in units='kip-in' only)",
+    "Some report ASCE Table 12.x narrative strings still name USA clauses (IS path primary)",
+    "CFS: SFIA designator twin + cfs_shapes.csv inch path (IS 811 preferred when label matches)",
+    "CFS: AISI S400 Ω0 / expected-strength wall capacity — found:false under IS 801",
 ]
 
 # Exact conversion factors
@@ -485,3 +485,110 @@ def conversion_cheatsheet() -> str:
         "Legacy kip-in: units='kip-in' / force_kip_in=True. "
         f"KIP_ISLANDS ({len(KIP_ISLANDS)}): " + "; ".join(KIP_ISLANDS[:3]) + "…"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 2: report / CSV / viewer display helpers (engine stays N-mm or kip-in)
+# ---------------------------------------------------------------------------
+def display_scale(cfg: dict | None = None) -> dict:
+    """Factors + labels to present engine quantities in engineer-facing units.
+
+    SI engine stores force N, length mm, moment N·mm, stress MPa.
+    Display defaults: kN, m (or mm for member lengths), kN·m, MPa.
+    Legacy kip-in: kip, ft/in, kip-ft, ksi (identity /12 for moment-ft).
+    """
+    if is_si(cfg):
+        return {
+            "si": True,
+            "force_div": 1000.0,          # N → kN
+            "force_lbl": "kN",
+            "force_raw_lbl": "N",
+            "moment_div": 1.0e6,          # N·mm → kN·m
+            "moment_lbl": "kN·m",
+            "moment_raw_lbl": "N·mm",
+            "length_div": 1000.0,         # mm → m (story / plan)
+            "length_lbl": "m",
+            "length_member_lbl": "mm",
+            "length_member_div": 1.0,     # keep mm
+            "stress_lbl": "MPa",
+            "pressure_lbl": "kN/m²",
+            "system": "N-mm-sec",
+            "E_default": 200000.0,
+            "Fy_default": 250.0,
+        }
+    return {
+        "si": False,
+        "force_div": 1.0,
+        "force_lbl": "kip",
+        "force_raw_lbl": "kip",
+        "moment_div": 12.0,               # kip-in → kip-ft
+        "moment_lbl": "kip-ft",
+        "moment_raw_lbl": "kip-in",
+        "length_div": 12.0,               # in → ft
+        "length_lbl": "ft",
+        "length_member_lbl": "in",
+        "length_member_div": 1.0,
+        "stress_lbl": "ksi",
+        "pressure_lbl": "psf",
+        "system": "kip-in",
+        "E_default": 29000.0,
+        "Fy_default": 50.0,
+    }
+
+
+def fmt_force(v, cfg: dict | None = None, digits: int = 1) -> str:
+    if v is None:
+        return "—"
+    sc = display_scale(cfg)
+    return f"{float(v) / sc['force_div']:.{digits}f} {sc['force_lbl']}"
+
+
+def fmt_moment(v, cfg: dict | None = None, digits: int = 1) -> str:
+    """Engine moment (N·mm or kip-in) → display string."""
+    if v is None:
+        return "—"
+    sc = display_scale(cfg)
+    return f"{float(v) / sc['moment_div']:.{digits}f} {sc['moment_lbl']}"
+
+
+def demand_field_names(cfg: dict | None = None) -> dict:
+    """CSV / calc_package field names for the active unit system."""
+    if is_si(cfg):
+        return {
+            "length": "length_mm",
+            "P_comp": "P_comp_N",
+            "P_tens": "P_tens_N",
+            "Mz": "Mz_Nmm",
+            "My": "My_Nmm",
+            "V": "V_N",
+            "Mx_display": "Mx_kNm",
+            "My_display": "My_kNm",
+            "M_conn": "M_kNm",
+            "P_conn": "P_N",
+            "V_conn": "V_N",
+            "axial": "axial_N",
+            "Fpx": "Fpx_N_by_level",
+            "Fpx_max": "Fpx_max_N",
+            "P_basis": "P_basis_N",
+            "conn_col": "demand_N_or_kNm",
+            "Lb": "Lb_mm",
+        }
+    return {
+        "length": "length_in",
+        "P_comp": "P_comp_kip",
+        "P_tens": "P_tens_kip",
+        "Mz": "Mz_kipin",
+        "My": "My_kipin",
+        "V": "V_kip",
+        "Mx_display": "Mx_kipft",
+        "My_display": "My_kipft",
+        "M_conn": "M_kipft",
+        "P_conn": "P_kip",
+        "V_conn": "V_kip",
+        "axial": "axial_kip",
+        "Fpx": "Fpx_kip_by_level",
+        "Fpx_max": "Fpx_max_kip",
+        "P_basis": "P_basis_kip",
+        "conn_col": "demand_kip_or_kipft",
+        "Lb": "Lb_in",
+    }

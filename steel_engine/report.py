@@ -27,21 +27,71 @@ import sections as S
 import design_post as DPOST          # run_case + capacity snippets (operator side)
 
 
-def _si_unit_banner(cfg=None):
-    """Wave 1 SI: document N-mm-sec in report HTML; numeric kip labels remain a kip island."""
+# ---- Wave 2 SI report unit context (set in build_report / _design_basis) ----
+_REP_CFG = None
+_REP_SI = True
+_REP_SC = None
+
+def _set_report_units(cfg=None):
+    """Bind display scales for this report render (SI default for India)."""
+    global _REP_CFG, _REP_SI, _REP_SC, Fy, Emod
+    _REP_CFG = cfg
     try:
-        from india_units import is_si, report_unit_labels, ENGINE_UNITS, KIP_ISLANDS
+        from india_units import is_si, display_scale
+        _REP_SI = is_si(cfg) if cfg is not None else True
+        _REP_SC = display_scale(cfg)
+    except Exception:
+        _REP_SI = True
+        _REP_SC = {"si": True, "force_div": 1000.0, "force_lbl": "kN", "moment_div": 1e6,
+                   "moment_lbl": "kN·m", "length_div": 1000.0, "length_lbl": "m",
+                   "length_member_lbl": "mm", "stress_lbl": "MPa", "pressure_lbl": "kN/m²",
+                   "E_default": 200000.0, "Fy_default": 250.0}
+    Fy = float(_REP_SC.get("Fy_default", 250.0 if _REP_SI else 50.0))
+    Emod = float(_REP_SC.get("E_default", 200000.0 if _REP_SI else 29000.0))
+    return _REP_SC
+
+def _sc():
+    if _REP_SC is None:
+        _set_report_units(_REP_CFG)
+    return _REP_SC
+
+def _F(v, digits=1):
+    """Engine force → display number (kN if SI)."""
+    if v is None: return None
+    return round(float(v) / _sc()["force_div"], digits)
+
+def _M(v, digits=1):
+    """Engine moment (N·mm / kip-in) → display (kN·m / kip-ft)."""
+    if v is None: return None
+    return round(float(v) / _sc()["moment_div"], digits)
+
+def _Lstory(v, digits=2):
+    if v is None: return None
+    return round(float(v) / _sc()["length_div"], digits)
+
+def _ul(kind):
+    sc = _sc()
+    return {
+        "F": sc["force_lbl"], "M": sc["moment_lbl"], "L": sc["length_lbl"],
+        "Lm": sc.get("length_member_lbl", "mm" if sc["si"] else "in"),
+        "S": sc["stress_lbl"], "P": sc["pressure_lbl"],
+    }[kind]
+
+def _si_unit_banner(cfg=None):
+    """Wave 2 SI: N-mm-sec engine + SI HTML labels (kN / mm / MPa / kN·m)."""
+    _set_report_units(cfg)
+    try:
+        from india_units import is_si, report_unit_labels, ENGINE_UNITS
     except Exception:
         return ""
     if not is_si(cfg):
         return ("<p><b>Unit system:</b> kip-in (legacy / explicit opt-in).</p>")
     lab = report_unit_labels(cfg)
     return (
-        "<p><b>Unit system (India SI wave 1):</b> OpenSees / engine = <code>N-mm-sec</code> "
-        f"(force {lab['force']}, length {lab['length']}, stress {lab['stress']}; "
-        f"display often {lab['force_display']} / {lab['moment_display']} / {lab['pressure']}). "
-        "Some HTML table headers below may still say kip/ksi — treat those labels as "
-        f"<em>kip islands</em> pending wave 2 ({len(KIP_ISLANDS)} tracked). "
+        "<p><b>Unit system (India SI wave 2):</b> OpenSees / engine = <code>N-mm-sec</code> "
+        f"(force {lab['force']}, length {lab['length']}, stress {lab['stress']}). "
+        f"Tables below use display units <b>{lab['force_display']}</b> / <b>{lab['moment_display']}</b> / "
+        f"<b>{lab['stress']}</b> / <b>{lab['pressure']}</b> (not kip/ksi). "
         f"E_steel = {ENGINE_UNITS['E_steel_MPa']:.0f} MPa, g = {ENGINE_UNITS['g_mm_s2']:.0f} mm/s².</p>"
     )
 
@@ -51,14 +101,17 @@ try:
 except Exception:
     HAVE_PIPE = False
 
-Fy, Emod = 50.0, 29000.0  # kip-in defaults; SI jobs use 250–350 MPa / 2e5 via india_units
+Fy, Emod = 250.0, 200000.0  # India SI defaults (MPa); legacy kip-in via _set_report_units
 try:
     from india_units import active_unit_system, ENGINE_UNITS
     if active_unit_system() == 'N-mm':
-        Fy, Emod = 250.0, ENGINE_UNITS['E_steel_MPa']  # E250 default display; override from cfg/grade
+        Fy, Emod = 250.0, ENGINE_UNITS['E_steel_MPa']
+    else:
+        Fy, Emod = 50.0, 29000.0
 except Exception:
     pass
 g = E.g
+_set_report_units(None)  # bind module defaults
 
 # ============================================================ small utilities
 def _register(name):
@@ -263,19 +316,21 @@ def _elevation_from_live(cfg, direction, title):
         if onln(i1, j1) and onln(i2, j2): mem.append((t, kind, n1, n2))
     if not mem: return None
     fig, axes = plt.subplots(1, 3, figsize=(16, 6))
+    _ftitles = (f"Axial N ({_ul('F')})", f"Shear V ({_ul('F')})", f"Moment M ({_ul('M')})")
     for ax, which, ttl, col in zip(axes, ("N", "V", "M"),
-                                   ("Axial N (kip)", "Shear V (kip)", "Moment M (k-ft)"),
+                                   _ftitles,
                                    ("#1f77b4", "#2ca02c", "#d62728")):
         data = []; mx = 1e-9
+        _mdiv = _sc()["moment_div"]
         for (t, kind, n1, n2) in mem:
             bf = ops.basicForce(t)
             if kind == "brace":
-                e1 = e2 = (bf[0] if which == "N" else 0.0)
+                e1 = e2 = (_F(bf[0], 3) if which == "N" else 0.0)
             else:
                 L = math.dist(ops.nodeCoord(n1), ops.nodeCoord(n2))
-                if which == "N":   e1 = e2 = bf[0]
-                elif which == "V": e1 = e2 = (abs(bf[1])+abs(bf[2]))/L
-                else:              e1 = bf[1]/12.0; e2 = -bf[2]/12.0
+                if which == "N":   e1 = e2 = _F(bf[0], 3)
+                elif which == "V": e1 = e2 = _F((abs(bf[1])+abs(bf[2]))/L, 3)
+                else:              e1 = bf[1]/_mdiv; e2 = -bf[2]/_mdiv
             data.append((kind, n1, n2, e1, e2)); mx = max(mx, abs(e1), abs(e2))
         sc = (0.30*min(cfg["SX"], cfg["SY"]))/mx
         peak = 0.0; peaklab = None
@@ -295,7 +350,7 @@ def _elevation_from_live(cfg, direction, title):
         if peaklab:
             ax.annotate(f"max {peak:.0f}", (peaklab[0], peaklab[1]), fontsize=8, color=col,
                         fontweight="bold")
-        ax.set_title(f"{ttl}   (peak {peak:.0f})"); ax.set_xlabel("along (in)"); ax.set_ylabel("Z (in)")
+        ax.set_title(f"{ttl}   (peak {peak:.0f})"); ax.set_xlabel(f"along ({_ul('Lm')})"); ax.set_ylabel(f"Z ({_ul('Lm')})")
         ax.set_aspect("equal", "datalim"); ax.grid(alpha=0.2)
     fig.suptitle(title)
     return _b64(fig)
@@ -323,13 +378,15 @@ def fig_drift_profile(cfg, driftX, driftY):
 
 def fig_story_shear_otm(cfg, Fx):
     NF = len(cfg["heights"]); z = E.zlevels(cfg)
-    Vstory = [sum(Fx[k] for k in range(s, NF+1)) for s in range(1, NF+1)]
-    OTM = [sum(Fx[k]*(z[k]-z[s-1])/12.0 for k in range(s, NF+1)) for s in range(1, NF+1)]
-    OTM_base = sum(Fx[k]*z[k]/12.0 for k in range(1, NF+1))
+    _mdiv = _sc()["moment_div"]; _fdiv = _sc()["force_div"]
+    Vstory_eng = [sum(Fx[k] for k in range(s, NF+1)) for s in range(1, NF+1)]
+    Vstory = [v / _fdiv for v in Vstory_eng]
+    OTM = [sum(Fx[k]*(z[k]-z[s-1])/_mdiv for k in range(s, NF+1)) for s in range(1, NF+1)]
+    OTM_base = sum(Fx[k]*z[k]/_mdiv for k in range(1, NF+1))
     lvl = list(range(1, NF+1))
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(9, 5))
-    a1.step(Vstory, lvl, where="mid"); a1.set_xlabel("story shear (kip)"); a1.set_ylabel("story"); a1.grid(alpha=0.3); a1.set_title("Story shear")
-    a2.plot(OTM, lvl, "-o"); a2.set_xlabel("overturning moment (k-ft)"); a2.set_title("OTM (above story)"); a2.grid(alpha=0.3)
+    a1.step(Vstory, lvl, where="mid"); a1.set_xlabel(f"story shear ({_ul('F')})"); a1.set_ylabel("story"); a1.grid(alpha=0.3); a1.set_title("Story shear")
+    a2.plot(OTM, lvl, "-o"); a2.set_xlabel(f"overturning moment ({_ul('M')})"); a2.set_title("OTM (above story)"); a2.grid(alpha=0.3)
     return _b64(fig), Vstory, OTM_base
 
 # ============================================================ per-load-case forces
@@ -366,7 +423,7 @@ def per_case_max_table(info):
             best[key] = (score, N, Mz, My, V, n1, n2)
     rows = []
     for (kind, sec), (sc, N, Mz, My, V, n1, n2) in sorted(best.items()):
-        rows.append([kind, sec, f"{N:.1f}", f"{Mz/12:.1f}", f"{My/12:.1f}", f"{V:.1f}", _loc(n1, n2)])
+        rows.append([kind, sec, f"{_F(N)}", f"{_M(Mz)}", f"{_M(My)}", f"{_F(V)}", _loc(n1, n2)])
     return rows
 
 def _case_desc(label, col_only):
@@ -414,16 +471,29 @@ def _member_calc_block(m):
     mid = m.get("id", ""); inp = m.get("inputs", {}) or {}
     sec = inp.get("section", ""); kind = inp.get("kind", "")
     h = ["<h4>%s &mdash; %s (%s)</h4>" % (mid, sec, kind)]
-    pk = [("A","A (in2)"),("Zx","Zx (in3)"),("Sx","Sx (in3)"),("Zy","Zy (in3)"),("Sy","Sy (in3)"),
-          ("rx","rx (in)"),("ry","ry (in)"),("r","r (in)"),("Aw","Aw (in2)"),("J","J (in4)"),
-          ("length_in","L (in)"),("Lb_in","Lb (in)")]
+    if _sc()["si"]:
+        pk = [("A","A (mm2)"),("Zx","Zx (mm3)"),("Sx","Sx (mm3)"),("Zy","Zy (mm3)"),("Sy","Sy (mm3)"),
+              ("rx","rx (mm)"),("ry","ry (mm)"),("r","r (mm)"),("Aw","Aw (mm2)"),("J","J (mm4)"),
+              ("length_mm","L (mm)"),("length_in","L (mm)"),("Lb_mm","Lb (mm)"),("Lb_in","Lb (mm)")]
+    else:
+        pk = [("A","A (in2)"),("Zx","Zx (in3)"),("Sx","Sx (in3)"),("Zy","Zy (in3)"),("Sy","Sy (in3)"),
+              ("rx","rx (in)"),("ry","ry (in)"),("r","r (in)"),("Aw","Aw (in2)"),("J","J (in4)"),
+              ("length_in","L (in)"),("Lb_in","Lb (in)")]
     pr = [(lbl, inp[k]) for k, lbl in pk if inp.get(k) is not None]
     if pr:
-        h.append("<p class='cnote'>Section properties / geometry (AISC Shapes Database v16):</p>")
+        h.append("<p class='cnote'>Section properties / geometry (IS 808 / IS 1161 catalog; SI mm):</p>")
         h.append(_table([l for l, _ in pr], [["%s" % v for _, v in pr]]))
-    dem = [("P_comp (kip)", inp.get("P_comp_kip")), ("P_tens (kip)", inp.get("P_tens_kip")),
-           ("Mz (kip-in)", inp.get("Mz_kipin")), ("My (kip-in)", inp.get("My_kipin")),
-           ("V (kip)", inp.get("V_kip"))]
+    # Prefer SI field names; fall back to legacy *_kip keys (values are engine units).
+    Pc = inp.get("P_comp_N", inp.get("P_comp_kip"))
+    Pt = inp.get("P_tens_N", inp.get("P_tens_kip"))
+    Mz = inp.get("Mz_Nmm", inp.get("Mz_kipin"))
+    My = inp.get("My_Nmm", inp.get("My_kipin"))
+    Vv = inp.get("V_N", inp.get("V_kip"))
+    dem = [(f"P_comp ({_ul('F')})", None if Pc is None else _F(Pc)),
+           (f"P_tens ({_ul('F')})", None if Pt is None else _F(Pt)),
+           (f"Mz ({_ul('M')})", None if Mz is None else _M(Mz)),
+           (f"My ({_ul('M')})", None if My is None else _M(My)),
+           (f"V ({_ul('F')})", None if Vv is None else _F(Vv))]
     h.append("<p class='cnote'>Demand envelope (analysis):</p>")
     h.append(_table([l for l, _ in dem] + ["governing combo"],
                     [["%s" % v for _, v in dem] + [str(inp.get("governing_combo", ""))]]))
@@ -533,16 +603,16 @@ def _wind_section(cfg):
     try:
         w = cfg["wind"]; FX = E.wind_forces(cfg, "X"); FY = E.wind_forces(cfg, "Y")
         VwX = sum(FX.values()); VwY = sum(FY.values()); NF = len(cfg["heights"])
-        rows = [[k, f"{FX[k]:.1f}", f"{FY[k]:.1f}"] for k in range(1, NF+1)]
+        rows = [[k, f"{_F(FX[k])}", f"{_F(FY[k])}"] for k in range(1, NF+1)]
         h = ["<p>IS 875/1893 §27 MWFRS. Velocity pressure qz = 0.00256·Kz·Kzt·Ke·V² (Eq. 26.10-1); design "
              "pressure p = qz·Kd·G·Cpnet (Kd applied in the pressure equation per Eq. 27.3-1); story force "
              "= p × tributary width × tributary height.</p>",
              _table(["Parameter", "Value"], [["Basic wind speed V", f"{w.get('V')} mph"],
                     ["Exposure", w.get("exposure", "C")],
                     ["Kd / Ke / G / Cpnet", f"{w.get('Kd',0.85)} / {w.get('Ke',1.0)} / {w.get('G',0.85)} / {w.get('Cpnet',1.3)}"]]),
-             "<p><b>Story wind forces (kip):</b></p>",
+             f"<p><b>Story wind forces ({_ul('F')}):</b></p>",
              _table(["Story", "X (E-W wind)", "Y (N-S wind)"], rows),
-             f"<p><b>Wind base shear:</b> X = {VwX:.0f} kip, Y = {VwY:.0f} kip.</p>"]
+             f"<p><b>Wind base shear:</b> X = {_F(VwX,0)} {_ul('F')}, Y = {_F(VwY,0)} {_ul('F')}.</p>"]
         return "".join(h), VwX, VwY
     except Exception as ex:
         return f"<p class='note'>[wind determination failed: {ex}]</p>", None, None
@@ -551,12 +621,12 @@ def _horizontal_distribution(cfg, Fx, VwX, VwY):
     Vseis = sum(Fx.values()); nframe = 2
     def row(lbl, Vw):
         gov = "seismic" if Vseis >= (Vw or 0) else "wind"; g = max(Vseis, Vw or 0)
-        return [lbl, (f"{Vw:.0f}" if Vw is not None else "—"), f"{Vseis:.0f}", gov, f"{g/nframe:.0f}"]
+        return [lbl, (f"{_F(Vw,0)}" if Vw is not None else "—"), f"{_F(Vseis,0)}", gov, f"{_F(g/nframe,0)}"]
     rows = [row("E-W — two moment frames", VwX), row("N-S — two braced frames", VwY)]
     h = ["<p>The story shear in each direction is shared by the two parallel lateral frames. The "
          "governing base shear (greater of wind and seismic) is split about 50/50 to each frame, plus "
          "±5% accidental torsion (IS 875/1893 §12.8.4.2) which biases demand toward the leading frame.</p>",
-         _table(["Direction / frames", "Wind base (kip)", "Seismic base (kip)", "Governs", "Per frame (kip)"], rows)]
+         _table(["Direction / frames", f"Wind base ({_ul('F')})", f"Seismic base ({_ul('F')})", "Governs", f"Per frame ({_ul('F')})"], rows)]
     return "".join(h)
 
 def _role_of(mid, inp):
@@ -629,7 +699,7 @@ def _stability_section(cfg, Fx, drX, pkg):
          "story below; the limit is &theta;<sub>max</sub> = 0.5/(&beta;C<sub>d</sub>) &le; 0.25 (Eq. 12.8-19) = "
          "%.3f (&beta; = 1.0 conservatively). &theta; &le; 0.10 means P-&Delta; could be neglected; "
          "&theta; &gt; &theta;<sub>max</sub> is not permitted.</p>" % theta_max,
-         _table(["Story", "P<sub>x</sub> (kip)", "V<sub>x</sub> (kip)", "h<sub>sx</sub> (in)",
+         _table(["Story", f"P<sub>x</sub> ({_ul('F')})", f"V<sub>x</sub> ({_ul('F')})", f"h<sub>sx</sub> ({_ul('Lm')})",
                  "&delta;<sub>e</sub> %", "&theta;", "&le; %.3f" % theta_max], rows),
          "<p>Worst-story &theta; = %.3f &mdash; %s the %.3f limit; P-&Delta; effects are %s and the analysis "
          "includes them regardless.</p>" % (worst, "within" if worst <= theta_max else "EXCEEDS",
@@ -975,15 +1045,15 @@ def _diaphragm_section(cfg, Fx):
         wpx = w[x-1]; Fpx = (sumF/sumw)*wpx if sumw else 0.0
         lo = 0.2*SDS*Ie*wpx; hi = 0.4*SDS*Ie*wpx; gov = min(max(Fpx, lo), hi)
         tag = "min" if gov == lo else ("max" if gov == hi else "Eq.12.10-1")
-        rows.append([x, f"{wpx:.0f}", f"{Fpx:.0f}", f"{lo:.0f}", f"{hi:.0f}", f"{gov:.0f} ({tag})"])
+        rows.append([x, f"{_F(wpx,0)}", f"{_F(Fpx,0)}", f"{_F(lo,0)}", f"{_F(hi,0)}", f"{_F(gov,0)} ({tag})"])
     just = ("<p>The floor/roof is taken as a <b>rigid diaphragm</b> (concrete-filled metal deck), distributing "
             "story forces to the lateral frames in proportion to their stiffness and modelled with a rigid "
             "in-plane constraint per IS 875/1893 &sect;12.3.1.2. Collectors/drag struts carry the diaphragm shear "
             "into the frames; chord forces (M<sub>diaph</sub>/depth) are resisted by the perimeter beams. The "
             "diaphragm, its collectors and chords are designed for the force F<sub>px</sub> below (&sect;12.10.1.1).</p>")
-    tbl = _table(["Level x", "w<sub>px</sub> (kip)", "F<sub>px</sub> Eq.12.10-1 (kip)",
+    tbl = _table(["Level x", f"w<sub>px</sub> ({_ul('F')})", f"F<sub>px</sub> (IS 1893 diaphragm) ({_ul('F')})",
                   "min 0.2S<sub>DS</sub>I<sub>e</sub>w<sub>px</sub>", "max 0.4S<sub>DS</sub>I<sub>e</sub>w<sub>px</sub>",
-                  "F<sub>px</sub> design (kip)"], rows)
+                  f"F<sub>px</sub> design ({_ul('F')})"], rows)
     return just + tbl + ("<p class='cnote'>F<sub>px</sub> is the diaphragm/collector design force; the detailed "
                          "diaphragm, collector and chord design is delegated and confirmed on the drawings.</p>")
 
@@ -1103,7 +1173,7 @@ def _seismic_loads_section(cfg, T, eX, eY, Cs, V, Tu, Ta, Fx, W):
     if upper <= low: gov = "C<sub>s,min</sub> (Eq.12.8-7, S<sub>1</sub>)" if (cmin_s1 and low == cmin_s1) else "C<sub>s,min</sub> (Eq.12.8-6)"
     elif cap < Cs_eq: gov = "C<sub>s,max</sub> (Eq.12.8-4)"
     else: gov = "C<sub>s</sub> (Eq.12.8-3)"
-    intro = (f"<p>IS 875/1893 &sect;12.8 equivalent lateral force. Seismic weight W = {W:.0f} kip; S<sub>DS</sub> = "
+    intro = (f"<p>IS 1893 equivalent lateral force. Seismic weight W = {_F(W,0)} {_ul('F')}; S<sub>DS</sub> = "
              f"{SDS} g, S<sub>D1</sub> = {SD1} g, S<sub>1</sub> = {S1} g, R = {R}, I<sub>e</sub> = {Ie}. Approximate "
              f"period T<sub>a</sub> = C<sub>t</sub>h<sub>n</sub><sup>x</sup> = {Ta:.2f} s; design period "
              f"T = min(T<sub>computed</sub>, C<sub>u</sub>T<sub>a</sub>) = {Tu:.2f} s (&sect;12.8.2).</p>")
@@ -1114,13 +1184,15 @@ def _seismic_loads_section(cfg, T, eX, eY, Cs, V, Tu, Ta, Fx, W):
         crows.append(["C<sub>s,min</sub> = 0.5&middot;S<sub>1</sub>/(R/I<sub>e</sub>) &nbsp;(Eq.12.8-7, S<sub>1</sub>&ge;0.6)", f"{cmin_s1:.4f}"])
     crows.append(["<b>Governing C<sub>s</sub></b>", f"<b>{Cs:.4f}</b> &nbsp;({gov})"])
     cstab = "<h4>Seismic response coefficient C<sub>s</sub> and its limits</h4>" + _table(["C<sub>s</sub> equation", "Value"], crows)
-    base = f"<p>Design base shear V = C<sub>s</sub>W = {Cs:.4f} &times; {W:.0f} = <b>{V:.0f} kip</b> in each direction.</p>"
-    vrows = [[k, f"{E.floor_w(cfg,k):.0f}", f"{z[k]/12:.1f}", f"{E.floor_w(cfg,k)*(z[k]/12)**kk:,.0f}",
-              f"{Fx[k]/V:.3f}", f"{Fx[k]:.1f}"] for k in range(1, NF+1)]
+    base = f"<p>Design base shear V = C<sub>s</sub>W = {Cs:.4f} &times; {_F(W,0)} = <b>{_F(V,0)} {_ul('F')}</b> in each direction.</p>"
+    _ldiv = _sc()["length_div"]
+    vrows = [[k, f"{_F(E.floor_w(cfg,k),0)}", f"{z[k]/_ldiv:.2f}",
+              f"{E.floor_w(cfg,k)*((z[k]/_ldiv)**kk)/_sc()['force_div']:,.0f}",
+              f"{Fx[k]/V:.3f}", f"{_F(Fx[k])}"] for k in range(1, NF+1)]
     vtab = (f"<h4>Vertical distribution of base shear (k = {kk:.2f}, &sect;12.8.3)</h4>"
             "<p>F<sub>x</sub> = C<sub>vx</sub>V, &nbsp; C<sub>vx</sub> = w<sub>x</sub>h<sub>x</sub><sup>k</sup> / "
             "&Sigma; w<sub>i</sub>h<sub>i</sub><sup>k</sup>.</p>"
-            + _table(["Floor", "w (kip)", "h (ft)", "w&middot;h<sup>k</sup>", "C<sub>vx</sub>", "F<sub>x</sub> (kip)"], vrows))
+            + _table(["Floor", f"w ({_ul('F')})", f"h ({_ul('L')})", "w&middot;h<sup>k</sup>", "C<sub>vx</sub>", f"F<sub>x</sub> ({_ul('F')})"], vrows))
     cumX = cumY = 0.0; mrows = []
     for m in range(min(len(T), 12)):
         cumX += eX[m]; cumY += eY[m]
@@ -1138,13 +1210,13 @@ def _governing_lateral(cfg, V, VwX, VwY):
     rows = []
     for d, Vw in (("X (E-W)", VwX), ("Y (N-S)", VwY)):
         if Vw is None:
-            rows.append([d, f"{V:.0f}", "&mdash; (no wind defined)", "<b>Seismic</b>"])
+            rows.append([d, f"{_F(V,0)}", "&mdash; (no wind defined)", "<b>Seismic</b>"])
         else:
-            rows.append([d, f"{V:.0f}", f"{Vw:.0f}", f"<b>{'Seismic' if V >= Vw else 'Wind'}</b>"])
+            rows.append([d, f"{_F(V,0)}", f"{_F(Vw,0)}", f"<b>{'Seismic' if V >= Vw else 'Wind'}</b>"])
     note = ("<p class='cnote'>Strength-level base-shear comparison (seismic E and wind W are both strength-level in "
             "IS 875/1893 LSD). The governing system per direction sizes the lateral frames; both are carried through "
             "the load combinations (Chapter 4).</p>")
-    return _table(["Direction", "Seismic V (kip)", "Wind V (kip)", "Governs"], rows) + note
+    return _table(["Direction", f"Seismic V ({_ul('F')})", f"Wind V ({_ul('F')})", "Governs"], rows) + note
 
 
 def _combo_table(cases):
@@ -1377,7 +1449,7 @@ def _composite_section(pkg):
         parts.append("<p>Per-member composite design values recorded in the calc package (partial-"
                      "composite ratio, stud strength/schedule, camber, lower-bound moment of inertia, "
                      "unshored wet-concrete stage):</p>")
-        parts.append(_table(["member", "section", "partial comp.", "Q<sub>n</sub> (kip)", "studs",
+        parts.append(_table(["member", "section", "partial comp.", f"Q<sub>n</sub> ({_ul('F')})", "studs",
                              "camber (in)", "I<sub>LB</sub> (in<sup>4</sup>)", "wet stage"], rows))
     if cd:
         parts.append("<h4>Composite design record (calc package `composite_design`)</h4>")
@@ -1511,19 +1583,19 @@ def _connection_demands(cfg, pkg, reX):
         P = max(inp.get("P_comp_kip", 0) or 0, inp.get("P_tens_kip", 0) or 0)
         if kind == "beam":
             typ = "beam-to-column (moment)" if mf else "beam-to-column (shear)"
-            dem = f"V = {V:.0f} kip" + (f", M = {Mz/12:.0f} k-ft" if mf and Mz else "")
+            dem = f"V = {_F(V,0)} {_ul('F')}" + (f", M = {_M(Mz,0)} {_ul('M')}" if mf and Mz else "")
             basis = "CJP flange welds + web bolts (J2/J3)" if mf else "bolted shear tab (J3 / J4)"
         elif "col" in kind:
-            typ = "column splice / base"; dem = f"P = {P:.0f} kip" + (f", M = {Mz/12:.0f} k-ft" if Mz else "")
+            typ = "column splice / base"; dem = f"P = {_F(P,0)} {_ul('F')}" + (f", M = {_M(Mz,0)} {_ul('M')}" if Mz else "")
             basis = "splice (J1.4) / base plate J8 + ACI 318 Ch.17"
         elif kind == "brace":
-            typ = "brace-to-gusset"; dem = f"axial = {P:.0f} kip"; basis = "expected strength (IS 800 seismic F2.6c)"
+            typ = "brace-to-gusset"; dem = f"axial = {_F(P,0)} {_ul('F')}"; basis = "expected strength (IS 800 seismic / agent RAG)"
         else:
             continue
         rows.append([f"{sec} {kind}", typ, dem, basis])
     if reX is not None:
         pmax = max((r[2][2] for r in reX), default=0.0); vmax = max((abs(r[2][0]) for r in reX), default=0.0)
-        rows.append(["column base", "base plate / anchor rods", f"P = {pmax:.0f} kip, V = {vmax:.0f} kip",
+        rows.append(["column base", "base plate / anchor rods", f"P = {_F(pmax,0)} {_ul('F')}, V = {_F(vmax,0)} {_ul('F')}",
                      "J8/J9 + ACI 318 Ch.17 (min 4 rods)"])
     if not rows:
         return None
@@ -1533,7 +1605,7 @@ def _qa_scorecard(cfg, Fx, reX, eX, eY, drX, drY):
     s = cfg["seis"]; rows = []
     if reX is not None and Fx is not None:
         Rx = sum(r[2][0] for r in reX); base = sum(Fx.values()); Rz = sum(r[2][2] for r in reX)
-        rows.append(["Equilibrium &mdash; |&Sigma;R<sub>x</sub>| = applied base shear", f"{abs(Rx):.0f} vs {base:.0f} kip",
+        rows.append(["Equilibrium &mdash; |&Sigma;R<sub>x</sub>| = applied base shear", f"{_F(abs(Rx),0)} vs {_F(base,0)} {_ul('F')}",
                      "PASS" if base and abs(abs(Rx)-base)/base < 0.01 else "REVIEW"])
     if eX is not None and eY is not None:
         cx = sum(eX)*100; cy = sum(eY)*100
@@ -1873,7 +1945,7 @@ def _design_basis(cfg):
     if _si:
         rows=[
           ["Lateral system", str(cfg.get("arch",""))],
-          ["Unit system", "N-mm-sec (India SI wave 1)"],
+          ["Unit system", "N-mm-sec (India SI wave 2)"],
           ["Plan grid", "%d &times; %d bays @ %.0f &times; %.0f mm  (%.2f &times; %.2f m overall)"
                         % (NX,NY,SX,SY,NX*SX/1000.0,NY*SY/1000.0)],
           ["Stories", "%d @ %s mm  (H = %.2f m)" % (len(H), ", ".join("%.0f"%h for h in H), sum(H)/1000.0)],
@@ -1907,7 +1979,12 @@ def build_report(name, root=None):
     Lx = (cfg["xcoords"][-1] if cfg.get("xcoords") else NX*SX); Ly = (cfg["ycoords"][-1] if cfg.get("ycoords") else NY*SY)
     Htot = E.zlevels(cfg)[-1]
     pkg, pkgsrc = _load_pkg(name, root)
-    mat = "ASTM A992 steel: \\(F_y=50\\) ksi, \\(F_u=65\\) ksi, \\(E=29{,}000\\) ksi."
+    _set_report_units(cfg)
+    if _sc()["si"]:
+        mat = (f"IS steel (agent grade from RAG): default display "
+               f"\\(F_y={Fy:.0f}\\) MPa, \\(E={Emod:,.0f}\\) MPa (N-mm-sec).")
+    else:
+        mat = "ASTM A992 steel: \\(F_y=50\\) ksi, \\(F_u=65\\) ksi, \\(E=29{,}000\\) ksi."
     parts = [f"<h1>{name} &mdash; structural analysis &amp; design report</h1>",
              f"<p><b>{cfg.get('arch','')}</b> &middot; generated {datetime.date.today()}</p>",
              _toc(), _design_basis(cfg)]
@@ -2064,7 +2141,7 @@ def build_report(name, root=None):
                         srows.append([label, f"{Nv:.0f}", f"{Nk} {Ns}".strip(), f"{Mv/12:.0f}", f"{Mk} {Ms}".strip()])
                         case_detail_parts.append(f"<h4>Load case: {label}</h4><p>{_case_desc(label, col_only)}</p>")
                         case_detail_parts.append(_table(
-                            ["member", "section", "N (kip)", "Mz (k-ft)", "My (k-ft)", "V (kip)", "location (i,j / level)"],
+                            [f"member", "section", f"N ({_ul('F')})", f"Mz ({_ul('M')})", f"My ({_ul('M')})", f"V ({_ul('F')})", "location (i,j / level)"],
                             rows))
                     if uri and _want_casefigs:
                         _save_case_fig(uri, figdir, label)   # -> figs/case_<label>.png (NOT embedded)
@@ -2078,7 +2155,7 @@ def build_report(name, root=None):
                              "<b>static model</b>, so gravity beam moments are correct). The governing N/V/M diagrams are "
                              "in Chapter 5 (cfg['force_diagrams']); the per-combination N/V/M figures are in Appendix B "
                              "(cfg['appendix_case_figures']).</p>")
-                parts.append(_table(["Load case", "Max axial N (kip)", "carried by", "Max moment M (k-ft)", "carried by"], srows))
+                parts.append(_table(["Load case", f"Max axial N ({_ul('F')})", "carried by", f"Max moment M ({_ul('M')})", "carried by"], srows))
         elif Fx is not None:
             parts.append("<h3>Load-case force summary</h3>")
             parts.append("<p class='note'>The per-combination force-summary table (one row per LSD combination) is "
@@ -2133,8 +2210,8 @@ def build_report(name, root=None):
     if Fx is not None and reX is not None:
         Rx = sum(r[2][0] for r in reX); Rz = sum(r[2][2] for r in reX)
         parts.append("<h3>Equilibrium check (seismic X combination)</h3>")
-        parts.append(f"<p>|&Sigma;R<sub>x</sub>| = {abs(Rx):.0f} kip vs applied base shear {sum(Fx.values()):.0f} kip "
-                     f"(equal and opposite); &Sigma;R<sub>z</sub> = {abs(Rz):.0f} kip factored gravity delivered to the "
+        parts.append(f"<p>|&Sigma;R<sub>x</sub>| = {_F(abs(Rx),0)} {_ul('F')} vs applied base shear {_F(sum(Fx.values()),0)} {_ul('F')} "
+                     f"(equal and opposite); &Sigma;R<sub>z</sub> = {_F(abs(Rz),0)} {_ul('F')} factored gravity delivered to the "
                      "ground. Reactions balance the applied loads in all three axes (load path verified).</p>")
         if eX is not None and eY is not None:
             parts.append(_modal_mass_check(eX, eY))
@@ -2169,7 +2246,7 @@ def build_report(name, root=None):
                 if _d in gd["perimeter"]:
                     _uri, _label, _pkM = gd["perimeter"][_d]
                     parts.append(_img(_uri, f"{_d}-direction perimeter frame &mdash; governing combo {_label} "
-                                            f"(peak beam moment {_pkM:.0f} k-ft)"))
+                                            f"(peak beam moment {(_M(_pkM) if _sc()['si'] else round(float(_pkM), 0))} {_ul('M')})"))
         if gd.get("internal"):
             parts.append("<h3>Governing internal-force diagrams &mdash; internal frames (static model)</h3>")
             parts.append("<p>The same diagrams for an interior frame line, which generally carries more gravity "
@@ -2178,7 +2255,7 @@ def build_report(name, root=None):
                 if _d in gd["internal"]:
                     _uri, _label, _pkM = gd["internal"][_d]
                     parts.append(_img(_uri, f"{_d}-direction internal frame &mdash; governing combo {_label} "
-                                            f"(peak beam moment {_pkM:.0f} k-ft)"))
+                                            f"(peak beam moment {(_M(_pkM) if _sc()['si'] else round(float(_pkM), 0))} {_ul('M')})"))
     except Exception as ex:
         parts.append(f"<p class='note'>[static-model diagrams unavailable: {ex}]</p>")
 
@@ -2232,7 +2309,7 @@ def build_report(name, root=None):
             parts.append(_stability_section(cfg, Fx, drX, pkg))
             parts.append(_img(fig_drift_profile(cfg, drX, drY), "Interstory drift profile (both directions)"))
             ss_uri, Vstory, OTM = fig_story_shear_otm(cfg, Fx)
-            parts.append(f"<p>Base shear &Sigma;F = {sum(Fx.values()):.0f} kip; base overturning &asymp; {OTM:.0f} k-ft.</p>")
+            parts.append(f"<p>Base shear &Sigma;F = {_F(sum(Fx.values()),0)} {_ul('F')}; base overturning &asymp; {OTM:.0f} {_ul('M')}.</p>")
             parts.append(_img(ss_uri, "Story-shear and overturning-moment profiles"))
         except Exception as ex:
             parts.append(f"<p class='note'>[stability section failed: {ex}]</p>")
@@ -2286,10 +2363,10 @@ def build_report(name, root=None):
         pmax = max((r[2][2] for r in reX), default=0.0); pmin = min((r[2][2] for r in reX), default=0.0)
         parts.append("<p>Column base reactions delivered to the foundation design (seismic X combination):</p>")
         parts.append(_table(["Quantity", "Value"], [
-            ["&Sigma; vertical to ground &Sigma;R<sub>z</sub>", f"{Rz:.0f} kip"],
-            ["&Sigma; horizontal base shear &Sigma;R<sub>x</sub>", f"{Rx:.0f} kip"],
-            ["Max single-column vertical reaction", f"{pmax:.0f} kip (compression)"],
-            ["Min single-column vertical reaction", f"{pmin:.0f} kip " + ("&mdash; <b>net uplift</b>" if pmin < 0 else "(no uplift)")]]))
+            ["&Sigma; vertical to ground &Sigma;R<sub>z</sub>", f"{_F(Rz,0)} {_ul('F')}"],
+            ["&Sigma; horizontal base shear &Sigma;R<sub>x</sub>", f"{_F(Rx,0)} {_ul('F')}"],
+            ["Max single-column vertical reaction", f"{_F(pmax,0)} {_ul('F')} (compression)"],
+            ["Min single-column vertical reaction", f"{_F(pmin,0)} {_ul('F')} " + ("&mdash; <b>net uplift</b>" if pmin < 0 else "(no uplift)")]]))
     parts.append("<p class='cnote'>Net column uplift is governed by the 0.9D&minus;E combinations; the value above "
                  "is from the seismic-X case shown. <b>Out of scope:</b> foundation/geotechnical design (bearing, "
                  "sliding, uplift anchorage, footing sizing) is delegated; per-column base reactions are available "

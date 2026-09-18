@@ -1,13 +1,15 @@
 """
-design_post.py  --  ANALYSIS / DEMAND extraction only. NO coded AISC 360 capacities.
+design_post.py  --  ANALYSIS / DEMAND extraction only. NO coded member capacities.
 
-This module deliberately contains NO AISC 360 member-design equations. The framework computes
+This module deliberately contains NO IS 800 / AISC member-design equations. The framework computes
 structural DEMANDS (the OpenSees model, IS loads from load_plan, the second-order P-Delta analysis);
-the AISC 360-22 capacity checks (compression E3, tension D2, flexure F2-F6, shear G2,
-beam-column interaction H1, the App.8 B2 amplifier, and the AISC 341 SCWB / Omega0 capacity
-design) are NOT coded anywhere. The design agent must query the AISC 360 / 341 RAG, derive the
-governing limit-state equation for each member itself, compute the capacity and D/C, cite the
-clause, and write its own calc_package.json. There is no oracle to fall back on.
+member capacity checks are NOT coded anywhere. The design agent must query the IS 800 / IS 808 /
+IS 816 / IS 4000 RAG, derive the governing limit-state equation for each member itself, compute the
+capacity and D/C, cite the clause, and write its own calc_package.json. There is no oracle to fall
+back on.
+
+India SI path (wave 2): engine unit system N-mm-sec when activated — demands are (N, N·mm, N·mm, N).
+Legacy kip-in remains for units='kip-in' / force_kip_in.
 
 What this module provides:
   * run_case(cfg, fD, fL, fLr, lateral) -- analyse ONE factored load combination through proper
@@ -15,7 +17,7 @@ What this module provides:
   * _beam_grav(...) -- the beam gravity span moment/shear added to the joint-lumped model
     (analysis bookkeeping, not a code check).
 
-The India load_plan combination set + the per-member demand envelope live in repo-root
+The India load_plan combination set + the per-member demand envelope live in
 design_pipeline.py; the report scaffold lives in report.py. Neither computes a member capacity.
 """
 import os, sys, math, csv, json
@@ -27,19 +29,35 @@ import sections as S
 
 # ---------- beam gravity span moment/shear (analysis bookkeeping, NOT a code check) ----------
 def _beam_grav(cfg, n1, n2, fD, fL, fLr):
-    """Beam gravity span moment & shear (w*L^2/8, w*L/2) over the tributary bay, kip-in/kip.
-    The engine lumps floor load at the nodes (good for drift/period), so beam gravity flexure
-    must be added analytically to the per-member demand."""
+    """Beam gravity span moment & shear (w*L^2/8, w*L/2) over the tributary bay.
+
+    SI (N-mm): w in N/mm, pressures kN/m², L in mm → moment N·mm, shear N.
+    Legacy kip-in: w in kip/in, pressures psf, L in in → moment kip-in, shear kip.
+    """
     a = ops.nodeCoord(n1); b = ops.nodeCoord(n2); NF = len(cfg["heights"])
     k = n1 // 100000; roof = (k == NF)
     Lx = abs(a[0]-b[0]); Ly = abs(a[1]-b[1]); L = max(Lx, Ly)
+    try:
+        si = (E.unit_system() == "N-mm") or str(cfg.get("units") or "").upper().startswith("N-MM")
+    except Exception:
+        si = str(cfg.get("units") or "").upper().startswith("N-MM")
+    if si:
+        if cfg.get("lean_gravity"):
+            # Lateral-frame beams carry only spandrel cladding line load (leaning gravity interior).
+            th = cfg["heights"][k-1]; th = th if not roof else th/2.0  # mm
+            w = fD * float(cfg.get("clad") or 0.0) * th / 1000.0      # kN/m = N/mm
+            return w*L*L/8.0, w*L/2.0
+        trib = cfg["SY"] if Lx >= Ly else cfg["SX"]  # mm
+        Dp = cfg["D_roof"] if roof else cfg["D_floor"]
+        Lp = 0.0 if roof else cfg["L_floor"]
+        LrSp = (cfg.get("snow", 0.0) if cfg.get("snow", 0.0) > 0 else 1.0) if roof else 0.0  # kN/m²
+        # p[kN/m²] * trib[mm]/1000 = kN/m = N/mm
+        w = (fD*Dp + fL*Lp + fLr*LrSp) * trib / 1000.0
+        return w*L*L/8.0, w*L/2.0
+    # ---- legacy kip-in ----
     if cfg.get("lean_gravity"):
-        # Perimeter lateral frame with gravity-only interior that LEANS on the frame
-        # (AISC Design Example III-1 idealization). The full-bay floor gravity is carried by the
-        # interior gravity columns (the joint-lumped nodal loads / leaning-column P-Delta path in
-        # run_case), so the lateral-frame beams carry only the spandrel CLADDING line load.
-        th = cfg["heights"][k-1]/12.0; th = th if not roof else th/2.0   # ft of wall tributary
-        w = fD * cfg.get("clad", 0.0) * th / 1000.0 / 12.0               # kip/in (dead only)
+        th = cfg["heights"][k-1]/12.0; th = th if not roof else th/2.0   # ft
+        w = fD * cfg.get("clad", 0.0) * th / 1000.0 / 12.0               # kip/in
         return w*L*L/8.0, w*L/2.0
     trib = cfg["SY"] if Lx >= Ly else cfg["SX"]
     Dp = cfg["D_roof"] if roof else cfg["D_floor"]

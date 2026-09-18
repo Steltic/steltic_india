@@ -2,7 +2,7 @@
 frame_diagram.py -- governing-combination internal-force diagrams (N / V / M) for the perimeter
 frames, drawn from the STATIC model (true two-way tributary distributed loads, sub-divided beams).
 
-For each perimeter frame line (X at j=0, Y at i=0) we find the ASCE 7-22 LRFD combination that
+For each perimeter frame line (X at j=0, Y at i=0) we find the governing load_plan combination that
 governs the beam moment on that line, then draw that single combination's real, equilibrium-
 consistent N / V / M diagrams with the peak value annotated on every member. These are the corrected
 replacement for the old lumped-model elevation (which read ~0 beam element forces).
@@ -15,6 +15,24 @@ import openseespy.opensees as ops
 import engine3d as E
 import static_model as SM
 
+
+def _si_labels(cfg=None):
+    """Wave 2 SI cosmetics for N/V/M diagrams."""
+    try:
+        from india_units import is_si, display_scale
+        si = is_si(cfg) if cfg is not None else True
+        sc = display_scale(cfg)
+    except Exception:
+        try:
+            import engine3d as _E
+            si = _E.unit_system() == "N-mm"
+        except Exception:
+            si = True
+        sc = {"moment_div": 1e6 if si else 12.0, "force_lbl": "kN" if si else "kip",
+              "moment_lbl": "kN·m" if si else "kip-ft",
+              "length_member_lbl": "mm" if si else "in",
+              "force_div": 1000.0 if si else 1.0}
+    return sc
 
 def _b64(fig):
     try: fig.tight_layout()        # O(subplots) margin fit; avoid O(n-artists) bbox_inches='tight' (P8)
@@ -40,8 +58,8 @@ def _accessors(cfg, direction, line="perimeter"):
         for idx, tag in enumerate(b["segs"]):
             lf = ops.eleResponse(tag, "localForces")            # [Nx,Vy,Vz,T,My,Mz]*2
             if idx == 0:
-                s.append(a0); N.append(lf[0]); V.append(lf[2]); M.append(lf[4]/12.0)
-            s.append(a0 + sg*(idx+1)*Ls); N.append(-lf[6]); V.append(-lf[8]); M.append(-lf[10]/12.0)
+                s.append(a0); N.append(lf[0]); V.append(lf[2]); M.append(lf[4]/_si_labels()["moment_div"])
+            s.append(a0 + sg*(idx+1)*Ls); N.append(-lf[6]); V.append(-lf[8]); M.append(-lf[10]/_si_labels()["moment_div"])
         return s, N, V, M
 
     def col_st(c):
@@ -51,7 +69,7 @@ def _accessors(cfg, direction, line="perimeter"):
         else:
             vI, vJ, mI, mJ = (1, 7, 5, 11) if tt == 1 else (2, 8, 4, 10)
         lf = ops.eleResponse(c["tag"], "localForces"); z1, z2 = zo(c["n1"]), zo(c["n2"])
-        return [z1, z2], [lf[0], -lf[6]], [lf[vI], -lf[vJ]], [lf[mI]/12.0, -lf[mJ]/12.0]
+        return [z1, z2], [lf[0], -lf[6]], [lf[vI], -lf[vJ]], [lf[mI]/_si_labels()["moment_div"], -lf[mJ]/_si_labels()["moment_div"]]
 
     return onln, al, zo, beam_st, col_st
 
@@ -66,7 +84,8 @@ def _draw_frame(cfg, acc, lbeams_d, lcols_d, combo, nseg, title):
     bb = {_key(b): b for b in mm["beams"]}; cc = {(c["i"], c["j"], c["k"]): c for c in mm["cols"]}
     onln, al, zo, beam_st, col_st = acc
     fig, axes = plt.subplots(1, 3, figsize=(20, 7)); SXY = min(cfg["SX"], cfg["SY"])
-    panels = [(0, "Axial N (kip)", "#1f77b4"), (1, "Shear V (kip)", "#2ca02c"), (2, "Moment M (k-ft)", "#d62728")]
+    _sc = _si_labels(); _ulF, _ulM, _ulL = _sc.get("force_lbl","kN"), _sc.get("moment_lbl","kN·m"), _sc.get("length_member_lbl","mm")
+    panels = [(0, f"Axial N ({_ulF})", "#1f77b4"), (1, f"Shear V ({_ulF})", "#2ca02c"), (2, f"Moment M ({_ulM})", "#d62728")]
     peakM = 0.0
     for pi, ttl, col in panels:
         ax = axes[pi]; peak = 1e-9; series = []
@@ -96,8 +115,8 @@ def _draw_frame(cfg, acc, lbeams_d, lcols_d, combo, nseg, title):
                 q = 0 if abs(pts[0][2]) >= abs(pts[1][2]) else 1; pv = pts[q][2]
                 if abs(pv) > 0.15*peak:
                     ax.annotate(f"{pv:.0f}", (a + pv*sc, pts[q][1]), fontsize=6, color=col, ha="left", zorder=5)
-        ax.set_title(f"{ttl}   peak {peak:.0f}"); ax.set_xlabel("plan (in)"); ax.grid(alpha=0.2)
-    axes[0].set_ylabel("Z (in)")
+        ax.set_title(f"{ttl}   peak {peak:.0f}"); ax.set_xlabel(f"plan ({_ulL})"); ax.grid(alpha=0.2)
+    axes[0].set_ylabel(f"Z ({_ulL})")
     fig.suptitle(f"{title} \u2014 governing LRFD combination:  {label}", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     return (_b64(fig), label, peakM)
@@ -113,7 +132,8 @@ def render_solved(cfg, mm, direction, label, line="perimeter", title=None):
         return None, 0.0
     bb = {_key(b): b for b in mm["beams"]}; cc = {(c["i"], c["j"], c["k"]): c for c in mm["cols"]}
     fig, axes = plt.subplots(1, 3, figsize=(20, 7)); SXY = min(cfg["SX"], cfg["SY"]); peakM = 0.0
-    panels = [(0, "Axial N (kip)", "#1f77b4"), (1, "Shear V (kip)", "#2ca02c"), (2, "Moment M (k-ft)", "#d62728")]
+    _sc = _si_labels(); _ulF, _ulM, _ulL = _sc.get("force_lbl","kN"), _sc.get("moment_lbl","kN·m"), _sc.get("length_member_lbl","mm")
+    panels = [(0, f"Axial N ({_ulF})", "#1f77b4"), (1, f"Shear V ({_ulF})", "#2ca02c"), (2, f"Moment M ({_ulM})", "#d62728")]
     for pi, ttl, col in panels:
         ax = axes[pi]; peak = 1e-9; series = []
         for b in lbeams:
@@ -142,8 +162,8 @@ def render_solved(cfg, mm, direction, label, line="perimeter", title=None):
                 q = 0 if abs(pts[0][2]) >= abs(pts[1][2]) else 1; pv = pts[q][2]
                 if abs(pv) > 0.15*peak:
                     ax.annotate(f"{pv:.0f}", (a + pv*sc, pts[q][1]), fontsize=6, color=col, ha="left", zorder=5)
-        ax.set_title(f"{ttl}   peak {peak:.0f}"); ax.set_xlabel("plan (in)"); ax.grid(alpha=0.2)
-    axes[0].set_ylabel("Z (in)")
+        ax.set_title(f"{ttl}   peak {peak:.0f}"); ax.set_xlabel(f"plan ({_ulL})"); ax.grid(alpha=0.2)
+    axes[0].set_ylabel(f"Z ({_ulL})")
     fig.suptitle(title or f"{line.capitalize()} {direction}-frame \u2014 {label}", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     return _b64(fig), peakM

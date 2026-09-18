@@ -219,8 +219,10 @@ def _viewer_data(cfg, name, root):
                 rec["wd"] = wd
         d = dem.get(tag)
         if d:
-            Pc = float(d.get("P_comp_kip") or 0); Pt = float(d.get("P_tens_kip") or 0)
-            Mx = float(d.get("Mx_kipft") or 0);   My = float(d.get("My_kipft") or 0)
+            Pc = float(d.get("P_comp_N") or d.get("P_comp_kip") or 0)
+            Pt = float(d.get("P_tens_N") or d.get("P_tens_kip") or 0)
+            Mx = float(d.get("Mx_kNm") or d.get("Mx_kipft") or 0)
+            My = float(d.get("My_kNm") or d.get("My_kipft") or 0)
             u = _dc("col" if rec["type"] == "column" else rec["type"],
                     sec, L, Pc, Pt, Mx * 12.0, My * 12.0, Fy)
             if u is not None:
@@ -230,7 +232,7 @@ def _viewer_data(cfg, name, root):
                 rec["f"] = {"N": round(-Pc if Pc >= Pt else Pt, 1)}
             else:
                 rec["f"] = {"P": round(max(Pc, Pt), 1), "Mx": round(Mx, 1),
-                            "My": round(My, 1), "V": round(float(d.get("V_kip") or 0), 1)}
+                            "My": round(My, 1), "V": round(float(d.get("V_N") or d.get("V_kip") or 0), 1)}
         elements.append(rec)
 
     zs = sorted({round(coords[t][2], 1) for t in used})
@@ -285,26 +287,31 @@ def _viewer_data(cfg, name, root):
     if umax is not None:
         stats.append(["Max D/C (screening)", "%.2f" % umax])
     if loads.get("seis"):
-        stats.append(["Seismic base shear V", "%.0f k (Cs=%.3f)" %
-                      (loads["seis"]["V"], loads["seis"]["Cs"])])
+        _u = "kN" if _viewer_si(cfg) else "kip"
+        _Vs = loads["seis"]["V"] / (1000.0 if _viewer_si(cfg) else 1.0)
+        stats.append(["Seismic base shear V", "%.0f %s (Cs=%.3f)" %
+                      (_Vs, _u, loads["seis"]["Cs"])])
     if loads.get("wind"):
-        stats.append(["Wind base shear X / Y", "%.0f / %.0f k" %
-                      (sum(loads["wind"]["X"]), sum(loads["wind"]["Y"]))])
+        _u = "kN" if _viewer_si(cfg) else "kip"
+        _fd = 1000.0 if _viewer_si(cfg) else 1.0
+        stats.append(["Wind base shear X / Y", "%.0f / %.0f %s" %
+                      (sum(loads["wind"]["X"])/_fd, sum(loads["wind"]["Y"])/_fd, _u)])
 
     return {
         "meta": {
             "title": "%s — %s" % (name, cfg.get("arch", "")),
-            "subtitle": "%d nodes · %d elements · T₁=%.3f s · units: kip, in" %
-                        (len(used), len(elements), ms["T"][0]),
+            "subtitle": "%d nodes · %d elements · T₁=%.3f s · units: %s" %
+                        (len(used), len(elements), ms["T"][0],
+                         ("N, mm (N-mm-sec)" if _viewer_si(cfg) else "kip, in")),
             "model_line": ("designed with model: %s" % model_used) if model_used else "",
             "support_label": support_label,
             "levels": levels, "stats": stats,
             "demand_src": ("demands: design/member_schedule.csv (governing combos)" if dem
                            else "no member_schedule.csv found — run the design pipeline"),
             "caveat": ("Demands are the pipeline's governing-combo envelopes from "
-                       "design/member_schedule.csv; D/C here is a screening check (AISC 360 E3 "
-                       "with K=1, phi*Mp bending with no LTB reduction, H1 interaction). "
-                       "The calc package is the check of record. North = +Y (report convention). "
+                       "design/member_schedule.csv; D/C here is a screening check only "
+                       "(not IS 800 capacity — agent RAG is check of record). "
+                       "North = +Y (report convention). "
                        "Drag = orbit, scroll = zoom, right-drag = pan, click a member for details."),
         },
         "nodes": {str(t): [round(c, 1) for c in coords[t]] for t in used},

@@ -45,6 +45,16 @@ def design(name, outdir=None):
     outdir = outdir or os.path.join(base, "buildings", name, "design")
     os.makedirs(outdir, exist_ok=True)
     cases = combos(cfg)
+    try:
+        from india_units import is_si, display_scale, demand_field_names
+        _SI = is_si(cfg)
+        _SC = display_scale(cfg)
+        _FN = demand_field_names(cfg)
+    except Exception:
+        _SI = str(cfg.get("units") or "").upper().startswith("N-MM")
+        _SC = {"si": _SI, "force_div": 1000.0 if _SI else 1.0, "moment_div": 1e6 if _SI else 12.0,
+               "E_default": 200000.0 if _SI else 29000.0, "Fy_default": 250.0 if _SI else 50.0}
+        _FN = None
 
     info0 = E.build(cfg, "PDelta")
     reg = {t: (kind, sec, n1, n2) for (t, kind, sec, n1, n2) in info0["ele"]}
@@ -87,15 +97,25 @@ def design(name, outdir=None):
             env[t] = dict(comp=se["comp"], tens=se["tens"], Mz=se["Mz"], My=se["My"], V=se["V"], combo=se["combo"])
         score[t] = (max(env[t]["comp"], env[t]["tens"]) if reg[t][0] in ("col", "brace") else env[t]["Mz"])
 
-    # ---- member_schedule.csv (every element: DEMANDS only) ----
+    # ---- member_schedule.csv (every element: DEMANDS only; SI headers when N-mm) ----
+    _mdiv = _SC["moment_div"]
     with open(os.path.join(outdir, "member_schedule.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["ele_tag", "member", "section", "length_in", "P_comp_kip", "P_tens_kip",
-                    "Mx_kipft", "My_kipft", "V_kip", "governing_combo"])
-        for t in sorted(reg):
-            kind, sec, n1, n2 = reg[t]; e = env[t]
-            w.writerow([t, kind, sec, round(length[t], 1), round(e["comp"], 1), round(e["tens"], 1),
-                        round(e["Mz"]/12, 1), round(e["My"]/12, 1), round(e["V"], 1), e["combo"]])
+        if _SI:
+            w.writerow(["ele_tag", "member", "section", "length_mm", "P_comp_N", "P_tens_N",
+                        "Mx_kNm", "My_kNm", "V_N", "governing_combo", "unit_system"])
+            for t in sorted(reg):
+                kind, sec, n1, n2 = reg[t]; e = env[t]
+                w.writerow([t, kind, sec, round(length[t], 1), round(e["comp"], 1), round(e["tens"], 1),
+                            round(e["Mz"]/_mdiv, 3), round(e["My"]/_mdiv, 3), round(e["V"], 1),
+                            e["combo"], "N-mm"])
+        else:
+            w.writerow(["ele_tag", "member", "section", "length_in", "P_comp_kip", "P_tens_kip",
+                        "Mx_kipft", "My_kipft", "V_kip", "governing_combo"])
+            for t in sorted(reg):
+                kind, sec, n1, n2 = reg[t]; e = env[t]
+                w.writerow([t, kind, sec, round(length[t], 1), round(e["comp"], 1), round(e["tens"], 1),
+                            round(e["Mz"]/12, 1), round(e["My"]/12, 1), round(e["V"], 1), e["combo"]])
 
     # ---- member_demands.md (summary by type; capacities are the AGENT's job) ----
     # group by (kind, section, ROLE), with the group demand = max of EVERY component over ALL members
@@ -135,56 +155,91 @@ def design(name, outdir=None):
                 "Omega0 [col]%s). Each run as a factored P-Delta case; demands enveloped per element.\n\n"
                 % (len(cases), ", wind" if cfg.get("wind") else ""))
         f.write("> **Capacities and D/C are NOT computed here.** The framework provides demands only; "
-                "the design agent derives each IS 800:2007 limit-state capacity (compression, tension "
-                "D2, flexure F2-F6, shear G2, beam-column interaction H1), the App.8 B2 amplifier, and "
-                "the IS 800 seismic / capacity-design column check from the RAG, computes D/C, cites the clause, and "
+                "the design agent derives each IS 800:2007 limit-state capacity (section classification, "
+                "compression/tension/flexure/shear/interaction per IS 800) and IS 800 §12 seismic "
+                "capacity-design checks from the RAG, computes D/C, cites the clause, and "
                 "records them in calc_package.json.\n\n")
-        f.write("| member type | section | n | governing combo | P_comp | P_tens | Mx(k-ft) | My | V |\n")
+        if _SI:
+            f.write("Unit system: **N-mm-sec** (display: P/V in N, Mx/My in kN·m). Stress checks use **MPa**.\n\n")
+            f.write("| member type | section | n | governing combo | P_comp (N) | P_tens (N) | Mx (kN·m) | My (kN·m) | V (N) |\n")
+        else:
+            f.write("| member type | section | n | governing combo | P_comp | P_tens | Mx(k-ft) | My | V |\n")
         f.write("|---|---|---:|---|---:|---:|---:|---:|---:|\n")
         for key, tags in sorted(by.items()):
             kind, sec, role = key; g = genv[key]
-            f.write("| %s | %s | %d | %s | %.0f | %.0f | %.0f | %.0f | %.0f |\n"
-                    % (role, sec, len(tags), g["combo"], g["comp"], g["tens"], g["Mz"]/12, g["My"]/12, g["V"]))
+            if _SI:
+                f.write("| %s | %s | %d | %s | %.0f | %.0f | %.2f | %.2f | %.0f |\n"
+                        % (role, sec, len(tags), g["combo"], g["comp"], g["tens"],
+                           g["Mz"]/_mdiv, g["My"]/_mdiv, g["V"]))
+            else:
+                f.write("| %s | %s | %d | %s | %.0f | %.0f | %.0f | %.0f | %.0f |\n"
+                        % (role, sec, len(tags), g["combo"], g["comp"], g["tens"], g["Mz"]/12, g["My"]/12, g["V"]))
 
     # ---- calc_package.json (DEMANDS only; agent adds limit_state / cited / capacity / DC) ----
     pkg = {"building": name, "code": "IS 800:2007 LSD",
+           "unit_system": "N-mm" if _SI else "kip-in",
+           "stress_unit": "MPa" if _SI else "ksi",
            "note": "Framework provides DEMANDS only. The agent must derive every capacity and D/C "
                    "from the IS 800 RAG and add 'limit_state', 'cited', 'capacity', and 'DC' to "
-                   "each member and connection.", "members": [], "connections": []}
+                   "each member and connection. India SI: forces N, moments N·mm (display kN·m), "
+                   "stress MPa.", "members": [], "connections": []}
+    _Edef = float(_SC.get("E_default", 200000.0 if _SI else 29000.0))
+    _Fydef = float(_SC.get("Fy_default", 250.0 if _SI else 50.0))
     for key, tags in sorted(by.items()):
         kind, sec, role = key; g = genv[key]; L = g["L"]
-        inp = {"kind": kind, "role": role, "section": sec, "length_in": round(L, 1)}
+        if _SI:
+            inp = {"kind": kind, "role": role, "section": sec, "length_mm": round(L, 1)}
+        else:
+            inp = {"kind": kind, "role": role, "section": sec, "length_in": round(L, 1)}
         p = P(sec)
         if kind == "brace":
             inp.update(A=(E.HSS.get(sec) if hasattr(E, "HSS") else None), r=S.brace_r(sec))
         elif p:
-            Lb_eff = min(L, 0.095*p["ry"]*29000.0/50.0) if kind == "beam" else L
-            inp.update(Lb_in=round(Lb_eff, 1), A=p["A"], Ix=p["Ix"], Iy=p["Iy"], J=p["J"], Zx=p["Zx"],
+            # Lp ≈ 0.095·ry·E/Fy (AISC F2 twin) — SI uses MPa; not an IS capacity (agent RAG).
+            Lb_eff = min(L, 0.095*p["ry"]*_Edef/_Fydef) if kind == "beam" else L
+            lb_key = "Lb_mm" if _SI else "Lb_in"
+            inp.update(**{lb_key: round(Lb_eff, 1)}, A=p["A"], Ix=p["Ix"], Iy=p["Iy"], J=p["J"], Zx=p["Zx"],
                        Zy=round(p["Zy"], 1), Sx=round(p["Sx"], 1), Sy=round(p["Sy"], 1),
                        rx=round(p["rx"], 3), ry=round(p["ry"], 3),
                        Aw=round(p["Aw"], 2) if p.get("Aw") else None,
                        ho=round(p["ho"], 2) if p.get("ho") else None,
                        rts=round(p["rts"], 3) if p.get("rts") else None)
-        inp.update(P_comp_kip=round(g["comp"], 2), P_tens_kip=round(g["tens"], 2),
-                   Mz_kipin=round(g["Mz"], 1), My_kipin=round(g["My"], 1), V_kip=round(g["V"], 2),
-                   governing_combo=g["combo"])
+        if _SI:
+            inp.update(P_comp_N=round(g["comp"], 2), P_tens_N=round(g["tens"], 2),
+                       Mz_Nmm=round(g["Mz"], 1), My_Nmm=round(g["My"], 1), V_N=round(g["V"], 2),
+                       # legacy aliases for viewers that still read *_kip keys (values are N / N·mm)
+                       P_comp_kip=round(g["comp"], 2), P_tens_kip=round(g["tens"], 2),
+                       Mz_kipin=round(g["Mz"], 1), My_kipin=round(g["My"], 1), V_kip=round(g["V"], 2),
+                       governing_combo=g["combo"])
+        else:
+            inp.update(P_comp_kip=round(g["comp"], 2), P_tens_kip=round(g["tens"], 2),
+                       Mz_kipin=round(g["Mz"], 1), My_kipin=round(g["My"], 1), V_kip=round(g["V"], 2),
+                       governing_combo=g["combo"])
         pkg["members"].append({"id": "%s-%s" % (role, sec), "inputs": inp,
                                "limit_state": None, "cited": None, "capacity": {}, "DC": None})
-    # ---- connections[] : one design slot per governing member type + column base (DEMANDS only;
-    #      the agent designs each connection in place and fills limit_state/cited/capacity/DC) ----
+    # ---- connections[] : DEMANDS only (agent fills capacity/D-C from IS 800 RAG) ----
     for key, tags in sorted(by.items()):
         kind, sec, role = key; e = genv[key]
         if kind == "beam":
             ctype = "beam-to-column (shear; + moment if MF)"
-            dem = {"V_kip": round(e["V"], 1), "M_kipft": round(e["Mz"]/12, 1)}
+            if _SI:
+                dem = {"V_N": round(e["V"], 1), "M_kNm": round(e["Mz"]/_mdiv, 3)}
+            else:
+                dem = {"V_kip": round(e["V"], 1), "M_kipft": round(e["Mz"]/12, 1)}
             basis = "IS 800 / IS 816 / IS 4000 connections; MF detailing per IS 800 (agent/RAG)"
         elif kind == "brace":
             ctype = "brace-to-gusset"
-            dem = {"axial_kip": round(max(e["comp"], e["tens"]), 1)}
+            if _SI:
+                dem = {"axial_N": round(max(e["comp"], e["tens"]), 1)}
+            else:
+                dem = {"axial_kip": round(max(e["comp"], e["tens"]), 1)}
             basis = "IS 800 / IS 816 / IS 4000 connection; seismic capacity design per IS 800 §12 + IS 1893 (agent/RAG)"
         else:
             ctype = "column splice / base plate"
-            dem = {"P_kip": round(e["comp"], 1), "M_kipft": round(e["Mz"]/12, 1)}
+            if _SI:
+                dem = {"P_N": round(e["comp"], 1), "M_kNm": round(e["Mz"]/_mdiv, 3)}
+            else:
+                dem = {"P_kip": round(e["comp"], 1), "M_kipft": round(e["Mz"]/12, 1)}
             basis = "IS 800 base plate / splice; foundation anchorage per applicable IS (agent/RAG)"
         pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec,
                                    "demand": dem, "design_basis": basis,
@@ -242,9 +297,13 @@ def design(name, outdir=None):
             bump = 1.25 if (pir.get("reentrant") or tors_trig) else 1.0
             pkg["connections"].append({
                 "id": "collector-irregularity-lines", "type": "collector / drag strut (SEEDED - REQUIRED)",
-                "demand": {"Fpx_max_kip": round(Fp_max, 0), "Om0": Om0q,
-                           "increase_12_3_3_5": bump,
-                           "P_basis_kip": round(bump * Om0q * Fp_max * 0.5, 0)},
+                "demand": ({"Fpx_max_N": round(Fp_max, 0), "Om0": Om0q,
+                            "increase_12_3_3_5": bump,
+                            "P_basis_N": round(bump * Om0q * Fp_max * 0.5, 0)}
+                           if _SI else
+                           {"Fpx_max_kip": round(Fp_max, 0), "Om0": Om0q,
+                            "increase_12_3_3_5": bump,
+                            "P_basis_kip": round(bump * Om0q * Fp_max * 0.5, 0)}),
                 "design_basis": "SEEDED because the screen found %s: collectors on the "
                                 "re-entrant/setback/transfer lines are a REQUIRED deliverable. Design "
                                 "with the overstrength / capacity-design combinations (IS 800 / IS 1893 — cite retrieved clause)%s. Refine the "
@@ -264,7 +323,7 @@ def design(name, outdir=None):
                            "classification": cls, "cite": "IS 1893 Part 1:2016 Table 5/6 + cl.7.1 (see india_seismic.py)"},
             "torsion": {"ratio_max": round(tr, 2), "classification": tcls, "Ax": Ax,
                         "cite": "IS 1893 torsional provisions (agent/RAG)"},
-            "Fpx_kip_by_level": {k: round(v, 0) for k, v in Fpx.items()},
+            ("Fpx_N_by_level" if _SI else "Fpx_kip_by_level"): {k: round(v, 0) for k, v in Fpx.items()},
         }
     except Exception as _se:
         pkg["framework_screen"] = {"error": "screen failed: %s" % _se}
@@ -286,23 +345,36 @@ def design(name, outdir=None):
 
     # ---- connection_demands.csv (demands + the limit-state checklist the agent sizes) ----
     with open(os.path.join(outdir, "connection_demands.csv"), "w", newline="") as f:
-        w = csv.writer(f); w.writerow(["connection", "member_tag", "type", "demand_kip_or_kipft", "note"])
+        w = csv.writer(f)
+        w.writerow(["connection", "member_tag", "type",
+                    ("demand_N_or_kNm" if _SI else "demand_kip_or_kipft"), "note"])
         for t in sorted(reg):
             kind, sec, n1, n2 = reg[t]; e = env[t]
             if kind == "beam":
-                w.writerow(["beam-end @ %s/%s" % (n1, n2), t, "shear (+moment if MF)",
-                            "V=%.1f kip, M=%.1f kip-ft" % (e["V"], e["Mz"]/12),
+                if _SI:
+                    dems = "V=%.1f N, M=%.3f kN·m" % (e["V"], e["Mz"]/_mdiv)
+                else:
+                    dems = "V=%.1f kip, M=%.1f kip-ft" % (e["V"], e["Mz"]/12)
+                w.writerow(["beam-end @ %s/%s" % (n1, n2), t, "shear (+moment if MF)", dems,
                             "size per IS 800 / IS 816 / IS 4000 (agent derives bolt/weld/plate from RAG)"])
             elif kind == "brace":
-                w.writerow(["brace @ %s/%s" % (n1, n2), t, "axial",
-                            "P=%.1f kip" % max(e["comp"], e["tens"]),
+                if _SI:
+                    dems = "P=%.1f N" % max(e["comp"], e["tens"])
+                else:
+                    dems = "P=%.1f kip" % max(e["comp"], e["tens"])
+                w.writerow(["brace @ %s/%s" % (n1, n2), t, "axial", dems,
                             "gusset/weld per IS 800 / IS 816 / IS 4000; seismic capacity-design per IS 800/1893 (agent)"])
         _l, _fd, _fl, _flr, _lat, _co = cases[1]; res, info = run_case(cfg, _fd, _fl, _flr, _lat); ops.reactions()
         for (i, j) in info["present"][0]:
             R = [ops.nodeReaction(E.ntag(i, j, 0), d) for d in (1, 2, 3, 4, 5, 6)]
+            if _SI:
+                dems = "P=%.1f N, Vx=%.1f, Vy=%.1f, M=%.3f kN·m" % (
+                    R[2], R[0], R[1], max(abs(R[3]), abs(R[4]))/_mdiv)
+            else:
+                dems = "P=%.1f kip, Vx=%.1f, Vy=%.1f, M=%.1f kip-ft" % (
+                    R[2], R[0], R[1], max(abs(R[3]), abs(R[4]))/12)
             w.writerow(["column base @ grid(%s,%s)" % (i, j), E.ntag(i, j, 0), "base plate/anchorage",
-                        "P=%.1f kip, Vx=%.1f, Vy=%.1f, M=%.1f kip-ft" % (R[2], R[0], R[1], max(abs(R[3]), abs(R[4]))/12),
-                        "base plate/anchor rods per IS 800 (agent/RAG)"])
+                        dems, "base plate/anchor rods per IS 800 (agent/RAG)"])
 
     # ---- optional opsvis figures ----
     figs = []
