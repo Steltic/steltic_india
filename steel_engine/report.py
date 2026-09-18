@@ -25,13 +25,39 @@ sys.path.insert(0, os.path.join(HERE, "eval_tests", "answer_key"))
 import engine3d as E
 import sections as S
 import design_post as DPOST          # run_case + capacity snippets (operator side)
+
+
+def _si_unit_banner(cfg=None):
+    """Wave 1 SI: document N-mm-sec in report HTML; numeric kip labels remain a kip island."""
+    try:
+        from india_units import is_si, report_unit_labels, ENGINE_UNITS, KIP_ISLANDS
+    except Exception:
+        return ""
+    if not is_si(cfg):
+        return ("<p><b>Unit system:</b> kip-in (legacy / explicit opt-in).</p>")
+    lab = report_unit_labels(cfg)
+    return (
+        "<p><b>Unit system (India SI wave 1):</b> OpenSees / engine = <code>N-mm-sec</code> "
+        f"(force {lab['force']}, length {lab['length']}, stress {lab['stress']}; "
+        f"display often {lab['force_display']} / {lab['moment_display']} / {lab['pressure']}). "
+        "Some HTML table headers below may still say kip/ksi — treat those labels as "
+        f"<em>kip islands</em> pending wave 2 ({len(KIP_ISLANDS)} tracked). "
+        f"E_steel = {ENGINE_UNITS['E_steel_MPa']:.0f} MPa, g = {ENGINE_UNITS['g_mm_s2']:.0f} mm/s².</p>"
+    )
+
 try:
     import design_pipeline as PIPE   # combos() — the IS 875/1893 load-case list
     HAVE_PIPE = True
 except Exception:
     HAVE_PIPE = False
 
-Fy, Emod = 50.0, 29000.0
+Fy, Emod = 50.0, 29000.0  # kip-in defaults; SI jobs use 250–350 MPa / 2e5 via india_units
+try:
+    from india_units import active_unit_system, ENGINE_UNITS
+    if active_unit_system() == 'N-mm':
+        Fy, Emod = 250.0, ENGINE_UNITS['E_steel_MPa']  # E250 default display; override from cfg/grade
+except Exception:
+    pass
 g = E.g
 
 # ============================================================ small utilities
@@ -1839,17 +1865,36 @@ def _design_basis(cfg):
     """Top-of-report echo of the RESOLVED building parameters so a brief-vs-built mismatch (bay count,
     spans, stories, loads) is visible on page 1."""
     NX,NY=cfg["NX"],cfg["NY"]; SX,SY=cfg["SX"],cfg["SY"]; H=cfg["heights"]; s=cfg.get("seis",{})
-    rows=[
-      ["Lateral system", str(cfg.get("arch",""))],
-      ["Plan grid", "%d &times; %d bays @ %.0f &times; %.0f ft  (%.0f &times; %.0f ft overall)"
-                    % (NX,NY,SX/12.0,SY/12.0,NX*SX/12.0,NY*SY/12.0)],
-      ["Stories", "%d @ %s ft  (H = %.0f ft)" % (len(H), ", ".join("%.0f"%(h/12.0) for h in H), sum(H)/12.0)],
-      ["Gravity loads", "floor D %s / L %s psf; roof D %s / L %s psf"
-                    % (cfg.get("D_floor","?"),cfg.get("L_floor","?"),cfg.get("D_roof","?"),cfg.get("L_roof","?"))],
-      ["Seismic", "R=%s, Cd=%s, &Omega;<sub>0</sub>=%s, Ie=%s, S<sub>DS</sub>=%s, S<sub>1</sub>=%s"
-                    % (s.get("R","?"),s.get("Cd","?"),s.get("Om0","?"),s.get("Ie","?"),s.get("SDS","?"),s.get("S1","?"))],
-    ]
-    return ("<h2>Design basis</h2><p class='note'>Model built to the parameters below &mdash; <b>verify these "
+    try:
+        from india_units import is_si
+        _si = is_si(cfg)
+    except Exception:
+        _si = str(cfg.get("units") or "").upper() in ("N-MM", "SI", "METRIC")
+    if _si:
+        rows=[
+          ["Lateral system", str(cfg.get("arch",""))],
+          ["Unit system", "N-mm-sec (India SI wave 1)"],
+          ["Plan grid", "%d &times; %d bays @ %.0f &times; %.0f mm  (%.2f &times; %.2f m overall)"
+                        % (NX,NY,SX,SY,NX*SX/1000.0,NY*SY/1000.0)],
+          ["Stories", "%d @ %s mm  (H = %.2f m)" % (len(H), ", ".join("%.0f"%h for h in H), sum(H)/1000.0)],
+          ["Gravity loads", "floor D %s / L %s kN/m&sup2;; roof D %s / L %s kN/m&sup2;"
+                        % (cfg.get("D_floor","?"),cfg.get("L_floor","?"),cfg.get("D_roof","?"),cfg.get("L_roof","?"))],
+          ["Seismic", "IS 1893 path — see load_plan; seis block keys present: %s"
+                        % (", ".join(sorted(s.keys())) if s else "(none)")],
+        ]
+    else:
+        rows=[
+          ["Lateral system", str(cfg.get("arch",""))],
+          ["Plan grid", "%d &times; %d bays @ %.0f &times; %.0f ft  (%.0f &times; %.0f ft overall)"
+                        % (NX,NY,SX/12.0,SY/12.0,NX*SX/12.0,NY*SY/12.0)],
+          ["Stories", "%d @ %s ft  (H = %.0f ft)" % (len(H), ", ".join("%.0f"%(h/12.0) for h in H), sum(H)/12.0)],
+          ["Gravity loads", "floor D %s / L %s psf; roof D %s / L %s psf"
+                        % (cfg.get("D_floor","?"),cfg.get("L_floor","?"),cfg.get("D_roof","?"),cfg.get("L_roof","?"))],
+          ["Seismic", "R=%s, Cd=%s, &Omega;<sub>0</sub>=%s, Ie=%s, S<sub>DS</sub>=%s, S<sub>1</sub>=%s"
+                        % (s.get("R","?"),s.get("Cd","?"),s.get("Om0","?"),s.get("Ie","?"),s.get("SDS","?"),s.get("S1","?"))],
+        ]
+    return (_si_unit_banner(cfg) +
+            "<h2>Design basis</h2><p class='note'>Model built to the parameters below &mdash; <b>verify these "
             "against your brief</b>, especially the bay count and spans.</p>" + _table(["Parameter","Value"], rows))
 
 

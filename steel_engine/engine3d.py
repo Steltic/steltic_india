@@ -8,7 +8,35 @@ import sys as _sys
 # tiny recompile cost is negligible for the short-lived pipeline processes.
 _sys.dont_write_bytecode = True
 import openseespy.opensees as ops
+# Unit system: India default flips to N-mm via activate_si_units() / india_units.apply_si_geometry.
+# Module import still starts at kip-in so USA archetypes/tests that import bare stay coherent;
+# India preflight always activates SI before build.
 g=386.4; E=29000.0; Gmod=11200.0
+_UNIT_SYSTEM = "kip-in"  # "kip-in" | "N-mm"
+
+def unit_system():
+    return _UNIT_SYSTEM
+
+def activate_si_units():
+    """OpenSees / engine constants for N-mm-sec (force N, length mm, mass tonne)."""
+    global g, E, Gmod, _UNIT_SYSTEM
+    _UNIT_SYSTEM = "N-mm"
+    g = 9810.0          # mm/s^2
+    E = 200000.0        # MPa = N/mm^2
+    Gmod = 76923.07692307692  # MPa (E/2.6)
+    _shapes_csv._cache = None
+    _shapes_csv_si._cache = None
+
+def activate_kip_in_units():
+    """Legacy kip+inch constants (USA twin / explicit opt-in)."""
+    global g, E, Gmod, _UNIT_SYSTEM
+    _UNIT_SYSTEM = "kip-in"
+    g = 386.4
+    E = 29000.0
+    Gmod = 11200.0
+    _shapes_csv._cache = None
+    _shapes_csv_si._cache = None
+
 SEC={
  "W14X90":(26.5,999,362,4.06),"W14X120":(35.3,1380,495,9.37),"W14X132":(38.8,1530,548,12.3),
  "W14X159":(46.7,1900,748,19.7),"W14X193":(56.8,2400,931,34.8),"W14X233":(68.5,3010,1150,59.5),
@@ -57,7 +85,7 @@ HSS.update({
  "HSS14X14X1/2":24.6,"HSS14X14X5/8":30.3,"HSS16X16X1/2":28.3,"HSS16X16X5/8":35.0})
 
 def _shapes_csv():
-    """Lazy shape DB: is808_shapes.csv + is1161_tubes.csv (India primary) then aisc_shapes.csv. label -> (A, Ix, Iy, J)."""
+    """Lazy shape DB (inch packs): is808 + is1161 + aisc. label -> (A, Ix, Iy, J) in in/in^4."""
     import csv, os
     c = _shapes_csv._cache
     if c is None:
@@ -77,12 +105,66 @@ def _shapes_csv():
     return c
 _shapes_csv._cache = None
 
+def _shapes_csv_si():
+    """Lazy SI packs (mm): prefer A_si_mm2 / Izz_si_mm4 / Iyy_si_mm4; else convert inch×25.4^n."""
+    import csv, os
+    c = _shapes_csv_si._cache
+    if c is None:
+        c = {}
+        mm = 25.4
+        here = os.path.dirname(__file__)
+        for fname in ("is808_shapes.csv", "is1161_tubes.csv", "aisc_shapes.csv"):
+            try:
+                with open(os.path.join(here, fname), newline="") as f:
+                    for row in csv.DictReader(f):
+                        lbl = (row.get("AISC_Manual_Label") or row.get("Label") or "").strip().upper().replace(" ", "")
+                        if not lbl or lbl in c:
+                            continue
+                        try:
+                            A_si = row.get("A_si_mm2")
+                            Izz = row.get("Izz_si_mm4")
+                            Iyy = row.get("Iyy_si_mm4")
+                            if A_si not in (None, "", "-") and Izz not in (None, "", "-"):
+                                A = float(A_si)
+                                Ix = float(Izz)
+                                Iy = float(Iyy) if Iyy not in (None, "", "-") else float(row["Iy"]) * mm**4
+                                J = float(row["J"]) * mm**4 if row.get("J") not in (None, "", "-") else 0.0
+                            else:
+                                A = float(row["A"]) * mm**2
+                                Ix = float(row["Ix"]) * mm**4
+                                Iy = float(row["Iy"]) * mm**4
+                                J = float(row["J"]) * mm**4 if row.get("J") not in (None, "", "-") else 0.0
+                            c[lbl] = (A, Ix, Iy, J)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        _shapes_csv_si._cache = c
+    return c
+_shapes_csv_si._cache = None
+
 def Ipack(name):
-    """(A, Ix, Iy, J) for a section; CASE-INSENSITIVE; IS 808 then AISC CSV fallback."""
+    """(A, Ix, Iy, J) for a section; CASE-INSENSITIVE; IS 808 then AISC CSV fallback.
+
+    Units follow unit_system(): inch packs when kip-in; mm packs when N-mm.
+    """
     key = str(name).upper().replace(" ", "").strip()
+    if _UNIT_SYSTEM == "N-mm":
+        s = _shapes_csv_si().get(key)
+        if s is not None:
+            return s
+        # Convert built-in SEC (inch) if present
+        s_in = SEC.get(key) or SEC.get(str(name).upper().strip())
+        if s_in is not None:
+            mm = 25.4
+            A, Ix, Iy, J = s_in
+            return (A * mm**2, Ix * mm**4, Iy * mm**4, J * mm**4)
+        raise KeyError(
+            "section %r not in SI catalog (is808/is1161/aisc) — "
+            "use an IS 808 label (e.g. 'MB300') or valid W-shape" % (name,)
+        )
     s = SEC.get(key) or (SEC.get(name) if name != key else None)
     if s is None:
-        # also try original upper-with-spaces stripped only of outer space
         s = SEC.get(str(name).upper().strip())
     if s is None:
         s = _shapes_csv().get(key)
@@ -96,7 +178,7 @@ def Ipack(name):
     return s
 
 def _xy_in(cfg, i, j):
-    """Grid intersection (x, y) in INCHES, honoring xcoords/ycoords (non-uniform spacing) and skew."""
+    """Grid intersection (x, y) in engine length units (in or mm), honoring xcoords/ycoords and skew."""
     xco = cfg.get("xcoords"); yco = cfg.get("ycoords"); skew = cfg.get("skew", 0.0)
     return ((xco[i] if xco else i*cfg["SX"]) + skew*j, (yco[j] if yco else j*cfg["SY"]))
 
@@ -277,9 +359,38 @@ def nbays(cfg,k):
             if (i,j) in P and (i+1,j) in P and (i,j+1) in P and (i+1,j+1) in P: n+=1
     return n
 
+def floor_area_mm2(cfg,k):
+    """Framed floor area (mm^2) when unit_system is N-mm."""
+    P=grid(cfg,k); a=0.0
+    for i in range(cfg["NX"]):
+        for j in range(cfg["NY"]):
+            if (i,j) in P and (i+1,j) in P and (i,j+1) in P and (i+1,j+1) in P:
+                dx=_xy_in(cfg,i+1,j)[0]-_xy_in(cfg,i,j)[0]
+                dy=_xy_in(cfg,i,j+1)[1]-_xy_in(cfg,i,j)[1]
+                a+=abs(dx*dy)
+    return a
+
+def perim_mm(cfg,k):
+    """Exposed floor-edge length (mm) when unit_system is N-mm."""
+    P=grid(cfg,k)
+    def framed(i,j):
+        return (0<=i<cfg["NX"] and 0<=j<cfg["NY"] and (i,j) in P and (i+1,j) in P
+                and (i,j+1) in P and (i+1,j+1) in P)
+    per=0.0
+    for i in range(cfg["NX"]):
+        for j in range(cfg["NY"]+1):
+            if framed(i,j-1) != framed(i,j):
+                per+=abs(_xy_in(cfg,i+1,j)[0]-_xy_in(cfg,i,j)[0])
+    for j in range(cfg["NY"]):
+        for i in range(cfg["NX"]+1):
+            if framed(i-1,j) != framed(i,j):
+                per+=abs(_xy_in(cfg,i,j+1)[1]-_xy_in(cfg,i,j)[1])
+    return per
+
 def floor_area_ft2(cfg,k):
-    """Framed floor area (ft^2): sum of ACTUAL bay areas (honors non-rectangular footprints via
-    grid() and non-uniform xcoords/ycoords).  Full uniform rectangle reduces to NX*NY*SX*SY."""
+    """Framed floor area (ft^2) in kip-in mode; converts from mm^2 when N-mm."""
+    if _UNIT_SYSTEM == "N-mm":
+        return floor_area_mm2(cfg,k) / (25.4**2) / 144.0
     P=grid(cfg,k); a=0.0
     for i in range(cfg["NX"]):
         for j in range(cfg["NY"]):
@@ -290,20 +401,20 @@ def floor_area_ft2(cfg,k):
     return a
 
 def perim_ft(cfg,k):
-    """Exposed floor-edge length (ft) for cladding: bay edges bordered by exactly ONE framed bay.
-    Handles non-rectangular footprints (L/T/U, notches, setbacks) and non-uniform xcoords/ycoords.
-    A full uniform rectangle reduces to the old 2*(NX*SX + NY*SY) bounding-box value."""
+    """Exposed floor-edge length (ft); converts from mm when N-mm."""
+    if _UNIT_SYSTEM == "N-mm":
+        return perim_mm(cfg,k) / 25.4 / 12.0
     P=grid(cfg,k)
     def framed(i,j):
         return (0<=i<cfg["NX"] and 0<=j<cfg["NY"] and (i,j) in P and (i+1,j) in P
                 and (i,j+1) in P and (i+1,j+1) in P)
     per=0.0
     for i in range(cfg["NX"]):
-        for j in range(cfg["NY"]+1):          # X-running edges between nodes (i,j)-(i+1,j)
+        for j in range(cfg["NY"]+1):
             if framed(i,j-1) != framed(i,j):
                 per+=abs(_xy_in(cfg,i+1,j)[0]-_xy_in(cfg,i,j)[0])/12.0
     for j in range(cfg["NY"]):
-        for i in range(cfg["NX"]+1):          # Y-running edges between nodes (i,j)-(i,j+1)
+        for i in range(cfg["NX"]+1):
             if framed(i-1,j) != framed(i,j):
                 per+=abs(_xy_in(cfg,i,j+1)[1]-_xy_in(cfg,i,j)[1])/12.0
     return per
@@ -329,9 +440,14 @@ def _is_storage(cfg, k):
     return bool(lv) and k in {int(i) for i in lv}
 
 def floor_w(cfg,k):
-    """Effective seismic weight of level k (ASCE 7-22 sec.12.7.2): dead + cladding + 25% of the
-    floor live where the area is storage (item 1) + 15% of the uniform design snow load where the
-    flat-roof snow load pf exceeds 45 psf (item 4)."""
+    """Effective seismic weight of level k.
+
+    kip-in: ASCE 7-22 §12.7.2 path (psf → kip).
+    N-mm: IS-facing path — pressures in kN/m², returns weight in **N**.
+    Mass for OpenSees is w/g with g in matching units (tonne when N-mm).
+    """
+    if _UNIT_SYSTEM == "N-mm":
+        return _floor_w_si(cfg, k)
     NF=len(cfg["heights"]); roof=(k==NF)
     d=_Dlev(cfg,k,roof)
     w=d*floor_area_ft2(cfg,k)/1000.0
@@ -340,11 +456,34 @@ def floor_w(cfg,k):
     w+=cfg["clad"]*perim_ft(cfg,k)*th/1000.0
     if roof:
         snow=cfg.get("snow",0.0)
-        if snow>45.0:                          # 12.7.2 item 4: 15% of snow ONLY where pf > 45 psf
+        if snow>45.0:
             w+=0.15*snow*floor_area_ft2(cfg,k)/1000.0
-    elif _is_storage(cfg,k):                   # 12.7.2 item 1: >=25% of storage floor live in W
+    elif _is_storage(cfg,k):
         w+=0.25*_Llev(cfg,k)*floor_area_ft2(cfg,k)/1000.0
     w+=cfg.get("extra_mass_floors",{}).get(k,0.0)*floor_area_ft2(cfg,k)/1000.0
+    return w
+
+def _floor_w_si(cfg,k):
+    """Seismic weight (N): p[kN/m²] * A[mm²] / 1000 = N."""
+    NF=len(cfg["heights"]); roof=(k==NF)
+    d=_Dlev(cfg,k,roof)
+    area = floor_area_mm2(cfg,k)
+    w = d * area / 1000.0
+    th = cfg["heights"][k-1]
+    th = th if not roof else th / 2.0
+    # clad[kN/m²] * perim[mm] * th[mm] / 1000 → N
+    w += float(cfg.get("clad") or 0.0) * perim_mm(cfg,k) * th / 1000.0
+    if roof:
+        snow = float(cfg.get("snow") or 0.0)
+        # IS 1893 snow participation: no ASCE 45 psf rule; include 0 unless cfg sets snow_seismic_frac
+        frac = float(cfg.get("snow_seismic_frac") or 0.0)
+        if frac and snow:
+            w += frac * snow * area / 1000.0
+    elif _is_storage(cfg,k):
+        w += 0.25 * _Llev(cfg,k) * area / 1000.0
+    extra = cfg.get("extra_mass_floors", {}).get(k, 0.0)
+    if extra:
+        w += float(extra) * area / 1000.0
     return w
 
 def floor_grav(cfg,k):

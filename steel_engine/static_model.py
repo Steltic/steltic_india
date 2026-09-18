@@ -306,8 +306,17 @@ def _bays_adjacent(present_k, i, j, dirn):
 
 
 def apply_gravity(cfg, model, fD, fL, fLr):
-    """Apply the true two-way tributary gravity (kip/in, local z down) to every beam sub-element,
-    plus cladding line load on perimeter beams. Returns the total applied vertical load (kip)."""
+    """Apply two-way tributary gravity to beam sub-elements (+ perimeter cladding).
+
+    kip-in: line load in kip/in, pressures psf; returns total kip.
+    N-mm: line load in N/mm, pressures kN/m²; returns total N.
+    """
+    try:
+        import engine3d as eng
+        if eng.unit_system() == "N-mm":
+            return _apply_gravity_si(cfg, model, fD, fL, fLr)
+    except Exception:
+        pass
     NF = model["NF"]; SX, SY = cfg["SX"], cfg["SY"]
     heights = cfg["heights"]; clad = cfg.get("clad", 0.0)
     extra = cfg.get("extra_mass_floors", {})
@@ -315,25 +324,56 @@ def apply_gravity(cfg, model, fD, fL, fLr):
     for b in model["beams"]:
         i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
         if not (1 <= k <= NF):
-            continue                        # non-grid beam (brace apex / custom node) -> no floor tributary gravity
+            continue
         roof = (k == NF)
         pD = (cfg["D_roof"] if roof else cfg["D_floor"]) + extra.get(k, 0.0)
         pL = 0.0 if roof else cfg["L_floor"]
         pLr = (cfg.get("snow") or 20.0) if roof else 0.0
-        p = fD*pD + fL*pL + fLr*pLr                       # psf
+        p = fD*pD + fL*pL + fLr*pLr
         nb = _bays_adjacent(model["present"].get(k, set()), i, j, dirn)
-        other = SY if dirn == "X" else SX                 # perpendicular bay dim (in)
+        other = SY if dirn == "X" else SX
         wcap = other/2.0
-        # cladding (dead only) on perimeter beams (bounding a single bay)
         th = heights[k-1]/12.0; th = th/2.0 if roof else th
-        wclad = fD*clad*th/12000.0 if (clad and nb == 1) else 0.0   # kip/in
+        wclad = fD*clad*th/12000.0 if (clad and nb == 1) else 0.0
         segs = b["segs"]
         for s, tag in enumerate(segs):
             s0 = L*s/len(segs); s1 = L*(s+1)/len(segs); smid = 0.5*(s0+s1)
-            width_in = min(smid, L-smid, wcap)            # tributary half-width at smid (in)
-            w = nb * p * (width_in/12.0) / 12000.0 + wclad  # psf*ft -> kip/in
+            width_in = min(smid, L-smid, wcap)
+            w = nb * p * (width_in/12.0) / 12000.0 + wclad
             ops.eleLoad("-ele", tag, "-type", "-beamUniform", 0.0, -w, 0.0)
             total += w*(s1-s0)
+    return total
+
+
+def _apply_gravity_si(cfg, model, fD, fL, fLr):
+    """SI gravity: p in kN/m² → beamUniform w in N/mm. Returns total vertical load (N)."""
+    NF = model["NF"]; SX, SY = cfg["SX"], cfg["SY"]
+    heights = cfg["heights"]; clad = float(cfg.get("clad") or 0.0)
+    extra = cfg.get("extra_mass_floors", {})
+    total = 0.0
+    for b in model["beams"]:
+        i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
+        if not (1 <= k <= NF):
+            continue
+        roof = (k == NF)
+        pD = (cfg["D_roof"] if roof else cfg["D_floor"]) + float(extra.get(k, 0.0) or 0.0)
+        pL = 0.0 if roof else cfg["L_floor"]
+        pLr = (cfg.get("snow") or 1.0) if roof else 0.0  # kN/m² placeholder roof live/snow
+        p = fD*pD + fL*pL + fLr*pLr  # kN/m²
+        nb = _bays_adjacent(model["present"].get(k, set()), i, j, dirn)
+        other = SY if dirn == "X" else SX  # mm
+        wcap = other / 2.0
+        th = heights[k-1]; th = th/2.0 if roof else th  # mm
+        # clad[kN/m²]*th[mm]/1000 = kN/m = N/mm on perimeter
+        wclad = (fD * clad * th / 1000.0) if (clad and nb == 1) else 0.0
+        segs = b["segs"]
+        for s, tag in enumerate(segs):
+            s0 = L*s/len(segs); s1 = L*(s+1)/len(segs); smid = 0.5*(s0+s1)
+            width_mm = min(smid, L-smid, wcap)
+            # p[kN/m²] * (width_mm/1000)[m] = kN/m = N/mm
+            w = nb * p * (width_mm / 1000.0) + wclad
+            ops.eleLoad("-ele", tag, "-type", "-beamUniform", 0.0, -w, 0.0)
+            total += w * (s1 - s0)
     return total
 
 

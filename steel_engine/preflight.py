@@ -123,12 +123,12 @@ _SYS = {
 
 
 def check(cfg):
-    # India metric briefs → kip+inch (engine remains kip-in; full SI rewrite deferred)
+    # India metric briefs → SI-native N-mm (wave 1); kip-in only if units/force_kip_in opt-in
     try:
-        from india_units import apply_metric_geometry
+        from india_units import apply_metric_geometry, is_si
         apply_metric_geometry(cfg)
     except Exception:
-        pass
+        is_si = lambda _c=None: False  # noqa: E731
 
     out = []
     say = lambda sev, msg: out.append((sev, msg))
@@ -142,21 +142,45 @@ def check(cfg):
     if not H:
         say("ERROR", "cfg['heights'] missing/empty")
     _dex0 = set(int(k) for k in (cfg.get("drift_exempt_stories") or {}))
-    _small = [(i, h) for i, h in enumerate(H, start=1) if h < 72]
-    _undeclared = [(i, h) for i, h in _small if i not in _dex0]
-    if _undeclared:
-        say("ERROR", "story height < 6 ft found (%s in, story %s): heights look like FEET -- engine "
-                     "units are INCHES (13 ft story = 156). If a small inter-level offset is "
-                     "INTENTIONAL (split-level), declare it in cfg['drift_exempt_stories'] with a reason."
-                     % (_undeclared[0][1], _undeclared[0][0]))
-    elif _small:
-        say("WARN", "sub-6-ft story height(s) at %s are DECLARED inter-diaphragm offsets "
-                    "(drift_exempt_stories) -- OK; design the step transfer detail"
-                    % [i for i, _ in _small])
-    for k in ("SX", "SY"):
-        v = cfg.get(k)
-        if isinstance(v, (int, float)) and 0 < v < 60:
-            say("ERROR", "%s=%g in is < 5 ft: bay spacing looks like FEET (engine uses inches)" % (k, v))
+    _si = False
+    try:
+        _si = is_si(cfg)
+    except Exception:
+        _si = str(cfg.get("units") or "").upper() in ("N-MM", "SI", "METRIC")
+    if _si:
+        # SI: heights in mm — storey < 1800 mm (~6 ft) looks like metres left unscaled
+        _small = [(i, h) for i, h in enumerate(H, start=1) if h < 1800]
+        _undeclared = [(i, h) for i, h in _small if i not in _dex0]
+        if _undeclared:
+            say("ERROR", "story height < 1800 mm found (%s mm, story %s): heights look like METRES "
+                         "-- engine SI units are MILLIMETRES (3.6 m storey = 3600). Call "
+                         "india_units.apply_si_geometry(cfg). If a small offset is INTENTIONAL, "
+                         "declare cfg['drift_exempt_stories']."
+                         % (_undeclared[0][1], _undeclared[0][0]))
+        elif _small:
+            say("WARN", "sub-1800-mm story height(s) at %s are DECLARED inter-diaphragm offsets "
+                        "(drift_exempt_stories) -- OK" % [i for i, _ in _small])
+        for k in ("SX", "SY"):
+            v = cfg.get(k)
+            if isinstance(v, (int, float)) and 0 < v < 1500:
+                say("ERROR", "%s=%g mm is < 1.5 m: bay spacing looks like METRES "
+                             "(engine SI uses millimetres)" % (k, v))
+    else:
+        _small = [(i, h) for i, h in enumerate(H, start=1) if h < 72]
+        _undeclared = [(i, h) for i, h in _small if i not in _dex0]
+        if _undeclared:
+            say("ERROR", "story height < 6 ft found (%s in, story %s): heights look like FEET -- engine "
+                         "units are INCHES (13 ft story = 156). If a small inter-level offset is "
+                         "INTENTIONAL (split-level), declare it in cfg['drift_exempt_stories'] with a reason."
+                         % (_undeclared[0][1], _undeclared[0][0]))
+        elif _small:
+            say("WARN", "sub-6-ft story height(s) at %s are DECLARED inter-diaphragm offsets "
+                        "(drift_exempt_stories) -- OK; design the step transfer detail"
+                        % [i for i, _ in _small])
+        for k in ("SX", "SY"):
+            v = cfg.get(k)
+            if isinstance(v, (int, float)) and 0 < v < 60:
+                say("ERROR", "%s=%g in is < 5 ft: bay spacing looks like FEET (engine uses inches)" % (k, v))
     # ---- seismic block ----
     s = cfg.get("seis") or {}
     for k in ("SDS", "SD1", "R", "Cd", "Ie"):

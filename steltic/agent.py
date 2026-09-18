@@ -264,12 +264,12 @@ def _completion_gate(ws):
 # hardening #7: phase-sliced contract hints -- tiny, in-context, fired at most once each.
 _PHASE_HINTS = (
     ("feet", re.compile(r"look like FEET", re.I),
-     "UNITS: the engine is KIP-INCH. Multiply every story height / bay spacing by 12 and re-run "
-     "design_and_report BEFORE chasing analysis numbers (a feet-cfg makes every result ~12x wrong)."),
+     "UNITS: kip-in opt-in only (units='kip-in'). India default is N-mm — if heights look like FEET "
+     "you may have the wrong unit system. For SI: apply_si_geometry (m→mm). For kip-in: ×12."),
     ("metric", re.compile(r"look like (METRES|METERS|METRIC)|units?[=:].*(metric|SI|/\s*m\b)", re.I),
-     "UNITS: India briefs in m/mm/kN must be converted to kip+inch before the pipeline. "
-     "Use steel_engine.india_units.apply_metric_geometry(cfg) (or multiply heights/bays by 39.3701). "
-     "Engine internals stay kip+inch — full SI rewrite is deferred; keep RAG load_plan cites in SI."),
+     "UNITS: India engine is SI-native N-mm-sec (wave 1). Call india_units.apply_si_geometry(cfg) "
+     "(alias apply_metric_geometry) so storey heights/bays in metres become millimetres "
+     "(3.6 m → 3600). Do NOT multiply by 39.37 unless units='kip-in'. Keep RAG load_plan cites in SI."),
     ("orient", re.compile(r"ORIENTATION: drift in [XY] is", re.I),
      "ORIENTATION: a frame column's STRONG axis must lie IN its frame's plane. Set strong_dir per "
      "line in add_column (X-direction frames -> 'X', Y-direction -> 'Y'); do NOT copy the "
