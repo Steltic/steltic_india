@@ -266,6 +266,10 @@ _PHASE_HINTS = (
     ("feet", re.compile(r"look like FEET", re.I),
      "UNITS: the engine is KIP-INCH. Multiply every story height / bay spacing by 12 and re-run "
      "design_and_report BEFORE chasing analysis numbers (a feet-cfg makes every result ~12x wrong)."),
+    ("metric", re.compile(r"look like (METRES|METERS|METRIC)|units?[=:].*(metric|SI|/\s*m\b)", re.I),
+     "UNITS: India briefs in m/mm/kN must be converted to kip+inch before the pipeline. "
+     "Use steel_engine.india_units.apply_metric_geometry(cfg) (or multiply heights/bays by 39.3701). "
+     "Engine internals stay kip+inch — full SI rewrite is deferred; keep RAG load_plan cites in SI."),
     ("orient", re.compile(r"ORIENTATION: drift in [XY] is", re.I),
      "ORIENTATION: a frame column's STRONG axis must lie IN its frame's plane. Set strong_dir per "
      "line in add_column (X-direction frames -> 'X', Y-direction -> 'Y'); do NOT copy the "

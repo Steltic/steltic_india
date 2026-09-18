@@ -3,7 +3,7 @@ Section properties for the design post-processor (steltic_india).
 
 Source of truth, in priority order:
   1. IS 808:2021 rolled sections CSV (`is808_shapes.csv` next to this file, or IS808_CSV env).
-     Indian designations: MB/WB/JB/LB/HB/SC/NPB/WPB/… (see is808_GAPS.md).
+     Indian designations: MB/WB/JB/LB/HB/SC/NPB/WPB/MC/JC/LC/MPC/ISA/PBP + IS 1161 CHS (see is808_GAPS.md, is1161_tubes.csv).
   2. AISC Shapes Database CSV (`aisc_shapes.csv` or AISC_CSV env) — retained for legacy
      W/HSS labels and USA twin parity; NOT the primary India path.
   3. Small built-in table for a few W-shapes used in library archetypes.
@@ -43,8 +43,8 @@ _HSS_R.update({
  "HSS14X14X1/2":5.49,"HSS14X14X5/8":5.43,"HSS16X16X1/2":6.31,"HSS16X16X5/8":6.25})
 
 _INDIA_PREFIXES = ("MB", "WB", "JB", "LB", "HB", "SC", "NPB", "WPB", "PBP",
-                   "MC", "LC", "JC", "MPC", "ISA", "ISMB", "ISWB", "ISLB", "ISJB",
-                   "ISMC", "ISLC", "ISHB", "ISSC")
+                   "MC", "LC", "JC", "MPC", "ISA", "CHS", "NB",
+                   "ISMB", "ISWB", "ISLB", "ISJB", "ISMC", "ISLC", "ISHB", "ISSC")
 
 def _looks_india(name: str) -> bool:
     u = str(name).upper().replace(" ", "")
@@ -54,6 +54,12 @@ def _is808_path():
     p = os.environ.get("IS808_CSV")
     if p and os.path.exists(p): return p
     here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "is808_shapes.csv")
+    return here if os.path.exists(here) else None
+
+def _is1161_path():
+    p = os.environ.get("IS1161_CSV")
+    if p and os.path.exists(p): return p
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "is1161_tubes.csv")
     return here if os.path.exists(here) else None
 
 def _aisc_path():
@@ -92,6 +98,10 @@ def _load_one(path):
             des = (row.get("Designation_IS") or "").strip().upper().replace(" ", "")
             if des and des not in db:
                 db[des] = db[lab]
+            for alt in ("NB_Label", "NB_label"):
+                nb = (row.get(alt) or "").strip().upper().replace(" ", "")
+                if nb and nb not in db:
+                    db[nb] = db[lab]
     return db
 
 def _load_csv():
@@ -99,11 +109,17 @@ def _load_csv():
     global _CSV, _CSV_SRC
     if _CSV is not None: return _CSV
     is808 = _load_one(_is808_path())
+    is1161 = _load_one(_is1161_path())
     aisc = _load_one(_aisc_path())
     merged = dict(aisc)
-    merged.update(is808)  # India wins
+    merged.update(is1161)  # India CHS
+    merged.update(is808)   # India rolled wins on collision
     _CSV = merged
-    _CSV_SRC = "is808+aisc" if is808 else ("aisc" if aisc else "none")
+    parts = []
+    if is808: parts.append("is808")
+    if is1161: parts.append("is1161")
+    if aisc: parts.append("aisc")
+    _CSV_SRC = "+".join(parts) if parts else "none"
     return _CSV
 
 def normalize_label(name: str) -> str:
@@ -126,7 +142,7 @@ def props(name, SEC=None):
     if _looks_india(name_u):
         raise KeyError(
             "section %r looks like an IS 808 designation but was not found in is808_shapes.csv "
-            "(channels/angles may be GAPS — see is808_GAPS.md). Do not substitute an AISC W-shape."
+            "(see is808_GAPS.md / is1161_tubes.csv). Do not substitute an AISC W-shape."
             % (name,)
         )
     # built-in path: need engine SEC for A,Ix,Iy,J
@@ -154,7 +170,7 @@ def brace_r(key):
 
 def hss_b_over_t(name, spec="A1085"):
     """Flat-width / design-wall ratio b/t for a SQUARE/RECT HSS (legacy AISC path).
-    India hollow sections: use IS 1161 via RAG — not auto-tabulated here (found:false in is808_GAPS)."""
+    India hollow sections: prefer IS 1161 labels (CHS… / NB…) from is1161_tubes.csv; legacy AISC HSS keys remain for twin parity."""
     import re as _re
     m = _re.match(r"HSS(\\d+(?:\\.\\d+)?)X(\\d+(?:\\.\\d+)?)X(\\d+)(?:/(\\d+))?", str(name).upper())
     if not m:
@@ -168,6 +184,16 @@ def hss_b_over_t(name, spec="A1085"):
 def list_is808(prefix=None):
     """Return sorted IS 808 labels (optionally filtered by Type/prefix)."""
     db = _load_one(_is808_path())
+    labs = sorted(set(db.keys()))
+    if prefix:
+        p = prefix.upper().replace(" ", "")
+        labs = [L for L in labs if L.startswith(p)]
+    return labs
+
+
+def list_chs(prefix=None):
+    """Return sorted IS 1161 CHS labels (optionally filtered by prefix)."""
+    db = _load_one(_is1161_path())
     labs = sorted(set(db.keys()))
     if prefix:
         p = prefix.upper().replace(" ", "")

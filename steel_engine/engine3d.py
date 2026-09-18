@@ -57,13 +57,13 @@ HSS.update({
  "HSS14X14X1/2":24.6,"HSS14X14X5/8":30.3,"HSS16X16X1/2":28.3,"HSS16X16X5/8":35.0})
 
 def _shapes_csv():
-    """Lazy shape DB: is808_shapes.csv (India primary) then aisc_shapes.csv. label -> (A, Ix, Iy, J)."""
+    """Lazy shape DB: is808_shapes.csv + is1161_tubes.csv (India primary) then aisc_shapes.csv. label -> (A, Ix, Iy, J)."""
     import csv, os
     c = _shapes_csv._cache
     if c is None:
         c = {}
         here = os.path.dirname(__file__)
-        for fname in ("is808_shapes.csv", "aisc_shapes.csv"):
+        for fname in ("is808_shapes.csv", "is1161_tubes.csv", "aisc_shapes.csv"):
             try:
                 with open(os.path.join(here, fname), newline="") as f:
                     for row in csv.DictReader(f):
@@ -88,7 +88,7 @@ def Ipack(name):
         s = _shapes_csv().get(key)
         if s is None:
             raise KeyError(
-                "section %r not in catalog, is808_shapes.csv, or aisc_shapes.csv — "
+                "section %r not in catalog, is808_shapes.csv, is1161_tubes.csv, or aisc_shapes.csv — "
                 "use an IS 808 label (e.g. 'MB300', 'NPB300X150X36.52') or valid W-shape"
                 % (name,)
             )
