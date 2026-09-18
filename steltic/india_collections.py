@@ -51,6 +51,17 @@ for _k, _v in list(COLLECTION_TO_STEM.items()):
     COLLECTION_TO_STEM[f"engineering_standards_{_k}"] = _v
 
 # Reverse: stem -> preferred collection name (for docs / logs)
+
+# Dual hosted-registry prefixes (historical naming drift):
+#   engineering_standards_IS*  (current India map)
+#   engineering_standards_IS*  (some hosted / twin registries)
+for _k, _v in list(COLLECTION_TO_STEM.items()):
+    if _k.startswith("engineering_"):
+        continue
+    COLLECTION_TO_STEM.setdefault(f"engineering_standards_{_k}", _v)
+    # Alternate spelling seen on some rag_server builds
+    COLLECTION_TO_STEM.setdefault(f"engineering_standard_{_k}", _v)
+
 STEM_TO_COLLECTION: dict[str, str] = {
     "IS_800_2007": "engineering_standards_IS800",
     "IS_808_2021": "engineering_standards_IS808",

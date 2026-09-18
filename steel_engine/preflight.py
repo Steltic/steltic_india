@@ -123,6 +123,13 @@ _SYS = {
 
 
 def check(cfg):
+    # India metric briefs → kip+inch (engine remains kip-in; full SI rewrite deferred)
+    try:
+        from india_units import apply_metric_geometry
+        apply_metric_geometry(cfg)
+    except Exception:
+        pass
+
     out = []
     say = lambda sev, msg: out.append((sev, msg))
     if not isinstance(cfg, dict):
