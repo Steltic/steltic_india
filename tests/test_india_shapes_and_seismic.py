@@ -74,9 +74,12 @@ def test_torsional_trigger_15():
 
 
 def test_metric_units_conversion():
-    cfg = {"units": "metric", "story_heights": [3.6], "bay_x": 6.0}
+    cfg = {"units": "metric", "story_heights": [3.6], "bay_x": 6.0, "bay_y": 5.0}
     IU.apply_metric_geometry(cfg)
     assert abs(cfg["story_heights"][0] - 3.6 * IU.M_TO_IN) < 1e-6
+    assert abs(cfg["heights"][0] - 3.6 * IU.M_TO_IN) < 1e-6
+    assert abs(cfg["SX"] - 6.0 * IU.M_TO_IN) < 1e-6
+    assert abs(cfg["SY"] - 5.0 * IU.M_TO_IN) < 1e-6
     assert cfg["_units_converted"]["to"] == "in"
     assert "kip" in IU.ENGINE_UNITS["force"]
 

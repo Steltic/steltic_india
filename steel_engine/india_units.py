@@ -132,6 +132,24 @@ def apply_metric_geometry(cfg: dict) -> dict:
                 geom[k] = [metric_length_to_in(v, length_unit) for v in geom[k]]
         geom["_units_converted"] = True
 
+    # Brief aliases → engine keys (inches already). Do not overwrite explicit values.
+    if not cfg.get("heights"):
+        for src in ("story_heights", "storey_heights"):
+            if cfg.get(src) is not None:
+                v = cfg[src]
+                cfg["heights"] = list(v) if isinstance(v, (list, tuple)) else v
+                break
+    if cfg.get("SX") is None:
+        for src in ("bay_x", "bay_spacing_x"):
+            if cfg.get(src) is not None:
+                cfg["SX"] = cfg[src]
+                break
+    if cfg.get("SY") is None:
+        for src in ("bay_y", "bay_spacing_y"):
+            if cfg.get(src) is not None:
+                cfg["SY"] = cfg[src]
+                break
+
     cfg["_units_converted"] = {
         "from": length_unit,
         "to": "in",
