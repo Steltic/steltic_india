@@ -277,17 +277,21 @@ def _elevation_from_live(cfg, direction, title):
 _LIVE_ELE = []   # element registry of the currently-live model (set by run helpers)
 
 def fig_drift_profile(cfg, driftX, driftY):
-    NF = len(cfg["heights"]); Cd = cfg["seis"].get("Cd", 5.0); Ie = cfg["seis"]["Ie"]
+    """IS 1893 Part 1:2016 cl.7.11.1 — plot design storey drifts (no ASCE Cd/Ie amplification)."""
+    NF = len(cfg["heights"])
+    try:
+        from india_seismic import design_story_drifts
+        dX = design_story_drifts(driftX, cfg); dY = design_story_drifts(driftY, cfg)
+    except Exception:
+        dX, dY = list(driftX), list(driftY)
     lvl = list(range(1, NF+1))
     fig, ax = plt.subplots(figsize=(9, 6))
-    ax.plot([d*100 for d in driftX], lvl, "-o", label=r"$\delta_e$ X")
-    ax.plot([d*Cd/Ie*100 for d in driftX], lvl, "-o", label=r"$\delta=C_d\delta_e/I_e$ X")
-    ax.plot([d*100 for d in driftY], lvl, "-s", label=r"$\delta_e$ Y")
-    ax.plot([d*Cd/Ie*100 for d in driftY], lvl, "-s", label=r"$\delta$ Y")
-    _dl, _dlrho = E.drift_allowable(cfg)   # Table 12.12-1, /rho for MF-only SDC D-F (12.12.1.1)
+    ax.plot([d*100 for d in dX], lvl, "-o", label=r"design drift X (IS 1893)")
+    ax.plot([d*100 for d in dY], lvl, "-s", label=r"design drift Y (IS 1893)")
+    _dl, _dlrho = E.drift_allowable(cfg)
     lim = _dl*100
-    ax.axvline(lim, color="r", ls="--", label=f"limit {lim:.2f}%" + (r" ($\Delta_a/\rho$)" if _dlrho else ""))
-    ax.set_xlabel("interstory drift (%)"); ax.set_ylabel("story"); ax.set_title("Drift profile")
+    ax.axvline(lim, color="r", ls="--", label=f"limit {lim:.2f}% (cl.7.11.1.1)")
+    ax.set_xlabel("interstorey drift (%)"); ax.set_ylabel("storey"); ax.set_title("Storey drift profile (IS 1893)")
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
     return _b64(fig)
 
@@ -976,63 +980,75 @@ def _torsion_ratios(cfg, Fx):
     return out
 
 def _irregularity_section(cfg, Fx):
+    """IS 1893 Part 1:2016 Table 5 (plan) / Table 6 (vertical) irregularity screen."""
     NF = len(cfg["heights"]); w = [E.floor_w(cfg, k) for k in range(1, NF+1)]
-    h = cfg["heights"]; custom_plan = cfg.get("plan") is not None
+    h = cfg["heights"]
     tors = _torsion_ratios(cfg, Fx)
+    # IS 1893 Table 5(i): δmax/δmin > 1.5 ⇒ torsional irregularity (NOT ASCE 1.2/Ax)
     tr = max([v for v in tors.values() if v is not None], default=1.0)
-    _Ax = min(max((tr/1.2)**2, 1.0), 3.0)   # IS 875/1893 Eq. 12.8-15 accidental-torsion amplification
-    # 7-22 Table 12.3-1/-1a: single Type 1 keyed to the Torsional Irregularity Ratio (TIR,
-    # Eq. 12.3-2, ratio of story drifts at the edges) with cumulative tiers >1.2 / >1.4 / >1.6
-    if tr > 1.6:   tcls = f"Type 1 torsional: TIR {tr:.2f} &gt; 1.6 (also &gt;1.2/&gt;1.4 tiers) &mdash; apply A<sub>x</sub> = {_Ax:.2f} (&sect;12.8.4.3); MRSA mass-offset restriction (&sect;12.9.1.5)"
-    elif tr > 1.4: tcls = f"Type 1 torsional: TIR {tr:.2f} &gt; 1.4 (also &gt;1.2 tier) &mdash; apply A<sub>x</sub> = {_Ax:.2f} (&sect;12.8.4.3); &rho; = 1.3 if &gt;1.4 in both directions (&sect;12.3.4.2.1)"
-    elif tr > 1.2: tcls = f"Type 1 torsional: TIR {tr:.2f} &gt; 1.2 &mdash; apply A<sub>x</sub> = {_Ax:.2f} (&sect;12.8.4.3) + 25% collector/diaphragm-connection increase (&sect;12.3.3.5)"
-    else:          tcls = f"None: TIR {tr:.2f} &le; 1.2 (A<sub>x</sub> = 1.0)"
-    # supplementary mass-uniformity screen (the 7-16 Vertical Type 2 mass irregularity was DELETED
-    # in IS 875/1893) -- advisory only, can never fail or require anything
-    massr = max((max(w[k]/w[k-1], w[k-1]/w[k]) for k in range(1, NF)), default=1.0)
+    cfg["_tir_screen"] = tr
+    if tr > 2.0:
+        tcls = (f"TORSIONAL irregularity: δ<sub>max</sub>/δ<sub>min</sub> = {tr:.2f} &gt; 2.0 "
+                f"(IS 1893 Table 5(i)) — revise configuration (found:true)")
+    elif tr > 1.5:
+        tcls = (f"TORSIONAL irregularity: δ<sub>max</sub>/δ<sub>min</sub> = {tr:.2f} in 1.5–2.0 "
+                f"(Table 5(i)) — ensure torsional mode period &lt; translational; use 3-D dynamic analysis")
+    else:
+        tcls = f"None: δ<sub>max</sub>/δ<sub>min</sub> = {tr:.2f} ≤ 1.5 (Table 5(i))"
+    # Mass: IS 1893 Table 6(ii) — seismic weight > 150% of floor below (still in force, unlike ASCE 7-22 delete)
+    massr = max((max(w[k]/w[k-1], w[k-1]/w[k]) for k in range(1, NF)), default=1.0) if NF > 1 else 1.0
     mcls = ("None" if massr <= 1.5 else
-            f"Supplementary screen: adjacent floor-mass ratio {massr:.2f} &gt; 1.5 (7-16 Vertical Type 2 "
-            "&mdash; deleted in IS 875/1893; ADVISORY only, no requirement triggered)")
-    # soft story screen via story height uniformity (stiffness ~ 1/h^3 proxy)
-    hr = max((max(h[k]/h[k-1], h[k-1]/h[k]) for k in range(1, NF)), default=1.0)
-    scls = "None (uniform story heights)" if hr <= 1.0001 else f"Check stiffness/soft-story: tallest/shortest story height ratio {hr:.2f}"
-    # R3: FIRM plan/vertical determination from the ACTUAL per-level footprint (present-sets / plan= fn),
-    # not the old 'cfg.get(plan) is None -> uniform rectangular' guess that denied custom_build L/T/U/cruciform plans.
+            f"Mass irregularity screen: adjacent floor-weight ratio {massr:.2f} &gt; 1.5 "
+            f"(IS 1893 Table 6(ii)) — Dynamic Analysis required in Zones III–V")
+    hr = max((max(h[k]/h[k-1], h[k-1]/h[k]) for k in range(1, NF)), default=1.0) if NF > 1 else 1.0
+    scls = ("None (uniform storey heights — stiffness soft-storey still agent-confirmed)"
+            if hr <= 1.0001 else
+            f"Check soft storey (Table 6(i)): tallest/shortest storey height ratio {hr:.2f}")
     pir = E.plan_irregularities(cfg)
     if pir["reentrant"]:
-        h2 = ("Type 2 RE-ENTRANT: YES &mdash; non-convex footprint. MRSA (&sect;12.9) recommended (ELF permitted by "
-              "7-22 &sect;12.6); apply a <b>25% increase to diaphragm-to-collector CONNECTION forces</b> "
-              "(&sect;12.3.3.5), with &Omega;<sub>0</sub> collectors on the re-entrant grid lines.")
+        h2 = ("RE-ENTRANT corners: YES — non-convex footprint proxy. Confirm projection &gt; 15% of "
+              "plan dimension (Table 5(ii)); three-dimensional dynamic analysis required.")
     else:
-        h2 = "None (rectangular / convex footprint)"
-    h3 = "None (solid rigid diaphragm; confirm any large openings/atria)"
-    h5 = ("Type 5 NONPARALLEL: YES &mdash; a skewed frame line; resolve its stiffness into BOTH principal directions and "
-          "apply biaxial member / SCWB checks with the 100/30 combination." if pir["nonparallel"]
-          else "None (orthogonal frames)")
-    v3 = ("Type 2 GEOMETRIC SETBACK: YES &mdash; footprint reduces with height; design the transfer/backstay diaphragm "
-          "at the setback with &Omega;<sub>0</sub> collectors." if pir["setback"] else "None (uniform footprint over height)")
+        h2 = "None (rectangular / convex footprint proxy)"
+    h3 = "Floor slab cut-outs: not auto-detected — agent confirms vs 50% floor area (Table 5(iii))"
+    h4 = "Out-of-plane offsets: not auto-detected — agent declares; Zones III–V have 0.2% drift / specialist rules (Table 5(iv))"
+    h5 = ("NON-PARALLEL LFRS: YES — skewed frame (Table 5(v)); analyse per 6.3.2.2 / 6.3.4.1 combinations."
+          if pir["nonparallel"] else "None (orthogonal frames)")
+    v3 = ("Vertical geometric irregularity / setback proxy: YES — footprint reduces with height "
+          "(confirm LFRS dimension &gt; 125% of storey below, Table 6(iii))."
+          if pir["setback"] else "None (uniform footprint over height)")
     rows = [
-        ["Horizontal 1 &mdash; Torsional (TIR tiers &gt;1.2/&gt;1.4/&gt;1.6)", tcls],
-        ["Horizontal 2 &mdash; Re-entrant corners", h2],
-        ["Horizontal 3 &mdash; Diaphragm discontinuity", h3],
-        ["Horizontal 4 &mdash; Out-of-plane offset", "None (continuous vertical frames; confirm no transfer)"],
-        ["Horizontal 5 &mdash; Nonparallel system", h5],
-        ["Vertical 1a/1b &mdash; Soft / extreme soft story", scls],
-        ["Mass uniformity &mdash; supplementary screen (7-16 Vert. 2, deleted in 7-22)", mcls],
-        ["Vertical 2 &mdash; Geometric (setback)", v3],
-        ["Vertical 3 &mdash; In-plane discontinuity", "None (aligned frames; confirm no transfer columns)"],
-        ["Vertical 4a/4b &mdash; Weak / extreme weak story", "Confirm against story shear strengths (Ch 6/9)"]]
-    intro = ("<p>Screening against IS 875/1893 Tables 12.3-1 (plan) and 12.3-2 (vertical). The Torsional "
-             "Irregularity Ratio (TIR, Eq. 12.3-2) is estimated from the per-story <i>drift</i> ratio at the "
-             "diaphragm edges under the &plusmn;5% accidental eccentricity (rigid-diaphragm estimate); "
-             "&gt;1.2 triggers Type 1 torsional irregularity and amplification A<sub>x</sub> (&sect;12.8.4.3).</p>")
-    mrsa_recommended = pir["reentrant"] or pir["setback"] or pir["nonparallel"] or tr > 1.2
-    if mrsa_recommended and "RS" not in [a.upper() for a in cfg.get("analyses", [])]:
-        intro += ("<p class='cnote'><b>Analysis procedure &mdash; ADVISORY:</b> MRSA (&sect;12.9) is recommended "
-                  "for the irregularities determined above; <b>ELF is permitted by IS 875/1893 &sect;12.6</b> for all "
-                  "structures (the 7-16 Table 12.6-1 procedure matrix was deleted). Consider adding 'RS' to "
-                  "cfg['analyses'] to capture the torsional/higher-mode response.</p>")
-    return intro + _table(["Irregularity type", "Determination"], rows)
+        ["Plan (i) — Torsional irregularity (Table 5)", tcls],
+        ["Plan (ii) — Re-entrant corners (Table 5)", h2],
+        ["Plan (iii) — Floor slab cut-outs / openings (Table 5)", h3],
+        ["Plan (iv) — Out-of-plane offsets (Table 5)", h4],
+        ["Plan (v) — Non-parallel LFRS (Table 5)", h5],
+        ["Vertical (i) — Soft storey / stiffness (Table 6)", scls],
+        ["Vertical (ii) — Mass irregularity (Table 6)", mcls],
+        ["Vertical (iii) — Vertical geometric (Table 6)", v3],
+        ["Vertical (iv–vii) — In-plane discontinuity / weak storey / floating cols / irregular modes",
+         "Agent classifies from analysis + RAG (not auto-gated)"],
+    ]
+    # Design eccentricity note (found:true) — replaces ASCE Ax invention
+    rows.append(["Torsion design eccentricity (cl.7.8.2)",
+                 "e<sub>di</sub> = 1.5 e<sub>si</sub> ± 0.05 b<sub>i</sub> (more severe). "
+                 "ASCE A<sub>x</sub> factor: found:false — do not invent."])
+    intro = ("<p>Screening against <b>IS 1893 (Part 1) : 2016 Table 5 (plan)</b> and "
+             "<b>Table 6 (vertical)</b> (cl.7.1). Torsional trigger is "
+             "&delta;<sub>max</sub>/&delta;<sub>min</sub> &gt; <b>1.5</b> (Table 5(i)), "
+             "not ASCE TIR 1.2 / A<sub>x</sub>. Storey-drift gate is "
+             "<b>0.004 h</b> under V<sub>B</sub> with &gamma;=1.0 (cl.7.11.1.1).</p>")
+    dyn = pir["reentrant"] or pir["setback"] or pir["nonparallel"] or tr > 1.5 or massr > 1.5
+    if dyn and "RS" not in [a.upper() for a in cfg.get("analyses", [])]:
+        intro += ("<p class='cnote'><b>Analysis procedure:</b> Table 5/6 irregularities often require "
+                  "three-dimensional dynamic analysis (Response Spectrum / modal). Consider adding "
+                  "'RS' to cfg['analyses']. Equivalent static method remains for regular buildings "
+                  "within the code's applicability limits — confirm via RAG (IS 1893 cl.7.3 / 7.7).</p>")
+    extra = ""
+    is1893 = pir.get("is1893_plan") or pir.get("is1893_vertical")
+    if is1893:
+        extra = "<p class='note'>Structured IS 1893 classification attached on <code>plan_irregularities()['is1893_*']</code>.</p>"
+    return intro + _table(["Irregularity type", "Determination"], rows) + extra
 
 
 def _gravity_loads_note():
@@ -1497,16 +1513,18 @@ def _qa_scorecard(cfg, Fx, reX, eX, eY, drX, drY):
         cx = sum(eX)*100; cy = sum(eY)*100
         rows.append(["Modal mass &ge; 90% (X / Y)", f"{cx:.0f}% / {cy:.0f}%", "PASS" if min(cx, cy) >= 90 else "REVIEW"])
     if drX is not None and Fx is not None:
-        NF = len(cfg["heights"]); SDS = s["SDS"]; Cd = s.get("Cd", 5.5); Ie = s["Ie"]
-        lim, limrho = E.drift_allowable(cfg)   # Table 12.12-1, /rho for MF-only SDC D-F (12.12.1.1)
-        dmax = max(max(drX[k]*Cd/Ie, drY[k]*Cd/Ie) for k in range(NF))
-        _limlab = f"{lim*100:.2f}%" + (" (&Delta;<sub>a</sub>/&rho;, &sect;12.12.1.1)" if limrho else "")
+        NF = len(cfg["heights"]); SDS = s["SDS"]; Cd = s.get("Cd", s.get("R", 5.0))
+        lim, limrho = E.drift_allowable(cfg)   # IS 1893 7.11.1.1 default 0.004
         try:
-            from preflight import relief_active as _ra
-            if _ra(cfg): _limlab += " (&sect;16.1.2 relief)"
+            from india_seismic import design_story_drifts, drift_limit_label
+            dX = design_story_drifts(drX, cfg); dY = design_story_drifts(drY, cfg)
+            dmax = max(max(abs(dX[k]), abs(dY[k])) for k in range(NF))
+            _limlab = drift_limit_label(cfg)
         except Exception:
-            pass
-        rows.append(["Seismic design drift &le; limit", f"{dmax*100:.2f}% &le; {_limlab}", "PASS" if dmax <= lim else "FAIL"])
+            dmax = max(max(abs(drX[k]), abs(drY[k])) for k in range(NF))
+            _limlab = f"{lim*100:.2f}% (IS 1893 cl.7.11.1.1)"
+        rows.append(["Seismic design storey drift &le; limit", f"{dmax*100:.2f}% &le; {_limlab}",
+                     "PASS" if dmax <= lim else "FAIL"])
         A = (cfg["NX"]*cfg["SX"])*(cfg["NY"]*cfg["SY"])/144.0
         Pu = {k: (1.2+0.2*SDS)*E.floor_w(cfg, k) + 0.5*(cfg.get("L_floor", 0)*A/1000.0 if k < NF else 0) for k in range(1, NF+1)}
         Ps = {sx: sum(Pu[k] for k in range(sx, NF+1)) for sx in range(1, NF+1)}

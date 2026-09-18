@@ -376,6 +376,10 @@ class JobWorkspace:
         payload = {"query": query, "collection": collection, "top_k": 5}   # fixed at 5
         if clause:  payload["clause"] = clause     # exact-clause / chapter server-side filter; only sent when set
         if chapter: payload["chapter"] = chapter
+        stem = self._collection_stem(collection)
+        if stem:
+            payload["stem"] = stem                 # India corpus document stem (IS_800_2007, …)
+            payload["doc"] = stem                  # alias some servers expect
         body = json.dumps(payload).encode()
         hdrs = {"Content-Type": "application/json"}
         if config.RAG_API_TOKEN:                   # shared-secret gate on the VM (defense in depth over the VPC rule)
@@ -597,12 +601,29 @@ class JobWorkspace:
     _CLAUSE_RE = re.compile(r"\b[A-N]\d+(?:\.\d+)*(?:-\d+[a-z]?)?\b")   # AISC-style clause/eq codes: F2, F2.1, F2-1, H1-1, J3.6
 
     def _is_spec_collection(self, collection: str) -> bool:
-        """RAG-to-file applies only to the SPECIFICATION corpora (AISC/ASCE). OpenSees/example RAGs
-        stay inline -- those return short usage examples the agent should see directly."""
+        """RAG-to-file applies to India IS/BIS specification corpora (and legacy AISC/ASCE names).
+        OpenSees/example RAGs stay inline."""
         c = (collection or "").lower()
-        if "opensees" in c:
+        if "opensees" in c or "example" in c:
             return False
-        return "engineering_standard" in c or any(t in c for t in ("a360", "a341", "a358", "aisc", "asce"))
+        try:
+            from .india_collections import is_india_spec_collection
+            if is_india_spec_collection(collection):
+                return True
+        except Exception:
+            pass
+        return "engineering_standard" in c or any(
+            t in c for t in ("a360", "a341", "a358", "aisc", "asce",
+                             "is800", "is808", "is875", "is1893", "is816", "is4000", "is1161", "is2062")
+        )
+
+    def _collection_stem(self, collection: str) -> str | None:
+        """Map engineering_standards_IS* collection names to corpus stems (IS_800_2007, …)."""
+        try:
+            from .india_collections import stem_for_collection
+            return stem_for_collection(collection)
+        except Exception:
+            return None
 
     def _render_rag(self, query: str, collection: str, out, via: str = "", sent_query: str = "") -> str:
         res = out.get("results") if isinstance(out, dict) else out

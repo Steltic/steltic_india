@@ -383,6 +383,7 @@ where one pinpoint lookup would have worked, and it burns the search softcap.
 |---|---|---|
 | `engineering_standards_IS800` | IS 800:2007 | member limit states, LSD, connections, section classification |
 | `engineering_standards_IS808` | IS 808:2021 | hot-rolled sections dimensions/properties |
+| *(local DB)* | `steel_engine/is808_shapes.csv` | MB/WB/JB/LB/HB/SC/NPB/WPB properties for `Ipack` / `sections.props` (Tables 1–5; see `is808_GAPS.md`) |
 | `engineering_standards_IS816` / `IS9595` / `IS4000` | weld / weld procedure / HSFG bolts | connection detailing |
 | `engineering_standards_IS1161` / `IS2062` | tubes / steel material | material grades |
 | `engineering_standards_IS875_P1`…`P5` | IS 875 Parts 1–5 | **LOADS — mandatory every job** (dead, imposed, wind, snow, special) |

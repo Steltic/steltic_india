@@ -66,3 +66,22 @@ RAG_SEARCH_SOFTCAP = int(os.environ.get("RAG_SEARCH_SOFTCAP", "20"))  # after th
 RAG_ALIASES_FILE   = os.environ.get("RAG_ALIASES_FILE", "")
 # Spec (IS 800 / IS 875 / IS 1893) RAG results are ALWAYS saved to jobs/<name>/rag/<slug>.txt and, once a design completes,
 # evicted from the saved conversation to a file pointer (agent._evict_all_rag) so optimisation runs don't bloat.
+
+
+# --- India corpus collection ↔ stem map (engineering_rag_india) ---
+# Prefer the India aliases file on this shared box when RAG_ALIASES_FILE is unset.
+if not RAG_ALIASES_FILE:
+    _india_aliases = pathlib.Path("/workspace/engineering_rag_india/indexes/aliases.json")
+    if _india_aliases.is_file():
+        RAG_ALIASES_FILE = str(_india_aliases)
+
+try:
+    from .india_collections import (  # noqa: E402
+        COLLECTION_TO_STEM, STEM_TO_COLLECTION, LOAD_COLLECTIONS, DESIGN_COLLECTIONS,
+        stem_for_collection, normalize_collection, INDIA_CORPUS_ROOT,
+    )
+except ImportError:
+    from india_collections import (  # type: ignore
+        COLLECTION_TO_STEM, STEM_TO_COLLECTION, LOAD_COLLECTIONS, DESIGN_COLLECTIONS,
+        stem_for_collection, normalize_collection, INDIA_CORPUS_ROOT,
+    )

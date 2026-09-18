@@ -57,31 +57,41 @@ HSS.update({
  "HSS14X14X1/2":24.6,"HSS14X14X5/8":30.3,"HSS16X16X1/2":28.3,"HSS16X16X5/8":35.0})
 
 def _shapes_csv():
-    """Lazy AISC shape DB from aisc_shapes.csv: label -> (A, Ix, Iy, J). Lets the agent name ANY W-shape."""
+    """Lazy shape DB: is808_shapes.csv (India primary) then aisc_shapes.csv. label -> (A, Ix, Iy, J)."""
     import csv, os
     c = _shapes_csv._cache
     if c is None:
         c = {}
-        try:
-            with open(os.path.join(os.path.dirname(__file__), "aisc_shapes.csv"), newline="") as f:
-                for row in csv.DictReader(f):
-                    lbl = (row.get("AISC_Manual_Label") or "").strip()
-                    if lbl:
-                        try: c[lbl] = (float(row["A"]), float(row["Ix"]), float(row["Iy"]), float(row["J"]))
-                        except Exception: pass
-        except Exception: pass
+        here = os.path.dirname(__file__)
+        for fname in ("is808_shapes.csv", "aisc_shapes.csv"):
+            try:
+                with open(os.path.join(here, fname), newline="") as f:
+                    for row in csv.DictReader(f):
+                        lbl = (row.get("AISC_Manual_Label") or row.get("Label") or "").strip().upper().replace(" ", "")
+                        if lbl and lbl not in c:
+                            try: c[lbl] = (float(row["A"]), float(row["Ix"]), float(row["Iy"]), float(row["J"]))
+                            except Exception: pass
+            except Exception:
+                pass
         _shapes_csv._cache = c
     return c
 _shapes_csv._cache = None
 
 def Ipack(name):
-    """(A, Ix, Iy, J) for a section; CASE-INSENSITIVE; falls back to aisc_shapes.csv (any AISC W-shape) on a miss."""
-    key = str(name).upper().strip()                 # 'W24x104' / ' w24X104 ' -> 'W24X104'
-    s = SEC.get(key) or (SEC.get(name) if name != key else None)   # honor an entry stored under the original case too
+    """(A, Ix, Iy, J) for a section; CASE-INSENSITIVE; IS 808 then AISC CSV fallback."""
+    key = str(name).upper().replace(" ", "").strip()
+    s = SEC.get(key) or (SEC.get(name) if name != key else None)
+    if s is None:
+        # also try original upper-with-spaces stripped only of outer space
+        s = SEC.get(str(name).upper().strip())
     if s is None:
         s = _shapes_csv().get(key)
         if s is None:
-            raise KeyError("section %r not in catalog or aisc_shapes.csv -- use a valid AISC W-shape label (e.g. 'W24X76')" % (name,))
+            raise KeyError(
+                "section %r not in catalog, is808_shapes.csv, or aisc_shapes.csv — "
+                "use an IS 808 label (e.g. 'MB300', 'NPB300X150X36.52') or valid W-shape"
+                % (name,)
+            )
         SEC[key] = s
     return s
 
@@ -616,15 +626,17 @@ def _mf_only(cfg):
 
 
 def drift_allowable(cfg):
-    """(allowable story drift ratio, rho_applied): cfg['drift_limit'] (Table 12.12-1 value,
-    default 0.020), divided by the redundancy factor rho for a moment-frame-only SFRS in SDC
-    D/E/F per ASCE 7-22 sec.12.12.1.1 (Delta <= Delta_a/rho). rho = cfg['rho'], the same value
-    used in the load combinations (default 1.3)."""
-    dl = float(cfg.get("drift_limit", 0.020) or 0.020)
-    if sdc_of(cfg) in ("D", "E", "F") and _mf_only(cfg):
-        rho = float(cfg.get("rho", 1.3) or 1.3)
-        return dl / rho, True
-    return dl, False
+    """(allowable storey drift ratio, rho_applied) — IS 1893 Part 1:2016 cl.7.11.1.1.
+
+    Default limit 0.004 * storey height (ratio 0.004) under design VB with γ=1.0.
+    No ASCE ρ divisor. See india_seismic.CLAUSES / TODO for found:false ASCE analogues.
+    """
+    try:
+        from india_seismic import drift_allowable as _ida
+        return _ida(cfg)
+    except Exception:
+        dl = float(cfg.get("drift_limit", 0.004) or 0.004)
+        return dl, False
 
 
 def _drift_env(cfg, drifts):
@@ -642,8 +654,14 @@ def run(cfg):
     Cs,V,Tu,Ta,kk,Fx,W=elf(cfg,T[0])
     sx=static_lateral(cfg,Fx,"X"); sy=static_lateral(cfg,Fx,"Y")
     mde_x=_drift_env(cfg, sx[2]); mde_y=_drift_env(cfg, sy[2])
-    Cd=cfg["seis"]["Cd"]; Ie=cfg["seis"]["Ie"]            # ASCE 7-22 Eq.12.8-16 design drift
-    mdx=Cd*mde_x/Ie; mdy=Cd*mde_y/Ie
+    # IS 1893 7.11.1.1: design storey drift under VB (γ=1) — NOT ASCE Cd*δe/Ie.
+    # elastic drifts from design seismic forces are the check values unless load_plan
+    # supplies an explicit RAG drift_amplification (india_seismic.design_story_drifts).
+    try:
+        from india_seismic import max_design_drift as _mdd
+        mdx=_mdd([mde_x], cfg); mdy=_mdd([mde_y], cfg)
+    except Exception:
+        mdx=mde_x; mdy=mde_y
     cumX=sum(eX); cumY=sum(eY)
     chk={}
     chk["equil_X"]=abs(sx[3]+V)<=1e-3*V; chk["equil_Y"]=abs(sy[3]+V)<=1e-3*V
@@ -736,9 +754,12 @@ def _footprint_at(cfg,k,NX,NY):
     return {(i,j) for i in range(NX+1) for j in range(NY+1)}
 
 def plan_irregularities(cfg):
-    """FIRM ASCE 7-22 Table 12.3-1/-2 plan screen from the ACTUAL per-level footprint (custom_build
-    present-sets OR a plan= fn OR the full grid). Replaces the old 'cfg.get(plan) is None -> rectangular'
-    guess that let L/T/U/cruciform custom_build models be reported as 'uniform rectangular'."""
+    """Geometric footprint screen + IS 1893 Part 1:2016 Table 5/6 classification hooks.
+
+    Geometric flags (reentrant/setback/nonparallel/nonrect) still come from the ACTUAL
+    per-level footprint. India classification (cites, triggers) is attached under
+    out['is1893'] via india_seismic — do not treat ASCE Table 12.3-1/-2 as authoritative.
+    """
     NX,NY=cfg["NX"],cfg["NY"]; NF=len(cfg.get("heights",[1]))
     full={(i,j) for i in range(NX+1) for j in range(NY+1)}
     reentrant=setback=nonrect=False; prev=None
@@ -748,11 +769,20 @@ def plan_irregularities(cfg):
         if fp!=full: nonrect=True
         xs=[i for i,j in fp]; ys=[j for i,j in fp]
         bbox={(i,j) for i in range(min(xs),max(xs)+1) for j in range(min(ys),max(ys)+1)}
-        if len(fp)<len(bbox): reentrant=True                 # non-convex footprint => re-entrant / notch
+        if len(fp)<len(bbox): reentrant=True
         if prev is not None and len(fp)<len(prev): setback=True
         prev=fp
-    return dict(reentrant=reentrant, setback=setback,
-                nonparallel=bool(cfg.get("skew")), nonrect=nonrect)
+    out=dict(reentrant=reentrant, setback=setback,
+             nonparallel=bool(cfg.get("skew")), nonrect=nonrect)
+    if setback:
+        cfg["_vertical_setback"]=True
+    try:
+        from india_seismic import classify_plan_irregularities, classify_vertical_irregularities
+        out["is1893_plan"]=classify_plan_irregularities(cfg, out)
+        out["is1893_vertical"]=classify_vertical_irregularities(cfg)
+    except Exception as ex:
+        out["is1893_error"]=str(ex)
+    return out
 
 CFG={}
 CFG["B02"]=dict(arch="mid-rise office",NX=6,NY=4,SX=360,SY=360,heights=[162]*6,base="fixed",col="W14X311",beam="W33X130",seis=seis(1.0,0.6,0.6,8,0.028,0.8,1.4),wind=dict(V=115,exposure="C",Kd=0.85,Kzt=1.0,G=0.85,Cpnet=1.3),analyses=["ELF","RS"],**D)

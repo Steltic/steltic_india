@@ -210,7 +210,7 @@ def design(name, outdir=None):
             Fpx[k] = min(max(num / den * wlev[k], 0.2 * SDSq * Ieq * wlev[k]), 0.4 * SDSq * Ieq * wlev[k])
         Fp_max = max(Fpx.values())
         # story-stiffness soft-story screen (both directions) + torsion ratio -- computed BEFORE the
-        # collector seeding so a Type 1 torsional irregularity (TIR screen > 1.2) can trigger the
+        # collector seeding so a IS 1893 torsional irregularity (δmax/δmin > 1.5, Table 5(i)) can trigger the
         # 12.3.3.5 25% increase there
         sxq = E.static_lateral(cfg, Fxq, "X"); syq = E.static_lateral(cfg, Fxq, "Y")
         def _kratio(s_):
@@ -261,7 +261,7 @@ def design(name, outdir=None):
                     "consequences, apply rho/Ax/25% collector increases as required); do not re-derive.",
             "plan": {k: bool(v) for k, v in pir.items()},
             "soft_story": {"K1_over_K2": {"X": kx, "Y": ky}, "K1_over_avg3": {"X": kx3, "Y": ky3},
-                           "classification": cls, "cite": "IS 1893 / IS 800 irregularity screen (agent/RAG)"},
+                           "classification": cls, "cite": "IS 1893 Part 1:2016 Table 5/6 + cl.7.1 (see india_seismic.py)"},
             "torsion": {"ratio_max": round(tr, 2), "classification": tcls, "Ax": Ax,
                         "cite": "IS 1893 torsional provisions (agent/RAG)"},
             "Fpx_kip_by_level": {k: round(v, 0) for k, v in Fpx.items()},
