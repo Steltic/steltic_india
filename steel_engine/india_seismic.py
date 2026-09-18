@@ -83,10 +83,17 @@ CLAUSES = {
     "soft_storey": {
         "found": True,
         "stem": "IS_1893_Part_1_2016",
-        "clause": "Table 6 (i)",
+        "clause": "Table 6 (i) + Amendment 2",
         "text": (
-            "A soft storey is a storey whose lateral stiffness is less than that of the storey above."
+            "A soft storey is a storey whose lateral stiffness is less than that of the storey above. "
+            "In a building with stiffness irregularity: (1) Dynamic Analysis shall be employed to "
+            "capture the actual distribution of lateral stiffness along the height; and (2) the "
+            "inter-storey drift shall be limited to 0.2 percent in that storey and all storeys below "
+            "with stiffness irregularity. (URM-infill SPD >20% → model infills; see also 7.9.)"
         ),
+        "stiffness_ratio_trigger": 1.0,  # Ki < Ki_above  ⇒ soft (Amd2 wording; no 0.7 factor)
+        "soft_storey_drift_limit": 0.002,
+        "requires_dynamic_analysis": True,
     },
     "mass_irregularity": {
         "found": True,
@@ -147,6 +154,84 @@ TODO = [
         ),
     },
 ]
+
+
+
+def storey_stiffness_soft_flags(storey_stiffness: list[float] | None) -> dict:
+    """Classify soft storeys from lateral stiffness samples (force/displacement per storey).
+
+    IS 1893 Table 6 (i) Amd2: soft when Ki < K(i+1) (storey above). Returns per-storey flags
+    and the governing drift limit (0.002 on soft storeys and all below).
+
+    storey_stiffness: list length = n_storeys, index 0 = lowest storey. Units arbitrary but
+    consistent (e.g. kip/in from Vb_storey / drift_storey). If None/empty → found data missing.
+    """
+    out = {
+        "found": True,
+        "standard": "IS_1893_Part_1_2016 Table 6 (i) Amd2",
+        "asce_Ax": {"found": False, "note": "No Ax amplification in IS 1893; use cl.7.8.2 eccentricity."},
+        "soft_storeys": [],
+        "drift_limit_by_storey": [],
+        "requires_dynamic_analysis": False,
+        "note": None,
+    }
+    if not storey_stiffness:
+        out["note"] = (
+            "No storey_stiffness[] provided — height-jump proxy in classify_vertical_irregularities "
+            "is advisory only; agent must supply Ki from analysis (e.g. storey shear / storey drift)."
+        )
+        return out
+    K = [float(x) for x in storey_stiffness]
+    n = len(K)
+    soft = [False] * n
+    for i in range(n - 1):
+        # i is below i+1; soft if Ki < K(above)
+        if K[i] < K[i + 1]:
+            soft[i] = True
+    # Once a soft storey exists, Amd2 limits drift to 0.002 in that storey AND all below
+    lim = []
+    below_soft = False
+    # walk from top: mark cascade downward
+    cascade = [False] * n
+    seen = False
+    for i in range(n - 1, -1, -1):
+        if soft[i]:
+            seen = True
+        if seen and (soft[i] or any(soft[j] for j in range(i, n))):
+            # all storeys at or below any soft storey
+            pass
+    for i in range(n):
+        if any(soft[j] for j in range(i, n)):  # this storey or any above is soft → 0.002 if at/below soft
+            # Amd2: "in that storey and all storeys below"
+            pass
+    # Correct cascade: for each soft storey s, storeys 0..s get 0.002
+    limit = [CLAUSES["storey_drift_limit"]["limit_ratio"]] * n
+    for s, is_soft in enumerate(soft):
+        if is_soft:
+            for i in range(0, s + 1):
+                limit[i] = CLAUSES["soft_storey"]["soft_storey_drift_limit"]
+    out["soft_storeys"] = soft
+    out["drift_limit_by_storey"] = limit
+    out["requires_dynamic_analysis"] = any(soft)
+    out["soft_storey_indices"] = [i for i, f in enumerate(soft) if f]
+    return out
+
+
+def drift_allowable_for_storey(cfg, storey_index: int = 0) -> float:
+    """Allowable drift ratio for a storey, applying soft-storey 0.002 when flagged."""
+    base, _ = drift_allowable(cfg)
+    flags = cfg.get("_soft_storey_flags") or {}
+    lims = flags.get("drift_limit_by_storey")
+    if lims and 0 <= storey_index < len(lims):
+        return float(lims[storey_index])
+    # cfg may list soft storey indices directly
+    soft_idx = cfg.get("soft_storey_indices") or []
+    if soft_idx:
+        # storeys at or below any soft storey → 0.002
+        max_soft = max(int(i) for i in soft_idx)
+        if storey_index <= max_soft:
+            return float(CLAUSES["soft_storey"]["soft_storey_drift_limit"])
+    return base
 
 
 def drift_allowable(cfg) -> tuple[float, bool]:
@@ -274,7 +359,12 @@ def classify_vertical_irregularities(cfg) -> dict:
         "triggered": soft,
         "cite": "IS 1893 Table 6 (i)",
         "found": True,
-        "note": "True soft-storey is stiffness-based; height jump / cfg flag is advisory only.",
+        "note": (
+            "True soft-storey is stiffness-based (Table 6(i) Amd2: Ki < K_above). "
+            "Call storey_stiffness_soft_flags(Ki) after analysis; height jump / cfg flag is advisory only. "
+            "When soft: dynamic analysis required; inter-storey drift ≤ 0.002 in soft storey and below. "
+            "ASCE Ax amplification: found:false — use cl.7.8.2 design eccentricity."
+        ),
     })
 
     mass_irreg = False
