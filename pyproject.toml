@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "steltic"
+name = "steltic-india"
 version = "0.2.2"
-description = "Free, local AISC 360/341 steel-design agent: your LLM + OpenSees + stamped-style reports"
+description = "Free, local India IS 800 / IS 875 / IS 1893 HR steel-design agent: your LLM + OpenSees + stamped-style reports"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE", "DISCLAIMER.md"]
@@ -13,7 +13,7 @@ license-files = ["LICENSE", "NOTICE", "DISCLAIMER.md"]
 # mis-tagged as universal and fails at import with "DLL load failed" on newer interpreters).
 requires-python = ">=3.10,<3.13"
 authors = [{ name = "Steltic" }]
-keywords = ["structural-engineering", "AISC", "steel-design", "opensees", "llm", "agent"]
+keywords = ["structural-engineering", "IS-800", "BIS", "India", "steel-design", "opensees", "llm", "agent"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -42,7 +42,7 @@ engine = []
 Homepage = "https://stelticai.com"
 
 [project.scripts]
-steltic = "steltic.cli:main"
+steltic-india = "steltic.cli:main"
 
 # The wheel ships the app package plus its data folders (engine, contract, frontend, example briefs)
 # at site-packages top level; steltic/config.py resolves them relative to the package parent, which

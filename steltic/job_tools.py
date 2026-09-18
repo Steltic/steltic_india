@@ -172,14 +172,14 @@ class JobWorkspace:
             counts[r["tool"]] = counts.get(r["tool"], 0) + 1
         return {"total_calls": len(recs), "counts_by_tool": counts, "entries": recs}
 
-    def search_engineering_standards(self, query: str, collection: str = "engineering_standards_A360",
+    def search_engineering_standards(self, query: str, collection: str = "engineering_standards_IS800",
                                      top_k: int = 5, clause: str = "", chapter: str = "") -> dict:
         """Search the standards corpus, ESCALATING before it is ever allowed to report nothing.
 
         One zero-hit answer is not evidence that a provision is absent -- it is far more often a
         filter that was too tight, a sentence sent where an id was wanted, or a document that was
         never converted on this machine. Leaving that judgement to the agent is how a design once ran
-        on remembered AISC values while its report said the corpus was empty. So the ladder lives
+        on remembered IS values while its report said the corpus was empty. So the ladder lives
         here, in the tool, and runs whether or not the agent thinks to escalate:
 
           rung 1  the query exactly as asked
@@ -205,7 +205,7 @@ class JobWorkspace:
             self.log("search_engineering_standards", detail, "RAG disabled (not configured)")
             return {"disabled": True,
                     "message": "No engineering-standards RAG is configured (RAG_API_URL is empty). Do NOT "
-                               "search again -- rely on your own knowledge of AISC 360/341/358 and cite "
+                               "search again -- rely on your own knowledge of IS 800 / IS 875 / IS 1893 and cite "
                                "clauses from memory, flagging any value you are unsure of for verification."}
 
         spec = self._is_spec_collection(collection)   # decided from what the AGENT asked for, not from the
@@ -267,7 +267,7 @@ class JobWorkspace:
 
         # A rung that comes back with one marginal chunk is not an answer; it is the ladder stopping
         # one rung too early. The first run after the contract told the agent to name exact ids sent
-        # a nine-term query at AISC 360-22, matched a single chunk straddling the E7/F2 boundary, and
+        # a nine-term query at IS 800:2007, matched a single chunk straddling the E7/F2 boundary, and
         # reported success -- the F2.2 lateral-torsional clause it wanted was never reached. So a
         # rung is accepted on ENOUGH hits; below that it is remembered and the ladder keeps climbing,
         # and the best rung seen is what gets returned if nothing better turns up.
@@ -376,6 +376,10 @@ class JobWorkspace:
         payload = {"query": query, "collection": collection, "top_k": 5}   # fixed at 5
         if clause:  payload["clause"] = clause     # exact-clause / chapter server-side filter; only sent when set
         if chapter: payload["chapter"] = chapter
+        stem = self._collection_stem(collection)
+        if stem:
+            payload["stem"] = stem                 # India corpus document stem (IS_800_2007, …)
+            payload["doc"] = stem                  # alias some servers expect
         body = json.dumps(payload).encode()
         hdrs = {"Content-Type": "application/json"}
         if config.RAG_API_TOKEN:                   # shared-secret gate on the VM (defense in depth over the VPC rule)
@@ -397,7 +401,7 @@ class JobWorkspace:
     _SERVER_EQ_RE = re.compile(r"^[A-Z]{1,2}\d+(?:\.\d+)*-\d+[a-z]?$", re.I)
     # Document names carry digit-hyphen pairs ("360-22", "S100-16", "7-22") shaped exactly like
     # equation ids; strip them before hunting for the id the engineer actually meant.
-    _DOCNAME_RE = re.compile(r"\b(?:AISC|AISI|ASCE(?:/SEI)?|ANSI)\s*/?\s*[A-Z]?\d+(?:[-–]\d+)?\b", re.I)
+    _DOCNAME_RE = re.compile(r"\b(?:IS|BIS|AISC|AISI|ASCE(?:/SEI)?|ANSI)\s*/?\s*[A-Z]?\d+(?:[-–:]\d+)?(?:\s*Part\s*\d+)?\b", re.I)
     _QUERY_ID_RE = re.compile(r"\b(?:[A-Za-z]{1,2}\d+(?:\.\d+)*(?:-\d+[a-z]?)?"   # F2 - F2.2 - F2-1 - E1.3.1.1-1
                               r"|\d+\.\d+(?:\.\d+)*(?:-\d+[a-z]?)?"               # 12.8.1 - 12.8-3 - 1.3.1.1-1
                               r"|\d+-\d+[a-z]?)\b")                               # 3-1 (dropped leading letter)
@@ -458,6 +462,9 @@ class JobWorkspace:
             qfm = config.DATA.parent.parent / "grokbot"
             cands += [qfm / "indexes" / "aliases.json",
                       qfm / "engineering_rag_phase2" / "indexes" / "aliases.json"]
+            # India HR: prefer the India corpus aliases on this shared box
+            cands += [pathlib.Path("/workspace/engineering_rag_india/indexes/aliases.json"),
+                      pathlib.Path("/workspace/engineering_rag_india/scripts/aliases.json")]
         except Exception:
             pass
         self._aliases_cache = {}
@@ -594,12 +601,29 @@ class JobWorkspace:
     _CLAUSE_RE = re.compile(r"\b[A-N]\d+(?:\.\d+)*(?:-\d+[a-z]?)?\b")   # AISC-style clause/eq codes: F2, F2.1, F2-1, H1-1, J3.6
 
     def _is_spec_collection(self, collection: str) -> bool:
-        """RAG-to-file applies only to the SPECIFICATION corpora (AISC/ASCE). OpenSees/example RAGs
-        stay inline -- those return short usage examples the agent should see directly."""
+        """RAG-to-file applies to India IS/BIS specification corpora (and legacy AISC/ASCE names).
+        OpenSees/example RAGs stay inline."""
         c = (collection or "").lower()
-        if "opensees" in c:
+        if "opensees" in c or "example" in c:
             return False
-        return "engineering_standard" in c or any(t in c for t in ("a360", "a341", "a358", "aisc", "asce"))
+        try:
+            from .india_collections import is_india_spec_collection
+            if is_india_spec_collection(collection):
+                return True
+        except Exception:
+            pass
+        return "engineering_standard" in c or any(
+            t in c for t in ("a360", "a341", "a358", "aisc", "asce",
+                             "is800", "is808", "is875", "is1893", "is816", "is4000", "is1161", "is2062")
+        )
+
+    def _collection_stem(self, collection: str) -> str | None:
+        """Map engineering_standards_IS* collection names to corpus stems (IS_800_2007, …)."""
+        try:
+            from .india_collections import stem_for_collection
+            return stem_for_collection(collection)
+        except Exception:
+            return None
 
     def _render_rag(self, query: str, collection: str, out, via: str = "", sent_query: str = "") -> str:
         res = out.get("results") if isinstance(out, dict) else out

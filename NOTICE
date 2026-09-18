@@ -1,11 +1,11 @@
 THIRD-PARTY DATA & NOTICES
 ==========================
 
-1. AISC-derived data.
-   - steel_engine/aisc_shapes.csv (AISC shape properties) and the AISC 360-22 / 341-22 / 358
-     references in contract/ (AGENT_START.md, README_AGENT.md, AISC360_TOC.md) are derived from
-     AISC publications. AISC specifications and shape data remain the property of the American
-     Institute of Steel Construction. This repository does not reproduce AISC specification text.
+1. IS/BIS-derived data.
+   - steel_engine/aisc_shapes.csv (IS/BIS shape properties) and the IS/BIS 360-22 / 341-22 / 358
+     references in contract/ (AGENT_START.md, README_AGENT.md, IS/BIS360_TOC.md) are derived from
+     IS/BIS publications. IS/BIS specifications and shape data remain the property of the American
+     Institute of Steel Construction. This repository does not reproduce IS/BIS specification text.
 
 2. Three.js.
    - steel_engine/vendor/three.min.js is Three.js, MIT-licensed (see steel_engine/vendor/THREE_LICENSE).

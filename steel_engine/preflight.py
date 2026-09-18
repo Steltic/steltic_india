@@ -3,9 +3,11 @@ OpenSees solve so a mis-declared cfg is caught in seconds, not after a full pipe
 Returns a list of (severity, message); severity in {"ERROR","WARN"}. Non-blocking by design --
 pipeline.design_and_report prints the findings and puts them in its return dict.
 
-Also hosts the CANONICAL Seismic Design Category function asce_sdc() (ASCE 7-22 sec.11.6) --
+Legacy asce_sdc() is USA ASCE 7-22 (not authoritative on steltic_india; India zone/SD from IS 1893 RAG). Also --
 engine-free so engine3d.py and report.py both import THIS implementation instead of keeping
 divergent copies."""
+import india_loads as _IL
+
 
 
 def asce_sdc(SDS, SD1, S1=0.0, risk_cat="II"):
@@ -84,7 +86,7 @@ def relief_findings(cfg):
     Ie = float(s.get("Ie", 1.0) or 1.0)
     dl = float(cfg.get("drift_limit", 0.020) or 0.020)
     if Ie >= 1.5:
-        out.append(("ERROR", "cfg['%s'] present but Ie=%.2f (Risk Category IV): ASCE 7-22 16.1.2 keeps the "
+        out.append(("ERROR", "cfg['%s'] present but Ie=%.2f (Risk Category IV): USA ASCE 7-22 16.1.2 (not India authority) keeps the "
                              "12.12.1 drift limits for RC IV -- remove the relief block and design to Table "
                              "12.12-1 (0.010)" % (RELIEF_KEY, Ie)))
         return out
@@ -104,7 +106,7 @@ def relief_findings(cfg):
     if mean16 > lim16:
         out.append(("ERROR", "cfg['%s'] records a Chapter 16 mean drift %.4f ABOVE its limit %.4f -- the relief "
                              "rests on an analysis that did not pass 16.4.1.2" % (RELIEF_KEY, mean16, lim16)))
-    out.append(("WARN", "ASCE 7-22 16.1.2 drift relief in force (Risk Category %s): Table 12.12-1 need not apply; "
+    out.append(("WARN", "legacy ASCE 7-22 16.1.2 drift relief in force (defer India equivalent) (Risk Category %s): Table 12.12-1 need not apply; "
                         "linear design target %.4f from the Chapter 16 result (mean MCE_R drift %.4f vs %.4f). "
                         "The final design must be re-verified by a Chapter 16 analysis before issue."
                         % (risk_cat_from_Ie(Ie), tgt, mean16, lim16)))
@@ -125,6 +127,9 @@ def check(cfg):
     say = lambda sev, msg: out.append((sev, msg))
     if not isinstance(cfg, dict):
         return [("ERROR", "cfg is not a dict")]
+    # ---- India load_plan (LIVE IS 875 / IS 1893 RAG) — mandatory ----
+    for sev, msg in _IL.validate_load_plan(cfg):
+        say(sev, msg)
     # ---- units ----
     H = [float(h) for h in (cfg.get("heights") or []) if isinstance(h, (int, float))]
     if not H:
@@ -166,26 +171,26 @@ def check(cfg):
                                 "FLAG and resolve (12.2.5.4 increase / dual system / 12.2.1.1)"
                                 % (hn, hlim, key.upper()))
             break
-    # ---- Risk-Category drift limit ----
+    # ---- IS 1893 Part 1:2016 storey drift limit (cl.7.11.1.1) ----
+    # Default 0.004 h under VB with γ=1.0. ASCE Table 12.12-1 / ρ rules: found:false (see india_seismic.TODO).
     Ie = float(s.get("Ie", 1.0) or 1.0)
-    dl = float(cfg.get("drift_limit", 0.020) or 0.020)
+    dl = float(cfg.get("drift_limit", 0.004) or 0.004)
     relief = drift_relief(cfg)
     if relief is not None:
+        say("WARN", "cfg['%s'] is a USA ASCE 7-22 16.1.2 artefact — India analogue found:false; "
+                    "do not treat as IS 1893 authority (see india_seismic.TODO)" % RELIEF_KEY)
         for sev, msg in relief_findings(cfg):
             say(sev, msg)
-    if Ie >= 1.5 and dl > 0.0101:
-        say("ERROR", "Ie=%.2f (RC IV) but drift_limit=%.3f -- Table 12.12-1 requires 0.010" % (Ie, dl))
-    elif 1.2 <= Ie < 1.5 and dl > 0.0151 and not relief_active(cfg):
-        say("ERROR", "Ie=%.2f (RC III) but drift_limit=%.3f -- Table 12.12-1 requires 0.015" % (Ie, dl))
-    # moment-frame-only SFRS in SDC D-F: allowable drift is Delta_a/rho (ASCE 7-22 sec.12.12.1.1);
-    # the engine applies the division in its drift gates -- flag it so the reduced target is expected
-    _mf_only = (any(k in sysname for k in ("smf", "imf", "omf")) or "moment" in sysname) \
-               and "dual" not in sysname
-    if _mf_only and sdc_of_cfg(cfg) in ("D", "E", "F"):
-        _rho = float(cfg.get("rho", 1.3) or 1.3)
-        say("WARN", "moment-frame-only SFRS in SDC %s: allowable story drift is drift_limit/rho = "
-                    "%.4f/%.2f = %.4f (12.12.1.1) -- the engine drift gates apply this division"
-                    % (sdc_of_cfg(cfg), dl, _rho, dl / _rho))
+    if dl > 0.00401 and not cfg.get("drift_limit_rag_cite"):
+        say("WARN", "drift_limit=%.4f exceeds IS 1893 cl.7.11.1.1 default 0.004 — set "
+                    "cfg['drift_limit_rag_cite'] if a stricter/special limit was RAG-retrieved "
+                    "(e.g. 0.002 for URM-infill storeys per Table 6 notes), else use 0.004" % dl)
+    if dl < 0.001:
+        say("WARN", "drift_limit=%.5f is unusually tight — confirm RAG cite" % dl)
+    # Accidental: agent may still set ASCE-shaped SDC; do not apply 12.12.1.1 ρ divisor on India path.
+    if cfg.get("rho") and float(cfg.get("rho") or 1) > 1.01:
+        say("WARN", "cfg['rho']=%.2f present but IS 1893 has no ASCE 12.12.1.1 ρ drift divisor "
+                    "(found:false) — drift gate uses cl.7.11.1.1 limit without /ρ" % float(cfg["rho"]))
     # ---- analyses vs R=3 ----
     if R and R <= 3.0 and "341" in str(cfg.get("system", "")):
         say("WARN", "R<=3: AISC 341 does NOT apply -- design to AISC 360 only and prove wind-vs-seismic")

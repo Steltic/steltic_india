@@ -1,18 +1,15 @@
 """
-AISC section properties for the design post-processor.
+Section properties for the design post-processor (steltic_india).
 
 Source of truth, in priority order:
-  1. If an official AISC Shapes Database CSV is present (set AISC_CSV env var or
-     drop 'aisc_shapes.csv' next to this file), properties are read from it (exact).
-  2. Otherwise a small built-in table for the shapes used in this library is used.
-     Built-in values: A, Ix, Iy, J come from the engine's SEC dict (already used to
-     build the models, so capacity and analysis stay consistent); Zx and the section
-     geometry (d, tw, bf, tf) are tabulated here; everything else (Sx, Sy, rx, ry, Aw,
-     ho, Cw, rts) is DERIVED with standard AISC formulae. Spot-check against AISC
-     v16.0 for production use; provide the CSV for exact values.
+  1. IS 808:2021 rolled sections CSV (`is808_shapes.csv` next to this file, or IS808_CSV env).
+     Indian designations: MB/WB/JB/LB/HB/SC/NPB/WPB/… (see is808_GAPS.md).
+  2. AISC Shapes Database CSV (`aisc_shapes.csv` or AISC_CSV env) — retained for legacy
+     W/HSS labels and USA twin parity; NOT the primary India path.
+  3. Small built-in table for a few W-shapes used in library archetypes.
 
 props(name) -> dict with keys: A, Ix, Iy, J, Zx, Zy, Sx, Sy, rx, ry, Aw, ho, Cw, rts,
-d, tw, bf, tf  (units in, in^2, in^3, in^4, in^6).
+d, tw, bf, tf  (pipeline units: in, in^2, in^3, in^4, in^6 — IS 808 rows are converted).
 brace_r(key) -> radius of gyration (in) for an HSS brace key.
 """
 import os, csv, math
@@ -45,22 +42,40 @@ _HSS_R.update({
  "HSS12X12X3/8":4.72,"HSS12X12X1/2":4.66,"HSS12X12X5/8":4.60,
  "HSS14X14X1/2":5.49,"HSS14X14X5/8":5.43,"HSS16X16X1/2":6.31,"HSS16X16X5/8":6.25})
 
-def _csv_path():
+_INDIA_PREFIXES = ("MB", "WB", "JB", "LB", "HB", "SC", "NPB", "WPB", "PBP",
+                   "MC", "LC", "JC", "MPC", "ISA", "ISMB", "ISWB", "ISLB", "ISJB",
+                   "ISMC", "ISLC", "ISHB", "ISSC")
+
+def _looks_india(name: str) -> bool:
+    u = str(name).upper().replace(" ", "")
+    return any(u.startswith(p) for p in _INDIA_PREFIXES)
+
+def _is808_path():
+    p = os.environ.get("IS808_CSV")
+    if p and os.path.exists(p): return p
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "is808_shapes.csv")
+    return here if os.path.exists(here) else None
+
+def _aisc_path():
     p = os.environ.get("AISC_CSV")
     if p and os.path.exists(p): return p
     here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aisc_shapes.csv")
     return here if os.path.exists(here) else None
 
+def _csv_path():
+    """Back-compat: primary shapes file. India prefers IS 808 when present."""
+    return _is808_path() or _aisc_path()
+
 _CSV = None
-def _load_csv():
-    global _CSV
-    if _CSV is not None: return _CSV
-    _CSV = {}
-    p = _csv_path()
-    if not p: return _CSV
-    with open(p, newline="") as f:
+_CSV_SRC = None
+
+def _load_one(path):
+    db = {}
+    if not path: return db
+    with open(path, newline="") as f:
         for row in csv.DictReader(f):
-            lab = (row.get("AISC_Manual_Label") or row.get("Shape") or "").strip().upper()
+            lab = (row.get("AISC_Manual_Label") or row.get("Label") or row.get("Shape") or "").strip().upper()
+            lab = lab.replace(" ", "")
             if not lab: continue
             def g(*keys):
                 for k in keys:
@@ -69,16 +84,37 @@ def _load_csv():
                         try: return float(str(v).replace(",", ""))
                         except ValueError: pass
                 return None
-            _CSV[lab] = dict(A=g("A"), Ix=g("Ix"), Iy=g("Iy"), J=g("J"), Zx=g("Zx"), Zy=g("Zy"),
+            db[lab] = dict(A=g("A"), Ix=g("Ix"), Iy=g("Iy"), J=g("J"), Zx=g("Zx"), Zy=g("Zy"),
                              Sx=g("Sx"), Sy=g("Sy"), rx=g("rx"), ry=g("ry"), d=g("d"), tw=g("tw"),
-                             bf=g("bf"), tf=g("tf"), Cw=g("Cw"), rts=g("rts"), ho=g("ho"))
+                             bf=g("bf"), tf=g("tf"), Cw=g("Cw"), rts=g("rts"), ho=g("ho"),
+                             _source=row.get("Source") or path)
+            # also index spaced Designation_IS if present
+            des = (row.get("Designation_IS") or "").strip().upper().replace(" ", "")
+            if des and des not in db:
+                db[des] = db[lab]
+    return db
+
+def _load_csv():
+    """Merged DB: IS 808 first, then AISC (IS labels win on collision)."""
+    global _CSV, _CSV_SRC
+    if _CSV is not None: return _CSV
+    is808 = _load_one(_is808_path())
+    aisc = _load_one(_aisc_path())
+    merged = dict(aisc)
+    merged.update(is808)  # India wins
+    _CSV = merged
+    _CSV_SRC = "is808+aisc" if is808 else ("aisc" if aisc else "none")
     return _CSV
 
+def normalize_label(name: str) -> str:
+    return str(name).upper().replace(" ", "").strip()
+
 def props(name, SEC=None):
-    name = name.upper()
-    csvd = _load_csv().get(name)
+    name_u = normalize_label(name)
+    csvd = _load_csv().get(name_u)
     if csvd and csvd.get("A"):
         d = dict(csvd)
+        d.pop("_source", None)
         d.setdefault("Aw", (d["d"]*d["tw"]) if d.get("d") and d.get("tw") else None)
         if not d.get("ho") and d.get("d") and d.get("tf"): d["ho"]=d["d"]-d["tf"]
         if not d.get("Cw") and d.get("Iy") and d.get("ho"): d["Cw"]=d["Iy"]*d["ho"]**2/4
@@ -87,11 +123,18 @@ def props(name, SEC=None):
         if not d.get("Sx") and d.get("Ix") and d.get("d"): d["Sx"]=2*d["Ix"]/d["d"]
         if not d.get("Zy") and d.get("Sy"): d["Zy"]=1.55*d["Sy"]
         return d
+    if _looks_india(name_u):
+        raise KeyError(
+            "section %r looks like an IS 808 designation but was not found in is808_shapes.csv "
+            "(channels/angles may be GAPS — see is808_GAPS.md). Do not substitute an AISC W-shape."
+            % (name,)
+        )
     # built-in path: need engine SEC for A,Ix,Iy,J
     if SEC is None:
         from engine3d import SEC as _S; SEC=_S
-    A,Ix,Iy,J = SEC[name]
-    Zx,dd,tw,bf,tf = _GEOM[name]
+    key = name.upper()
+    A,Ix,Iy,J = SEC[key]
+    Zx,dd,tw,bf,tf = _GEOM[key]
     Sx = 2*Ix/dd; Sy = 2*Iy/bf
     rx = math.sqrt(Ix/A); ry = math.sqrt(Iy/A)
     Aw = dd*tw; ho = dd-tf; Cw = Iy*ho**2/4.0
@@ -104,17 +147,16 @@ def brace_r(key):
     r = _HSS_R.get(key)
     if r is not None:
         return r
-    d = _load_csv().get(str(key).upper())          # B6: any HSS resolves rx from the Shapes DB CSV
+    d = _load_csv().get(normalize_label(key))
     if d and d.get("rx"):
         return d["rx"]
     return 2.5
 
 def hss_b_over_t(name, spec="A1085"):
-    """Flat-width / design-wall ratio b/t for a SQUARE/RECT HSS, used for AISC 341 Table D1.1 ductility.
-    B6: design wall t_des = t_nom for ASTM A1085 (tighter tolerance) but 0.93*t_nom for A500. Parses the
-    nominal wall from the label (e.g. HSS12X12X3/4 -> B=12, t_nom=0.75). Returns (b_over_t, t_des)."""
+    """Flat-width / design-wall ratio b/t for a SQUARE/RECT HSS (legacy AISC path).
+    India hollow sections: use IS 1161 via RAG — not auto-tabulated here (found:false in is808_GAPS)."""
     import re as _re
-    m = _re.match(r"HSS(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)X(\d+)(?:/(\d+))?", str(name).upper())
+    m = _re.match(r"HSS(\\d+(?:\\.\\d+)?)X(\\d+(?:\\.\\d+)?)X(\\d+)(?:/(\\d+))?", str(name).upper())
     if not m:
         return None, None
     B = float(m.group(1))
@@ -122,3 +164,12 @@ def hss_b_over_t(name, spec="A1085"):
     tdes = tnom if str(spec).upper() == "A1085" else 0.93*tnom
     b = B - 3.0*tdes
     return b/tdes, tdes
+
+def list_is808(prefix=None):
+    """Return sorted IS 808 labels (optionally filtered by Type/prefix)."""
+    db = _load_one(_is808_path())
+    labs = sorted(set(db.keys()))
+    if prefix:
+        p = prefix.upper().replace(" ", "")
+        labs = [L for L in labs if L.startswith(p)]
+    return labs

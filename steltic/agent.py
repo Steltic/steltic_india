@@ -67,15 +67,16 @@ TOOL_SPECS = [
     _spec("new_activity_log", "Start a fresh activity log for a design run (call ONCE first).",
           {"building": {"type": "string", "description": "building name -> jobs/<name>/"}}, []),
     _spec("search_engineering_standards",
-          "Search the engineering RAG. Collections: engineering_standards_A360 (primary spec), "
-          "engineering_standards_A341 (seismic), engineering_standards_A358 (connections), "
-          "and steel_design_examples (AISC worked examples -- query this ALONGSIDE A360 for each member/connection and "
-          "mirror the example's method). When you know the exact provision, pass clause or chapter for a pinpoint lookup. "
-          "Returns a 'disabled' note if no RAG is configured -- then rely on your own cited AISC knowledge.",
+          "Search the India (IS/BIS) engineering RAG. Design collections: engineering_standards_IS800 "
+          "(primary), plus IS808/IS816/IS9595/IS4000/IS1161/IS2062 as needed. LOAD collections "
+          "(MANDATORY every job before pipeline): engineering_standards_IS875_P1..P5 and "
+          "engineering_standards_IS1893 — write retrieved factors into cfg['load_plan']. "
+          "When you know the exact provision, pass clause or chapter for a pinpoint lookup. "
+          "Returns a 'disabled' note if no RAG is configured -- then rely on your own cited IS 800 knowledge.",
           {"query": {"type": "string"},
            "collection": {"type": "string",
-                          "description": "default engineering_standards_A360; use steel_design_examples for worked examples"},
-           "clause": {"type": "string", "description": "optional: restrict to an exact AISC clause code, e.g. F2, E3, J3.6 -- use when you know the provision"},
+                          "description": "default engineering_standards_IS800; use IS875_P* / IS1893 for loads every job"},
+           "clause": {"type": "string", "description": "optional: exact clause code, e.g. 8.2.1, 7.2 -- use when you know the provision"},
            "chapter": {"type": "string", "description": "optional: restrict to a whole chapter, e.g. F, E, J"},
            "top_k": {"type": "integer", "description": "chunks to return (default 3, max 5)"}},
           ["query"]),
@@ -233,7 +234,7 @@ def _completion_gate(ws):
                 probs.append("'%s' has D/C = %.3f > 1.0 -- resize/redesign (or waive with justification)"
                              % (x.get("id"), max(dcs)))
             if not x.get("cited") and not any(c.get("cited") for c in checks):
-                probs.append("'%s' has no cited AISC clause" % x.get("id"))
+                probs.append("'%s' has no cited IS clause" % x.get("id"))
         # seeded collector slot must be filled (hardening #3 pairs with this)
         for c in con:
             if isinstance(c, dict) and "SEEDED" in str(c.get("type", "")) and c.get("DC") is None \
@@ -312,7 +313,7 @@ def dispatch(tool, args, ws, executor):
         return ws.activity_summary()
     if tool == "search_engineering_standards":
         return ws.search_engineering_standards(args.get("query", ""),
-                                               args.get("collection", "engineering_standards_A360"),
+                                               args.get("collection", "engineering_standards_IS800"),
                                                args.get("top_k", config.RAG_TOP_K),
                                                args.get("clause", ""), args.get("chapter", ""))
     return {"error": f"unknown tool '{tool}'"}
@@ -509,7 +510,7 @@ _SEARCH_FILLER = {"strength", "section", "equation", "equations", "design", "fle
 
 def _search_anchor(query):
     """Coarse fingerprint of a RAG query so REWORDED variants of the same lookup collapse to one signature.
-    Prefer the AISC clause code(s) (F2, E3, J3.6, H1-1 -> base 'h1'); else a small set of content words."""
+    Prefer the IS clause code(s) (F2, E3, J3.6, H1-1 -> base 'h1'); else a small set of content words."""
     q = (query or "").lower()
     codes = [re.sub(r"-\d+$", "", c) for c in re.findall(r"\b[a-k]\d+(?:\.\d+)?(?:-\d+)?\b", q)]
     if codes:
@@ -527,7 +528,7 @@ def _sig(nm, args):
         body = str(args.get("content", ""))                                   # SAME bytes trips; editing does NOT
         return ("write_file", args.get("path", ""), hashlib.md5(body.encode()).hexdigest()[:8])
     if nm == "search_engineering_standards":
-        return ("search", args.get("collection", "A360"), _search_anchor(args.get("query", "")))
+        return ("search", args.get("collection", "IS800"), _search_anchor(args.get("query", "")))
     return (nm, json.dumps(args, sort_keys=True)[:120])
 
 
@@ -591,7 +592,7 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
                 messages.append({"role": "user", "content":
                     brief + "\n\n(Apply this change to the existing design: edit jobs/" + building +
                     "/cfg.py, re-run pipeline.design_and_report for fresh demands, re-derive the affected "
-                    "AISC capacities into calc_package.json, run consistency.check, then re-render with "
+                    "IS 800 capacities into calc_package.json, run consistency.check, then re-render with "
                     "report.build_report. Keep everything else as-is.)"})
                 yield {"type": "status", "text": f"continuing '{building}' with your new instruction ({len(messages)} messages in context)"}
             else:                           # empty brief -> plain resume of an interrupted run
@@ -606,7 +607,7 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
         if re.search(r"composite[^.\n]{0,50}(deck|slab|floor)|(deck|slab|floor)[^.\n]{0,50}composite",
                      brief or "", re.I):
             user += ("\n\n[framework note] This brief specifies a COMPOSITE floor. Per the contract you must "
-                     "either perform the AISC 360 Ch. I composite design for the floor members (COMPOSITE_I3.md) "
+                     "either perform the IS 800 composite/floor design for the floor members (COMPOSITE_I3.md) "
                      "or record an explicit composite scope statement in the calc package -- and keep the word "
                      "'composite' in cfg (floor_system or notes) so the consistency check tracks it.")
         if images:                              # vision: attach reference image(s) as OpenAI image_url parts
@@ -645,7 +646,7 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
         if searches >= config.RAG_SEARCH_SOFTCAP and not nudged:
             nudged = True
             messages.append({"role": "user", "content":
-                "You have gathered ample AISC references -- STOP searching now and DERIVE the capacities: apply the "
+                "You have gathered ample IS references -- STOP searching now and DERIVE the capacities: apply the "
                 "clauses you found to the demands and write limit_state/cited/capacity/DC into design/calc_package.json "
                 "(members + connections + capacity_design), then run consistency.check and report.build_report. "
                 "Re-search only ONE specific equation if it is genuinely missing."})
@@ -690,7 +691,7 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
                     "Your previous turn was " + ("cut off before making a tool call. Use LESS reasoning" if truncated
                     else "EMPTY -- you produced no text and no tool call") + ". Do NOT stop here -- the design is not "
                     "finished. CONTINUE with your NEXT tool call (write cfg.py, run pipeline.design_and_report, derive "
-                    "AISC capacities into calc_package.json, run consistency.check, build the report). Give a final "
+                    "IS 800 capacities into calc_package.json, run consistency.check, build the report). Give a final "
                     "written answer ONLY if the design is genuinely complete (report built, consistency.check passes)."})
                 continue
             if not final_text:                                  # exhausted nudges, still empty -> pause, never fake 'done'
@@ -838,7 +839,7 @@ def _tool_title(name, args):
     if name == "run_python":
         return f"run_python · {_code_label(a.get('code',''))}"
     if name == "search_engineering_standards":
-        coll = (a.get("collection") or "engineering_standards_A360").replace("engineering_standards_", "")
+        coll = (a.get("collection") or "engineering_standards_IS800").replace("engineering_standards_", "")
         flt = "".join(f" [{k}={a[k]}]" for k in ("clause", "chapter") if a.get(k))
         return f"search {coll} ‹{(a.get('query') or '')[:64]}›{flt}"
     if name == "write_file":   return f"write_file {a.get('path','')}"
@@ -869,7 +870,7 @@ def _result_preview(name, result):
     if "error" in result:
         return "error: " + str(result["error"])[:240]
     if name == "search_engineering_standards":
-        if result.get("disabled"): return "RAG disabled — using cited AISC knowledge"
+        if result.get("disabled"): return "RAG disabled — using cited IS 800 knowledge"
         res = result.get("results") if isinstance(result.get("results"), list) else None
         bits = [f"{len(res) if res is not None else 0} hits"]
         cl = result.get("clauses_found") or []

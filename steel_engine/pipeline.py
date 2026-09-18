@@ -11,8 +11,8 @@ You DETERMINE the joints / base fixity explicitly and STATE them in the report, 
 to ask the user to approve the model. (build_and_preview(name, cfg) remains available as an OPTIONAL
 self-review that builds just the 3 figures -- it is not a required hold.)
 
-The framework computes the model, the ASCE 7 loads, the P-Delta analysis, and the per-member
-DEMANDS + the report scaffold. It computes NO AISC 360 capacity: YOU query the RAG, derive every
+The framework computes the model, the IS loads from cfg['load_plan'] (RAG), the P-Delta analysis, and the per-member
+DEMANDS + the report scaffold. It computes NO IS 800 capacity: YOU query the RAG, derive every
 capacity/D-C yourself, and write them into calc_package.json. All outputs go to the building's
 solution folder: steel_builder/<name>/ (design/, figs/, report.html).
 
@@ -82,7 +82,7 @@ def build_and_preview(name, cfg=None):
 def design_and_report(name, cfg=None, do_report=True):
     """Run the full design (no user-review pause): register cfg, run sanity -> DEMAND envelope ->
     figures -> HTML report, all in process, writing to the solution folder steel_builder/<name>.
-    Computes NO AISC 360 capacity; the agent derives those from the RAG and fills calc_package.json."""
+    Computes NO IS 800 capacity; the agent derives those from the RAG and fills calc_package.json."""
     if cfg is not None:
         E.CFG[name] = copy.deepcopy(cfg)   # freeze the analysed model: the report renders exactly this cfg
     if name not in E.CFG:
@@ -108,7 +108,7 @@ def design_and_report(name, cfg=None, do_report=True):
     import consistency as _CC                                   # early units/geometry heads-up (e.g. story heights in ft)
     out["geometry_warnings"] = _CC._geometry_issues(E.CFG.get(name))
 
-    # 2) ASCE 7-22 LRFD combinations + per-member DEMAND envelope (NO capacities -- agent/RAG)
+    # 2) India load_plan combinations + per-member DEMAND envelope (NO capacities -- agent/RAG)
     import design_pipeline as DP
     out["demands_written"] = bool(DP.design(name, outdir=os.path.join(root, "design")))
     out["design_dir"] = os.path.join(root, "design")

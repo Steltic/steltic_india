@@ -2,7 +2,7 @@
 design_post.py  --  ANALYSIS / DEMAND extraction only. NO coded AISC 360 capacities.
 
 This module deliberately contains NO AISC 360 member-design equations. The framework computes
-structural DEMANDS (the OpenSees model, the ASCE 7 loads, the second-order P-Delta analysis);
+structural DEMANDS (the OpenSees model, IS loads from load_plan, the second-order P-Delta analysis);
 the AISC 360-22 capacity checks (compression E3, tension D2, flexure F2-F6, shear G2,
 beam-column interaction H1, the App.8 B2 amplifier, and the AISC 341 SCWB / Omega0 capacity
 design) are NOT coded anywhere. The design agent must query the AISC 360 / 341 RAG, derive the
@@ -15,7 +15,7 @@ What this module provides:
   * _beam_grav(...) -- the beam gravity span moment/shear added to the joint-lumped model
     (analysis bookkeeping, not a code check).
 
-The ASCE 7-22 combination set + the per-member demand envelope live in repo-root
+The India load_plan combination set + the per-member demand envelope live in repo-root
 design_pipeline.py; the report scaffold lives in report.py. Neither computes a member capacity.
 """
 import os, sys, math, csv, json
@@ -52,7 +52,7 @@ def _beam_grav(cfg, n1, n2, fD, fL, fLr):
 def run_case(cfg, fD, fL, fLr, lateral):
     """Analyse ONE factored load combination (supplied by the caller) under proper P-Delta and
     return per-element DEMANDS {tag: (N, Mz, My, V)}. The caller chooses the factors and the
-    lateral pattern (ASCE 7-22 combinations: Ev in fD, rho, Omega0, 100/30, accidental torsion);
+    lateral pattern (IS partial-factor combinations (from load_plan): Ev in fD, rho, Omega0, 100/30, accidental torsion);
     this runs the actual nonlinear analysis, so no invalid superposition of factored results.
         fD, fL, fLr : dead / live / roof-live(or snow) load factors for THIS combination.
         lateral     : dict floor-> (fx, fy, mz) at the diaphragm master, scaled from the engine's

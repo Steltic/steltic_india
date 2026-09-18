@@ -1,4 +1,4 @@
-"""Steltic -- a local web app that runs an AISC 360/341 steel-design agent.
+"""Steltic -- a local web app that runs an IS 800 360/341 steel-design agent.
 
 Frontend (vanilla) -> FastAPI backend (agent loop) -> sandboxed run_python (Docker if available).
 You bring your own LLM (base-url + API key, kept in memory only). Optional engineering-standards

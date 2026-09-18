@@ -6,7 +6,7 @@ period / seismic base shear, but the beam ELEMENTS then carry ~0 gravity force, 
 diagrams cannot be drawn from it. This static model instead DISTRIBUTES the floor pressures onto the
 beams as their true two-way (45-degree) tributary line loads -- triangular on the short bay edge,
 trapezoidal on the long edge -- by sub-dividing every beam into `nseg` sub-elements with real
-intermediate nodes and applying the exact stepped load. Every ASCE 7-22 LRFD combination is then
+intermediate nodes and applying the exact stepped load. Every India load_plan combination is then
 analysed statically with P-Delta, so N / V / M are correct everywhere for the force diagrams and the
 gravity member demands. The dynamic model is untouched.
 
