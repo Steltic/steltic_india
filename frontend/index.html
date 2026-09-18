@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Steltic</title>
+  <title>Steltic India</title>
   <link rel="stylesheet" href="/static/styles.css?v=17">
 </head>
 <body>
   <div id="app">
     <header>
-      <strong id="brand">Steltic</strong>
-      <span class="muted">AISC 360/341 steel-design agent</span>
+      <strong id="brand">Steltic India</strong>
+      <span class="muted">India IS 800 / IS 875 / IS 1893 HR steel-design agent</span>
       <span class="spacer"></span>
       <span class="badge" id="execBadge" title="sandbox executor"></span>
       <button id="settingsBtn" class="ghost">Settings</button>
@@ -65,7 +65,10 @@
                style="display:none">
         <span class="info" tabindex="0" data-tip="Up to 3 files, 5 MB each. Text / Markdown (.txt, .md) is read into the brief. PDFs (.pdf) have their text extracted into the brief (text-based PDFs only — scanned pages have no text layer). Images (.png, .jpg, .jpeg, .gif, .webp) are attached as references and sent to the model — but not all LLMs can read images.">i</span>
         <select id="exampleSelect" class="ghost" title="Load an example design brief into the prompt">
-          <option value="" selected>Example Prompts…</option>
+                    <option value="IN_Ex1_SCBF_5levels_Delhi.txt">IN_Ex1 — SCBF 5 levels, Delhi (IS)</option>
+          <option value="IN_Ex2_SMF_office_Mumbai.txt">IN_Ex2 — SMF office, Mumbai (IS)</option>
+          <option value="IN_Ex3_Industrial_portal_Chennai_wind.txt">IN_Ex3 — Portal, Chennai wind (IS)</option>
+<option value="" selected>Example Prompts…</option>
           <option value="ex1">Ex1 — SCBF, 5 levels</option>
           <option value="ex2">Ex2 — SMF, 9 levels</option>
           <option value="ex3">Ex3 — Braced + Moment, 7 levels</option>

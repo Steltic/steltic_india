@@ -1,3 +1,5 @@
+"""Legacy ASCE 7-22 §16.1.2 drift-relief helpers (USA). Kept for API compat;
+India equivalent via IS RAG is deferred — not authoritative on steltic_india."""
 """ASCE 7-22 16.1.2 drift relief (cfg['drift_relief_16_1_2']) -- the rules preflight and consistency apply, and the
 /api/restore archive flag. Engine-free: run with `python -m pytest tests -q` from the repo root."""
 import copy, io, json, os, sys, zipfile

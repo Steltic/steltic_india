@@ -15,11 +15,14 @@ rather than recalled code values.
 
 Two hard rules:
 - **Ground code checks in the RAG.** Apply provisions/equations exactly as returned
-  from the AISC 360 spec collection (and AISC 341 / AISI when applicable). Cite the
+  from the IS 800 spec collection (and IS 800 §12 / seismic / AISI when applicable). Cite the
   section and equation numbers. Do not invent code numbers from memory.
-- **Loads (ASCE 7) are computed, not retrieved.** ASCE 7 is not in the RAG
-  (copyright). Compute wind/seismic with the building engine's load routines and
-  spot-check them; the spec RAGs cover *member* design, not *loads*.
+- **Loads (IS 875 / IS 1893) are RETRIEVED live every job, not hardcoded.**
+  Unlike USA steltic (IS 875/1893 embedded in the engine), steltic_india REQUIRES you to
+  RAG-query IS 875 Parts 1–5 and IS 1893 Part 1:2016 every job, then write the
+  retrieved combination factors and story forces into `cfg['load_plan']`
+  (see `india_loads.py`). The engine will NOT invent ASCE or permanent IS formulas.
+  Design RAGs (IS 800 family) cover *member* design; load RAGs cover *loads*.
 
 ---
 
@@ -31,13 +34,13 @@ Embeddings are Nomic; phrase queries naturally (the retriever was built with a
 
 | Collection | Contains | Use it for |
 |---|---|---|
-| **`engineering_standards_A360`** | AISC 360-22 *Specification* (normative provisions + equations) | **Primary grounding** for every steel member/connection limit state |
-| `engineering_standards_A341` | AISC 341 *Seismic Provisions* | Seismic detailing/system requirements (SMF/SCBF/EBF/BRBF/dual), R-system rules |
-| `engineering_standards_A358` | AISC 358 prequalified moment connections | Moment-connection detailing |
+| **`engineering_standards_IS800`** | IS 800-22 *Specification* (normative provisions + equations) | **Primary grounding** for every steel member/connection limit state |
+| `engineering_standards_IS800` | IS 800 §12 / seismic *Seismic Provisions* | Seismic detailing/system requirements (SMF/SCBF/EBF/BRBF/dual), R-system rules |
+| `engineering_standards_IS816` | IS 800 connections prequalified moment connections | Moment-connection detailing |
 | **`steel_design_examples`** | AISC Design Examples (worked problems + answers) | Worked numeric examples & answer keys to mirror your calc |
 | **AISC Q&A database** (`aisc_qa_database/`, ingest as needed) | Our original Q&A solutions grounded in A360 | Extra worked, spec-grounded examples per chapter |
 | **`opensees_buildings_3d`** ← THIS LIBRARY | 40 validated 3D steel building models (MF/CBF/dual/EBF/BRBF/SPSW/podium/…; 1–40 storeys; SDC B–E; wind; irregularities) | **Retrieve the nearest whole-building model** to start from |
-| `opensees_building_templates` | 2D parametric MF/CBF covering set + the AISC III-1 flagship | Parametric lateral-frame methodology, ASCE 7 ELF/RS/wind worked at building scale |
+| `opensees_building_templates` | 2D parametric MF/CBF covering set + the IS 800 worked reference flagship | Parametric lateral-frame methodology, IS 1893 / IS 875 ELF/RS/wind worked at building scale |
 | `openseespy_documentation`, `opensees_documentation` | OpenSeesPy/OpenSees command reference | Correct API for `rigidDiaphragm`, `mass`, `eigen`, `responseSpectrumAnalysis`, transforms, elements |
 | `bgscm16_steel_textbook`, `structural_analysis`, `statics_textbook`, `mechanics`, `materials` | Textbooks | Background theory when a provision/behaviour is unclear |
 
@@ -59,12 +62,12 @@ YOUR frame layout -- NOT example_build.py's placeholder -- and confirm strong-ax
 orientation check. Any AISC W-shape name resolves automatically (no need to "extend" a section table).
 
 **Phase 2 - Run the pipeline (ONE call).** `pipeline.design_and_report(name, cfg)` builds the model,
-computes the ASCE 7-22 loads, assembles the LRFD combinations, runs each through P-Delta, envelopes the
-per-member DEMANDS, draws the figures, checks drift (delta = Cd*delta_e/Ie, ASCE 7-22 Sec.12.8.6) and
+applies your RAG-backed cfg['load_plan'] combinations, runs each through P-Delta, envelopes the
+per-member DEMANDS, draws the figures, checks drift (design drift per retrieved IS 1893 / IS 800 serviceability rules) and
 serviceability, and writes the report scaffold. It computes **NO AISC capacity** -- that is your job.
 
 **Phase 3 - Ground every member & connection in the AISC RAG (this is the real work).** For each
-governing limit state, query `engineering_standards_A360` (+ `engineering_standards_A341` for seismic),
+governing limit state, query `engineering_standards_IS800` (+ `engineering_standards_IS800` for seismic),
 apply the cited equation to the demands, compute the capacity and D/C, and write
 `limit_state`/`cited`/`capacity`/`DC` into `calc_package.json`. Limit-state -> query:
 - Tension -> *"tensile yielding rupture D2 net area D3"*
@@ -72,7 +75,7 @@ apply the cited equation to the demands, compute the capacity and D/C, and write
 - Beams/flexure -> *"flexural strength F2 lateral-torsional buckling"* (compact vs noncompact flange -> F2 vs F3; weak-axis F6; HSS F7/F8)
 - Beam-columns -> *"combined axial and flexure interaction H1-1"*; Shear -> *"shear strength G2 web"*
 - Braces -> A360 E3 + **A341** seismic detailing; Connections -> A360 Ch. J (*"bolt shear J3"*, *"fillet weld J2"*, *"block shear J4"*); prequalified moment connections -> **A358**
-- Also derive the App.8 **B2** amplifier and the AISC 341 **SCWB / Omega0** column check. Cite the version (AISC 360-22).
+- Also derive the App.8 **B2** amplifier and the IS 800 §12 / seismic **SCWB / Omega0** column check. Cite the version (IS 800-22).
 
 **Phase 4 - Resize, reconcile, finish.** If any D/C > 1.0 or SCWB < 1.0, change the section in the cfg,
 re-run the pipeline for fresh demands, and re-derive. When all D/C <= 1.0 and drift/serviceability pass,
@@ -114,7 +117,7 @@ primitives (`modal`, `elf`, `static_lateral`, `rs_baseshear`) directly.
   `extra_mass_floors={level:psf}`; `skew` (parallelogram), `xcoords`/`ycoords`
   (non-uniform grid); `torsion_check`, `dual_check`, `softstorey_check`,
   `drift_limit`; `D_floor`,`D_roof`,`clad`,`L_floor`; `drift_relief_16_1_2` (ONLY when the Nonlinear
-  module hands it back — ASCE 7-22 §16.1.2, Risk Category I–III; see *Feedback from the Nonlinear module* in AGENT_START).
+  module hands it back — nonlinear feedback (India drift relief TBD), Risk Category I–III; see *Feedback from the Nonlinear module* in AGENT_START).
 
 Ready-made layout/plan helpers: `perim_braces`, `core_braces` (wide braced core),
 `core1` (single-bay core, for dual), `tors3` (eccentric→torsion), `weak1` (open
@@ -130,9 +133,9 @@ EBF/BRBF/steel-plate-shear-wall-core.
 
 ## 6. What "validated" means (the sanity-check suite)
 A model is `validated` when ALL pass: equilibrium (ΣR = Σapplied, both dirs);
-stability (lowest eigenvalue > 0); period (T1 within 0.5×–3× of ASCE 7 Ta — bare
+stability (lowest eigenvalue > 0); period (T1 within 0.5×–3× of IS 1893 Ta — bare
 centreline models run flexible); cumulative effective modal mass ≥ 90% each
-direction; max interstorey drift < the ASCE 7 limit; ELF base shear recovered and
+direction; max interstorey drift < the IS 1893 / brief limit; ELF base shear recovered and
 RS ≥ 0.85·ELF; plus torsion < 1.5 and dual ≥ 25% MF where applicable.
 
 ---
@@ -140,13 +143,13 @@ RS ≥ 0.85·ELF; plus torsion < 1.5 and dual ≥ 25% MF where applicable.
 ## 7. Caveats — state these in any output
 - **Elastic analysis only.** No yielding/buckling/inelastic links. EBF/BRBF/SPSW are
   *elastic idealizations* here; their inelastic detailing (links, plates) is governed
-  by AISC 341 and is a later tier.
+  by IS 800 §12 / seismic and is a later tier.
 - **Sections are ASSUMED, not designed** in the library models — they were sized so
   drift/period are realistic. Phase 6 is where you actually *check* members against
   A360; resize as the checks require.
 - **Bare-centreline models run flexible** (no panel zones / composite slab /
   nonstructural stiffness) → longer periods; that's expected.
-- **Loads = ASCE 7, computed not retrieved**; spot-check them.
+- **Loads = IS 875/1893, retrieved live into cfg['load_plan']**; never invent.
 - **Always cite** the A360-22 section/equation behind each check, and note any
   governing seismic-detailing requirement from A341.
 
@@ -156,8 +159,8 @@ RS ≥ 0.85·ELF; plus torsion < 1.5 and dual ≥ 25% MF where applicable.
 
 Produce a **design package** (write to the building's working folder). Minimum set:
 
-1. **Design basis sheet** — codes/versions (AISC 360-22, AISC 341-22 if seismic,
-   ASCE 7-22), Risk Category & Ie, SDC, R, ρ, site (SDS, SD1, S1), wind (V, Exposure),
+1. **Design basis sheet** — codes/versions (IS 800-22, IS 800 §12 / seismic-22 if seismic,
+   IS 1893), Importance Factor / Zone & Ie, SDC, R, ρ, site (SDS, SD1, S1), wind (V, Exposure),
    gravity loads (D, L, Lr/S), drift limits used, units.
 2. **Model summary** — geometry (storeys, heights, grid, plan), lateral system per
    direction, base fixity, diaphragm, member sections, seismic weights per floor.
@@ -171,7 +174,7 @@ Produce a **design package** (write to the building's working folder). Minimum s
    interaction ratio (D/C), pass/fail, **cited A360 section + equation**.
 7. **Connection schedule + checks** (Section 10c) — every connection, type, demand,
    capacity, D/C, cited A360 (and A358/A341 where relevant).
-8. **Drift & irregularity report** — interstorey drifts vs ASCE 7 limit; torsional /
+8. **Drift & irregularity report** — interstorey drifts vs IS 1893 / brief limit; torsional /
    vertical irregularity findings; dual-system 25% split if applicable.
 9. **Figures** (Section 12) — undeformed model, deformed shape(s) for governing
    combos, first few mode shapes, member force/"stress" diagrams, drift profile.
@@ -188,14 +191,14 @@ and import them.
 ## 9. Load combinations — how to handle them (IMPORTANT)
 
 The library models run **one load case at a time** (gravity, ELF-X, ELF-Y, wind-X,
-wind-Y, RS). **Member design demands must come from the ASCE 7-22 §2.3 LRFD load
+wind-Y, RS). **Member design demands must come from the IS 800 Table 4 partial-factor load
 combinations**, not any single case. Procedure:
 
 **a) Run the component load cases** (unfactored/nominal), each as its own pattern:
 D, L, Lr/S, W (±X, ±Y), and E (seismic: ELF ±X, ±Y, or RS). Record element forces
 for each.
 
-**b) Form the LRFD combinations (§2.3.1 + seismic §2.3.6 / §12.4):**
+**b) Form the partial-factor (LSD) combinations (§2.3.1 + seismic §2.3.6 / §12.4):**
 1. 1.4D
 2. 1.2D + 1.6L + 0.5(Lr or S)
 3. 1.2D + 1.6(Lr or S) + (L or 0.5W)
@@ -209,7 +212,7 @@ where E includes the **vertical term Ev = 0.2·SDS·D** and the **redundancy fac
 **c) Apply the required permutations to each lateral combo:**
 - **Sign:** ±W and ±E (both directions of action).
 - **Orthogonal (directional) combination:** 100% in one axis + **30%** in the
-  orthogonal axis (ASCE 7 §12.5.3/§12.5.4 for SDC C+ and for plan irregularities);
+  orthogonal axis (IS 1893 orthogonal / accidental eccentricity — cite retrieved clause);
   do both (100X+30Y and 30X+100Y). Wind: apply each principal direction (and
   quartering cases per §27 if required).
 - **Accidental torsion:** ±5% eccentricity (the engine's `accidental=True` static
@@ -217,7 +220,7 @@ where E includes the **vertical term Ev = 0.2·SDS·D** and the **redundancy fac
   §12.8.4.3 if torsionally irregular).
 
 **d) Second-order (P-Δ) is nonlinear → do NOT superpose factored second-order
-results.** Either: (i) build each LRFD combination as a single **factored** load case
+results.** Either: (i) build each IS partial-factor combination as a single **factored** load case
 (factored gravity + factored lateral applied together) and run it through the **P-Δ**
 analysis, then read member forces; **or** (ii) superpose **first-order** case forces
 with the combo factors and apply the Appendix-8 **B₁/B₂ amplifiers** to the
@@ -240,7 +243,7 @@ P = max|N|, Mz = max|Mz| (strong axis), My = max|My| (weak axis), V = max|Vy,Vz|
 across both ends and all combos. Map each element tag → member (column line / beam /
 brace) via the engine's tagging.
 
-### 10b. Member capacities (LRFD φ) — ground each in A360 (query the spec RAG, cite)
+### 10b. Member capacities (partial-factor (LSD) φ) — ground each in A360 (query the spec RAG, cite)
 - **Tension:** φtPn = min(0.90·Fy·Ag [D2-1], 0.75·Fu·Ae [D2-2, D3]).
 - **Compression:** φcPn = 0.90·Fn·Ag; Fn from **E3** (E3-2/E3-3) using Lc/r = K·L/r
   (DAM ⇒ K=1).
@@ -250,7 +253,7 @@ brace) via the engine's tagging.
 - **Beam-columns:** interaction **H1-1a/H1-1b**:
   Pr/Pc + (8/9)(Mrx/Mcx + Mry/Mcy) ≤ 1.0  (or the H1-1b branch). **D/C = this value.**
 - **Braces:** compression **E3** (Lc/r) + tension **D2**; seismic slenderness &
-  width-thickness from **A341** (query `engineering_standards_A341`).
+  width-thickness from **A341** (query `engineering_standards_IS800`).
 Cross-check one of each against `steel_design_examples` / the AISC Q&A database.
 
 **Member schedule table columns:**
@@ -262,7 +265,7 @@ List every connection: beam-to-column (shear &/or moment), brace-to-gusset/colum
 column splice, **column base plate/anchorage**, collector/diaphragm chord.
 - **Demand** = forces of the connected member(s) from the governing combo. For
   **seismic** systems, use **capacity-design** demands per A341 (e.g., brace expected
-  strength RyFyAg; amplified collector forces with Ω₀) — query `engineering_standards_A341`.
+  strength RyFyAg; amplified collector forces with Ω₀) — query `engineering_standards_IS800`.
 - **Capacity** per A360 **Chapter J** (bolts J3 + Table J3.2, welds J2 + Table J2.5,
   block shear J4, bearing/tearout J3.10, base plates J8) and **A358** for prequalified
   moment connections.
@@ -281,7 +284,7 @@ The job is satisfactorily complete when ALL hold:
    accidental torsion, ρ and Ev included; Cs/V/qz spot-checked by hand.
 3. **Every member D/C ≤ 1.0** under the governing envelope (members that fail were
    resized and re-run; final sections reflected in `model.py` and the schedule).
-4. **Drift OK** — max **design** drift δ = Cd·δ_elastic/Ie (§12.8.6) ≤ ASCE 7 limit
+4. **Drift OK** — max **design** drift ≤ the limit from IS 1893 / brief (cite retrieved clause)
    (0.020·hsx, or 0.015/0.010 for Risk III/IV) in both directions; stability coefficient
    θ (or B₂) within §12.8.7.
 5. **Irregularities addressed** — torsional/vertical irregularities identified, and
@@ -289,7 +292,7 @@ The job is satisfactorily complete when ALL hold:
 6. **System rules met** — for seismic systems, R/ρ/height limits and detailing per
    A341 satisfied; dual systems carry ≥25% on the MF.
 7. **Connections sized** for member/capacity-design demands; all D/C ≤ 1.0.
-8. **Every capacity is cited** to an AISC 360-22 section/equation (and A341/A358 where
+8. **Every capacity is cited** to an IS 800-22 section/equation (and A341/A358 where
    applicable) — nothing from memory.
 9. **Deliverables (Section 8) produced**, internally consistent, and **reproducible**
    (final `model.py` + recorder outputs + `run.md`).
@@ -321,14 +324,14 @@ The pipeline already writes the geometry / orientation / deformed figures (via `
 ## 13. The turnkey tool (one call) -- DEMANDS only
 
 `pipeline.design_and_report(name, cfg)` is the one call you run. It automates only the mechanics
-that are **not** code checks: it builds the model, computes the ASCE 7 loads, assembles the
-**ASCE 7-22 Sec.2.3 LRFD combinations**, runs **each as a factored case through P-Delta** (correct
+that are **not** code checks: it builds the model, applies your RAG-backed `cfg['load_plan']`, assembles the
+**IS 800 partial-factor combinations**, runs **each as a factored case through P-Delta** (correct
 nonlinear handling -- no superposition), **envelopes the per-member DEMANDS** (P, M, V + governing
 combo), writes the demand package, and builds the report scaffold.
 
-It computes **NO AISC 360 capacity.** There is no coded E3/D2/F2-F6/G2/H1, no App.8 B2, and no
-AISC 341 SCWB/Omega0 anywhere in this repo. For **every** governing member and connection, the B2
-amplifier, and the seismic capacity-design check, **you** query the AISC 360 / 341 RAG, select the
+It computes **NO IS 800 capacity.** There is no coded E3/D2/F2-F6/G2/H1, no App.8 B2, and no
+IS 800 §12 / seismic SCWB/Omega0 anywhere in this repo. For **every** governing member and connection, the B2
+amplifier, and the seismic capacity-design check, **you** query the IS 800 / 341 RAG, select the
 governing limit state, implement the exact equation (phi, limits, clause), compute the capacity and
 D/C, cite the Section + equation, and write `limit_state` / `cited` / `capacity` / `DC` into
 `calc_package.json`. Then re-run `report.build_report(name)` so the report shows your checks.
@@ -361,7 +364,7 @@ model, loads, combinations, demands, and report come from the pipeline. The capa
 **What the pipeline writes** (`<name>/design/`):
 - `member_schedule.csv` -- every element's enveloped DEMANDS + governing combo (no capacity/DC).
 - `member_demands.md` -- demand summary by member type.
-- `connection_demands.csv` -- beam-end / brace / base demands + the AISC 360/341 limit-state checklist you size.
+- `connection_demands.csv` -- beam-end / brace / base demands + the IS 800:2007 limit-state checklist you size.
 - `calc_package.json` -- per governing member type: section properties + demands; **you add**
   `limit_state`, `cited`, `capacity`, `DC`.
 - `design_report.md`, the figures, `model_opensees.py` (a standalone, runnable OpenSees model the user can open and check independently), and `<name>/report.html`.
@@ -369,7 +372,7 @@ model, loads, combinations, demands, and report come from the pipeline. The capa
 **Section properties** come from `engine/sections.py`, which reads `engine/aisc_shapes.csv` (the
 AISC Shapes Database v16) for exact values.
 
-**Honesty:** the framework computes demands, not capacities -- **every** AISC 360/341 member and
+**Honesty:** the framework computes demands, not capacities -- **every** IS 800:2007 member and
 connection capacity, the B2 amplifier, and the SCWB/Omega0 check are derived by you from the RAG and
 cited. Analysis is elastic; you choose Lb per the bracing.
 
@@ -384,14 +387,14 @@ k-ft** (noncompact flange, so F3.2 reduces below phi*Mp = 589 k-ft) -- but the n
 YOUR RAG-grounded derivation, not a library function (there isn't one).
 
 > **Acceptance:** DONE when every governing member AND connection is RAG-grounded (limit-state equation
-> traced to an AISC 360/341 clause, capacity derived by you), every D/C <= 1.0, drift and serviceability
+> traced to an IS 800:2007 clause, capacity derived by you), every D/C <= 1.0, drift and serviceability
 > pass, `consistency.check(name)` is clean, and the HTML report is generated. End by OFFERING optimisation.
 
 ## 15. Connections — DESIGN them in place (not delegated)
 Connections are a **required deliverable**, designed here — *not* delegated. The pipeline seeds a
 `connections` list in `calc_package.json` (one slot per governing member type + column base) with the
 DEMANDS; **you** size each connection (bolts J3, welds J2, block shear J4, HSS Ch. K, base plates
-J8/J9 + ACI 318 Ch.17; moment connections per AISC 358; seismic forces per AISC 341) and write its
+J8/J9 + ACI 318 Ch.17; moment connections per IS 800 connections; seismic forces per IS 800 §12 / seismic) and write its
 `limit_state` / `cited` / `capacity` / `DC` (and the actual components — bolt size/grade & count,
 weld size/length, plate thickness). Report Chapter 10 and the Chapter 6 Connections table render them.
 A member-only package is INCOMPLETE.

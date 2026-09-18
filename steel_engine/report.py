@@ -4,7 +4,7 @@ report.py  --  one self-contained HTML engineer's report per building.
 A senior engineer can follow the whole job: building summary + plan, model & deformed shape,
 dynamic properties + mode shapes, drift/P-Delta, story shear/OTM, support reactions, member
 forces per load case (tables + N/V/M diagrams), the design summary, and Appendix A — a fully
-referenced AISC 360-22 design-calculation record for every member/connection.
+referenced IS 800:2007 design-calculation record for every member/connection.
 
 Math is rendered with MathJax; figures are written to figs/ and referenced (keeps the .html small).
 
@@ -26,7 +26,7 @@ import engine3d as E
 import sections as S
 import design_post as DPOST          # run_case + capacity snippets (operator side)
 try:
-    import design_pipeline as PIPE   # combos() — the ASCE 7 load-case list
+    import design_pipeline as PIPE   # combos() — the IS 875/1893 load-case list
     HAVE_PIPE = True
 except Exception:
     HAVE_PIPE = False
@@ -304,7 +304,7 @@ def fig_story_shear_otm(cfg, Fx):
 
 # ============================================================ per-load-case forces
 def load_cases(cfg):
-    """ASCE 7-22 LRFD combinations considered (label, fD, fL, fLr, lat, col_only)."""
+    """IS 875/1893 LSD combinations considered (label, fD, fL, fLr, lat, col_only)."""
     if HAVE_PIPE:
         try: return PIPE.combos(cfg)
         except Exception: pass
@@ -340,7 +340,7 @@ def per_case_max_table(info):
     return rows
 
 def _case_desc(label, col_only):
-    """Plain-English description of an ASCE 7-22 combination label."""
+    """Plain-English description of an IS 875/1893 combination label."""
     L = label
     if ("WX" in L or "WY" in L) and "E" not in L.replace("Lr", "").replace("Le", ""):
         d = "X (E–W)" if "WX" in L else "Y (N–S)"
@@ -350,8 +350,8 @@ def _case_desc(label, col_only):
         d = "X (E–W)" if "EX" in L else "Y (N–S)"
         upl = " on the 0.9D (uplift) gravity case" if L.startswith("(0.9") else ""
         return (f"Capacity-design (overstrength, \\(\\Omega_0\\)) seismic in the {d} direction{upl} — applied "
-                "to the columns only, so they remain elastic while the braces/beams yield (AISC 341 / "
-                "ASCE 7 §12.4.3).")
+                "to the columns only, so they remain elastic while the braces/beams yield (IS 800 seismic / "
+                "IS 875/1893 §12.4.3).")
     if "rhoE" in L:
         d = "X (E–W)" if "EX" in L else "Y (N–S)"
         sense = "positive" if ("EX+" in L or "EY+" in L) else "negative"
@@ -400,25 +400,25 @@ def _member_calc_block(m):
     cap = m.get("capacity"); dc = m.get("DC"); ls = m.get("limit_state"); cited = m.get("cited")
     if (isinstance(cap, dict) and cap) or dc is not None or ls or cited:
         rows = []
-        if ls: rows.append(("Governing limit state", "selected from AISC 360", str(ls), str(cited or "")))
+        if ls: rows.append(("Governing limit state", "selected from IS 800", str(ls), str(cited or "")))
         if isinstance(cap, dict):
             for k, v in cap.items(): rows.append((k, "", str(v), ""))
         if dc is not None:
             ok = "ok" if (isinstance(dc,(int,float)) and dc <= 1.0) else ("NG" if isinstance(dc,(int,float)) else "")
             rows.append(("D/C", "demand / capacity", "%s %s" % (dc, ok), str(cited or "")))
-        h.append(_calc("AISC 360 capacity &amp; D/C - derived by the agent from the RAG", rows))
+        h.append(_calc("IS 800 capacity &amp; D/C - derived by the agent from the RAG", rows))
     else:
-        h.append("<p class='note'>Capacity &amp; D/C: <b>to be derived by the agent from the AISC 360 / 341 "
+        h.append("<p class='note'>Capacity &amp; D/C: <b>to be derived by the agent from the IS 800 / 341 "
                  "RAG</b> - the framework computes demands only (no coded capacity). Expected calc_package "
                  "fields: <code>limit_state</code>, <code>cited</code>, <code>capacity</code>, <code>DC</code>.</p>")
     return "".join(h)
 
 def appendix(cfg, name, pkg):
     # Appendix A: per governing member, section inputs + demand envelope + the agent's RAG-derived
-    # AISC 360 capacity/limit-state/D-C. The framework codes NO capacity equations.
+    # IS 800 capacity/limit-state/D-C. The framework codes NO capacity equations.
     h = ["<h3>Member calculations</h3>",
          "<p>For every governing member the framework lists the section properties and the enveloped "
-         "demand from the analysis combinations. The AISC 360-22 capacity, governing limit state, cited "
+         "demand from the analysis combinations. The IS 800:2007 capacity, governing limit state, cited "
          "clause, and D/C are <b>derived by the agent from the RAG</b> and shown where recorded in "
          "calc_package.json - the framework computes no capacity.</p>"]
     members = pkg.get("members") if isinstance(pkg, dict) else None
@@ -431,7 +431,7 @@ def appendix(cfg, name, pkg):
         h.append("<p class='note'>[no members in calc_package.json]</p>")
     cd = pkg.get("connections") or pkg.get("connection_demands")
     if cd:
-        h.append("<h3>Connections (AISC 360-22 Ch. J / Ch. K; AISC 341-22 capacity design)</h3>")
+        h.append("<h3>Connections (IS 800:2007 Ch. J / Ch. K; IS 800 seismic-22 capacity design)</h3>")
         items = cd.items() if isinstance(cd, dict) else [(c.get("id", ""), c) for c in cd]
         for cid, c in items:
             dem = _fmt(c.get("demand", c.get("demands", {})))
@@ -504,7 +504,7 @@ def _wind_section(cfg):
         w = cfg["wind"]; FX = E.wind_forces(cfg, "X"); FY = E.wind_forces(cfg, "Y")
         VwX = sum(FX.values()); VwY = sum(FY.values()); NF = len(cfg["heights"])
         rows = [[k, f"{FX[k]:.1f}", f"{FY[k]:.1f}"] for k in range(1, NF+1)]
-        h = ["<p>ASCE 7-22 §27 MWFRS. Velocity pressure qz = 0.00256·Kz·Kzt·Ke·V² (Eq. 26.10-1); design "
+        h = ["<p>IS 875/1893 §27 MWFRS. Velocity pressure qz = 0.00256·Kz·Kzt·Ke·V² (Eq. 26.10-1); design "
              "pressure p = qz·Kd·G·Cpnet (Kd applied in the pressure equation per Eq. 27.3-1); story force "
              "= p × tributary width × tributary height.</p>",
              _table(["Parameter", "Value"], [["Basic wind speed V", f"{w.get('V')} mph"],
@@ -525,7 +525,7 @@ def _horizontal_distribution(cfg, Fx, VwX, VwY):
     rows = [row("E-W — two moment frames", VwX), row("N-S — two braced frames", VwY)]
     h = ["<p>The story shear in each direction is shared by the two parallel lateral frames. The "
          "governing base shear (greater of wind and seismic) is split about 50/50 to each frame, plus "
-         "±5% accidental torsion (ASCE 7-22 §12.8.4.2) which biases demand toward the leading frame.</p>",
+         "±5% accidental torsion (IS 875/1893 §12.8.4.2) which biases demand toward the leading frame.</p>",
          _table(["Direction / frames", "Wind base (kip)", "Seismic base (kip)", "Governs", "Per frame (kip)"], rows)]
     return "".join(h)
 
@@ -591,8 +591,8 @@ def _stability_section(cfg, Fx, drX, pkg):
         rows.append([sx, "%.0f" % Pstory[sx], "%.0f" % Vstory[sx], "%.0f" % cfg["heights"][sx-1],
                      "%.3f" % (drX[sx-1]*100), "%.3f" % th, "OK" if th <= theta_max else "NG"])
     h = ["<p>Member demands already include second-order effects (a P-&Delta; geometric transformation is applied "
-         "under every combination), so the AISC 360-22 App.8 B<sub>2</sub> amplifier is captured directly by the "
-         "analysis. The ASCE 7-22 &sect;12.8.7 story stability coefficient "
+         "under every combination), so the IS 800:2007 App.8 B<sub>2</sub> amplifier is captured directly by the "
+         "analysis. The IS 875/1893 &sect;12.8.7 story stability coefficient "
          "&theta; = (P<sub>x</sub>/h<sub>sx</sub>)/(V<sub>x</sub>/&Delta;<sub>xe</sub>) (Eq. 12.8-18; equal to the "
          "legacy P<sub>x</sub>&Delta;I<sub>e</sub>/(V<sub>x</sub>h<sub>sx</sub>C<sub>d</sub>) with "
          "&Delta; = C<sub>d</sub>&Delta;<sub>xe</sub>/I<sub>e</sub>) is evaluated per "
@@ -693,7 +693,7 @@ CHK_CSS = ("ol.toc{font-size:14px}ol.toc li{margin:2px 0}"
 
 CHAPTERS = {
  1: ("Design basis & codes", [
-   "Governing codes and editions stated (IBC, ASCE 7-22, AISC 360-22, AISC 341-22 + 358 if seismic, AWS D1.1); Risk Category and Importance Factors.",
+   "Governing codes and editions stated (IBC, IS 875/1893, IS 800:2007, IS 800 seismic-22 + 358 if seismic, AWS D1.1); Risk Category and Importance Factors.",
    "Project criteria match the architectural/owner brief and the geotechnical report (site class, bearing, lateral soil, frost).",
    "Units, sign conventions and material specs stated and consistent throughout.",
    "Scope and design-responsibility boundaries defined (connections DESIGNED in this package; delegated/deferred items: joists, stairs, cladding, embeds)."]),
@@ -710,7 +710,7 @@ CHAPTERS = {
    "Seismic (Ch. 11-12): S<sub>DS</sub>/S<sub>D1</sub>, SDC, period, C<sub>s</sub>, V, vertical distribution, E<sub>v</sub>, accidental+amplified torsion, 100/30, &rho;.",
    "Governing case (wind vs seismic) identified per direction."]),
  4: ("Load combinations", [
-   "Full ASCE 7-22 &sect;2.3 LRFD set (gravity, wind &plusmn;, seismic &plusmn; with E<sub>v</sub> &amp; &rho;, &Omega;<sub>0</sub> where required), 100/30, &plusmn; accidental torsion.",
+   "Full IS 875/1893 &sect;2.3 LSD set (gravity, wind &plusmn;, seismic &plusmn; with E<sub>v</sub> &amp; &rho;, &Omega;<sub>0</sub> where required), 100/30, &plusmn; accidental torsion.",
    "Combinations applied to the right members (&Omega;<sub>0</sub> to capacity-protected only); uplift/net-tension (0.9D) checked.",
    "Second-order effects handled per-combination (no superposition of factored second-order results)."]),
  5: ("Analysis model fidelity", [
@@ -721,7 +721,7 @@ CHAPTERS = {
    "Modal results sane: &ge;90% participating mass, reasonable periods, expected mode shapes.",
    "Equilibrium verified: &Sigma;R = applied base shear (each direction) and total factored gravity.",
    "Stiffness reductions / notional loads / effective-length basis consistent with the analysis method."]),
- 6: ("Member strength design (AISC 360)", [
+ 6: ("Member strength design (IS 800)", [
    "Every member type checked for the governing combo: tension (D2/D3), compression (E3/E4/E7), flexure (F2-F8 correct limit state), shear (G2), interaction (H1).",
    "Correct limit state, &phi;, L<sub>b</sub>, C<sub>b</sub>, K, slenderness and section properties.",
    "Composite members (Ch. I) designed properly if used (PNA, &phi;M<sub>n</sub>, studs, shoring, construction-stage deflection).",
@@ -736,10 +736,10 @@ CHAPTERS = {
    "Deflections: floor LL &le; L/360, TL &le; L/240; camber; roof ponding; long-span/cantilever limits.",
    "Floor vibration (AISC DG11) for the occupancy where applicable.",
    "Building separation / pounding; differential movement at joints."]),
- 9: ("Seismic / wind detailing (AISC 341)", [
+ 9: ("Seismic / wind detailing (IS 800 seismic)", [
    "System detailing matches the R used (width-thickness, brace slenderness, protected zones).",
    "Capacity design: SCWB (E3.4a), columns/collectors for &Omega;<sub>0</sub> or expected strength (R<sub>y</sub>F<sub>y</sub>).",
-   "Demand-critical welds, prequalified connections (AISC 358), continuity/doubler plates, panel-zone shear.",
+   "Demand-critical welds, prequalified connections (IS 800 connections), continuity/doubler plates, panel-zone shear.",
    "Wind: C&amp;C on cladding/fasteners, net uplift load path and hold-downs."]),
  10: ("Connections", [
    "Connection demands (V, N, M, incl. capacity-design/overstrength where required) on the drawings.",
@@ -768,7 +768,7 @@ def _toc():
     return ("<h2>Report structure &mdash; EOR review checklist</h2>"
             "<p>This report is organised as the senior-engineer (EOR) acceptance checklist: one chapter per "
             "checklist section. Each chapter opens with the items a reviewer must accept, followed by the "
-            "supporting analysis and design evidence. Appendix A is the fully-referenced AISC 360/341 member "
+            "supporting analysis and design evidence. Appendix A is the fully-referenced IS 800/341 member "
             "calc, Appendix B the member forces for every load case, Appendix C the activity log of the tool "
             "calls that produced the design.</p><ol class='toc'>" + rows + "</ol>")
 
@@ -784,7 +784,7 @@ def _risk_category(Ie):
 
 
 def _drift_relief_note(cfg):
-    """Chapter 8 paragraph when cfg['drift_relief_16_1_2'] is in force (ASCE 7-22 16.1.2: a Chapter 16
+    """Chapter 8 paragraph when cfg['drift_relief_16_1_2'] is in force (IS 875/1893 16.1.2: a Chapter 16
     analysis relaxes the 12.12.1 drift limits for Risk Category I-III). Empty string otherwise; the
     RC IV misuse is reported as a preflight/consistency ERROR, and named here so the reader sees it."""
     try:
@@ -797,14 +797,14 @@ def _drift_relief_note(cfg):
     Ie = float((cfg.get("seis") or {}).get("Ie", 1.0) or 1.0)
     if not relief_active(cfg):
         return ("<p class='note'><b>cfg['drift_relief_16_1_2'] is present but NOT in force</b> "
-                + ("(Risk Category IV, I<sub>e</sub> = %.2f: ASCE 7-22 &sect;16.1.2 keeps the Table 12.12-1 limits)" % Ie
+                + ("(Risk Category IV, I<sub>e</sub> = %.2f: IS 875/1893 &sect;16.1.2 keeps the Table 12.12-1 limits)" % Ie
                    if Ie >= 1.5 else "(block incomplete -- see the preflight findings)")
                 + " &mdash; the Table 12.12-1 limit above governs.</p>")
     def _f(k, scale=100.0, fmt="%.2f%%"):
         v = r.get(k)
         return (fmt % (float(v) * scale)) if isinstance(v, (int, float)) else "&mdash;"
     table_val = r.get("table_12_12_1") if isinstance(r.get("table_12_12_1"), (int, float)) else (0.015 if Ie >= 1.25 else 0.020)
-    return ("<p class='cnote'><b>ASCE 7-22 &sect;16.1.2 drift relief in force.</b> A Chapter 16 nonlinear response "
+    return ("<p class='cnote'><b>IS 875/1893 &sect;16.1.2 drift relief in force.</b> A Chapter 16 nonlinear response "
             "history analysis of this building (Nonlinear module job <code>%s</code>%s) gave a suite-mean MCE<sub>R</sub> "
             "story drift of %s against the &sect;16.4.1.2 limit of %s (verdict: %s). For Risk Category I&ndash;III the "
             "&sect;12.12.1 limits therefore need not apply; the linear design target was reset to %s of story height "
@@ -841,7 +841,7 @@ def _esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 def _sdc(SDS, SD1, S1=0.0, Ie=1.0):
-    """Seismic Design Category per ASCE 7-22 sec.11.6 -- delegates to the canonical
+    """Seismic Design Category per IS 875/1893 sec.11.6 -- delegates to the canonical
     preflight.asce_sdc: worse of Tables 11.6-1/-2 (incl. the Risk Category IV column, RC from Ie),
     after the S1 >= 0.75 -> E (RC I-III) / F (RC IV) override."""
     from preflight import asce_sdc, risk_cat_from_Ie
@@ -850,11 +850,11 @@ def _sdc(SDS, SD1, S1=0.0, Ie=1.0):
 def _design_basis_codes(cfg, s, root=None):
     seismic = bool(s.get("R"))
     rows = [["International Building Code (IBC)", "adopting code &mdash; confirm locally adopted edition &amp; amendments"],
-            ["ASCE/SEI 7-22", "loads &amp; load combinations (gravity, wind Ch.26-31, seismic Ch.11-12, &sect;2.3 LRFD)"],
-            ["AISC 360-22", "steel member &amp; connection design (LRFD)"]]
+            ["ASCE/SEI 7-22", "loads &amp; load combinations (gravity, wind Ch.26-31, seismic Ch.11-12, &sect;2.3 LSD)"],
+            ["IS 800:2007", "steel member &amp; connection design (LSD)"]]
     if seismic:
-        rows += [["AISC 341-22", "seismic provisions / ductile detailing &amp; capacity design"],
-                 ["AISC 358", "prequalified moment connections (if SMF/IMF used)"]]
+        rows += [["IS 800 seismic-22", "seismic provisions / ductile detailing &amp; capacity design"],
+                 ["IS 800 connections", "prequalified moment connections (if SMF/IMF used)"]]
     rows += [["AWS D1.1", "structural welding"], ["ACI 318 (Ch. 17)", "cast-in anchorage at column bases"]]
     out = ["<h3>Governing standards</h3>",
            _table(["Reference", "Used for"], rows)]
@@ -872,7 +872,7 @@ def _design_basis_codes(cfg, s, root=None):
             _r = drift_relief(cfg)
             if _r is not None:
                 crows.append(["Story drift limit basis",
-                              ("ASCE 7-22 &sect;16.1.2 relief in force &mdash; linear target %.2f%% from the Chapter 16 result "
+                              ("IS 875/1893 &sect;16.1.2 relief in force &mdash; linear target %.2f%% from the Chapter 16 result "
                                "(Nonlinear module job <code>%s</code>)" % (100.0 * float(_r.get("linear_target", 0) or 0), _esc(str(_r.get("nlrha_job", "?")))))
                               if relief_active(cfg) else
                               "Table 12.12-1 (a cfg['drift_relief_16_1_2'] block is present but NOT in force &mdash; see Chapter 8)"])
@@ -911,12 +911,12 @@ def _lfrs_table(cfg):
         elif abs(R-3.25) < .5: name, hl = "Ordinary concentrically braced frame (OCBF)", "35 ft (SDC D/E), not permitted (F)"
         elif R and abs(R-8) < .4 and Om0 and Om0 < 2.75: name, hl = "Buckling-restrained braced frame (BRBF)", "160 ft (D/E), 100 ft (F)"
         elif R and abs(R-8) < .4: name, hl = "Eccentrically braced frame (EBF)", "160 ft (D/E), 100 ft (F)"
-        else: name, hl = "steel braced frame", "per ASCE 7-22 Table 12.2-1"
+        else: name, hl = "steel braced frame", "per IS 875/1893 Table 12.2-1"
     else:
         if R and abs(R-8) < .4:   name, hl = "Special moment frame (SMF)", "not limited (NL)"
         elif R and abs(R-4.5) < .4: name, hl = "Intermediate moment frame (IMF)", "35 ft in SDC D; not permitted E/F (confirm)"
         elif R and abs(R-3.5) < .4: name, hl = "Ordinary moment frame (OMF)", "limited use in SDC D-F (confirm)"
-        else: name, hl = "steel moment frame", "per ASCE 7-22 Table 12.2-1"
+        else: name, hl = "steel moment frame", "per IS 875/1893 Table 12.2-1"
     sysdecl = cfg.get("system")                       # R1: use the system the agent DECLARED, not an R-guess
     sys_key = "Seismic force-resisting system (declared)" if sysdecl else "System (inferred from R &mdash; DECLARE cfg['system'])"
     sys_val = (sysdecl if sysdecl else name)
@@ -927,7 +927,7 @@ def _lfrs_table(cfg):
             ["Redundancy &rho;", f"{rho} <span class='cnote'>(confirm vs &sect;12.3.4.2; 1.0 if redundancy conditions met)</span>"],
             ["Structural height h<sub>n</sub> limit (Table 12.2-1)", hl]]
     if sysdecl:
-        note = ("<p class='cnote'>System is the one DECLARED in cfg['system']; apply its AISC 341 provisions in "
+        note = ("<p class='cnote'>System is the one DECLARED in cfg['system']; apply its IS 800 seismic provisions in "
                 "Chapter 9 and confirm the Table 12.2-1 height limit for the SDC. Use the same system both directions "
                 "unless cfg declares a different system per direction.</p>")
     else:
@@ -948,7 +948,7 @@ def _diaphragm_section(cfg, Fx):
         rows.append([x, f"{wpx:.0f}", f"{Fpx:.0f}", f"{lo:.0f}", f"{hi:.0f}", f"{gov:.0f} ({tag})"])
     just = ("<p>The floor/roof is taken as a <b>rigid diaphragm</b> (concrete-filled metal deck), distributing "
             "story forces to the lateral frames in proportion to their stiffness and modelled with a rigid "
-            "in-plane constraint per ASCE 7-22 &sect;12.3.1.2. Collectors/drag struts carry the diaphragm shear "
+            "in-plane constraint per IS 875/1893 &sect;12.3.1.2. Collectors/drag struts carry the diaphragm shear "
             "into the frames; chord forces (M<sub>diaph</sub>/depth) are resisted by the perimeter beams. The "
             "diaphragm, its collectors and chords are designed for the force F<sub>px</sub> below (&sect;12.10.1.1).</p>")
     tbl = _table(["Level x", "w<sub>px</sub> (kip)", "F<sub>px</sub> Eq.12.10-1 (kip)",
@@ -980,7 +980,7 @@ def _irregularity_section(cfg, Fx):
     h = cfg["heights"]; custom_plan = cfg.get("plan") is not None
     tors = _torsion_ratios(cfg, Fx)
     tr = max([v for v in tors.values() if v is not None], default=1.0)
-    _Ax = min(max((tr/1.2)**2, 1.0), 3.0)   # ASCE 7-22 Eq. 12.8-15 accidental-torsion amplification
+    _Ax = min(max((tr/1.2)**2, 1.0), 3.0)   # IS 875/1893 Eq. 12.8-15 accidental-torsion amplification
     # 7-22 Table 12.3-1/-1a: single Type 1 keyed to the Torsional Irregularity Ratio (TIR,
     # Eq. 12.3-2, ratio of story drifts at the edges) with cumulative tiers >1.2 / >1.4 / >1.6
     if tr > 1.6:   tcls = f"Type 1 torsional: TIR {tr:.2f} &gt; 1.6 (also &gt;1.2/&gt;1.4 tiers) &mdash; apply A<sub>x</sub> = {_Ax:.2f} (&sect;12.8.4.3); MRSA mass-offset restriction (&sect;12.9.1.5)"
@@ -988,11 +988,11 @@ def _irregularity_section(cfg, Fx):
     elif tr > 1.2: tcls = f"Type 1 torsional: TIR {tr:.2f} &gt; 1.2 &mdash; apply A<sub>x</sub> = {_Ax:.2f} (&sect;12.8.4.3) + 25% collector/diaphragm-connection increase (&sect;12.3.3.5)"
     else:          tcls = f"None: TIR {tr:.2f} &le; 1.2 (A<sub>x</sub> = 1.0)"
     # supplementary mass-uniformity screen (the 7-16 Vertical Type 2 mass irregularity was DELETED
-    # in ASCE 7-22) -- advisory only, can never fail or require anything
+    # in IS 875/1893) -- advisory only, can never fail or require anything
     massr = max((max(w[k]/w[k-1], w[k-1]/w[k]) for k in range(1, NF)), default=1.0)
     mcls = ("None" if massr <= 1.5 else
             f"Supplementary screen: adjacent floor-mass ratio {massr:.2f} &gt; 1.5 (7-16 Vertical Type 2 "
-            "&mdash; deleted in ASCE 7-22; ADVISORY only, no requirement triggered)")
+            "&mdash; deleted in IS 875/1893; ADVISORY only, no requirement triggered)")
     # soft story screen via story height uniformity (stiffness ~ 1/h^3 proxy)
     hr = max((max(h[k]/h[k-1], h[k-1]/h[k]) for k in range(1, NF)), default=1.0)
     scls = "None (uniform story heights)" if hr <= 1.0001 else f"Check stiffness/soft-story: tallest/shortest story height ratio {hr:.2f}"
@@ -1022,14 +1022,14 @@ def _irregularity_section(cfg, Fx):
         ["Vertical 2 &mdash; Geometric (setback)", v3],
         ["Vertical 3 &mdash; In-plane discontinuity", "None (aligned frames; confirm no transfer columns)"],
         ["Vertical 4a/4b &mdash; Weak / extreme weak story", "Confirm against story shear strengths (Ch 6/9)"]]
-    intro = ("<p>Screening against ASCE 7-22 Tables 12.3-1 (plan) and 12.3-2 (vertical). The Torsional "
+    intro = ("<p>Screening against IS 875/1893 Tables 12.3-1 (plan) and 12.3-2 (vertical). The Torsional "
              "Irregularity Ratio (TIR, Eq. 12.3-2) is estimated from the per-story <i>drift</i> ratio at the "
              "diaphragm edges under the &plusmn;5% accidental eccentricity (rigid-diaphragm estimate); "
              "&gt;1.2 triggers Type 1 torsional irregularity and amplification A<sub>x</sub> (&sect;12.8.4.3).</p>")
     mrsa_recommended = pir["reentrant"] or pir["setback"] or pir["nonparallel"] or tr > 1.2
     if mrsa_recommended and "RS" not in [a.upper() for a in cfg.get("analyses", [])]:
         intro += ("<p class='cnote'><b>Analysis procedure &mdash; ADVISORY:</b> MRSA (&sect;12.9) is recommended "
-                  "for the irregularities determined above; <b>ELF is permitted by ASCE 7-22 &sect;12.6</b> for all "
+                  "for the irregularities determined above; <b>ELF is permitted by IS 875/1893 &sect;12.6</b> for all "
                   "structures (the 7-16 Table 12.6-1 procedure matrix was deleted). Consider adding 'RS' to "
                   "cfg['analyses'] to capture the torsional/higher-mode response.</p>")
     return intro + _table(["Irregularity type", "Determination"], rows)
@@ -1061,7 +1061,7 @@ def _seismic_loads_section(cfg, T, eX, eY, Cs, V, Tu, Ta, Fx, W):
     if upper <= low: gov = "C<sub>s,min</sub> (Eq.12.8-7, S<sub>1</sub>)" if (cmin_s1 and low == cmin_s1) else "C<sub>s,min</sub> (Eq.12.8-6)"
     elif cap < Cs_eq: gov = "C<sub>s,max</sub> (Eq.12.8-4)"
     else: gov = "C<sub>s</sub> (Eq.12.8-3)"
-    intro = (f"<p>ASCE 7-22 &sect;12.8 equivalent lateral force. Seismic weight W = {W:.0f} kip; S<sub>DS</sub> = "
+    intro = (f"<p>IS 875/1893 &sect;12.8 equivalent lateral force. Seismic weight W = {W:.0f} kip; S<sub>DS</sub> = "
              f"{SDS} g, S<sub>D1</sub> = {SD1} g, S<sub>1</sub> = {S1} g, R = {R}, I<sub>e</sub> = {Ie}. Approximate "
              f"period T<sub>a</sub> = C<sub>t</sub>h<sub>n</sub><sup>x</sup> = {Ta:.2f} s; design period "
              f"T = min(T<sub>computed</sub>, C<sub>u</sub>T<sub>a</sub>) = {Tu:.2f} s (&sect;12.8.2).</p>")
@@ -1100,7 +1100,7 @@ def _governing_lateral(cfg, V, VwX, VwY):
         else:
             rows.append([d, f"{V:.0f}", f"{Vw:.0f}", f"<b>{'Seismic' if V >= Vw else 'Wind'}</b>"])
     note = ("<p class='cnote'>Strength-level base-shear comparison (seismic E and wind W are both strength-level in "
-            "ASCE 7-22 LRFD). The governing system per direction sizes the lateral frames; both are carried through "
+            "IS 875/1893 LSD). The governing system per direction sizes the lateral frames; both are carried through "
             "the load combinations (Chapter 4).</p>")
     return _table(["Direction", "Seismic V (kip)", "Wind V (kip)", "Governs"], rows) + note
 
@@ -1123,7 +1123,7 @@ def _combo_legend(cfg):
     except Exception:
         _sdc_txt = ""
     items = [("D", "dead load"),
-             ("L", "floor live load (reducible per ASCE 7-22 &sect;4.7)"),
+             ("L", "floor live load (reducible per IS 875/1893 &sect;4.7)"),
              ("L<sub>r</sub> / S", "roof live load / snow"),
              ("E<sub>X</sub>, E<sub>Y</sub>", "horizontal seismic effect Q<sub>E</sub> (ELF) in the X (E-W) / Y (N-S) direction; the vertical term E<sub>v</sub>=0.2S<sub>DS</sub>D is folded into the D factor"),
              ("W<sub>X</sub>, W<sub>Y</sub>", "wind load in the X / Y direction"),
@@ -1132,7 +1132,7 @@ def _combo_legend(cfg):
              ("t+ / t&minus;", "&plusmn;5% accidental torsion M<sub>t</sub> = &plusmn;0.05B&middot;F<sub>x</sub> (&sect;12.8.4.2)"),
              ("+ / &minus;", "sign (direction) of the applied lateral load"),
              ("[col]", "combination applied to columns only"),
-             ("0.5L/1.0L, 0.3S/0.5Lr, 0.15S, 0.9D", "companion / counteracting load factors (ASCE 7-22 &sect;2.3.1/&sect;2.3.6: "
+             ("0.5L/1.0L, 0.3S/0.5Lr, 0.15S, 0.9D", "companion / counteracting load factors (IS 875/1893 &sect;2.3.1/&sect;2.3.6: "
               "companion L = 1.0 where L<sub>o</sub> &gt; 100 psf or garage/public assembly, else 0.5; companion snow "
               "0.3S (gravity/wind) and 0.15S (seismic); principal snow 1.0S)")]
     return "<h4>Notation used in the combination labels</h4>" + _table(["Symbol", "Meaning"], [[a, b] for a, b in items])
@@ -1219,7 +1219,7 @@ def _floor_serviceability(pkg):
                      "OK" if sv.get("ok") else "NG"])
     if not rows:
         return "<p class='cnote'>Floor/roof beam deflection &amp; camber: no serviceability data in calc_package.json.</p>"
-    return ("<h3>Floor &amp; roof beam deflection and camber (ASCE 7-22 serviceability; AISC 360-22 Ch. L)</h3>"
+    return ("<h3>Floor &amp; roof beam deflection and camber (IS 875/1893 serviceability; IS 800:2007 Ch. L)</h3>"
             "<p>Live-load deflection is limited to L/360 and total-load deflection to L/240. Composite floor members "
             "use a lower-bound transformed moment of inertia I<sub>tr</sub>; the bare-steel (pre-composite, wet-concrete) "
             "dead-load deflection is offset by shop camber.</p>"
@@ -1227,7 +1227,7 @@ def _floor_serviceability(pkg):
 
 def _combo_notes(cfg):
     s = cfg["seis"]; SDS = s["SDS"]; rho = cfg.get("rho", 1.3); Om0 = s.get("Om0")
-    return ("<p>The analysed set is the ASCE 7-22 &sect;2.3 LRFD strength combinations:</p><ul>"
+    return ("<p>The analysed set is the IS 875/1893 &sect;2.3 LSD strength combinations:</p><ul>"
             f"<li><b>Vertical seismic E<sub>v</sub></b> = 0.2&middot;S<sub>DS</sub>D = {0.2*SDS:.2f}D is folded into the "
             f"D factor: seismic combinations use (1.2+0.2S<sub>DS</sub>)D = {1.2+0.2*SDS:.2f}D and "
             f"(0.9&minus;0.2S<sub>DS</sub>)D = {0.9-0.2*SDS:.2f}D.</li>"
@@ -1247,13 +1247,13 @@ def _modal_mass_check(eX, eY):
     cx = sum(eX); cy = sum(eY)
     return (f"<p><b>Modal mass participation:</b> &Sigma;m<sub>X</sub> = {cx*100:.0f}% "
             f"({'OK' if cx >= 0.90 else 'review &lt; 90%'}), &Sigma;m<sub>Y</sub> = {cy*100:.0f}% "
-            f"({'OK' if cy >= 0.90 else 'review &lt; 90%'}); ASCE 7-22 &sect;12.9.1 requires &ge; 90% in each "
+            f"({'OK' if cy >= 0.90 else 'review &lt; 90%'}); IS 875/1893 &sect;12.9.1 requires &ge; 90% in each "
             "direction. Periods and mode shapes are shown below and in Chapter 3.</p>")
 
 def _stability_basis_note():
     return ("<p class='cnote'><b>Analysis basis:</b> a second-order P-&Delta; geometric transformation is applied to "
             "the columns under every factored combination (no superposition of factored results). Effective length "
-            "K = 1 is used, consistent with a second-order analysis. If the Direct Analysis Method (AISC 360-22 "
+            "K = 1 is used, consistent with a second-order analysis. If the Direct Analysis Method (IS 800:2007 "
             "&sect;C2) is the design basis, the 0.8&middot;EI / 0.8&tau;<sub>b</sub>&middot;EA stiffness reductions and "
             "notional loads N<sub>i</sub> = 0.002&alpha;Y<sub>i</sub> are confirmed at the member-design stage; the "
             "story stability coefficient &theta; (&sect;12.8.7) and the B<sub>2</sub> amplifier are reported in "
@@ -1307,7 +1307,7 @@ def _extra_blocks_section(pkg):
 
 
 def _composite_section(pkg):
-    """Chapter-6 'Composite floor design (AISC 360 Ch. I)' section. Two tolerant sources:
+    """Chapter-6 'Composite floor design (IS 800 Ch. I)' section. Two tolerant sources:
     (a) the standard top-level `composite_design` block (rendered as nested tables), and
     (b) composite values embedded in member capacity dicts (stud counts / partial ratio / camber /
         I_LB / wet stage) -- summarised one row per member. Renders nothing when neither exists."""
@@ -1330,7 +1330,7 @@ def _composite_section(pkg):
                          str(found.get("ILB", "&mdash;")), str(found.get("wet", "&mdash;"))])
     if not cd and not rows:
         return ""
-    parts.append("<h3>Composite floor design (AISC 360 Ch. I)</h3>")
+    parts.append("<h3>Composite floor design (IS 800 Ch. I)</h3>")
     if rows:
         parts.append("<p>Per-member composite design values recorded in the calc package (partial-"
                      "composite ratio, stud strength/schedule, camber, lower-bound moment of inertia, "
@@ -1340,7 +1340,7 @@ def _composite_section(pkg):
     if cd:
         parts.append("<h4>Composite design record (calc package `composite_design`)</h4>")
         parts.append(_capdesign_html(cd))
-    parts.append("<p class='note'>Stud strengths per AISC 360-22 &sect;I8.2a (with deck-rib position "
+    parts.append("<p class='note'>Stud strengths per IS 800:2007 &sect;I8.2a (with deck-rib position "
                  "factors); flexure per &sect;I3.2a; service deflection on the lower-bound moment of "
                  "inertia; camber rule and the unshored construction stage as recorded above.</p>")
     return "".join(parts)
@@ -1355,7 +1355,7 @@ def _member_dc_summary(pkg):
                 f"({gov.get('limit_state')}, combo {(gov.get('inputs', {}) or {}).get('governing_combo', '')}).</p>")
     return ("<p class='cnote'>The member <b>demands</b> (axial, moment, shear, L<sub>b</sub>, section properties and "
             "governing combination) are computed by the framework and listed below; the <b>capacities</b>, limit "
-            "states and D/C ratios are derived by the agent from the AISC 360/341 RAG (Appendix A) and are pending "
+            "states and D/C ratios are derived by the agent from the IS 800/341 RAG (Appendix A) and are pending "
             "for this building.</p>")
 
 def _ch6_notes(cfg):
@@ -1393,7 +1393,7 @@ def _wind_drift_section(cfg):
             for k in range(1, NF+1)]
     return ("<h3>Wind drift</h3>"
             f"<p>Interstory drift under the design MWFRS wind vs a serviceability limit of h/{int(round(1/lim))} "
-            f"({lim*100:.2f}%). Wind drift has no code-mandated limit (ASCE 7-22 Appendix CC is advisory); a "
+            f"({lim*100:.2f}%). Wind drift has no code-mandated limit (IS 875/1893 Appendix CC is advisory); a "
             "10-year-MRI service wind may be used for a less conservative check.</p>"
             + _table(["Story", "drift X %", "drift Y %", f"&le; {lim*100:.2f}%"], rows))
 
@@ -1429,7 +1429,7 @@ def _aisc341_detailing(cfg, pkg):
         _rows = [[c.get("check", ""), c.get("status", "")] for c in det.get("checks", [])]
         _intro = (f"<p><b>System:</b> {det.get('system','')} &mdash; R = {det.get('R', s.get('R'))}, "
                   f"C<sub>d</sub> = {det.get('Cd', s.get('Cd'))}, &Omega;<sub>0</sub> = {det.get('Omega0', s.get('Om0'))}, "
-                  f"SDC {det.get('SDC','')}. <b>AISC 341 applies:</b> {'yes' if det.get('aisc341_applies') else 'no'}.</p>"
+                  f"SDC {det.get('SDC','')}. <b>IS 800 seismic applies:</b> {'yes' if det.get('aisc341_applies') else 'no'}.</p>"
                   f"<p>{det.get('basis','')}</p>")
         return _intro + _table(["Required check", "Status / basis"], _rows)
     if braced:
@@ -1439,23 +1439,23 @@ def _aisc341_detailing(cfg, pkg):
                   ("Brace connection strength", "expected R<sub>y</sub>F<sub>y</sub>A<sub>g</sub> / 1.1R<sub>y</sub>P<sub>n</sub> (F2.6c)"),
                   ("Columns &amp; collectors", "amplified seismic &Omega;<sub>0</sub> or capacity-limited"),
                   ("Protected zones / gussets", "brace ends, gusset hinge zone"),
-                  ("Demand-critical welds", "AISC 341 A3.4")]
+                  ("Demand-critical welds", "IS 800 seismic A3.4")]
     else:
         sysname = "moment frame (SMF/IMF)"
         checks = [("Strong-column-weak-beam", "&Sigma;M*<sub>pc</sub>/&Sigma;M*<sub>pb</sub> &gt; 1.0 (E3.4a)"),
                   ("Beam &amp; column width-thickness", "highly ductile (Table D1.1)"),
-                  ("Panel-zone shear &amp; doublers", "AISC 341 E3.6e"),
+                  ("Panel-zone shear &amp; doublers", "IS 800 seismic E3.6e"),
                   ("Continuity plates", "at beam flanges (E3.6f)"),
                   ("Protected zones", "RBS / plastic-hinge regions"),
                   ("Demand-critical welds", "CJP beam-flange-to-column"),
-                  ("Prequalified connection", "within AISC 358 limits")]
+                  ("Prequalified connection", "within IS 800 connections limits")]
     cap = (pkg or {}).get("capacity_design") or (pkg or {}).get("scwb")
-    rows = [[name, basis, "see Appendix A" if cap else "agent-derived (AISC 341 RAG) &mdash; pending"] for name, basis in checks]
-    intro = (f"<p>For the {sysname} (R = {s.get('R')}), the required AISC 341-22 ductile-detailing and capacity-design "
-             "checks are listed below. These are derived by the agent from the AISC 341 RAG; values populate from the "
+    rows = [[name, basis, "see Appendix A" if cap else "agent-derived (IS 800 seismic RAG) &mdash; pending"] for name, basis in checks]
+    intro = (f"<p>For the {sysname} (R = {s.get('R')}), the required IS 800 seismic-22 ductile-detailing and capacity-design "
+             "checks are listed below. These are derived by the agent from the IS 800 seismic RAG; values populate from the "
              "calc package where present.</p>")
     extra = ("<h4>Capacity-design results (from the calc package)</h4>" + _capdesign_html(cap)) if cap else ""
-    note = ("<p class='cnote'>Width-thickness ductility, AISC 358 prequalification limits, weld NDT and the C&amp;C "
+    note = ("<p class='cnote'>Width-thickness ductility, IS 800 connections prequalification limits, weld NDT and the C&amp;C "
             "cladding / net-uplift checks are confirmed on the drawings and connection submittal (delegated).</p>")
     return intro + _table(["Required check", "Basis", "Status"], rows) + extra + note
 
@@ -1475,7 +1475,7 @@ def _connection_demands(cfg, pkg, reX):
             typ = "column splice / base"; dem = f"P = {P:.0f} kip" + (f", M = {Mz/12:.0f} k-ft" if Mz else "")
             basis = "splice (J1.4) / base plate J8 + ACI 318 Ch.17"
         elif kind == "brace":
-            typ = "brace-to-gusset"; dem = f"axial = {P:.0f} kip"; basis = "expected strength (AISC 341 F2.6c)"
+            typ = "brace-to-gusset"; dem = f"axial = {P:.0f} kip"; basis = "expected strength (IS 800 seismic F2.6c)"
         else:
             continue
         rows.append([f"{sec} {kind}", typ, dem, basis])
@@ -1719,7 +1719,7 @@ def _deflection_section(cfg, nseg=6):
 def _grounding_check(cfg, name, pkg):
     """Verify the design actually queried the RAG collections its systems require (reliability).
     Reads the activity log; A341/A358 are required only for seismic systems detailed for ductility
-    (R > 3); AISC 360 + connection grounding are always required."""
+    (R > 3); IS 800 + connection grounding are always required."""
     import re as _re
     recs, _ = _load_activity(name)
     col = {}
@@ -1746,22 +1746,22 @@ def _grounding_check(cfg, name, pkg):
     def row(item, required, ok, ev):
         rows.append([item, "required" if required else "n/a (R&le;3)" if not detailed else "n/a",
                      ev, ("&mdash;" if not required else ("grounded" if ok else "<b>MISSING</b>"))])
-    row("AISC 360-22 &mdash; member limit states", True, n("engineering_standards_A360") > 0 or cite_a360,
-        f"{n('engineering_standards_A360')} queries" + (" + cited in calc_package" if cite_a360 else ""))
-    row("AISC 360 Ch. J &mdash; connection design grounded", True, has_conn,
+    row("IS 800:2007 &mdash; member limit states", True, n("engineering_standards_IS800") > 0 or cite_a360,
+        f"{n('engineering_standards_IS800')} queries" + (" + cited in calc_package" if cite_a360 else ""))
+    row("IS 800 Ch. J &mdash; connection design grounded", True, has_conn,
         "connections block present" if has_conn else "no connections block written")
-    row("AISC 341-22 &mdash; seismic detailing / capacity design", detailed,
-        n("engineering_standards_A341") > 0 or has_cap or cite_a341,
-        f"{n('engineering_standards_A341')} queries" + (" + capacity_design block" if has_cap else "")
+    row("IS 800 seismic-22 &mdash; seismic detailing / capacity design", detailed,
+        n("engineering_standards_IS800") > 0 or has_cap or cite_a341,
+        f"{n('engineering_standards_IS800')} queries" + (" + capacity_design block" if has_cap else "")
         + (" + cited in calc_package" if cite_a341 else ""))
-    row("AISC 358 &mdash; prequalified moment connections", detailed and not braced,
-        n("engineering_standards_A358") > 0 or cite_a358,
-        f"{n('engineering_standards_A358')} queries" + (" + cited in calc_package" if cite_a358 else ""))
+    row("IS 800 connections &mdash; prequalified moment connections", detailed and not braced,
+        n("engineering_standards_IS816") > 0 or cite_a358,
+        f"{n('engineering_standards_IS816')} queries" + (" + cited in calc_package" if cite_a358 else ""))
     nmiss = sum(1 for r in rows if "MISSING" in r[3])
     head = ("<h3>Grounding verification</h3>"
             f"<p>Whether the design queried the RAG collections its systems require. R = {R} "
-            + ("(&gt; 3 &mdash; AISC 341 ductile detailing applies)." if detailed
-               else "(&le; 3 &mdash; system not detailed for seismic; AISC 341/358 do not apply, design per AISC 360).")
+            + ("(&gt; 3 &mdash; IS 800 seismic ductile detailing applies)." if detailed
+               else "(&le; 3 &mdash; system not detailed for seismic; IS 800 seismic/358 do not apply, design per IS 800).")
             + "</p>")
     tail = ("<p class='note'>Grounding incomplete: the items marked MISSING were required for this building's "
             "systems but no RAG query / calc-package evidence was found. Re-run those checks against the RAG.</p>"
@@ -1867,7 +1867,7 @@ def build_report(name, root=None):
     try: T, eX, eY, Cs, V, Tu, Ta, Fx, W = _seismic(cfg)
     except Exception as ex: parts.append(f"<p class='note'>[seismic analysis failed: {ex}]</p>")
     windhtml, VwX, VwY = _wind_section(cfg)
-    print("[%s] report: model + ASCE 7 loads + modal done; rendering chapters%s ..."
+    print("[%s] report: model + IS 875/1893 loads + modal done; rendering chapters%s ..."
           % (name, " + static-model force diagrams (~30-60 s)" if cfg.get("force_diagrams") else ""))
     drX = drY = None; reX = reY = None
     if Fx is not None:
@@ -1920,7 +1920,7 @@ def build_report(name, root=None):
         parts.append("<h3>Horizontal force distribution to the lateral frames</h3>")
         try: parts.append(_horizontal_distribution(cfg, Fx, VwX, VwY))
         except Exception as ex: parts.append(f"<p class='note'>[distribution failed: {ex}]</p>")
-        parts.append("<h3>Diaphragm classification &amp; design force (ASCE 7-22 &sect;12.10)</h3>")
+        parts.append("<h3>Diaphragm classification &amp; design force (IS 875/1893 &sect;12.10)</h3>")
         try: parts.append(_diaphragm_section(cfg, Fx))
         except Exception as ex: parts.append(f"<p class='note'>[diaphragm section failed: {ex}]</p>")
         parts.append("<h3>Plan &amp; vertical irregularity screening</h3>")
@@ -1934,9 +1934,9 @@ def build_report(name, root=None):
     parts.append(_chapter(3))
     parts.append("<h3>Gravity loads</h3>"); parts.append(_gravity_loads_table(cfg))
     parts.append(_gravity_loads_note())
-    parts.append("<h3>Wind load determination (ASCE 7-22 Ch. 26-31)</h3>"); parts.append(windhtml)
+    parts.append("<h3>Wind load determination (IS 875/1893 Ch. 26-31)</h3>"); parts.append(windhtml)
     parts.append(_wind_cc_note())
-    parts.append("<h3>Seismic load determination (ASCE 7-22 Ch. 11-12)</h3>")
+    parts.append("<h3>Seismic load determination (IS 875/1893 Ch. 11-12)</h3>")
     if Fx is not None:
         parts.append(_seismic_loads_section(cfg, T, eX, eY, Cs, V, Tu, Ta, Fx, W))
     else:
@@ -2018,7 +2018,7 @@ def build_report(name, root=None):
                 parts.append(_table(["Load case", "Max axial N (kip)", "carried by", "Max moment M (k-ft)", "carried by"], srows))
         elif Fx is not None:
             parts.append("<h3>Load-case force summary</h3>")
-            parts.append("<p class='note'>The per-combination force-summary table (one row per LRFD combination) is "
+            parts.append("<p class='note'>The per-combination force-summary table (one row per LSD combination) is "
                          "temporarily omitted for faster reporting &mdash; it can be populated here on request at the "
                          "completion of the design. The governing per-member design demands are the enveloped values in "
                          "Chapter 6 / the member schedule.</p>")
@@ -2099,7 +2099,7 @@ def build_report(name, root=None):
             gd = FD.governing_diagrams(cfg, load_cases(cfg), nseg=6, lines=("perimeter", "internal"))   # nseg 2->6 (opt-in figures)
         if gd.get("perimeter"):
             parts.append("<h3>Governing internal-force diagrams &mdash; perimeter frames (static model)</h3>")
-            parts.append("<p>N / V / M for each perimeter frame under its governing LRFD combination, from the "
+            parts.append("<p>N / V / M for each perimeter frame under its governing LSD combination, from the "
                          "static model (true two-way tributary loads on sub-divided beams). Peak values annotated "
                          "per member; columns are single elements (linear between ends).</p>")
             for _d in ("X", "Y"):
@@ -2119,24 +2119,24 @@ def build_report(name, root=None):
     except Exception as ex:
         parts.append(f"<p class='note'>[static-model diagrams unavailable: {ex}]</p>")
 
-    # ===================== Chapter 6 — Member strength design (AISC 360) ==================
+    # ===================== Chapter 6 — Member strength design (IS 800) ==================
     parts.append(_chapter(6))
     parts.append(_member_section(cfg, name, pkg, {"roof"}, "Roof members",
         "Roof beams/girders for roof dead + roof live (and snow); governing flexure/shear/deflection limit state."))
     parts.append(_member_section(cfg, name, pkg, {"floor"}, "Floor members",
         "Typical floor beams/girders for floor dead + live load."))
     parts.append(_member_section(cfg, name, pkg, {"gravity_col"}, "Gravity columns",
-        "Interior gravity columns for accumulated tributary gravity (AISC 360 &sect;E3 compression)."))
+        "Interior gravity columns for accumulated tributary gravity (IS 800 &sect;E3 compression)."))
     parts.append(_member_section(cfg, name, pkg, {"lateral_col"}, "Lateral-system columns",
-        "Moment-frame / braced-frame columns for combined gravity + lateral (AISC 360 &sect;H1 interaction)."))
+        "Moment-frame / braced-frame columns for combined gravity + lateral (IS 800 &sect;H1 interaction)."))
     if cfg.get("braces"):
         parts.append(_member_section(cfg, name, pkg, {"brace"}, "Braces",
-            "Concentric braces for the design story shear (AISC 360 &sect;E3 compression, &sect;D2 tension)."))
+            "Concentric braces for the design story shear (IS 800 &sect;E3 compression, &sect;D2 tension)."))
     parts.append(_ch6_notes(cfg))
     if pkg:
         parts.append("<h3>Member design summary (calc_package.json)</h3>")
         parts.append(f"<p>Source: <code>{os.path.relpath(pkgsrc, HERE)}</code>. Capacities/D-C derived by the agent "
-                     "from the AISC 360/341 RAG; full referenced calc in Appendix A.</p>")
+                     "from the IS 800/341 RAG; full referenced calc in Appendix A.</p>")
         parts.append(_member_dc_summary(pkg))
         _comp = _composite_section(pkg)
         if _comp:
@@ -2199,7 +2199,7 @@ def build_report(name, root=None):
     parts.append("<p class='cnote'><b>Out of scope (this model):</b> floor vibration (AISC Design Guide 11) and "
                  "building separation/pounding are detail-level serviceability checks confirmed against the framing drawings.</p>")
 
-    # ===================== Chapter 9 — Seismic / wind detailing (AISC 341) ================
+    # ===================== Chapter 9 — Seismic / wind detailing (IS 800 seismic) ================
     parts.append(_chapter(9))
     parts.append(_aisc341_detailing(cfg, pkg))
 
@@ -2211,8 +2211,8 @@ def build_report(name, root=None):
                      "forces from the analysis; each connection is then DESIGNED to these demands below):</p>")
         parts.append(_ctbl)
     parts.append("<p class='cnote'><b>Designed in this package:</b> each connection is sized to the demands above per "
-                 "AISC 360 Ch. J (bolts J3, welds J2, block shear J4, HSS Ch. K, base plates/anchors J8/J9 + ACI 318 "
-                 "Ch.17) and AISC 341 for seismic systems &mdash; limit state, capacity and D/C &le; 1.0 derived by the "
+                 "IS 800 Ch. J (bolts J3, welds J2, block shear J4, HSS Ch. K, base plates/anchors J8/J9 + ACI 318 "
+                 "Ch.17) and IS 800 seismic for seismic systems &mdash; limit state, capacity and D/C &le; 1.0 derived by the "
                  "agent from the RAG (see the Connections table in Chapter 6 / Appendix A). Only shop-level detailing "
                  "is confirmed on the fabricator's connection submittal.</p>")
 
@@ -2245,7 +2245,7 @@ def build_report(name, root=None):
     parts.append(_grounding_check(cfg, name, pkg))
     parts.append(_consistency_section(name, root, pkg))
     parts.append("<p>Automated QA evidence in this report: per-combination equilibrium balances to ~0 in all three "
-                 "axes (Chapter 5); every member demand is enveloped over the full ASCE 7-22 combination set "
+                 "axes (Chapter 5); every member demand is enveloped over the full IS 875/1893 combination set "
                  "(Chapter 4 / Appendix B); each capacity is traceable to a cited AISC clause (Appendix A); and the "
                  "tool-call activity log is in Appendix C.</p>")
     parts.append("<p class='cnote'><b>Out of scope (engineer judgement):</b> independent third-party check, software "
@@ -2253,7 +2253,7 @@ def build_report(name, root=None):
                  "are professional-responsibility steps completed outside the automated package.</p>")
 
     # ============================== Appendices ==========================================
-    parts.append("<h2>Appendix A &mdash; Referenced AISC 360/341 member calculations</h2>")
+    parts.append("<h2>Appendix A &mdash; Referenced IS 800/341 member calculations</h2>")
     if pkg:
         try: parts.append(appendix(cfg, name, pkg))
         except Exception as ex: parts.append(f"<p class='note'>[Appendix A failed: {ex}]</p>")

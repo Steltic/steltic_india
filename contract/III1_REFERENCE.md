@@ -1,3 +1,7 @@
+> **steltic_india note:** USA AISC Design Examples / III-1 references below are
+> non-authoritative here. Prefer IS 800 RAG. Retained temporarily as modelling
+> methodology hints only.
+
 # AISC Design Example III-1 — condensed worked method (a four-story building)
 
 Treat this as a **METHOD TEMPLATE and a SELF-CHECK DISCIPLINE, not numbers to copy.**

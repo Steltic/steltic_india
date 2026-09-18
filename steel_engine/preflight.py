@@ -3,9 +3,11 @@ OpenSees solve so a mis-declared cfg is caught in seconds, not after a full pipe
 Returns a list of (severity, message); severity in {"ERROR","WARN"}. Non-blocking by design --
 pipeline.design_and_report prints the findings and puts them in its return dict.
 
-Also hosts the CANONICAL Seismic Design Category function asce_sdc() (ASCE 7-22 sec.11.6) --
+Legacy asce_sdc() is USA ASCE 7-22 (not authoritative on steltic_india; India zone/SD from IS 1893 RAG). Also --
 engine-free so engine3d.py and report.py both import THIS implementation instead of keeping
 divergent copies."""
+import india_loads as _IL
+
 
 
 def asce_sdc(SDS, SD1, S1=0.0, risk_cat="II"):
@@ -84,7 +86,7 @@ def relief_findings(cfg):
     Ie = float(s.get("Ie", 1.0) or 1.0)
     dl = float(cfg.get("drift_limit", 0.020) or 0.020)
     if Ie >= 1.5:
-        out.append(("ERROR", "cfg['%s'] present but Ie=%.2f (Risk Category IV): ASCE 7-22 16.1.2 keeps the "
+        out.append(("ERROR", "cfg['%s'] present but Ie=%.2f (Risk Category IV): USA ASCE 7-22 16.1.2 (not India authority) keeps the "
                              "12.12.1 drift limits for RC IV -- remove the relief block and design to Table "
                              "12.12-1 (0.010)" % (RELIEF_KEY, Ie)))
         return out
@@ -104,7 +106,7 @@ def relief_findings(cfg):
     if mean16 > lim16:
         out.append(("ERROR", "cfg['%s'] records a Chapter 16 mean drift %.4f ABOVE its limit %.4f -- the relief "
                              "rests on an analysis that did not pass 16.4.1.2" % (RELIEF_KEY, mean16, lim16)))
-    out.append(("WARN", "ASCE 7-22 16.1.2 drift relief in force (Risk Category %s): Table 12.12-1 need not apply; "
+    out.append(("WARN", "legacy ASCE 7-22 16.1.2 drift relief in force (defer India equivalent) (Risk Category %s): Table 12.12-1 need not apply; "
                         "linear design target %.4f from the Chapter 16 result (mean MCE_R drift %.4f vs %.4f). "
                         "The final design must be re-verified by a Chapter 16 analysis before issue."
                         % (risk_cat_from_Ie(Ie), tgt, mean16, lim16)))
@@ -125,6 +127,9 @@ def check(cfg):
     say = lambda sev, msg: out.append((sev, msg))
     if not isinstance(cfg, dict):
         return [("ERROR", "cfg is not a dict")]
+    # ---- India load_plan (LIVE IS 875 / IS 1893 RAG) — mandatory ----
+    for sev, msg in _IL.validate_load_plan(cfg):
+        say(sev, msg)
     # ---- units ----
     H = [float(h) for h in (cfg.get("heights") or []) if isinstance(h, (int, float))]
     if not H:

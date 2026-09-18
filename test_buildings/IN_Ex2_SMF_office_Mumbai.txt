@@ -1,0 +1,6 @@
+IN_Ex2 — 9-storey SMF office, Mumbai
+
+Location: Mumbai — RETRIEVE IS 1893 Zone, Z, soil, importance (office), R/Ω0 for SMF.
+Geometry: 9 × 3.5 m storeys; 4×4 bays @ 7.5 m; special moment frames on perimeter.
+Loads: IS 875 P1/P2 dead+imposed; IS 875 P3 wind (coastal — retrieve Vb, k1–k4, Cp).
+Design: IS 800:2007; connections IS 816/4000. LIVE load_plan RAG mandatory.

@@ -23,7 +23,7 @@ def _default_data_dir() -> pathlib.Path:
         root = pathlib.Path.home() / "Library" / "Application Support"
     else:
         root = pathlib.Path(os.environ.get("XDG_DATA_HOME") or (pathlib.Path.home() / ".local" / "share"))
-    return root / "Steltic"
+    return root / "StelticIndia"
 
 
 DATA         = _default_data_dir();       DATA.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ RETRIES         = int(os.environ.get("RETRIES", "8"))           # LLM-call retri
 RETRY_BACKOFF_CAP = int(os.environ.get("RETRY_BACKOFF_CAP", "60"))  # max seconds between retries (backoff ramps up to this)
 
 # --- RAG (engineering standards). Empty => the search tool returns a 'disabled' note and the agent
-# relies on its own AISC knowledge. Point it at your own RAG server, or request access to the
+# relies on its own IS 800 knowledge. Point it at your own RAG server, or request access to the
 # hosted Steltic RAG via the contact details at https://stelticai.com. ---
 RAG_API_URL   = os.environ.get("RAG_API_URL", "")
 RAG_API_TOKEN = os.environ.get("RAG_API_TOKEN", "")  # bearer token, sent on every RAG call when set
@@ -64,5 +64,5 @@ RAG_SEARCH_SOFTCAP = int(os.environ.get("RAG_SEARCH_SOFTCAP", "20"))  # after th
 # not with us, so by default we look for it beside the workspace the RAG server was pointed at; set
 # this when the corpus lives somewhere else. Absent, the rewording rung is simply skipped.
 RAG_ALIASES_FILE   = os.environ.get("RAG_ALIASES_FILE", "")
-# Spec (AISC/ASCE) RAG results are ALWAYS saved to jobs/<name>/rag/<slug>.txt and, once a design completes,
+# Spec (IS 800 / IS 875 / IS 1893) RAG results are ALWAYS saved to jobs/<name>/rag/<slug>.txt and, once a design completes,
 # evicted from the saved conversation to a file pointer (agent._evict_all_rag) so optimisation runs don't bloat.

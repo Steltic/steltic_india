@@ -1,0 +1,19 @@
+IN_Ex1 — 5-storey office, special concentrically braced frame (India)
+
+Location: New Delhi (seismic Zone per IS 1893 Part 1:2016 — RETRIEVE zone factor Z, importance
+factor, response reduction R for SCBF, design spectrum; do not invent).
+Soil: medium — retrieve from IS 1893.
+
+Geometry (convert to inches for the engine):
+- 5 storeys @ 3.6 m; plan 5 bays × 4 bays @ 6.0 m
+- Perimeter SCBF both directions; interior gravity framing pinned
+- Roof + floors: composite metal deck (model as one-way); cladding 0.5 kN/m²
+
+Gravity (RETRIEVE from IS 875 Part 1 dead / Part 2 imposed — do not invent):
+- Office imposed loads, floor finishes, roof live/access as applicable
+
+Wind (RETRIEVE IS 875 Part 3:2015 — design wind speed, terrain, Cp):
+- Delhi basic wind speed — cite retrieved table/clause
+
+Design: IS 800:2007 LSD. Material IS 2062 E250/E350 as retrieved. Sections IS 808.
+Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from LIVE RAG before pipeline.

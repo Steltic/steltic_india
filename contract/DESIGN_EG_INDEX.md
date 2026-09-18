@@ -1,3 +1,7 @@
+> **steltic_india note:** USA AISC Design Examples / III-1 references below are
+> non-authoritative here. Prefer IS 800 RAG. Retained temporarily as modelling
+> methodology hints only.
+
 # AISC Design Examples — quick index for `steel_design_examples` queries
 
 For **every member and connection you design**, pair your `engineering_standards_A360`

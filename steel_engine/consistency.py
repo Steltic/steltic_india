@@ -313,13 +313,13 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         _sp=(pkg.get("framework_screen") or {}).get("plan") or {}
         if any(_sp.get(k) for k in ("reentrant","setback","nonparallel")):
             pir={k: bool(_sp.get(k)) for k in ("reentrant","setback","nonparallel")}
-    # NOTE: ASCE 7-22 deleted the 7-16 Table 12.6-1 analysis-procedure matrix; sec.12.6 permits ELF
+    # NOTE: IS 875/1893 deleted the 7-16 Table 12.6-1 analysis-procedure matrix; sec.12.6 permits ELF
     # for ALL structures, so an irregular SDC D+ building no longer FAILS for lacking 'RS'. The
     # MRSA-recommended advisory is rendered in the report (Ch.2 irregularity screen) instead.
     dl=float(cfg.get("drift_limit",0.020) or 0.020)
     _mfrho=(" (for a moment-frame-only SFRS in SDC D-F the allowable is further divided by rho, "
             "12.12.1.1 -- the engine drift gates apply this)")
-    # ASCE 7-22 16.1.2: a Chapter 16 analysis relaxes the 12.12.1 limits for RC I-III (never IV).
+    # IS 875/1893 16.1.2: a Chapter 16 analysis relaxes the 12.12.1 limits for RC I-III (never IV).
     # preflight.relief_findings is the single source of the rules; its ERRORs are consistency flags.
     _relief_on=False
     try:
@@ -335,7 +335,7 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         out.append("Risk Category III (Ie=%.2f): allowable story drift is 0.015 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.015"%Ie+_mfrho)
     if R is not None and float(R)<=3.0:
         out.append("R=%.2f is a 'not specifically detailed for seismic' system -- AISC 341 does NOT apply (no SCWB / "
-                   "capacity design); design members & connections to AISC 360 only, and CONFIRM whether wind or seismic governs each direction"%float(R))
+                   "capacity design); design members & connections to IS 800 only, and CONFIRM whether wind or seismic governs each direction"%float(R))
     H=[float(h) for h in (cfg.get("heights") or []) if _isnum(h)]
     if len(H)>=2 and sdc_high:
         hr=max(max(H[k]/H[k-1],H[k-1]/H[k]) for k in range(1,len(H)))
@@ -361,7 +361,7 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         if "tributary" not in _blob2:
             out.append("cfg['diaphragm']='%s' declared but calc_package never distributes lateral force by "
                        "TRIBUTARY AREA -- for a flexible diaphragm the braced-line shears, deck shear (plf), "
-                       "chords and collectors must be designed from the tributary model (ASCE 7-22 12.3.1)"%_dia)
+                       "chords and collectors must be designed from the tributary model (IS 875/1893 12.3.1)"%_dia)
     _dex = cfg.get("drift_exempt_stories") or {}
     if _dex and isinstance(pkg,dict):
         _blob3=json.dumps(pkg).lower()
@@ -479,7 +479,7 @@ def _consultancy_issues(cfg, pkg):
                     and float((m.get("inputs") or {}).get("length_in") or 0) >= 480 for m in mem)
     if roof_long and "ponding" not in blob:
         out.append("long-span (>=40 ft) roof framing and NO ponding evaluation in calc_package -- "
-                   "check ponding stability/impounded rain (AISC 360-22 App. 2 / ASCE 7-22 Ch. 8: "
+                   "check ponding stability/impounded rain (IS 800:2007 App. 2 / IS 875/1893 Ch. 8: "
                    "roof slope + secondary drainage head) and record it")
     # A6 footfall vibration: long floor spans or vibration-sensitive occupancy
     floor_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor"
@@ -507,20 +507,20 @@ def _consultancy_issues(cfg, pkg):
                   ("lower bound", "lower-bound model", "scope", "excluded", "not relied", "delegated")))
         if missing and not scoped:
             out.append("COMPOSITE floor system declared and the package lacks: " + "; ".join(missing) +
-                       " -- design the composite floor per AISC 360-22 Ch. I (see COMPOSITE_I3.md: "
+                       " -- design the composite floor per IS 800:2007 Ch. I (see COMPOSITE_I3.md: "
                        "b_eff I3.1a, studs I8.2a, partial composite I3.2a, camber rule, I_LB deflection) "
                        "or record an explicit composite scope statement")
     # A8 seismic joint / pounding: multi-wing keywords and no joint decision
     if any(k in arch for k in ("twin", "two tower", "wings", "wing ")) and \
             not any(k in blob for k in ("seismic joint", "pounding", "joint width", "no seismic joint")):
         out.append("multi-wing/tower configuration and NO seismic-joint decision recorded -- either "
-                   "size the joint (sum of Cd-amplified drifts, ASCE 7-22 12.12.3 + pounding check) "
+                   "size the joint (sum of Cd-amplified drifts, IS 875/1893 12.12.3 + pounding check) "
                    "or record why the wings are intentionally connected (with the interaction designed)")
     # B6 snow drift at steps/parapets
     stepish = any(k in arch for k in ("step", "setback", "parapet", "penthouse", "tier", "wedding"))
     if float(cfg.get("snow", 0) or 0) > 0 and stepish and "drift" not in blob.replace("drift_", ""):
         out.append("snow present with roof steps/parapets/setbacks and no DRIFT surcharge in the "
-                   "package (ASCE 7-22 7.7/7.8) -- add the drift check to the step-adjacent members")
+                   "package (IS 875/1893 7.7/7.8) -- add the drift check to the step-adjacent members")
     # B8 delegated-design register
     if any(k in blob for k in ("joist", "sji", " deck", "brb", "stair", "curtain wall")) and \
             "delegat" not in blob:
