@@ -9,8 +9,9 @@ Source of truth, in priority order:
   3. Small built-in table for a few W-shapes used in library archetypes.
 
 props(name) -> dict with keys: A, Ix, Iy, J, Zx, Zy, Sx, Sy, rx, ry, Aw, ho, Cw, rts,
-d, tw, bf, tf  (pipeline units: in, in^2, in^3, in^4, in^6 — IS 808 rows are converted).
-brace_r(key) -> radius of gyration (in) for an HSS brace key.
+d, tw, bf, tf. Units follow india_units.active_unit_system(): mm-based when N-mm (default
+for India), inch-based when kip-in. IS 808 SI columns preferred; else inch×25.4^n.
+brace_r(key) -> radius of gyration in active length unit.
 """
 import os, csv, math
 
@@ -93,6 +94,8 @@ def _load_one(path):
             db[lab] = dict(A=g("A"), Ix=g("Ix"), Iy=g("Iy"), J=g("J"), Zx=g("Zx"), Zy=g("Zy"),
                              Sx=g("Sx"), Sy=g("Sy"), rx=g("rx"), ry=g("ry"), d=g("d"), tw=g("tw"),
                              bf=g("bf"), tf=g("tf"), Cw=g("Cw"), rts=g("rts"), ho=g("ho"),
+                             A_si_mm2=g("A_si_mm2"), Izz_si_mm4=g("Izz_si_mm4"),
+                             Iyy_si_mm4=g("Iyy_si_mm4"), Mass_kg_m=g("Mass_kg_m"),
                              _source=row.get("Source") or path)
             # also index spaced Designation_IS if present
             des = (row.get("Designation_IS") or "").strip().upper().replace(" ", "")
@@ -125,27 +128,71 @@ def _load_csv():
 def normalize_label(name: str) -> str:
     return str(name).upper().replace(" ", "").strip()
 
-def props(name, SEC=None):
+def _active_us():
+    try:
+        from india_units import active_unit_system
+        return active_unit_system()
+    except Exception:
+        return "N-mm"
+
+def _fill_derived(d):
+    d.setdefault("Aw", (d["d"]*d["tw"]) if d.get("d") and d.get("tw") else None)
+    if not d.get("ho") and d.get("d") and d.get("tf"): d["ho"]=d["d"]-d["tf"]
+    if not d.get("Cw") and d.get("Iy") and d.get("ho"): d["Cw"]=d["Iy"]*d["ho"]**2/4
+    if not d.get("rts") and d.get("Iy") and d.get("Cw") and d.get("Sx"):
+        d["rts"]=math.sqrt(math.sqrt(d["Iy"]*d["Cw"])/d["Sx"])
+    if not d.get("Sx") and d.get("Ix") and d.get("d"): d["Sx"]=2*d["Ix"]/d["d"]
+    if not d.get("Zy") and d.get("Sy"): d["Zy"]=1.55*d["Sy"]
+    return d
+
+def _to_si_props(csvd):
+    """Build mm-based property dict from CSV row (prefer SI columns)."""
+    mm = 25.4
+    d = {}
+    src = dict(csvd)
+    src.pop("_source", None)
+    if src.get("A_si_mm2"):
+        d["A"] = src["A_si_mm2"]
+    elif src.get("A") is not None:
+        d["A"] = src["A"] * mm**2
+    if src.get("Izz_si_mm4") is not None:
+        d["Ix"] = src["Izz_si_mm4"]
+    elif src.get("Ix") is not None:
+        d["Ix"] = src["Ix"] * mm**4
+    if src.get("Iyy_si_mm4") is not None:
+        d["Iy"] = src["Iyy_si_mm4"]
+    elif src.get("Iy") is not None:
+        d["Iy"] = src["Iy"] * mm**4
+    for key, power in (("J", 4), ("Zx", 3), ("Zy", 3), ("Sx", 3), ("Sy", 3),
+                       ("Cw", 6), ("rx", 1), ("ry", 1), ("d", 1), ("tw", 1),
+                       ("bf", 1), ("tf", 1), ("ho", 1), ("rts", 1)):
+        if src.get(key) is not None:
+            d[key] = src[key] * (mm ** power)
+    if src.get("Mass_kg_m") is not None:
+        d["Mass_kg_m"] = src["Mass_kg_m"]
+    d["_units"] = "mm"
+    return _fill_derived(d)
+
+def props(name, SEC=None, unit_system=None):
+    """Section properties in active (or requested) unit system."""
     name_u = normalize_label(name)
+    us = unit_system or _active_us()
     csvd = _load_csv().get(name_u)
-    if csvd and csvd.get("A"):
+    if csvd and (csvd.get("A") or csvd.get("A_si_mm2")):
+        if us == "N-mm":
+            return _to_si_props(csvd)
         d = dict(csvd)
         d.pop("_source", None)
-        d.setdefault("Aw", (d["d"]*d["tw"]) if d.get("d") and d.get("tw") else None)
-        if not d.get("ho") and d.get("d") and d.get("tf"): d["ho"]=d["d"]-d["tf"]
-        if not d.get("Cw") and d.get("Iy") and d.get("ho"): d["Cw"]=d["Iy"]*d["ho"]**2/4
-        if not d.get("rts") and d.get("Iy") and d.get("Cw") and d.get("Sx"):
-            d["rts"]=math.sqrt(math.sqrt(d["Iy"]*d["Cw"])/d["Sx"])
-        if not d.get("Sx") and d.get("Ix") and d.get("d"): d["Sx"]=2*d["Ix"]/d["d"]
-        if not d.get("Zy") and d.get("Sy"): d["Zy"]=1.55*d["Sy"]
-        return d
+        d.pop("A_si_mm2", None); d.pop("Izz_si_mm4", None); d.pop("Iyy_si_mm4", None)
+        d.pop("Mass_kg_m", None)
+        d["_units"] = "in"
+        return _fill_derived(d)
     if _looks_india(name_u):
         raise KeyError(
             "section %r looks like an IS 808 designation but was not found in is808_shapes.csv "
             "(see is808_GAPS.md / is1161_tubes.csv). Do not substitute an AISC W-shape."
             % (name,)
         )
-    # built-in path: need engine SEC for A,Ix,Iy,J
     if SEC is None:
         from engine3d import SEC as _S; SEC=_S
     key = name.upper()
@@ -156,17 +203,21 @@ def props(name, SEC=None):
     Aw = dd*tw; ho = dd-tf; Cw = Iy*ho**2/4.0
     rts = math.sqrt(math.sqrt(Iy*Cw)/Sx)
     Zy = 1.55*Sy
-    return dict(A=A,Ix=Ix,Iy=Iy,J=J,Zx=Zx,Zy=Zy,Sx=Sx,Sy=Sy,rx=rx,ry=ry,
-                Aw=Aw,ho=ho,Cw=Cw,rts=rts,d=dd,tw=tw,bf=bf,tf=tf)
+    d = dict(A=A,Ix=Ix,Iy=Iy,J=J,Zx=Zx,Zy=Zy,Sx=Sx,Sy=Sy,rx=rx,ry=ry,
+             Aw=Aw,ho=ho,Cw=Cw,rts=rts,d=dd,tw=tw,bf=bf,tf=tf, _units="in")
+    if us == "N-mm":
+        return _to_si_props(d)
+    return d
 
 def brace_r(key):
     r = _HSS_R.get(key)
+    us = _active_us()
     if r is not None:
-        return r
-    d = _load_csv().get(normalize_label(key))
+        return r * 25.4 if us == "N-mm" else r
+    d = props(key) if _load_csv().get(normalize_label(key)) else None
     if d and d.get("rx"):
         return d["rx"]
-    return 2.5
+    return 2.5 * 25.4 if us == "N-mm" else 2.5
 
 def hss_b_over_t(name, spec="A1085"):
     """Flat-width / design-wall ratio b/t for a SQUARE/RECT HSS (legacy AISC path).

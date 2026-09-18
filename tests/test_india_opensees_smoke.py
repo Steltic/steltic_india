@@ -1,7 +1,7 @@
-"""Minimal India OpenSees smoke: metric brief → kip-in + IS 808 MB + example_build + eigen.
+"""Minimal India OpenSees smoke: metric brief → N-mm + IS 808 MB + example_build + eigen.
 
 Requires project venv with openseespy (CPython <3.13). Skip cleanly if unavailable.
-Does NOT invent load values — uses placeholder D_floor/D_roof only so mass path runs;
+Does NOT invent load values — uses placeholder D_floor/D_roof in kN/m² so mass path runs;
 load_plan RAG gate is not exercised here (see test_india_load_plan).
 """
 import sys
@@ -23,8 +23,11 @@ def test_india_metric_is808_build_and_eigen():
     import example_build as EB
     import engine3d as eng
 
+    IU.activate_si()
     p = S.props("MB300")
-    assert p["A"] > 0 and p["d"] > 0
+    assert p["A"] > 5000  # mm^2
+    assert p["d"] > 250   # mm
+    assert p.get("_units") == "mm"
 
     cfg = {
         "name": "IN_smoke_2storey",
@@ -38,16 +41,24 @@ def test_india_metric_is808_build_and_eigen():
         "beam": "MB250",
         "base": "fixed",
         "jurisdiction": "india",
-        # Placeholder gravity/clad for mass only — not design values from RAG.
-        "D_floor": 80.0,
-        "D_roof": 60.0,
-        "clad": 15.0,
-        "L_floor": 50.0,
-        "Lr": 20.0,
+        # Placeholder gravity/clad for mass only — kN/m², not design values from RAG.
+        "D_floor": 3.0,
+        "D_roof": 2.5,
+        "clad": 0.5,
+        "L_floor": 2.0,
+        "Lr": 0.75,
     }
-    IU.apply_metric_geometry(cfg)
+    IU.apply_si_geometry(cfg)
     assert cfg.get("SX") and cfg.get("heights")
-    assert abs(cfg["SX"] - 6.0 * IU.M_TO_IN) < 1e-6
+    assert abs(cfg["SX"] - 6000.0) < 1e-6
+    assert abs(cfg["heights"][0] - 3600.0) < 1e-6
+    assert cfg["units"] == "N-mm"
+    assert eng.unit_system() == "N-mm"
+    assert abs(eng.E - 200000.0) < 1e-6
+    assert abs(eng.g - 9810.0) < 1e-6
+
+    A, Ix, Iy, J = eng.Ipack("MB300")
+    assert A > 5000 and Ix > 1e7
 
     info = EB.example_build(cfg, transf="Linear")
     assert info["NF"] == 2

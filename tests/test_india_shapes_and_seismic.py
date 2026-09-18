@@ -13,24 +13,30 @@ import india_units as IU
 
 
 def test_is808_mb200_props():
+    IU.activate_si()
     p = S.props("MB200")
-    assert abs(p["A"] - 4.774) < 0.01
-    assert abs(p["d"] - 200 / 25.4) < 0.01
+    assert abs(p["A"] - 3080.0) < 5.0  # A_si_mm2
+    assert abs(p["d"] - 200.0) < 0.5   # mm
     assert p["Ix"] > p["Iy"] > 0
+    # Legacy kip-in pack still available
+    pin = S.props("MB200", unit_system="kip-in")
+    assert abs(pin["A"] - 4.774) < 0.01
 
 
 def test_is808_channel_and_angle():
+    IU.activate_si()
     mc = S.props("MC200")
-    assert mc["A"] > 4.0 and mc["d"] > 7.0
+    assert mc["A"] > 2500 and mc["d"] > 190  # mm
     isa = S.props("ISA50X50X6")
-    assert 0.8 < isa["A"] < 1.0
+    assert 400 < isa["A"] < 700  # mm^2
     assert "MC200" in S.list_is808("MC")
 
 
 def test_is1161_chs():
+    IU.activate_si()
     chs = S.props("CHS60.3X3.6")
-    assert chs["A"] > 0.9
-    assert abs(chs["Ix"] - chs["Iy"]) < 1e-9
+    assert chs["A"] > 500  # mm^2
+    assert abs(chs["Ix"] - chs["Iy"]) < 1e-3
     assert len(S.list_chs("CHS")) >= 50
 
 
@@ -75,13 +81,23 @@ def test_torsional_trigger_15():
 
 def test_metric_units_conversion():
     cfg = {"units": "metric", "story_heights": [3.6], "bay_x": 6.0, "bay_y": 5.0}
+    IU.apply_metric_geometry(cfg)  # wave 1 alias → SI mm
+    assert abs(cfg["story_heights"][0] - 3600.0) < 1e-6
+    assert abs(cfg["heights"][0] - 3600.0) < 1e-6
+    assert abs(cfg["SX"] - 6000.0) < 1e-6
+    assert abs(cfg["SY"] - 5000.0) < 1e-6
+    assert cfg["_units_converted"]["to"] == "mm"
+    assert cfg["units"] == "N-mm"
+    assert IU.ENGINE_UNITS["force"] == "N"
+    assert IU.ENGINE_UNITS["length"] == "mm"
+
+def test_legacy_kip_in_opt_in():
+    cfg = {"units": "kip-in", "force_kip_in": True, "metric": True,
+           "story_heights": [3.6], "bay_x": 6.0, "bay_y": 5.0}
     IU.apply_metric_geometry(cfg)
-    assert abs(cfg["story_heights"][0] - 3.6 * IU.M_TO_IN) < 1e-6
-    assert abs(cfg["heights"][0] - 3.6 * IU.M_TO_IN) < 1e-6
     assert abs(cfg["SX"] - 6.0 * IU.M_TO_IN) < 1e-6
-    assert abs(cfg["SY"] - 5.0 * IU.M_TO_IN) < 1e-6
     assert cfg["_units_converted"]["to"] == "in"
-    assert "kip" in IU.ENGINE_UNITS["force"]
+    assert cfg["units"] == "kip-in"
 
 
 def test_collection_stem_map():
