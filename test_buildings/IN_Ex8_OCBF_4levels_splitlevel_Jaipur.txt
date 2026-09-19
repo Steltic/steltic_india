@@ -1,0 +1,8 @@
+IN_Ex8 — 4-storey OCBF split-level (vertical irregularity), Jaipur
+
+Location: Jaipur — RETRIEVE IS 1893 Zone, Z, soil, I (office/workshop); R for OCBF / concentric SBF.
+Geometry (SI N-mm): L-plan — office wing 4 storeys (L1=4.2 m, L2–4=3.6 m); workshop wing 2 tall
+  storeys (L1=6.0 m, L2=4.8 m). Shared grid line columns; floor elevations do NOT align
+  (vertical irregularity). OCBF chevron/single-diagonal on perimeter of each wing.
+Loads: RETRIEVE IS 875 P1/P2 (office + light manufacturing mezzanine); P3 wind — check both.
+Design: IS 800 LSD OCBF; connections IS 816/4000. LIVE load_plan RAG mandatory.

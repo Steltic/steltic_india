@@ -1,0 +1,10 @@
+IN_Ex15 — Gable warehouse + low-roof lean-to, Shimla (snow / ponding)
+
+Location: Shimla (mountain) — RETRIEVE IS 1893 Zone, Z, soil, I (warehouse); snow from
+  IS 875 Part 4 LIVE (balanced / unbalanced / drift / sliding — do not invent). Ponding /
+  rain on flat lean-to per IS 875 practice + IS 800 stability checks.
+Geometry (SI N-mm): main hall clear-span portals ~24 m × length ~60 m @ 7.5 m centres;
+  eave ~8 m, ridge ~11 m (gable ~1:4); attached flat lean-to office ~12 m × 30 m, roof ~5 m.
+  Longitudinal rod/OCBF bracing. Model gable at mean roof height; apply slope snow by hand.
+Loads: RETRIEVE IS 875 P1/P2/P3 + **P4 snow**; check wind uplift on light roof.
+Design: IS 800 LSD portals; LIVE cfg['load_plan'] RAG mandatory (P4 required).

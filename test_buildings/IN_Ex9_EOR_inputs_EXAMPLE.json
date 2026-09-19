@@ -1,0 +1,33 @@
+{
+  "_label": "EXAMPLE / not-for-construction",
+  "_purpose": "CI / COMPLETE-gate exercise for IN_Ex9 SPSW T-plan Guwahati — EOR-documented R when IS 1893 Table 9 SPSW row found:false.",
+  "_building": "IN_Ex9_SPSW_12levels_Tplan_Guwahati",
+  "_disclaimer": "EXAMPLE only. Real jobs require LIVE RAG for IS 875/1893 load_plan and project-specific EOR R cite. High-seismic Guwahati — do not invent Z/I/R from ASCE.",
+
+  "system": "SPSW",
+  "structure_kind": "hr_steel",
+  "jurisdiction": "india",
+  "units": "N-mm",
+
+  "R": 4.0,
+  "R_source": "eor_documented",
+  "R_cite": "EXAMPLE EOR memo: IS 1893 Part 1 Table 9 steel SPSW / steel plate shear wall row found:false; project adopts R=4.0 with EOR concurrence (COMPLETE-gate EXAMPLE) — NOT ASCE 7 R=7.",
+  "R_table9_found": false,
+  "R_steel_spsw_table9_found": false,
+
+  "seis": {
+    "R": 4.0,
+    "R_source": "eor_documented",
+    "R_cite": "EXAMPLE EOR memo (see top-level R_cite)",
+    "R_table9_found": false,
+    "Omega0_found": false,
+    "Om0_found": false,
+    "Om0_note": "IS 1893 has no Ω0 — found:false. Optional eor_documented Omega0 + cite for VBE/HBE capacity design; never invent ASCE 7 Ω0."
+  },
+
+  "notes": {
+    "table9": "Steel SPSW R row found:false in LIVE RAG — eor_documented path OK",
+    "zone": "Guwahati high seismic — LIVE retrieve Zone/Z from IS 1893 Annex; do not invent",
+    "irregularity": "T-plan re-entrant corners — MRSA; collectors at stem/flange junctions"
+  }
+}

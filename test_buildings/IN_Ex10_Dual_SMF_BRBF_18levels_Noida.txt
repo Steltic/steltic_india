@@ -1,0 +1,9 @@
+IN_Ex10 — 18-storey slender dual SMF + BRBF, Noida (wind + EQ)
+
+Location: Noida / NCR — RETRIEVE IS 1893 Zone, Z, soil, I (office/residential); R for dual
+  SMF+BRBF — steel dual / BRBF Table 9 rows may be found:false → eor_documented
+  (IN_Ex10_EOR_inputs_EXAMPLE.json); MRF independently ≥25% VB per IS 1893 §7.2.7.
+Geometry (SI N-mm): 18 storeys (L1=5.4 m; typical 3.2 m); slender plan 3×2 bays @ 9.0 m;
+  perimeter SMF + core BRBF dual; uniform footprint (slenderness is the point).
+Loads: RETRIEVE IS 875 P1/P2; P3 wind — check BOTH wind and seismic (tall/slender; neither skip).
+Design: IS 800 LSD dual; connections IS 816/4000. LIVE load_plan RAG mandatory.

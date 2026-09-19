@@ -1,0 +1,33 @@
+{
+  "_label": "EXAMPLE / not-for-construction",
+  "_purpose": "CI / COMPLETE-gate exercise for IN_Ex7 BRBF Ahmedabad — EOR-documented R when IS 1893 Table 9 BRBF row found:false.",
+  "_building": "IN_Ex7_BRBF_10levels_Ahmedabad",
+  "_disclaimer": "EXAMPLE only. Real jobs require LIVE RAG for IS 875/1893 load_plan and project-specific EOR R cite. Never invent ASCE Ω0.",
+
+  "system": "BRBF",
+  "structure_kind": "hr_steel",
+  "jurisdiction": "india",
+  "units": "N-mm",
+
+  "R": 4.5,
+  "R_source": "eor_documented",
+  "R_cite": "EXAMPLE EOR memo: IS 1893 Part 1 Table 9 steel BRBF / buckling-restrained braced frame row found:false; project adopts R=4.5 with EOR concurrence (COMPLETE-gate EXAMPLE) — NOT ASCE 7 R=8 and NOT a silent SBF proxy without disclosure.",
+  "R_table9_found": false,
+  "R_steel_brbf_table9_found": false,
+
+  "seis": {
+    "R": 4.5,
+    "R_source": "eor_documented",
+    "R_cite": "EXAMPLE EOR memo (see top-level R_cite)",
+    "R_table9_found": false,
+    "Omega0_found": false,
+    "Om0_found": false,
+    "Om0_note": "IS 1893 has no Ω0 — found:false. Optional eor_documented Omega0 + cite; never invent ASCE 7 Ω0."
+  },
+
+  "notes": {
+    "table9": "Steel BRBF R row found:false in LIVE RAG — eor_documented path OK",
+    "omega0": "found:false — does not alone block COMPLETE",
+    "brb": "BRB core Fy range + capacity design per IS 800 §12 practice / project EOR — LIVE RAG"
+  }
+}

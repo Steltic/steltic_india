@@ -1,0 +1,34 @@
+{
+  "_label": "EXAMPLE / not-for-construction",
+  "_purpose": "CI / COMPLETE-gate exercise for IN_Ex10 dual SMF+BRBF Noida — EOR-documented R when steel dual / BRBF Table 9 rows found:false.",
+  "_building": "IN_Ex10_Dual_SMF_BRBF_18levels_Noida",
+  "_disclaimer": "EXAMPLE only. Real jobs require LIVE RAG for IS 875/1893 load_plan and project-specific EOR R cite. Mirror IN_Ex4 dual eor_documented pattern; never silent SBF proxy.",
+
+  "system": "dual SMF+BRBF",
+  "structure_kind": "hr_steel",
+  "jurisdiction": "india",
+  "units": "N-mm",
+
+  "R": 4.5,
+  "R_source": "eor_documented",
+  "R_cite": "EXAMPLE EOR memo: IS 1893 Table 9 steel SMF+BRBF dual row found:false (iv is RC only; BRBF row found:false); EOR documents concentric SBF-class R=4.5 with §7.2.7 dual rule (MRF independently ≥25% VB) — NOT invented as a steel dual Table 9 row and NOT ASCE dual R=8.",
+  "R_table9_found": false,
+  "R_steel_dual_table9_found": false,
+  "R_steel_brbf_table9_found": false,
+
+  "seis": {
+    "R": 4.5,
+    "R_source": "eor_documented",
+    "R_cite": "EXAMPLE EOR memo (see top-level R_cite)",
+    "R_steel_dual_table9_found": false,
+    "Omega0_found": false,
+    "Om0_found": false,
+    "Om0_note": "IS 1893 has no Ω0 — found:false. Optional eor_documented Omega0 + cite; never invent ASCE 7 Ω0."
+  },
+
+  "notes": {
+    "table9": "Steel dual SMF+BRBF / BRBF rows found:false — eor_documented + §7.2.7 path OK (see IN_Ex4 dual precedent)",
+    "dual_25pct": "Perimeter SMF must independently resist ≥25% design base shear per IS 1893 §7.2.7",
+    "wind": "Tall slender Noida — LIVE IS 875 P3; check wind vs seismic both directions"
+  }
+}

@@ -1,0 +1,9 @@
+IN_Ex9 — 12-storey SPSW residential, T-plan, Guwahati (high seismic)
+
+Location: Guwahati — RETRIEVE IS 1893 Zone (high), Z, soil, I (residential); R for SPSW —
+  Table 9 SPSW often found:false → eor_documented path (IN_Ex9_EOR_inputs_EXAMPLE.json).
+Geometry (SI N-mm): T-plan — flange 6×2 bays @ 8.5 m; stem 2×2 bays @ 8.5 m; 12 storeys
+  (L1=4.2 m lobby; typical 3.2 m); optional partial mechanical penthouse. SPSW piers at
+  core + re-entrant lines (web plates + HBE/VBE).
+Loads: RETRIEVE IS 875 P1/P2 (residential); P3 wind — seismic expected to govern; do not invent.
+Design: IS 800 LSD; connections IS 816/4000. LIVE cfg['load_plan'] RAG mandatory.

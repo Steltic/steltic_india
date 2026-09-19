@@ -1,0 +1,10 @@
+IN_Ex6 — 8-storey EBF office, L-plan (re-entrant), Pune
+
+Location: Pune — RETRIEVE IS 1893 Part 1 Zone, Z, soil, I (office); R for EBF —
+  if Table 9 steel EBF row found:false, use eor_documented path (see IN_Ex6_EOR_inputs_EXAMPLE.json).
+Geometry (SI N-mm): L-plan — north bar 7×2 bays @ 9.0 m (8 storeys); west leg 4×3 bays @ 9.0 m
+  (5 storeys stepped roof). Storey 1 = 4.8 m; typical = 3.9 m. Perimeter/re-entrant EBF with
+  shear links both directions; interior gravity pinned.
+Loads: RETRIEVE IS 875 P1/P2 dead+imposed (office); P3 wind — do not invent. MRSA for plan irregularity.
+Design: IS 800:2007 LSD (+ §12 capacity design for EBF links); connections IS 816/4000.
+LIVE cfg['load_plan'] RAG mandatory before pipeline.
