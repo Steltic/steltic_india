@@ -1091,13 +1091,39 @@ def _sdc(SDS, SD1, S1=0.0, Ie=1.0):
 
 def _design_basis_codes(cfg, s, root=None):
     seismic = bool(s.get("R"))
-    rows = [["International Building Code (IBC)", "adopting code &mdash; confirm locally adopted edition &amp; amendments"],
-            ["ASCE/SEI 7-22", "loads &amp; load combinations (gravity, wind Ch.26-31, seismic Ch.11-12, &sect;2.3 LSD)"],
-            ["IS 800:2007", "steel member &amp; connection design (LSD)"]]
-    if seismic:
-        rows += [["IS 800 seismic-22", "seismic provisions / ductile detailing &amp; capacity design"],
-                 ["IS 800 connections", "prequalified moment connections (if SMF/IMF used)"]]
-    rows += [["AWS D1.1", "structural welding"], ["ACI 318 (Ch. 17)", "cast-in anchorage at column bases"]]
+    # Wave3: India SI jobs list IS codes as governing — no USA IBC/ASCE Ch.1 boilerplate.
+    _india = False
+    try:
+        from india_units import is_si as _is_si
+        _india = _is_si(cfg) or str((cfg or {}).get("code_region") or "").lower() in ("india", "is", "bis")
+    except Exception:
+        _india = str((cfg or {}).get("units") or "").upper() in ("N-MM", "SI", "METRIC")
+        _india = _india or str((cfg or {}).get("code_region") or "").lower() in ("india", "is", "bis")
+    if _india:
+        rows = [
+            ["National Building Code of India (NBC) / local bye-laws",
+             "adopting code &mdash; confirm state/local edition &amp; amendments"],
+            ["IS 875 (Parts 1&ndash;5)", "dead / imposed / wind / snow / special loads"],
+            ["IS 1893 (Part 1):2016", "seismic loads &amp; drift (when applicable)"],
+            ["IS 800:2007", "steel member &amp; connection design (LSD)"],
+        ]
+        if seismic:
+            rows += [
+                ["IS 800:2007 §12", "seismic ductile detailing &amp; capacity design (when R requires)"],
+                ["IS 800 / IS 4000", "bolted &amp; welded connections; base plates"],
+            ]
+        rows += [
+            ["IS 816 / IS 814", "structural welding / electrodes"],
+            ["IS 456:2000", "foundation / anchorage concrete interface"],
+        ]
+    else:
+        rows = [["International Building Code (IBC)", "adopting code &mdash; confirm locally adopted edition &amp; amendments"],
+                ["ASCE/SEI 7-22", "loads &amp; load combinations (gravity, wind Ch.26-31, seismic Ch.11-12, &sect;2.3 LSD)"],
+                ["IS 800:2007", "steel member &amp; connection design (LSD)"]]
+        if seismic:
+            rows += [["IS 800 seismic-22", "seismic provisions / ductile detailing &amp; capacity design"],
+                     ["IS 800 connections", "prequalified moment connections (if SMF/IMF used)"]]
+        rows += [["AWS D1.1", "structural welding"], ["ACI 318 (Ch. 17)", "cast-in anchorage at column bases"]]
     out = ["<h3>Governing standards</h3>",
            _table(["Reference", "Used for"], rows)]
     Ie = s.get("Ie", 1.0); RC = _risk_category(Ie)

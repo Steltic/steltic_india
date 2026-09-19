@@ -265,11 +265,25 @@ def check(cfg):
                     "detailing apply -- confirm the system row in Table 15.4-1/2 before using any "
                     "building R")
     try:
-        LX = float(cfg.get("NX", 0)) * float(cfg.get("SX", 0)) / 12.0
-        LY = float(cfg.get("NY", 0)) * float(cfg.get("SY", 0)) / 12.0
-        if max(LX, LY) > 300.0:
-            say("WARN", "B5 plan dimension %.0f ft > ~300 ft jointless: record the expansion/thermal "
-                        "decision in calc_package (joint located, or thermal force statement)" % max(LX, LY))
+        # B5 expansion/thermal screen — unit-aware (wave3).
+        # USA kip-in: SX/SY in inches → plan ft = N*S/12; threshold ~300 ft.
+        # India SI N-mm: SX/SY in mm → plan m = N*S/1000; threshold ~91.4 m (~300 ft).
+        # Do NOT treat millimetre plan lengths as feet (SI false-positive).
+        if _si:
+            LX_m = float(cfg.get("NX", 0)) * float(cfg.get("SX", 0)) / 1000.0
+            LY_m = float(cfg.get("NY", 0)) * float(cfg.get("SY", 0)) / 1000.0
+            Lmax_m = max(LX_m, LY_m)
+            if Lmax_m > 91.44:  # ~300 ft
+                say("WARN", "B5 plan dimension %.1f m > ~91 m (~300 ft) jointless: record the "
+                            "expansion/thermal decision in calc_package (joint located, or thermal "
+                            "force statement). SI N-mm geometry." % Lmax_m)
+            # else: short SI plan — no expansion_thermal WARN (not a false-positive seed)
+        else:
+            LX = float(cfg.get("NX", 0)) * float(cfg.get("SX", 0)) / 12.0
+            LY = float(cfg.get("NY", 0)) * float(cfg.get("SY", 0)) / 12.0
+            if max(LX, LY) > 300.0:
+                say("WARN", "B5 plan dimension %.0f ft > ~300 ft jointless: record the expansion/thermal "
+                            "decision in calc_package (joint located, or thermal force statement)" % max(LX, LY))
     except Exception:
         pass
     for k, v in dict(cfg.get("extra_mass_floors") or {}).items():
