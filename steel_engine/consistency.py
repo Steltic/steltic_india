@@ -269,26 +269,76 @@ def _load_cfg(root, name):
         return None
 
 
+
 def _geometry_issues(cfg):
-    """Catch the classic feet-entered-as-inches slip: the engine uses INCHES everywhere, so a story height of
-    '13' is 13 inches (~1 ft), not 13 ft. Flag implausible story heights and bay spacings."""
+    """Units/geometry sanity for story heights and bay spacing.
+
+    USA / kip-in: heights are inches (flag feet-as-inches and >60 ft).
+    India SI / N-mm: heights are millimetres (flag metres-left-unscaled and absurd tall).
+    """
     out = []
     if not isinstance(cfg, dict):
         return out
     H = [float(h) for h in (cfg.get("heights") or []) if _isnum(h)]
     _dex = set(int(k) for k in (cfg.get("drift_exempt_stories") or {}))
-    small = [h for i, h in enumerate(H, start=1) if h < 72 and i not in _dex]   # declared offsets OK
+    _si = False
+    try:
+        from india_units import is_si
+        _si = bool(is_si(cfg))
+    except Exception:
+        u = str(cfg.get("units") or "").lower()
+        _si = u in ("n-mm", "n-mm-s", "n-mm-sec", "si", "metric", "mm", "india_si", "india_metric")
+        if cfg.get("metric") or cfg.get("si_native"):
+            _si = True
+        if str(cfg.get("jurisdiction") or "").lower() in ("india", "in", "bis", "is"):
+            # Heuristic: mm storeys are thousands
+            if H and float(H[0]) >= 500:
+                _si = True
+    if _si:
+        small = [h for i, h in enumerate(H, start=1) if h < 1800 and i not in _dex]
+        if small:
+            out.append(
+                "story heights look like METRES, not millimetres (%s) -- SI engine uses MILLIMETRES: "
+                "a 3.6 m story is 3600, not 3.6. Call india_units.apply_si_geometry(cfg) / "
+                "apply_metric_geometry(cfg)." % ", ".join("%g" % h for h in small[:10])
+            )
+        tall = [h for h in H if h > 20000]  # > 20 m storey — absurd
+        if tall:
+            out.append(
+                "story height(s) over 20 m (%s mm) -- confirm SI millimetre units."
+                % ", ".join("%g" % h for h in tall[:10])
+            )
+        for key, lab in (("SX", "X-bay"), ("SY", "Y-bay")):
+            v = cfg.get(key)
+            if _isnum(v) and 0 < float(v) < 1500:
+                out.append(
+                    "%s spacing %s=%g mm is implausibly small -- SI engine uses MILLIMETRES "
+                    "(a 6 m bay is 6000)." % (lab, key, float(v))
+                )
+        return out
+    # ---- kip-in / inch path (USA scaffolding retained for twin cfgs) ----
+    small = [h for i, h in enumerate(H, start=1) if h < 72 and i not in _dex]
     if small:
-        out.append("story heights look like FEET, not inches (%s) -- the engine uses INCHES: a 13 ft story is 156, "
-                   "not 13. Multiply every height by 12 and re-run design_and_report." % ", ".join("%g" % h for h in small[:10]))
-    tall = [h for h in H if h > 720]            # > 60 ft -- gross error / wrong units (legit tall atria are < ~50 ft)
+        out.append(
+            "story heights look like FEET, not inches (%s) -- the engine uses INCHES: a 13 ft story is 156, "
+            "not 13. Multiply every height by 12 and re-run design_and_report."
+            % ", ".join("%g" % h for h in small[:10])
+        )
+    tall = [h for h in H if h > 720]
     if tall:
-        out.append("story height(s) over 60 ft (%s in) -- confirm the units are inches." % ", ".join("%g" % h for h in tall[:10]))
+        out.append(
+            "story height(s) over 60 ft (%s in) -- confirm the units are inches."
+            % ", ".join("%g" % h for h in tall[:10])
+        )
     for key, lab in (("SX", "X-bay"), ("SY", "Y-bay")):
         v = cfg.get(key)
-        if _isnum(v) and 0 < float(v) < 60:     # < 5 ft bay -- almost certainly feet
-            out.append("%s spacing %s=%g in is implausibly small -- the engine uses INCHES (a 20 ft bay is 240)." % (lab, key, float(v)))
+        if _isnum(v) and 0 < float(v) < 60:
+            out.append(
+                "%s spacing %s=%g in is implausibly small -- the engine uses INCHES (a 20 ft bay is 240)."
+                % (lab, key, float(v))
+            )
     return out
+
 
 
 
