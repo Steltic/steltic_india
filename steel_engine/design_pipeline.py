@@ -35,6 +35,44 @@ def combos(cfg):
     return IL.cases_from_load_plan(cfg)
 
 
+
+
+def _section12_component_stubs(role="brace"):
+    """H5: IS 800 §12 gusset/bolt/weld D/C worksheet slots (structure only).
+
+    Brace capacity-design *demand* is already written on the connection. These stubs
+    give the agent empty slots so a RAG miss does not become invented sizes/capacities.
+    found:false until the agent fills from IS 800 / IS 816 / IS 4000 retrieval.
+    """
+    def _slot(component, note):
+        return {
+            "component": component,
+            "limit_state": None,
+            "cited": None,
+            "capacity": {},
+            "size": None,
+            "DC": None,
+            "found": False,
+            "note": note,
+        }
+    return {
+        "status": "stubs",
+        "cite": "IS 800:2007 §12 (seismic connections) / §10; IS 816 welds; IS 4000 HSFG",
+        "policy": (
+            "Fill from LIVE RAG only. Do not invent bolt grade/diameter, weld size, or "
+            "gusset thickness when retrieval misses — leave found:false."
+        ),
+        "slots": [
+            _slot("gusset",
+                  "Gusset plate: thickness/Fy/Whitmore/block shear — RAG IS 800; found:false until sized."),
+            _slot("bolts",
+                  "Bolt group: n, diameter, grade, shear/bearing/slip — RAG IS 800 §10 / IS 4000; found:false until sized."),
+            _slot("welds",
+                  "Weld(s): size/length/electrode — RAG IS 816 / IS 800; found:false until sized."),
+        ],
+    }
+
+
 # ---------- DEMAND envelope (analysis only; NO IS 800 capacities) ----------
 def design(name, outdir=None):
     """Run India load_plan combinations through P-Delta and write the per-member DEMAND
@@ -241,9 +279,20 @@ def design(name, outdir=None):
             else:
                 dem = {"P_kip": round(e["comp"], 1), "M_kipft": round(e["Mz"]/12, 1)}
             basis = "IS 800 base plate / splice; foundation anchorage per applicable IS (agent/RAG)"
-        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec,
-                                   "demand": dem, "design_basis": basis,
-                                   "limit_state": None, "cited": None, "capacity": {}, "DC": None})
+        entry = {"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec,
+                "demand": dem, "design_basis": basis,
+                "limit_state": None, "cited": None, "capacity": {}, "DC": None}
+        if kind == "brace":
+            # H5: §12 worksheet stubs (gusset/bolt/weld) — CD demand already on dem when agent adds it
+            entry["section12_worksheet"] = _section12_component_stubs("brace")
+            entry["component_checks"] = {
+                s["component"]: {
+                    "limit_state": None, "cited": None, "capacity": {}, "DC": None,
+                    "found": False, "note": s["note"],
+                }
+                for s in entry["section12_worksheet"]["slots"]
+            }
+        pkg["connections"].append(entry)
     # ---- SEEDED COLLECTOR SLOTS + FRAMEWORK IRREGULARITY SCREEN (hardening #3/#9) ----
     # When the footprint screen finds a re-entrant corner or setback, seed a collector design slot
     # with the diaphragm-force demand so the package CANNOT silently omit it (weak-LLM miss #1).
