@@ -621,8 +621,12 @@ try:
         R_is_proxy,
         omega0_blocks_complete,
         design_status,
+        complete_gate_disclosure,
+        needs_table9_miss_gate,
+        table9_system_flags,
         R_OK_SOURCES,
         R_PROXY_SOURCES,
+        TABLE9_SYSTEM_FLAGS,
     )
 except ImportError:  # pragma: no cover
     pass

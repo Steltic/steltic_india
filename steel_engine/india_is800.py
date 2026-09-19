@@ -2181,3 +2181,143 @@ def scwb_multi_joint(
         ),
     }
 
+
+
+# --- HR polish Wave D: Whitmore / block shear status object -------------------
+
+def gusset_whitmore_block_shear_status(
+    *,
+    whitmore=None,
+    block_shear=None,
+    rag_hit=None,
+    disclosed=None,
+):
+    """Consistent status object for gusset Whitmore + block shear (Wave D).
+
+    Prefer RAG numeric capacity or disclosed geometry helpers. Emit found:false
+    when corpus misses — never invent Whitmore width / block-shear areas.
+    ``disclosed`` may carry eor_documented geometry (bw/t/fy or Avg/Atn).
+    """
+    disclosed = disclosed or {}
+    rag_hit = rag_hit or {}
+
+    # Whitmore
+    if whitmore is None:
+        w_kwargs = {}
+        if rag_hit.get("whitmore_capacity_N") is not None:
+            w_kwargs["capacity_N"] = rag_hit["whitmore_capacity_N"]
+            w_kwargs["cite"] = rag_hit.get("whitmore_cite") or rag_hit.get("cite")
+        else:
+            for k in ("whitmore_width_mm", "t_gusset_mm", "fy_MPa", "L_wt_mm", "w_brace_mm",
+                      "gamma_m0", "capacity_N", "cite"):
+                if disclosed.get(k) is not None:
+                    w_kwargs[k] = disclosed[k]
+                elif rag_hit.get(k) is not None:
+                    w_kwargs[k] = rag_hit[k]
+        whitmore = gusset_whitmore_capacity_N(**w_kwargs) if w_kwargs else gusset_whitmore_capacity_N()
+
+    # Block shear
+    if block_shear is None:
+        b_kwargs = {}
+        if rag_hit.get("block_shear_capacity_N") is not None:
+            b_kwargs["capacity_N"] = rag_hit["block_shear_capacity_N"]
+            b_kwargs["cite"] = rag_hit.get("block_shear_cite") or rag_hit.get("cite")
+        else:
+            for k in ("Avg_mm2", "Atn_mm2", "fy_MPa", "fu_MPa", "gamma_m0", "gamma_m1",
+                      "capacity_N", "cite"):
+                if disclosed.get(k) is not None:
+                    b_kwargs[k] = disclosed[k]
+                elif rag_hit.get(k) is not None:
+                    b_kwargs[k] = rag_hit[k]
+        block_shear = (
+            gusset_block_shear_capacity_N(**b_kwargs) if b_kwargs
+            else gusset_block_shear_capacity_N()
+        )
+
+    w_found = bool(whitmore.get("found"))
+    b_found = bool(block_shear.get("found"))
+    return {
+        "component": "gusset_whitmore_block_shear",
+        "found": w_found and b_found,
+        "whitmore": whitmore,
+        "block_shear": block_shear,
+        "status": (
+            "ok" if (w_found and b_found) else
+            "partial" if (w_found or b_found) else
+            "found_false"
+        ),
+        "blocks_complete": False,  # non-blocking residual when found:false (Ex6–15 policy)
+        "note": (
+            "Whitmore + block shear from RAG / disclosed geometry."
+            if (w_found and b_found) else
+            "Whitmore/block shear found:false on corpus miss — do not invent bw/t/Avg/Atn; "
+            "bolt/weld D/C may still close. Non-blocking residual toward COMPLETE."
+        ),
+        "policy": "rag_or_disclosed_else_found_false",
+    }
+
+
+
+def h6_h7_residual_status(cfg=None, pkg=None):
+    """Disclosed non-blocking H6/H7 residual status (Wave D).
+
+    H6 = IS 800 Ch. I composite worksheet stubs (studs/camber/wet/I_LB).
+    H7 = E250B mill/stock procurement process note.
+    Never invent PE stamps or mill availability. Product gates closed; process open.
+    """
+    cfg = cfg or {}
+    pkg = pkg or {}
+    composite_declared = bool(
+        cfg.get("composite") or cfg.get("composite_floor")
+        or (isinstance(pkg.get("composite_design"), dict))
+    )
+    h6 = {
+        "id": "H6",
+        "title": "IS 800 Ch. I composite worksheet",
+        "found": False,
+        "status": "disclose_only_stub",
+        "blocking": False,
+        "pe_stamp": None,
+        "pe_stamp_invented": False,
+        "slots": [
+            "b_eff", "studs", "partial_composite", "camber", "wet_stage", "I_LB_deflection",
+        ],
+        "note": (
+            "H6 Ch. I composite stubs — leave found:false rather than invent stud/"
+            "camber/wet/I_LB. Fill from LIVE IS 800 Ch. I RAG or explicit scope statement."
+        ),
+        "cite": "IS 800:2007 Ch. I — retrieve LIVE; see COMPOSITE_I3.md",
+        "composite_declared": composite_declared,
+    }
+    if composite_declared and isinstance(pkg.get("composite_design"), dict):
+        cd = pkg["composite_design"]
+        ws = cd.get("chI_worksheet") if isinstance(cd.get("chI_worksheet"), dict) else {}
+        h6["worksheet_status"] = ws.get("status") or cd.get("status") or "stubs"
+    elif not composite_declared:
+        h6["note"] += " No composite declared — stubs remain available if needed."
+
+    h7 = {
+        "id": "H7",
+        "title": "E250B mill / stock procurement",
+        "found": False,
+        "status": "process_open",
+        "blocking": False,
+        "pe_stamp": None,
+        "pe_stamp_invented": False,
+        "note": (
+            "H7 E250B mill/stock procurement is a process residual — do not invent "
+            "availability or PE stamp. Confirm mill cert before seal when E250B specified."
+        ),
+        "cite": "IS 2062 E250 / project procurement — process note (not a product invent)",
+    }
+    return {
+        "H6": h6,
+        "H7": h7,
+        "blocking": False,
+        "status": "disclose_only_residuals",
+        "note": (
+            "H6/H7 are disclosed non-blocking residuals (Wave D). Product COMPLETE gates "
+            "closed without inventing PE stamps or mill stock."
+        ),
+        "policy": "disclose_only_no_pe_invent",
+    }
