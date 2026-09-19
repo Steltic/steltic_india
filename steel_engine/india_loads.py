@@ -557,3 +557,177 @@ def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_sourc
         "cite": "IS 875 (Part 2):1987 Table 1 STORAGE — 2.0 kN/m² per m of storage height",
         "note": "Do not silently assume 2.5 m stack height — set cfg or document with cite.",
     }
+
+
+
+# --- HR polish Wave D: Annex town / site proxy disclosure ---------------------
+
+SITE_PROXY_OK_SOURCES = frozenset({
+    "site_proxy", "annex_proxy", "disclosed_proxy", "eor_documented", "eor",
+    "documented", "explicit", "documented_proxy",
+})
+SITE_PROXY_REFUSED = frozenset({
+    "silent", "silent_proxy", "assumed", "assumption", "invented", "guess",
+    "placeholder", "todo", "tbd", "wrong_city_silent",
+})
+
+
+def _site_norm(s) -> str:
+    return str(s or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def resolve_site_annex_proxy(
+    cfg=None,
+    *,
+    town=None,
+    annex_hit=None,
+    quantity="Vb",  # "Vb" | "Z" | "zone"
+    proxy_town=None,
+    proxy_value=None,
+    proxy_cite=None,
+    proxy_source=None,
+):
+    """Resolve Annex A (Vb) / Annex E (Z) town values with explicit site_proxy.
+
+    When the requested town is found:false in Annex tables, refuse silent
+    wrong-city Vb/Z. Accept a disclosed proxy (Kochi→Kozhikode/Trivandrum Vb=39,
+    Indore→Bhopal Z/Vb, Noida→Delhi Z/Vb) only with site_proxy source + cite.
+    Never invent.
+    """
+    cfg = cfg or {}
+    town = town or cfg.get("town") or cfg.get("site_town") or cfg.get("city")
+    quantity = str(quantity or "Vb").strip()
+    q_l = quantity.lower()
+
+    # Direct corpus / annex hit
+    if isinstance(annex_hit, dict) and annex_hit.get("found") is True:
+        if q_l in ("vb", "vb_mps", "wind"):
+            val = annex_hit.get("Vb_mps", annex_hit.get("Vb"))
+        elif q_l in ("z", "zone_factor"):
+            val = annex_hit.get("Z", annex_hit.get("zone_factor"))
+        else:
+            val = annex_hit.get("zone", annex_hit.get("Zone"))
+        if val is not None:
+            return {
+                "found": True,
+                "town": town,
+                "town_found": True,
+                "quantity": quantity,
+                "value": val,
+                "site_proxy": False,
+                "source": annex_hit.get("source") or "annex",
+                "resolved_via": "annex_corpus",
+                "cite": annex_hit.get("cite") or "IS 875/1893 Annex (corpus)",
+                "note": "Annex town row found:true — not a site_proxy.",
+            }
+
+    proxy_town = proxy_town or cfg.get("site_proxy_town") or cfg.get("proxy_town")
+    proxy_cite = proxy_cite or cfg.get("site_proxy_cite") or cfg.get("proxy_cite")
+    src = _site_norm(
+        proxy_source or cfg.get("site_proxy_source") or cfg.get("proxy_source")
+        or ("site_proxy" if cfg.get("site_proxy") is True else "")
+    )
+
+    if proxy_value is None:
+        if cfg.get("site_proxy") is True or src in SITE_PROXY_OK_SOURCES:
+            if q_l in ("vb", "vb_mps", "wind"):
+                for k in ("site_proxy_value", "proxy_Vb_mps", "proxy_Vb"):
+                    if cfg.get(k) is not None:
+                        proxy_value = cfg[k]
+                        break
+            elif q_l in ("z", "zone_factor"):
+                for k in ("site_proxy_value", "proxy_Z"):
+                    if cfg.get(k) is not None:
+                        proxy_value = cfg[k]
+                        break
+            else:
+                for k in ("site_proxy_value", "proxy_zone"):
+                    if cfg.get(k) is not None:
+                        proxy_value = cfg[k]
+                        break
+
+    # Disclosed site_proxy path
+    if proxy_value is not None and src in SITE_PROXY_OK_SOURCES and proxy_cite:
+        if src in SITE_PROXY_REFUSED:
+            return {
+                "found": False,
+                "town": town,
+                "town_found": False,
+                "quantity": quantity,
+                "value": None,
+                "site_proxy": False,
+                "source": src,
+                "resolved_via": "refused",
+                "cite": "refuse silent/assumed site invent",
+                "note": "Refused site_proxy source=%r." % (src,),
+                "required_inputs": [
+                    "site_proxy_source in site_proxy/eor_documented",
+                    "site_proxy_cite",
+                ],
+                "policy": "refuse_silent_wrong_city",
+            }
+        return {
+            "found": True,
+            "town": town,
+            "town_found": False,
+            "quantity": quantity,
+            "value": float(proxy_value) if q_l != "zone" else proxy_value,
+            "site_proxy": True,
+            "proxy_town": proxy_town,
+            "source": src,
+            "resolved_via": "site_proxy",
+            "cite": str(proxy_cite),
+            "note": (
+                "Annex town %r found:false — using disclosed site_proxy %s=%r via %r. "
+                "Not a silent wrong-city invent."
+                % (town, quantity, proxy_value, proxy_town)
+            ),
+            "policy": "site_proxy_ok_when_annex_town_miss",
+        }
+
+    # Silent cfg value without disclosure → refuse
+    silent_val = None
+    if q_l in ("vb", "vb_mps", "wind"):
+        silent_val = cfg.get("Vb", cfg.get("Vb_mps"))
+    elif q_l in ("z", "zone_factor"):
+        silent_val = cfg.get("Z")
+    else:
+        silent_val = cfg.get("zone")
+
+    refused = []
+    if silent_val is not None and not (src in SITE_PROXY_OK_SOURCES and proxy_cite):
+        refused.append(
+            "silent %s=%r without site_proxy + cite — refuse wrong-city invent"
+            % (quantity, silent_val)
+        )
+    if proxy_value is not None and src not in SITE_PROXY_OK_SOURCES:
+        refused.append("site_proxy_source must be site_proxy/eor_documented/documented")
+    if proxy_value is not None and not proxy_cite:
+        refused.append("site_proxy_cite")
+
+    return {
+        "found": False,
+        "town": town,
+        "town_found": False,
+        "quantity": quantity,
+        "value": None,
+        "site_proxy": False,
+        "source": src or None,
+        "resolved_via": "found_false",
+        "cite": (
+            "IS 875 Part 3 Annex A (Vb) / IS 1893 Annex E (Z) — town row missing; "
+            "disclose site_proxy + cite or leave found:false"
+        ),
+        "note": (
+            "Annex town %r found:false for %s. Do not silently use another city's "
+            "Vb/Z. Set site_proxy=True + site_proxy_town + site_proxy_value + "
+            "site_proxy_cite (e.g. Kochi→Kozhikode Vb=39; Indore→Bhopal Z=0.10/Vb=39; "
+            "Noida→Delhi Z=0.24/Vb=47)."
+            % (town, quantity)
+        ),
+        "required_inputs": refused or [
+            "annex corpus hit for town",
+            "OR site_proxy=True + site_proxy_town + site_proxy_value + site_proxy_cite",
+        ],
+        "policy": "refuse_silent_wrong_city",
+    }

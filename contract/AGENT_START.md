@@ -88,6 +88,12 @@ the wrong units.
   that warning you entered feet — fix the `cfg` to inches and re-run BEFORE chasing the numbers.**
 
 
+## HR polish Wave D
+
+See `docs/INDIA_HR_POLISH_WAVE_D.md` — Ω0 found:false / eor_documented COMPLETE disclosure;
+Table 9 miss gate for BRBF/SPSW/EBF/IMF (proxy/is800_omrf refuses COMPLETE); Whitmore/block
+shear status objects; H6/H7 disclose-only residuals; Annex town `site_proxy` (Kochi/Indore/Noida).
+
 ## complete-gap wave4
 
 See `docs/INDIA_COMPLETE_GAP_WAVE4.md` — end-plate EOR-documented Rn (CFS-style), cfg base/splice plate+anchor geometry + RAG formulas. H6/H7 stay stubs; multi-joint SCWB optional.

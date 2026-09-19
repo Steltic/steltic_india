@@ -675,3 +675,11 @@ def design(name, outdir=None):
     print("[%s] %d combos, %d members -> DEMAND envelope written (capacities = agent/RAG)" % (name, len(cases), len(reg)))
     print("  output: %s" % outdir)
     return {"members": len(reg), "combos": len(cases), "outdir": outdir}   # B8: truthy -> pipeline.demands_written is True
+
+
+# --- HR polish Wave D: re-export H6/H7 residual status ------------------------
+try:
+    from india_is800 import h6_h7_residual_status  # noqa: F401
+except Exception:  # pragma: no cover
+    def h6_h7_residual_status(cfg=None, pkg=None):
+        return {"blocking": False, "status": "unavailable", "H6": {"found": False}, "H7": {"found": False}}
