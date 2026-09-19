@@ -1,0 +1,7 @@
+IN_Ex4 — 8-storey hospital, dual SMF + SCBF, Kolkata (higher importance)
+
+Location: Kolkata — RETRIEVE IS 1893 Part 1 Zone, Z, soil; importance factor I for hospital
+  (important building — do not invent; cite Table / clause). R / Ω0 for dual SMF+SCBF.
+Geometry (SI N-mm): 8 × 3.6 m storeys; 5×4 bays @ 7.5 m; perimeter SMF + interior SCBF dual.
+Loads: RETRIEVE IS 875 P1 dead, P2 imposed (hospital occupancy), P3 wind — do not invent.
+Design: IS 800:2007 LSD; connections IS 816/4000. LIVE cfg['load_plan'] RAG mandatory.
