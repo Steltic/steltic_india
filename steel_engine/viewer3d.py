@@ -25,6 +25,24 @@ _ES = 29000.0
 ORANGE = "#ff8a3d"   # matches frontend/styles.css accent
 
 
+def _viewer_si(cfg):
+    """True when cfg is SI-native N-mm (India). Falls back to india_units.is_si."""
+    try:
+        import india_units as _IU
+        return bool(_IU.is_si(cfg))
+    except Exception:
+        pass
+    if not cfg:
+        return False
+    if cfg.get("force_kip_in"):
+        return False
+    if cfg.get("metric") or cfg.get("si_native"):
+        return True
+    u = str(cfg.get("units") or "").lower()
+    return u in ("n-mm", "n-mm-s", "n-mm-sec", "si", "metric", "mm", "india_si", "india_metric")
+
+
+
 # --------------------------------------------------------------- capacities
 def _sec_props(sec):
     import sections as S

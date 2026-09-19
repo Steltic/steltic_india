@@ -98,6 +98,12 @@ def design_and_report(name, cfg=None, do_report=True):
         _pf = _PF.check(E.CFG.get(name))
         out["preflight"] = _pf
         print(_PF.render(_pf))
+        _pf_err = [m for s, m in (_pf or []) if s == "ERROR"]
+        if _pf_err:
+            out["blocked"] = True
+            out["error"] = "preflight ERRORs — fix before design_and_report (wind gate / Ta / load_plan)"
+            print("[pipeline] BLOCKED by preflight ERRORs:\n- " + "\n- ".join(_pf_err))
+            return out
     except Exception as _pfe:
         out["preflight"] = [("WARN", "preflight failed: %s" % _pfe)]
     E.clear_caches()   # fresh per-run modal/elf memo so design + report share this run's solves

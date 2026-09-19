@@ -411,3 +411,159 @@ def drift_limit_label(cfg) -> str:
         f"{dl*100:.2f}% of storey height (IS 1893 Part 1:2016 cl.7.11.1.1; "
         f"VB with γ=1.0; no Cd/Ie amplification)"
     )
+
+
+# ---------------------------------------------------------------------------
+# IS 1893 (Part 1) : 2016 §7.6.2 — approximate fundamental period Ta
+# ---------------------------------------------------------------------------
+# (a) bare RC MRF:   Ta = 0.075 h^0.75
+# (b) bare steel MRF: Ta = 0.085 h^0.75
+# (c) all other buildings: Ta = 0.09 h / sqrt(d)
+# Fail closed when a non-MRF system (SCBF/CBF/EBF/…) is paired with an MRF formula.
+
+class TaFormulaError(ValueError):
+    """Non-MRF system paired with MRF Ta formula (IS 1893 §7.6.2 fail-closed)."""
+
+
+_MRF_TOKENS = (
+    "smrf", "omrf", "imrf", "mrf", "moment frame", "moment-frame", "moment_frame",
+    "bare mrf", "steel mrf", "rc mrf", "rcc mrf", "smf", "omf", "imf",
+    "special moment", "intermediate moment", "ordinary moment",
+)
+_NON_MRF_TOKENS = (
+    "scbf", "ocbf", "cbf", "ebf", "brbf", "braced", "sbf", "concentric",
+    "eccentric", "buckling restrained", "shear wall", "dual", "spsw",
+    "frame-shear", "wall frame", "infill",
+)
+
+
+def is_bare_mrf_system(system) -> bool:
+    """True only when the SFRS is a bare moment frame (IS 1893 §7.6.2 a/b)."""
+    s = str(system or "").strip().lower()
+    if not s:
+        return False
+    if any(t in s for t in _NON_MRF_TOKENS):
+        return False
+    return any(t in s for t in _MRF_TOKENS)
+
+
+def _looks_like_mrf_formula(formula: str) -> bool:
+    f = str(formula or "").lower().replace(" ", "")
+    if not f:
+        return False
+    # Explicit all-other / 0.09 h/√d wins even if "0.085" appears in a note
+    if "0.09" in f and ("sqrt" in f or "√" in formula or "/d" in f or "√d" in formula or "h/" in f):
+        return False
+    if "allother" in f or "all-other" in f or "§7.6.2(c)" in formula.lower() or "7.6.2(c)" in formula.lower():
+        return False
+    if "0.085" in f or "0.075" in f:
+        return True
+    if ("h^0.75" in f or "h**0.75" in f or "h0.75" in f) and "0.09" not in f:
+        return True
+    return False
+
+
+def approximate_Ta(h_m: float, d_m: float | None = None, system: str | None = None,
+                   formula: str | None = None, material: str | None = None) -> dict:
+    """Compute IS 1893 §7.6.2 Ta (seconds). Heights/base d in metres.
+
+    If ``formula`` is supplied it must match the system class; non-MRF + MRF
+    formula raises ``TaFormulaError`` (fail closed). When formula is omitted the
+    system selects (a)/(b)/(c) automatically.
+    """
+    h = float(h_m)
+    if h <= 0:
+        raise ValueError("h_m must be positive (building height in metres)")
+    sys = system or ""
+    bare_mrf = is_bare_mrf_system(sys)
+    mat = str(material or "").lower()
+    if bare_mrf and ("steel" in mat or "steel" in str(sys).lower()):
+        kind = "steel_mrf"
+        coeff = 0.085
+        clause = "7.6.2(b)"
+        ta = coeff * (h ** 0.75)
+        used = "0.085 h^0.75"
+    elif bare_mrf:
+        kind = "rc_mrf"
+        coeff = 0.075
+        clause = "7.6.2(a)"
+        ta = coeff * (h ** 0.75)
+        used = "0.075 h^0.75"
+    else:
+        kind = "all_other"
+        clause = "7.6.2(c)"
+        if d_m is None or float(d_m) <= 0:
+            raise ValueError("d_m (base dimension in metres along vibration) required for §7.6.2(c)")
+        ta = 0.09 * h / (float(d_m) ** 0.5)
+        used = "0.09 h/√d"
+
+    if formula is not None and _looks_like_mrf_formula(formula) and not bare_mrf:
+        raise TaFormulaError(
+            "IS 1893 §7.6.2 fail-closed: system %r is not a bare MRF but Ta formula %r "
+            "looks like MRF 0.075/0.085 h^0.75 — use 0.09 h/√d (§7.6.2(c) all other buildings)."
+            % (sys, formula)
+        )
+
+    return {
+        "found": True,
+        "standard": "IS_1893_Part_1_2016",
+        "clause": clause,
+        "kind": kind,
+        "Ta_s": float(ta),
+        "formula": used,
+        "h_m": h,
+        "d_m": None if d_m is None else float(d_m),
+        "system": sys,
+        "bare_mrf": bare_mrf,
+    }
+
+
+def validate_Ta_for_system(cfg, plan: dict | None = None) -> list:
+    """Fail-closed findings when non-MRF jobs use an MRF Ta formula.
+
+    Inspects cfg['system'] / load_plan.seismic_summary Ta_formula / Ta_s notes.
+    Returns list of (level, message). Missing Ta is not an ERROR (agent may still
+    be building the plan); wrong formula for the system is ERROR.
+    """
+    out = []
+    if not isinstance(cfg, dict):
+        return out
+    plan = plan if plan is not None else (cfg.get("load_plan") or {})
+    if not isinstance(plan, dict):
+        plan = {}
+    ss = plan.get("seismic_summary") or plan.get("seis_summary") or {}
+    if not isinstance(ss, dict):
+        ss = {}
+    system = (
+        cfg.get("system")
+        or ss.get("system")
+        or (cfg.get("seis") or {}).get("system")
+        or ""
+    )
+    formula = (
+        ss.get("Ta_formula")
+        or ss.get("Ta_formula_note")
+        or ss.get("formula")
+        or cfg.get("Ta_formula")
+        or ""
+    )
+    if not formula and not ss:
+        return out  # nothing to check yet
+    if formula and _looks_like_mrf_formula(str(formula)) and not is_bare_mrf_system(system):
+        out.append((
+            "ERROR",
+            "IS 1893 §7.6.2 Ta fail-closed: system %r is not a bare MRF but load_plan "
+            "uses MRF Ta formula %r. Use §7.6.2(c) Ta=0.09 h/√d (all other buildings). "
+            "Do not silently keep 0.085 h^0.75 / 0.075 h^0.75 for SCBF/CBF/EBF/dual/wall systems."
+            % (system or "(undeclared)", formula),
+        ))
+        return out
+    # If system is clearly non-MRF and Ta present without formula, require formula citation
+    if system and not is_bare_mrf_system(system) and ss.get("Ta_s") is not None and not formula:
+        out.append((
+            "WARN",
+            "load_plan.seismic_summary has Ta_s but no Ta_formula — record §7.6.2(c) "
+            "'0.09 h/√d' (or MRF clause if truly bare MRF) so the fail-closed gate can verify.",
+        ))
+    return out
+

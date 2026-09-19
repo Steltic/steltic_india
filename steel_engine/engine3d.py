@@ -14,6 +14,35 @@ import openseespy.opensees as ops
 g=386.4; E=29000.0; Gmod=11200.0
 _UNIT_SYSTEM = "kip-in"  # "kip-in" | "N-mm"
 
+
+def _india_job(cfg):
+    """True for India / SI-native jobs — ASCE Cu·Ta period gate does not apply."""
+    if not isinstance(cfg, dict):
+        return False
+    try:
+        from india_units import is_si
+        if is_si(cfg):
+            return True
+    except Exception:
+        pass
+    j = str(cfg.get("jurisdiction") or cfg.get("code_jurisdiction") or "").lower()
+    if j in ("india", "in", "bis", "is", "is_bis"):
+        return True
+    plan = cfg.get("load_plan") or {}
+    if isinstance(plan, dict) and str(plan.get("jurisdiction") or "").lower() in ("india", "is", "is_bis", "bis"):
+        return True
+    return False
+
+
+def _period_check_ok(cfg, T0, Ta, NF=None):
+    """ASCE 0.5Ta–3Ta (CuTa scaffolding) is USA-only. India uses IS 1893 Ta for ELF only."""
+    if _india_job(cfg):
+        return True
+    if NF is not None and NF < 3:
+        return 0.1 <= T0 <= 1.5
+    return (0.5 * Ta) <= T0 <= (3.0 * Ta)
+
+
 def unit_system():
     return _UNIT_SYSTEM
 
@@ -805,7 +834,7 @@ def run(cfg):
     chk={}
     chk["equil_X"]=abs(sx[3]+V)<=1e-3*V; chk["equil_Y"]=abs(sy[3]+V)<=1e-3*V
     chk["stability"]=min(w2)>0
-    chk["period"]=0.5*Ta<=T[0]<=3*Ta
+    chk["period"]=_period_check_ok(cfg, T[0], Ta)
     chk["modalmass_X"]=cumX>=0.90; chk["modalmass_Y"]=cumY>=0.90
     dl,_dlrho=drift_allowable(cfg)   # Table 12.12-1 limit, /rho for MF-only SDC D-F (12.12.1.1)
     chk["drift_X"]=0<mdx<dl; chk["drift_Y"]=0<mdy<dl
@@ -1121,7 +1150,7 @@ def run_one(name):
     chk["modalmass_X"]=cumX>=0.90; chk["modalmass_Y"]=cumY>=0.90
     chk["drift_X"]=0<mdx<dl; chk["drift_Y"]=0<mdy<dl
     chk["baseshear_X"]=abs(abs(sx[3])-Vx)<=1e-3*Vx; chk["baseshear_Y"]=abs(abs(sy[3])-Vy)<=1e-3*Vy
-    chk["period"]=(0.5*Ta<=T[0]<=3*Ta) if NF>=3 else (0.1<=T[0]<=1.5)
+    chk["period"]=_period_check_ok(cfg, T[0], Ta, NF)
     extra={}
     if (not chk["drift_X"] or not chk["drift_Y"]) and min(mdx,mdy)>1e-9 and max(mdx,mdy)/min(mdx,mdy)>1.5:
         _b="X" if mdx>mdy else "Y"

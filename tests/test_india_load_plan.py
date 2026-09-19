@@ -19,6 +19,7 @@ def test_rag_backed_plan_builds_cases():
         "seis": {"SDS": 0.1},
         "load_plan": {
             "jurisdiction": "india",
+            "no_wind": "unit-test fixture — wind not in scope for this gate test",
             "retrieval": [
                 {"stem": "IS_875_Part_2_1987", "query": "imposed loads residential",
                  "found": True, "cite": "Table 1"},
@@ -48,6 +49,7 @@ def test_asce_flag_forbidden():
         "use_asce7_engine_loads": True,
         "load_plan": {
             "jurisdiction": "india",
+            "no_wind": "unit-test fixture — wind not in scope for this gate test",
             "retrieval": [
                 {"stem": "IS_875_Part_1_2026", "query": "dead", "found": True, "cite": "1"},
                 {"stem": "IS_1893_Part_1_2016", "query": "Z", "found": True, "cite": "3"},
@@ -62,6 +64,7 @@ def test_asce_flag_forbidden():
 
 
 def test_wind_forces_disabled():
+    pytest.importorskip("openseespy.opensees", reason="openseespy not installed in this interpreter")
     import engine3d as E
     with pytest.raises(RuntimeError, match="wind_forces"):
         E.wind_forces({"wind": {"V": 100, "exposure": "C"}, "heights": [120], "NX": 1, "NY": 1, "SX": 300, "SY": 300}, "X")
