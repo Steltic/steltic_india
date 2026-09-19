@@ -561,3 +561,116 @@ def apply_panel_zone_to_capacity_design(
     checks["panel_zone"] = dict(pz_result)
     cd["checks"] = checks
     return cd
+
+
+
+BASE_PLATE_REQUIRED = [
+    "P_N (column axial demand)", "M_Nmm (optional moment)", "fy_col_MPa",
+    "concrete_fck_MPa (or found:false)", "plate_plan_mm (B×L) or size from RAG",
+    "anchor bolt grade/n/diameter from RAG",
+]
+WELD_COMPONENT_REQUIRED = [
+    "demand_N_or_Nmm", "throat_mm / size from RAG", "electrode/fu from IS 816 RAG", "length_mm",
+]
+
+
+def base_plate_worksheet(
+    *,
+    P_N=None,
+    M_Nmm=None,
+    fy_col_MPa=None,
+    fck_MPa=None,
+    plate_B_mm=None,
+    plate_L_mm=None,
+    plate_t_mm=None,
+    capacity_bearing_N=None,
+    capacity_anchor_N=None,
+    cited=None,
+):
+    """IS 800 Ch.11 / base-plate component worksheet.
+
+    Sizes/flags when RAG capacities present; otherwise found:false with required_inputs.
+    Never invents plate thickness or anchor capacity.
+    """
+    missing = []
+    if P_N is None:
+        missing.append("P_N")
+    slots = {
+        "bearing": {
+            "component": "base_plate_bearing",
+            "found": False, "DC": None, "capacity": {},
+            "required_inputs": ["P_N", "plate plan BxL", "fck_MPa", "bearing capacity from RAG"],
+            "note": "Concrete bearing under plate — RAG IS 800 Ch.11 / IS 456; found:false until sized.",
+        },
+        "plate_bending": {
+            "component": "base_plate_bending",
+            "found": False, "DC": None, "capacity": {},
+            "required_inputs": ["P_N", "M_Nmm", "plate_t_mm", "fy_plate", "cantilever m from RAG"],
+            "note": "Plate bending thickness — RAG IS 800; do not invent t.",
+        },
+        "anchors": {
+            "component": "anchor_bolts",
+            "found": False, "DC": None, "capacity": {},
+            "required_inputs": ["shear/tension demand", "n, dia, grade from RAG", "embedment"],
+            "note": "Anchor rods — RAG IS 800 / IS 456; found:false until sized.",
+        },
+        "welds": {
+            "component": "column_to_plate_welds",
+            "found": False, "DC": None, "capacity": {},
+            "required_inputs": list(WELD_COMPONENT_REQUIRED),
+            "note": "Fillet welds column-to-plate — RAG IS 816; found:false until sized.",
+        },
+    }
+    # Prefill demand side only
+    if P_N is not None:
+        for k in slots:
+            slots[k]["demand_N"] = float(P_N) if k != "plate_bending" else None
+            if k == "plate_bending" and M_Nmm is not None:
+                slots[k]["demand_Nmm"] = float(M_Nmm)
+            elif k == "plate_bending" and P_N is not None:
+                slots[k]["demand_N"] = float(P_N)
+    # Fill D/C only when RAG capacities provided
+    if capacity_bearing_N is not None and P_N is not None:
+        slots["bearing"] = fill_connection_component_dc(
+            slots["bearing"], demand_N=float(P_N), capacity_N=float(capacity_bearing_N),
+            cited=cited or "IS 800 Ch.11 bearing",
+        )
+    if capacity_anchor_N is not None and P_N is not None:
+        slots["anchors"] = fill_connection_component_dc(
+            slots["anchors"], demand_N=float(P_N), capacity_N=float(capacity_anchor_N),
+            cited=cited or "IS 800 anchors",
+        )
+    any_filled = any(s.get("found") is True for s in slots.values())
+    return {
+        "status": "worksheets",
+        "found": any_filled,  # True only if at least one component closed from RAG
+        "cite": "IS 800:2007 Ch.11 / §10; IS 816 welds",
+        "required_inputs": list(BASE_PLATE_REQUIRED) if missing or not any_filled else [],
+        "missing_top": missing,
+        "geometry": {
+            "plate_B_mm": plate_B_mm, "plate_L_mm": plate_L_mm, "plate_t_mm": plate_t_mm,
+            "fy_col_MPa": fy_col_MPa, "fck_MPa": fck_MPa,
+        },
+        "slots": list(slots.values()),
+        "policy": (
+            "Fill component capacities from LIVE RAG only. Demand may be prefilled from "
+            "analysis; never invent plate t, bearing, anchors, or weld size."
+        ),
+        "note": (
+            "Base-plate worksheet seeded. found:false on slots until RAG capacities present."
+            if not any_filled else
+            "One or more base-plate components filled from provided RAG capacities."
+        ),
+    }
+
+
+def section12_or_base_connection_stubs(role="brace"):
+    """Route to brace §12 stubs or base-plate worksheet structure by role."""
+    r = (role or "").lower()
+    if "base" in r:
+        return base_plate_worksheet()
+    # default brace/gusset path kept in design_pipeline._section12_component_stubs
+    return {
+        "status": "defer_to_section12_component_stubs",
+        "note": "Use design_pipeline._section12_component_stubs for gusset/bolt/weld",
+    }

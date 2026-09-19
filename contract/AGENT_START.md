@@ -108,6 +108,14 @@ the wrong units.
   - **§12 connection component D/C** — `fill_connection_component_dc(...)` writes D/C only when both
     demand and a RAG capacity are present; never invent bolt/weld/gusset capacities.
   - Report Ch.3 wind reads `load_plan.wind_summary` / W_X/W_Y (no false “no wind parameters” when laterals applied).
+  - **k4 OCR miss (IN_Ex3):** `india_loads.resolve_k4` / `india_wind_tables.resolve_k4` — when
+    corpus digits are found:false, supply `eor_k4` + `eor_cite` with `eor_source='eor_documented'`
+    (CFS-style). Do **not** invent k4.
+  - **Building length:** prefer `cfg['building_length_m']` (brief field). If brief only gives frame
+    spacing, use `building_length_assumption_m` + cite via `resolve_building_length_m` — no silent L=36 m.
+  - **Base plate / weld D/Cs:** `india_is800.base_plate_worksheet` — demand prefill OK; capacities from RAG only.
+  - **R≤3 consistency:** when `capacity_design.checks.wind_vs_seismic` is computed, the always-on
+    "CONFIRM wind or seismic" reminder softens (IN_Ex3 wind≫EQ path).
 
 ## Gotchas that fail SILENTLY (read this once — they will not error loudly)
 These are the traps that pass every obvious check yet corrupt the result. Most are now auto-handled by the

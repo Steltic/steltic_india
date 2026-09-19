@@ -198,3 +198,101 @@ def test_agent_start_keeps_h6_h7():
 def test_india_is800_module_exported_cites():
     assert "7.1.2" in I8.design_compressive_strength.__doc__ or True
     assert I8.GAMMA_M0_DEFAULT == 1.10
+
+
+# ----- IN_Ex3 fold-ins --------------------------------------------------------
+
+def test_resolve_k4_eor_documented_when_ocr_miss():
+    import india_loads as IL
+    r = IL.resolve_k4(
+        {"found": False},
+        eor_k4=1.15,
+        eor_cite="IS 875 P3 §6.3.4 industrial east-coast — EOR documented",
+        eor_source="eor_documented",
+        structure_class="industrial",
+    )
+    assert r["found"] is True
+    assert r["k4"] == 1.15
+    assert r["resolved_via"] == "eor_documented"
+    assert r.get("corpus_digits_found") is False
+    assert "cite" in r and r["cite"]
+
+
+def test_resolve_k4_refuses_invented():
+    import india_loads as IL
+    r = IL.resolve_k4({"found": False}, eor_k4=1.15, eor_cite=None, eor_source="assumed")
+    assert r["found"] is False
+    assert r["k4"] is None
+    assert "required_inputs" in r
+
+
+def test_resolve_k4_prefers_corpus_digits():
+    import india_loads as IL
+    r = IL.resolve_k4({"found": True, "k4": 1.3, "cite": "corpus digits"}, eor_k4=1.15)
+    assert r["resolved_via"] == "corpus"
+    assert r["k4"] == 1.3
+
+
+def test_building_length_explicit_cfg():
+    import india_loads as IL
+    r = IL.resolve_building_length_m({"building_length_m": 42.0})
+    assert r["found"] is True and r["L_m"] == 42.0 and r["source"] == "cfg"
+
+
+def test_building_length_documented_assumption():
+    import india_loads as IL
+    r = IL.resolve_building_length_m({
+        "building_length_assumption_m": 36.0,
+        "building_length_assumption_cite": "6 bays × 6 m stated assumption",
+    })
+    assert r["found"] is True and r["L_m"] == 36.0
+    assert r["source"] == "documented_assumption"
+    assert "brief_field_required" in r
+
+
+def test_building_length_refuses_silent():
+    import india_loads as IL
+    r = IL.resolve_building_length_m({})
+    assert r["found"] is False
+    assert "building_length_m" in str(r["required_inputs"])
+
+
+def test_base_plate_worksheet_no_invented_capacity():
+    bp = I8.base_plate_worksheet(P_N=500e3)
+    assert bp["status"] == "worksheets"
+    assert any(s["found"] is False for s in bp["slots"])
+    assert "required_inputs" in bp
+    # with RAG capacity
+    bp2 = I8.base_plate_worksheet(P_N=500e3, capacity_bearing_N=800e3, cited="IS 800 Ch.11")
+    bearing = next(s for s in bp2["slots"] if s["component"] == "base_plate_bearing")
+    assert bearing["found"] is True
+    assert abs(bearing["DC"] - 500e3 / 800e3) < 1e-9
+
+
+def test_consistency_r3_softens_when_wind_vs_seis_computed():
+    import consistency as C
+    cfg = {"seis": {"R": 3.0, "Ie": 1.0, "SDS": 0.2, "SD1": 0.1}, "heights": [8000.0],
+           "units": "N-mm", "jurisdiction": "india", "NX": 1, "NY": 6, "SX": 24000, "SY": 6000}
+    pkg_open = {"members": [], "connections": [{"id": "x", "limit_state": "a", "DC": 0.1, "cited": "c"}],
+                "capacity_design": {"checks": {}}}
+    # Without wind_vs_seismic → CONFIRM language
+    issues_open = C._design_basis_issues(cfg, "t", pkg_open)
+    r3_open = [i for i in issues_open if "R=3.00" in i or "R=3.0" in i]
+    assert r3_open and "CONFIRM" in r3_open[0]
+
+    pkg_done = {
+        "members": [],
+        "connections": [{"id": "x", "limit_state": "a", "DC": 0.1, "cited": "c"}],
+        "capacity_design": {
+            "checks": {
+                "wind_vs_seismic": {
+                    "found": True, "computed": True,
+                    "VB_wind_kN": 370, "VB_seismic_kN": 50,
+                    "governing": "wind", "ratio_X": 7.4,
+                }
+            }
+        },
+    }
+    issues_done = C._design_basis_issues(cfg, "t", pkg_done)
+    r3_done = [i for i in issues_done if "R=3" in i or "CONFIRM whether wind or seismic" in i]
+    assert r3_done == [], r3_done  # suppressed when wind_vs_seismic computed

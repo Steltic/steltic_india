@@ -401,8 +401,34 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         elif Ie>=1.25 and dl>0.0151 and not _relief_on:
             out.append("Risk Category III (Ie=%.2f): allowable story drift is 0.015 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.015"%Ie+_mfrho)
     if R is not None and float(R)<=3.0:
-        out.append("R=%.2f is a 'not specifically detailed for seismic' system -- AISC 341 does NOT apply (no SCWB / "
-                   "capacity design); design members & connections to IS 800 only, and CONFIRM whether wind or seismic governs each direction"%float(R))
+        # complete-gap wave1 / IN_Ex3: do not always-on "CONFIRM wind or seismic" when the
+        # package already computed wind_vs_seismic (wind ≫ EQ documented). Still note R≤3
+        # detailing scope once, without the open CONFIRM action item.
+        _wvs = None
+        if isinstance(pkg, dict):
+            _cd = pkg.get("capacity_design") or {}
+            _chk = _cd.get("checks") if isinstance(_cd, dict) else {}
+            if isinstance(_chk, dict):
+                _wvs = _chk.get("wind_vs_seismic") or _cd.get("wind_vs_seismic")
+            if _wvs is None and isinstance(_cd, dict):
+                _wvs = _cd.get("wind_vs_seismic")
+        _gov_done = False
+        if isinstance(_wvs, dict):
+            # accept computed ratios / governing flags
+            if _wvs.get("found") is True or _wvs.get("computed") is True:
+                _gov_done = True
+            if _wvs.get("governs") or _wvs.get("governing"):
+                _gov_done = True
+            if _wvs.get("VB_wind_kN") is not None and _wvs.get("VB_seismic_kN") is not None:
+                _gov_done = True
+            if _wvs.get("ratio_X") is not None or _wvs.get("ratio_wind_over_seis") is not None:
+                _gov_done = True
+        if _gov_done:
+            # IN_Ex3: wind≫EQ already proven in package — do not emit standing R=3 FAIL reminder.
+            pass
+        else:
+            out.append("R=%.2f is a 'not specifically detailed for seismic' system -- AISC 341 does NOT apply (no SCWB / "
+                       "capacity design); design members & connections to IS 800 only, and CONFIRM whether wind or seismic governs each direction"%float(R))
     H=[float(h) for h in (cfg.get("heights") or []) if _isnum(h)]
     if len(H)>=2 and sdc_high:
         hr=max(max(H[k]/H[k-1],H[k-1]/H[k]) for k in range(1,len(H)))

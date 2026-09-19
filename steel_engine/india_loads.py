@@ -418,3 +418,88 @@ def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
     from india_wind_tables import resolve_cpe_walls as _resolve
     return _resolve(h_over_w, l_over_w, theta_deg, corpus_hit, allow_fallback=allow_fallback)
 
+
+
+def resolve_k4(corpus_hit=None, *, eor_k4=None, eor_cite=None, eor_source=None,
+               structure_class=None):
+    """Prefer corpus §6.3.4 digits; else EOR-documented k4+cite (never invent)."""
+    from india_wind_tables import resolve_k4 as _resolve
+    return _resolve(
+        corpus_hit, eor_k4=eor_k4, eor_cite=eor_cite, eor_source=eor_source,
+        structure_class=structure_class,
+    )
+
+
+def resolve_building_length_m(cfg, *, bay_spacing_m=None, n_bays=None, n_frames=None):
+    """Building length along portal spacing for wind l/w and Ka.
+
+    Prefer explicit cfg keys (brief field). If missing, allow a *documented*
+    assumption with cite — never a silent invented length.
+    """
+    cfg = cfg or {}
+    for key in ("building_length_m", "length_m", "L_m", "plan_length_m"):
+        if cfg.get(key) is not None:
+            return {
+                "found": True,
+                "L_m": float(cfg[key]),
+                "source": "cfg",
+                "key": key,
+                "cite": cfg.get("building_length_cite") or cfg.get("length_cite") or "cfg explicit",
+            }
+    # nested geometry
+    geom = cfg.get("geometry") if isinstance(cfg.get("geometry"), dict) else {}
+    if geom.get("length_m") is not None:
+        return {
+            "found": True, "L_m": float(geom["length_m"]), "source": "cfg.geometry",
+            "cite": geom.get("length_cite") or "cfg.geometry.length_m",
+        }
+    # Documented assumption path
+    assum = cfg.get("building_length_assumption_m")
+    assum_cite = cfg.get("building_length_assumption_cite") or cfg.get("length_assumption_cite")
+    if assum is not None and assum_cite:
+        return {
+            "found": True,
+            "L_m": float(assum),
+            "source": "documented_assumption",
+            "cite": str(assum_cite),
+            "note": "Brief omitted building length; documented assumption — not silent invent",
+            "brief_field_required": "building_length_m (or n_frames × bay spacing stated in brief)",
+        }
+    # Derive only when spacing + count are explicit in cfg AND cite documents the assumption
+    sp = bay_spacing_m if bay_spacing_m is not None else cfg.get("bay_spacing_m") or cfg.get("bay_y") or cfg.get("frame_spacing_m")
+    nb = n_bays if n_bays is not None else cfg.get("n_bays_length") or cfg.get("NY")
+    nf = n_frames if n_frames is not None else cfg.get("n_frames")
+    derive_cite = cfg.get("building_length_derive_cite")
+    if sp and (nb is not None) and derive_cite:
+        L = float(sp) * float(nb)
+        return {
+            "found": True, "L_m": L, "source": "derived_documented",
+            "cite": str(derive_cite),
+            "bay_spacing_m": float(sp), "n_bays": float(nb),
+            "note": "L = n_bays × spacing with documented cite; prefer brief building_length_m",
+            "brief_field_required": "building_length_m",
+        }
+    if sp and nf is not None and derive_cite:
+        # n_frames = n_bays + 1 → length = (n_frames-1)*spacing
+        L = float(sp) * max(float(nf) - 1.0, 0.0)
+        return {
+            "found": True, "L_m": L, "source": "derived_documented",
+            "cite": str(derive_cite),
+            "bay_spacing_m": float(sp), "n_frames": float(nf),
+            "note": "L = (n_frames-1) × spacing with documented cite",
+            "brief_field_required": "building_length_m",
+        }
+    return {
+        "found": False,
+        "L_m": None,
+        "required_inputs": [
+            "cfg['building_length_m'] (preferred brief field)",
+            "OR building_length_assumption_m + building_length_assumption_cite",
+            "OR bay spacing + n_bays/n_frames + building_length_derive_cite",
+        ],
+        "brief_field_required": "building_length_m",
+        "note": (
+            "Brief gave frame spacing but not building length (IN_Ex3 pattern). "
+            "Do not silently assume L=36 m — set cfg building_length_m or document the assumption with cite."
+        ),
+    }

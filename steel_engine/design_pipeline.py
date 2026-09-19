@@ -364,9 +364,30 @@ def design(name, outdir=None):
                 s["component"]: {
                     "limit_state": None, "cited": None, "capacity": {}, "DC": None,
                     "found": False, "note": s["note"],
+                    "required_inputs": s.get("required_inputs"),
                 }
                 for s in entry["section12_worksheet"]["slots"]
             }
+        elif kind == "col" or "base" in ctype.lower() or "column" in ctype.lower():
+            # complete-gap wave1 / IN_Ex3: base-plate / weld component worksheets
+            try:
+                import india_is800 as I8
+                bp = I8.base_plate_worksheet(
+                    P_N=(dem.get("P_N") if isinstance(dem, dict) else None),
+                )
+                entry["base_plate_worksheet"] = bp
+                entry["component_checks"] = {
+                    s["component"]: {
+                        "limit_state": s.get("limit_state"), "cited": s.get("cited"),
+                        "capacity": s.get("capacity") or {}, "DC": s.get("DC"),
+                        "found": s.get("found"), "note": s.get("note"),
+                        "required_inputs": s.get("required_inputs"),
+                        "demand_N": s.get("demand_N"),
+                    }
+                    for s in bp.get("slots") or []
+                }
+            except Exception as _bpe:
+                entry["base_plate_worksheet"] = {"status": "stubs_error", "error": str(_bpe)}
         pkg["connections"].append(entry)
     # ---- SEEDED COLLECTOR SLOTS + FRAMEWORK IRREGULARITY SCREEN (hardening #3/#9) ----
     # When the footprint screen finds a re-entrant corner or setback, seed a collector design slot

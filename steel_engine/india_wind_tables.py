@@ -360,3 +360,86 @@ def override_policy() -> dict:
             "corpus is authoritative; in-repo tables are fallback only."
         ),
     }
+
+
+# --- k4 Importance Factor for Cyclonic Region (§6.3.4) ---------------------
+# Corpus OCR often garbles the numeric k4 table. Allow EOR-documented values
+# with an explicit cite (CFS-style eor_documented) — never invent silently.
+
+K4_OK_SOURCES = frozenset({
+    "corpus", "corpus_exact_table", "exact_table", "rag",
+    "eor_documented", "eor", "documented", "explicit", "eor_explicit",
+    "is15498", "printed_table", "pdf",
+})
+K4_REFUSED_SOURCES = frozenset({
+    "assumed", "assumption", "silent", "silent_default", "invented",
+    "placeholder", "todo", "tbd", "guess",
+})
+
+
+def resolve_k4(corpus_hit=None, *, eor_k4=None, eor_cite=None, eor_source=None,
+               structure_class=None):
+    """Resolve IS 875 Part 3 §6.3.4 k4.
+
+    Prefer corpus exact digits when found:true. When OCR/digits are found:false,
+    accept an EOR-documented k4 + cite (source in K4_OK_SOURCES, not invented).
+    Never invent a default k4.
+    """
+    if _corpus_found(corpus_hit) and corpus_hit.get("k4") is not None:
+        out = dict(corpus_hit)
+        out.setdefault("found", True)
+        out.setdefault("source", "corpus")
+        out["resolved_via"] = "corpus"
+        out.setdefault(
+            "cite",
+            out.get("cite") or "IS 875 (Part 3):2015 §6.3.4 (corpus)",
+        )
+        return out
+
+    # Explicit EOR / documented path (allowed when corpus digits miss)
+    k4_val = eor_k4
+    src = (eor_source or "").strip().lower().replace(" ", "_").replace("-", "_")
+    cite = eor_cite
+    if isinstance(corpus_hit, dict) and corpus_hit.get("found") is False:
+        # allow hit to carry eor fields
+        k4_val = k4_val if k4_val is not None else corpus_hit.get("k4") or corpus_hit.get("eor_k4")
+        src = src or str(corpus_hit.get("source") or corpus_hit.get("k4_source") or "").strip().lower().replace(" ", "_")
+        cite = cite or corpus_hit.get("cite") or corpus_hit.get("eor_cite")
+
+    if k4_val is not None and src in K4_OK_SOURCES and cite:
+        return {
+            "found": True,  # resolved for design use — provenance is EOR/documented, not OCR digits
+            "k4": float(k4_val),
+            "corpus_digits_found": False,
+            "source": src,
+            "resolved_via": "eor_documented" if "eor" in src or src == "documented" else src,
+            "cite": str(cite),
+            "structure_class": structure_class,
+            "note": (
+                "k4 from EOR/documented path because corpus §6.3.4 numeric digits "
+                "were found:false (OCR). Not invented — cite required. Confirm against "
+                "printed IS 875 P3 / IS 15498 before sealing."
+            ),
+            "policy": "eor_documented_ok_when_ocr_miss",
+        }
+
+    refused = []
+    if k4_val is None:
+        refused.append("k4 value")
+    if src not in K4_OK_SOURCES:
+        refused.append("k4_source in {%s}" % ", ".join(sorted(K4_OK_SOURCES)))
+    if not cite:
+        refused.append("k4_cite (printed clause / IS 15498 / EOR note)")
+    return {
+        "found": False,
+        "k4": None,
+        "corpus_digits_found": False,
+        "source": src or None,
+        "resolved_via": "refused",
+        "required_inputs": refused,
+        "cite": "IS 875 (Part 3):2015 §6.3.4 — retrieve digits or supply eor_documented k4+cite",
+        "note": (
+            "Do not invent k4. When OCR digits are found:false, set "
+            "k4_source='eor_documented' with k4_cite (CFS-style provenance)."
+        ),
+    }
