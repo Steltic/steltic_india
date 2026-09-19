@@ -379,7 +379,7 @@ def render_findings(findings) -> str:
 
 
 # ---------------------------------------------------------------------------
-# S6: Ka / Cpe — prefer corpus; verified overrides in india_wind_tables
+# S6: Ka / Cpe — corpus exact_table prefer; india_wind_tables = fallback only
 # ---------------------------------------------------------------------------
 def wind_table_override_policy() -> dict:
     """Documented Ka/Cpe policy for agents (S6). See docs/IS875_P3_Ka_Cpe_OVERRIDES.md."""
@@ -391,13 +391,30 @@ def wind_table_override_policy() -> dict:
 
 
 def ka_fallback(A_m2: float) -> dict:
-    """Optional Table 4 Ka fallback when corpus exact_table 4 is unavailable."""
+    """Table 4 Ka fallback when corpus exact_table 4 returns found:false."""
     from india_wind_tables import ka_for_area_m2
     return ka_for_area_m2(A_m2)
 
 
-def cpe_walls_override(h_over_w: float, l_over_w: float, theta_deg: float = 0.0) -> dict:
-    """Verified Table 5 wall Cpe (PDF). Do not use Docling OCR for design Cpe."""
+def cpe_walls_fallback(h_over_w: float, l_over_w: float, theta_deg: float = 0.0) -> dict:
+    """Table 5 wall Cpe fallback when corpus exact_table 5 returns found:false."""
     from india_wind_tables import cpe_walls
     return cpe_walls(h_over_w, l_over_w, theta_deg)
+
+
+# P1 alias — still fallback-only after corpus-prefer demotion.
+cpe_walls_override = cpe_walls_fallback
+
+
+def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> dict:
+    """Prefer corpus exact_table 4; fallback to in-repo Ka only if found:false."""
+    from india_wind_tables import resolve_ka as _resolve
+    return _resolve(A_m2, corpus_hit, allow_fallback=allow_fallback)
+
+
+def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
+                      corpus_hit=None, *, allow_fallback: bool = True) -> dict:
+    """Prefer corpus exact_table 5; fallback to in-repo Cpe only if found:false."""
+    from india_wind_tables import resolve_cpe_walls as _resolve
+    return _resolve(h_over_w, l_over_w, theta_deg, corpus_hit, allow_fallback=allow_fallback)
 

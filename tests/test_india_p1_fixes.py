@@ -27,6 +27,7 @@ def test_ka_prefers_corpus_policy():
     pol = WT.override_policy()
     assert "exact_table 4" in pol["Ka_Table_4"]["prefer"]
     assert "Docling" in pol["Cpe_Table_5_walls"]["do_not_use"]
+    assert "exact_table 5" in pol["Cpe_Table_5_walls"]["prefer"]
     # india_loads wrappers
     assert IL.ka_fallback(25.0)["Ka"] == 0.9
     assert "corpus" in IL.wind_table_override_policy()["Ka_Table_4"]["prefer"].lower() or \
@@ -39,7 +40,8 @@ def test_cpe_walls_verified_override_common_band():
     assert r["Cpe"]["A"] == 0.7
     assert r["Cpe"]["B"] == -0.2
     assert r["Cpe_local"] == -0.8
-    assert "OCR" in r["cite"] or "override" in r["cite"].lower()
+    assert ("OCR" in r["cite"] or "override" in r["cite"].lower()
+            or "fallback" in r["cite"].lower())
     r90 = WT.cpe_walls(0.4, 1.2, 90)
     assert r90["Cpe"]["C"] == 0.7
 
@@ -55,7 +57,7 @@ def test_cpe_walls_refuses_outside_band_and_bad_angle():
 
 def test_cpe_ocr_not_authoritative_flag():
     assert WT.TABLE_5_CPE_WALLS["ocr_trust"] is False
-    assert WT.TABLE_5_CPE_WALLS["source"] == "verified_pdf_override"
+    assert WT.TABLE_5_CPE_WALLS["source"] == "corpus_preferred"
     assert WT.TABLE_4_KA["source"] == "corpus_preferred"
 
 

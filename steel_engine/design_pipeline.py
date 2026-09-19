@@ -73,6 +73,52 @@ def _section12_component_stubs(role="brace"):
     }
 
 
+
+def _composite_chI_worksheet_stubs():
+    """H6: IS 800 Ch. I composite floor worksheet slots (structure only).
+
+    Parallel to §12 stubs: give empty found:false slots so agents do not invent
+    stud schedules, camber, or wet-stage D/C when IS 800 Ch. I retrieval misses
+    or composite is out of scope. Fill from LIVE RAG or record an explicit scope
+    statement — never invent numbers.
+    """
+    def _slot(component, note):
+        return {
+            "component": component,
+            "limit_state": None,
+            "cited": None,
+            "capacity": {},
+            "size": None,
+            "DC": None,
+            "found": False,
+            "note": note,
+        }
+    return {
+        "status": "stubs",
+        "cite": "IS 800:2007 Ch. I (composite construction) — retrieve LIVE; see COMPOSITE_I3.md",
+        "policy": (
+            "Fill from LIVE IS 800 Ch. I RAG only, or record an explicit composite scope "
+            "statement (bare-steel lower bound / excluded / delegated). Do not invent stud "
+            "count, camber, or wet-stage D/C when retrieval misses — leave found:false."
+        ),
+        "qfm_scope": "H6 — composite Ch.I not auto-designed; stubs prevent invention",
+        "slots": [
+            _slot("b_eff",
+                  "Effective width b_eff — RAG IS 800 Ch. I; found:false until retrieved."),
+            _slot("studs",
+                  "Shear connectors: n, diameter, Qn/Rd — RAG IS 800 Ch. I; found:false until sized."),
+            _slot("partial_composite",
+                  "Degree of shear connection / partial composite % — RAG; found:false until set."),
+            _slot("camber",
+                  "Camber decision (even 'none') with wet deflection shown — found:false until decided."),
+            _slot("wet_stage",
+                  "Unshored wet-concrete / construction-stage check — found:false until checked."),
+            _slot("I_LB_deflection",
+                  "Service deflection on lower-bound I — RAG; found:false until checked."),
+        ],
+    }
+
+
 # ---------- DEMAND envelope (analysis only; NO IS 800 capacities) ----------
 def design(name, outdir=None):
     """Run India load_plan combinations through P-Delta and write the per-member DEMAND
@@ -390,6 +436,25 @@ def design(name, outdir=None):
                       "(which preserves your capacities).")
     except Exception:
         pass
+    # H6: seed India composite Ch.I worksheet stubs when composite is declared
+    # so agents do not invent stud/camber designs (parallel to §12 stubs).
+    try:
+        _blob = (str(cfg.get("floor_system", "")).lower() + " "
+                 + str(cfg.get("notes", "")).lower() + " "
+                 + str(cfg.get("arch", "")).lower())
+        if "composite" in _blob or cfg.get("composite"):
+            pkg["composite_design"] = {
+                "status": "stubs",
+                "chI_worksheet": _composite_chI_worksheet_stubs(),
+                "note": (
+                    "H6: composite Ch.I not auto-designed. Fill slots from IS 800 Ch. I RAG "
+                    "or record explicit scope (bare-steel lower bound / excluded / delegated). "
+                    "Do not invent stud/camber/wet-stage numbers."
+                ),
+            }
+    except Exception as _ce:
+        pkg.setdefault("composite_design", {"status": "stubs_error", "error": str(_ce)})
+
     json.dump(pkg, open(_cp, "w"), indent=1)
 
     # ---- connection_demands.csv (demands + the limit-state checklist the agent sizes) ----
