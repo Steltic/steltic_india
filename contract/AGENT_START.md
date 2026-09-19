@@ -117,6 +117,24 @@ the wrong units.
   - **R≤3 consistency:** when `capacity_design.checks.wind_vs_seismic` is computed, the always-on
     "CONFIRM wind or seismic" reminder softens (IN_Ex3 wind≫EQ path).
 
+- **complete-gap wave2 helpers:**
+  - **Dual / missing Table 9 R** — `india_seismic_gates.resolve_R` / `complete_allowed`: require
+    `R` + `R_source` + `R_cite`. Allowlisted sources include `eor_documented` /
+    `sbf_concentric_for_dual` (NOT proxy/silent). Set `R_steel_dual_table9_found=false` when
+    IS 1893 Table 9 has no steel SMF+SCBF dual row. COMPLETE gate refuses proxy.
+  - **Ω0** — `resolve_Omega0`: default found:false (not in IS 1893). Optional
+    `Omega0_source='eor_documented'` + cite; never invent ASCE 7 Ω0. Honest miss does not block COMPLETE.
+  - **k4 hospital/Ex4** — same `resolve_k4(..., eor_source='eor_documented')` path as Ex3 when OCR digits miss.
+  - **Connection D/Cs from LIVE RAG** — `is4000_bolt_shear_capacity_N` (Table 2),
+    `fillet_weld_capacity_is800_N` / `fillet_weld_capacity_N` (IS 816),
+    `apply_rag_capacities_to_connection`, `base_plate_worksheet` capacities. found:false on RAG miss.
+  - **Panel-zone doubler detail** — `panel_zone_doubler_detail`: thickness from `panel_zone_check`;
+    plate grade + electrode from RAG/EOR only (H7 E250B procurement stays process note).
+  - **SCWB scope** — representative joint OK; multi-joint refinement optional. Document scope.
+  - **ARPACK warnings** — OpenSees eigen stderr suppressed around solve; modal sanity PASS is real — do not fake PASS.
+  - **Mezz storage height (Ex5)** — `resolve_storage_height_m`: prefer `cfg['storage_height_m']`; else documented assumption + cite (no silent 2.5 m).
+  - **Mass irregularity Table 6(ii)** — `mass_irregularity_screen_note(W_by_floor)` documents screen; Zone note; do not invent mandatory RS.
+
 ## Gotchas that fail SILENTLY (read this once — they will not error loudly)
 These are the traps that pass every obvious check yet corrupt the result. Most are now auto-handled by the
 framework; this list tells you what it does so you do not fight it.

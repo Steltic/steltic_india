@@ -608,10 +608,32 @@ def _modal_impl(cfg,nm):
         # A system MUST be set or -genBandArpack raises "no system is set" and silently falls back to the
         # VERY SLOW -fullGenLapack on every modal solve (pipeline-wide).  Set one first. (P7 root-cause)
         ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        # complete-gap wave2: OpenSees ARPACK may print WARNING lines on tiny/single-storey
+        # models even when the solve succeeds and sanity modalmass/period PASS. Suppress
+        # stderr noise only around the eigen call — do NOT fake PASS; failures still raise.
+        import contextlib, os as _os
+        @contextlib.contextmanager
+        def _quiet_arpack():
+            try:
+                devnull = open(_os.devnull, "w")
+                old_err = _os.dup(2)
+                _os.dup2(devnull.fileno(), 2)
+            except Exception:
+                yield
+                return
+            try:
+                yield
+            finally:
+                try:
+                    _os.dup2(old_err, 2); _os.close(old_err); devnull.close()
+                except Exception:
+                    pass
         try:
-            return ops.eigen("-genBandArpack",nev)      # fast Arnoldi for the lowest modes
+            with _quiet_arpack():
+                return ops.eigen("-genBandArpack",nev)      # fast Arnoldi for the lowest modes
         except Exception:
-            return ops.eigen("-fullGenLapack",nev)       # dense fallback if ARPACK cannot converge
+            with _quiet_arpack():
+                return ops.eigen("-fullGenLapack",nev)       # dense fallback if ARPACK cannot converge
     def _mass(w2):
         eX=[];eY=[]
         for mode in range(1,len(w2)+1):

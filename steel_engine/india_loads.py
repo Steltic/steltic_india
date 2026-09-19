@@ -503,3 +503,57 @@ def resolve_building_length_m(cfg, *, bay_spacing_m=None, n_bays=None, n_frames=
             "Do not silently assume L=36 m — set cfg building_length_m or document the assumption with cite."
         ),
     }
+
+
+def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_source=None,
+                             unit_load_kNpm2_per_m=2.0):
+    """Mezz/warehouse storage height for IS 875 Part 2 storage UDL (kN/m² per m height).
+
+    Prefer cfg['storage_height_m'] (brief). Else documented assumption with cite.
+    Never invent a silent 2.5 m.
+    Returns L_floor = unit_load × height when resolved.
+    """
+    cfg = cfg or {}
+    for key in ("storage_height_m", "mezz_storage_height_m", "stack_height_m"):
+        if cfg.get(key) is not None:
+            h = float(cfg[key])
+            return {
+                "found": True,
+                "h_m": h,
+                "L_kNpm2": float(unit_load_kNpm2_per_m) * h,
+                "unit_load_kNpm2_per_m": float(unit_load_kNpm2_per_m),
+                "source": "cfg",
+                "key": key,
+                "cite": cfg.get("storage_height_cite") or "cfg explicit storage height",
+            }
+    h = eor_h_m if eor_h_m is not None else cfg.get("storage_height_assumption_m")
+    cite = eor_cite or cfg.get("storage_height_assumption_cite")
+    src = (eor_source or cfg.get("storage_height_source") or "").strip().lower().replace(" ", "_")
+    ok = {"eor_documented", "eor", "documented", "explicit", "documented_assumption", "assumption_documented"}
+    if h is not None and cite and (src in ok or src == "" or "document" in src or "eor" in src or "assum" in src):
+        return {
+            "found": True,
+            "h_m": float(h),
+            "L_kNpm2": float(unit_load_kNpm2_per_m) * float(h),
+            "unit_load_kNpm2_per_m": float(unit_load_kNpm2_per_m),
+            "source": src or "documented_assumption",
+            "resolved_via": "eor_documented" if "eor" in (src or "documented") else "documented_assumption",
+            "cite": str(cite),
+            "note": (
+                "Storage height documented (not silent invent). Prefer brief storage_height_m. "
+                "IS 875 P2 Table 1 warehouses 2.0 kN/m² per m of storage height."
+            ),
+            "brief_field_required": "storage_height_m",
+        }
+    return {
+        "found": False,
+        "h_m": None,
+        "L_kNpm2": None,
+        "required_inputs": [
+            "cfg['storage_height_m'] (preferred brief field)",
+            "OR storage_height_assumption_m + storage_height_assumption_cite",
+        ],
+        "brief_field_required": "storage_height_m",
+        "cite": "IS 875 (Part 2):1987 Table 1 STORAGE — 2.0 kN/m² per m of storage height",
+        "note": "Do not silently assume 2.5 m stack height — set cfg or document with cite.",
+    }

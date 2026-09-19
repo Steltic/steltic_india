@@ -388,6 +388,21 @@ def design(name, outdir=None):
                 }
             except Exception as _bpe:
                 entry["base_plate_worksheet"] = {"status": "stubs_error", "error": str(_bpe)}
+        # complete-gap wave2: apply LIVE RAG capacities when cfg supplies them
+        _rag_map = (cfg.get("connection_rag_capacities") or {})
+        _rag_for = None
+        if isinstance(_rag_map, dict):
+            _rag_for = (_rag_map.get(role) or _rag_map.get(kind)
+                        or _rag_map.get("brace" if kind == "brace" else None)
+                        or _rag_map.get("base" if kind == "col" else None)
+                        or _rag_map.get("default"))
+        if _rag_for:
+            try:
+                import india_is800 as _I8rag
+                entry["rag_capacities"] = _rag_for
+                entry = _I8rag.apply_rag_capacities_to_connection(entry, rag_capacities=_rag_for)
+            except Exception as _rage:
+                entry["rag_capacities_error"] = str(_rage)
         pkg["connections"].append(entry)
     # ---- SEEDED COLLECTOR SLOTS + FRAMEWORK IRREGULARITY SCREEN (hardening #3/#9) ----
     # When the footprint screen finds a re-entrant corner or setback, seed a collector design slot
