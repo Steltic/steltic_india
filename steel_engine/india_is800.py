@@ -444,6 +444,17 @@ def panel_zone_check(
             "Doubler suggestion is thickness-only from code inequalities; confirm electrode/"
             "plate grade via IS 816 / IS 800 RAG before detailing."
         ),
+        "inputs": {
+            "d_col_mm": d_col_mm,
+            "tw_mm": tw_mm,
+            "bf_mm": bf_mm,
+            "tf_mm": tf_mm,
+            "d_beam_mm": d_beam_mm,
+            "V_design_N": V_design_N,
+            "fy_MPa": fy_MPa,
+            "gamma_m0": gamma_m0,
+            "doubler_t_mm": doubler_t_mm,
+        }
     }
 
 
@@ -585,6 +596,12 @@ def base_plate_worksheet(
     plate_t_mm=None,
     capacity_bearing_N=None,
     capacity_anchor_N=None,
+    capacity_bending_N=None,
+    capacity_bending_Nmm=None,
+    fy_plate_MPa=None,
+    cantilever_m_mm=None,
+    bearing_pressure_MPa=None,
+    gamma_m0=None,
     cited=None,
 ):
     """IS 800 Ch.11 / base-plate component worksheet.
@@ -640,6 +657,37 @@ def base_plate_worksheet(
             slots["anchors"], demand_N=float(P_N), capacity_N=float(capacity_anchor_N),
             cited=cited or "IS 800 anchors",
         )
+    # Plate bending thickness / capacity — IS 800 LSD cantilever; no invent t
+    bend = base_plate_bending_check(
+        P_N=P_N,
+        M_Nmm=M_Nmm,
+        plate_B_mm=plate_B_mm,
+        plate_L_mm=plate_L_mm,
+        plate_t_mm=plate_t_mm,
+        fy_plate_MPa=fy_plate_MPa or fy_col_MPa,
+        cantilever_m_mm=cantilever_m_mm,
+        bearing_pressure_MPa=bearing_pressure_MPa,
+        capacity_bending_N=capacity_bending_N,
+        capacity_bending_Nmm=capacity_bending_Nmm,
+        gamma_m0=gamma_m0,
+        cited=cited,
+    )
+    slots["plate_bending"] = {**slots["plate_bending"], **{
+        k: bend[k] for k in (
+            "found", "DC", "capacity", "required_inputs", "note", "cited",
+            "t_required_mm", "t_provided_mm", "m_mm", "w_MPa", "missing",
+        ) if k in bend
+    }}
+    if bend.get("found"):
+        slots["plate_bending"]["capacity"] = bend.get("capacity") or {
+            "t_required_mm": bend.get("t_required_mm"),
+            "capacity_N": bend.get("capacity_N"),
+            "capacity_Nmm": bend.get("capacity_Nmm"),
+        }
+        slots["plate_bending"]["cited"] = bend.get("cite") or bend.get("cited")
+    else:
+        slots["plate_bending"]["missing"] = bend.get("required_inputs") or bend.get("missing")
+        slots["plate_bending"]["note"] = bend.get("note") or slots["plate_bending"]["note"]
     any_filled = any(s.get("found") is True for s in slots.values())
     return {
         "status": "worksheets",
@@ -810,6 +858,9 @@ def apply_rag_capacities_to_connection(
             "anchor_bolts": ["anchors", "anchor_bolts", "anchor"],
             "base_plate_bending": ["plate_bending", "base_plate_bending"],
             "end_plate_or_continuity": ["end_plate_or_continuity", "end_plate", "continuity", "gusset"],
+            "gusset_whitmore": ["gusset_whitmore", "whitmore", "gusset"],
+            "gusset_block_shear": ["gusset_block_shear", "block_shear", "block_shear_gusset"],
+            "column_axial_Pn": ["column_axial_Pn", "axial_Pn", "splice_Pn", "base_Pn"],
         }
         # Direct + forward aliases
         keys = list(aliases.get(component, [])) + [component]
@@ -1144,3 +1195,425 @@ def end_plate_or_continuity_capacity_N(
         "cite": cite or "IS 800:2007 §10 / §12.11",
         "note": "Capacity from provided RAG value — not invented.",
     }
+
+
+# --- complete-gap wave3: base-plate bending, Whitmore/block shear, Pn, PZ-in-model ---
+
+def base_plate_bending_check(
+    *,
+    P_N=None,
+    M_Nmm=None,
+    plate_B_mm=None,
+    plate_L_mm=None,
+    plate_t_mm=None,
+    fy_plate_MPa=None,
+    cantilever_m_mm=None,
+    bearing_pressure_MPa=None,
+    capacity_bending_N=None,
+    capacity_bending_Nmm=None,
+    gamma_m0=None,
+    cited=None,
+):
+    """IS 800 LSD base-plate bending / thickness check (Ch.11 practice).
+
+    Paths (any one closes found:true — never invent t or m):
+      1) RAG capacity_bending_N vs P_N, or capacity_bending_Nmm vs M_Nmm
+      2) Disclosed plate_t_mm + fy + cantilever m (+ bearing pressure or P/plan)
+         → t_req = m * sqrt(3 * w * γ_m0 / fy) from M = w m²/2 per unit width
+            and σ_allow = fy/γ_m0 (equivalent to t = sqrt(6 M γ_m0 / fy))
+
+    found:false when RAG/disclosed inputs miss — do not invent plate thickness.
+    """
+    gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
+    cite = cited or "IS 800:2007 Ch.11 / LSD plate bending (cantilever); γ_m0 Table 5"
+    missing = []
+
+    # Path 1: direct RAG capacity
+    if capacity_bending_N is not None and P_N is not None and float(capacity_bending_N) > 0:
+        dc = float(P_N) / float(capacity_bending_N) if float(capacity_bending_N) > 0 else None
+        return {
+            "found": True,
+            "DC": dc,
+            "capacity_N": float(capacity_bending_N),
+            "capacity": {"capacity_N": float(capacity_bending_N), "path": "rag_capacity_N"},
+            "cite": cite,
+            "cited": cite,
+            "note": "Base-plate bending D/C from LIVE RAG capacity_N — t not invented.",
+        }
+    if capacity_bending_Nmm is not None and M_Nmm is not None and float(capacity_bending_Nmm) > 0:
+        dc = float(M_Nmm) / float(capacity_bending_Nmm)
+        return {
+            "found": True,
+            "DC": dc,
+            "capacity_Nmm": float(capacity_bending_Nmm),
+            "capacity": {"capacity_Nmm": float(capacity_bending_Nmm), "path": "rag_capacity_Nmm"},
+            "cite": cite,
+            "cited": cite,
+            "note": "Base-plate bending moment D/C from LIVE RAG — t not invented.",
+        }
+
+    # Path 2: thickness from cantilever projection (disclosed / RAG geometry)
+    m = cantilever_m_mm
+    fy = fy_plate_MPa
+    t_prov = plate_t_mm
+    w = bearing_pressure_MPa
+    if w is None and P_N is not None and plate_B_mm and plate_L_mm:
+        area = float(plate_B_mm) * float(plate_L_mm)
+        if area > 0:
+            w = float(P_N) / area  # N/mm² = MPa
+    if m is None:
+        missing.append("cantilever_m_mm from RAG / disclosed projection")
+    if fy is None:
+        missing.append("fy_plate_MPa from RAG / IS 2062")
+    if t_prov is None:
+        missing.append("plate_t_mm disclosed (do not invent t)")
+    if w is None:
+        missing.append("bearing_pressure_MPa or P_N with plate_B_mm×plate_L_mm")
+    if missing:
+        return {
+            "found": False,
+            "DC": None,
+            "capacity": {},
+            "t_required_mm": None,
+            "t_provided_mm": float(t_prov) if t_prov is not None else None,
+            "required_inputs": missing,
+            "missing": missing,
+            "cite": cite,
+            "note": (
+                "Base-plate bending found:false — need RAG/disclosed m, fy, t, and bearing "
+                "pressure (or P with plate plan). Never invent plate thickness."
+            ),
+        }
+
+    m = float(m); fy = float(fy); t_prov = float(t_prov); w = float(w)
+    # M per unit width = w * m² / 2; t_req = sqrt(6 M γ_m0 / fy) = m * sqrt(3 w γ_m0 / fy)
+    t_req = m * math.sqrt(max(3.0 * w * gm0 / fy, 0.0))
+    dc = (t_req / t_prov) if t_prov > 0 else None
+    return {
+        "found": True,
+        "DC": dc,
+        "t_required_mm": t_req,
+        "t_provided_mm": t_prov,
+        "m_mm": m,
+        "w_MPa": w,
+        "fy_plate_MPa": fy,
+        "gamma_m0": gm0,
+        "capacity": {
+            "t_required_mm": t_req,
+            "t_provided_mm": t_prov,
+            "path": "cantilever_thickness_IS800_LSD",
+        },
+        "capacity_N": None,
+        "cite": cite,
+        "cited": cite,
+        "note": (
+            "t_req = m√(3 w γ_m0/fy) from cantilever plate bending (M=w m²/2). "
+            "m/fy/t/w from RAG or disclosed geometry — thickness not invented."
+        ),
+        "pass": (dc is not None and dc <= 1.0),
+    }
+
+
+def gusset_whitmore_capacity_N(
+    *,
+    whitmore_width_mm=None,
+    t_gusset_mm=None,
+    fy_MPa=None,
+    L_wt_mm=None,
+    w_brace_mm=None,
+    gamma_m0=None,
+    capacity_N=None,
+    cite=None,
+):
+    """Gusset Whitmore section yield — IS 800 LSD (RAG width or 30° construction).
+
+    Capacity = bw * t * fy / γ_m0. bw from RAG whitmore_width_mm, or
+    bw = w_brace + 2 L_wt tan(30°) when both disclosed. Direct capacity_N from RAG OK.
+    found:false on miss — no invent.
+    """
+    gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
+    cite = cite or "IS 800:2007 gusset Whitmore yield (LSD); γ_m0 Table 5"
+    if capacity_N is not None and float(capacity_N) > 0:
+        return {
+            "found": True,
+            "capacity_N": float(capacity_N),
+            "cite": cite,
+            "note": "Whitmore capacity from LIVE RAG — not invented.",
+            "path": "rag_capacity_N",
+        }
+    missing = []
+    bw = whitmore_width_mm
+    if bw is None and L_wt_mm is not None and w_brace_mm is not None:
+        bw = float(w_brace_mm) + 2.0 * float(L_wt_mm) * math.tan(math.radians(30.0))
+    if bw is None:
+        missing.append("whitmore_width_mm from RAG OR (L_wt_mm + w_brace_mm) disclosed")
+    if t_gusset_mm is None:
+        missing.append("t_gusset_mm disclosed / RAG")
+    if fy_MPa is None:
+        missing.append("fy_MPa from RAG / IS 2062")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "required_inputs": missing,
+            "cite": cite,
+            "note": "Whitmore found:false — do not invent gusset t or Whitmore width.",
+        }
+    cap = float(bw) * float(t_gusset_mm) * float(fy_MPa) / gm0
+    return {
+        "found": True,
+        "capacity_N": cap,
+        "whitmore_width_mm": float(bw),
+        "t_gusset_mm": float(t_gusset_mm),
+        "fy_MPa": float(fy_MPa),
+        "gamma_m0": gm0,
+        "cite": cite,
+        "note": "Whitmore T = bw t fy / γ_m0 — bw/t/fy from RAG or disclosed 30° construction.",
+        "path": "whitmore_yield",
+    }
+
+
+def gusset_block_shear_capacity_N(
+    *,
+    capacity_N=None,
+    Avg_mm2=None,
+    Atn_mm2=None,
+    fy_MPa=None,
+    fu_MPa=None,
+    gamma_m0=None,
+    gamma_m1=None,
+    cite=None,
+):
+    """Gusset block shear — IS 800:2007 §6.4.1 (RAG capacity or disclosed areas).
+
+    T_db = Avg fy/(√3 γ_m0) + 0.9 Atn fu/γ_m1  (tension rupture + shear yield form).
+    found:false without RAG capacity or full geometry — no invent.
+    """
+    gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
+    gm1 = float(gamma_m1 if gamma_m1 is not None else 1.25)
+    cite = cite or "IS 800:2007 §6.4.1 block shear"
+    if capacity_N is not None and float(capacity_N) > 0:
+        return {
+            "found": True,
+            "capacity_N": float(capacity_N),
+            "cite": cite,
+            "note": "Block shear capacity from LIVE RAG — not invented.",
+            "path": "rag_capacity_N",
+        }
+    missing = []
+    for name, val in (
+        ("Avg_mm2 (gross shear area)", Avg_mm2),
+        ("Atn_mm2 (net tension area)", Atn_mm2),
+        ("fy_MPa", fy_MPa),
+        ("fu_MPa", fu_MPa),
+    ):
+        if val is None:
+            missing.append(name)
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "required_inputs": missing,
+            "cite": cite,
+            "note": "Block shear found:false — RAG capacity or Avg/Atn/fy/fu required; no invent.",
+        }
+    cap = (
+        float(Avg_mm2) * float(fy_MPa) / (math.sqrt(3.0) * gm0)
+        + 0.9 * float(Atn_mm2) * float(fu_MPa) / gm1
+    )
+    return {
+        "found": True,
+        "capacity_N": cap,
+        "Avg_mm2": float(Avg_mm2),
+        "Atn_mm2": float(Atn_mm2),
+        "fy_MPa": float(fy_MPa),
+        "fu_MPa": float(fu_MPa),
+        "gamma_m0": gm0,
+        "gamma_m1": gm1,
+        "cite": cite,
+        "note": "Block shear T_db per IS 800 §6.4.1 from disclosed areas — not invented.",
+        "path": "section_6_4_1",
+    }
+
+
+def column_base_or_splice_Pn_capacity_N(
+    *,
+    capacity_N=None,
+    cite=None,
+    limit_state=None,
+    demand_P_N=None,
+):
+    """Column base / splice axial Pn from RAG only — never reuse beam bolt-group shear.
+
+    Returns found:false until LIVE RAG (or disclosed base-plate/anchor axial capacity) is
+    supplied. Optional demand_P_N yields DC when capacity present.
+    """
+    cite = cite or "IS 800:2007 Ch.11 / §10 column base or splice axial — RAG"
+    if capacity_N is None or float(capacity_N) <= 0:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "DC": None,
+            "demand_P_N": float(demand_P_N) if demand_P_N is not None else None,
+            "required_inputs": [
+                "capacity_N from LIVE RAG base-plate/anchor/splice (do not apply beam bolt shear to P_N)",
+            ],
+            "cite": cite,
+            "note": (
+                "Column splice/base Pn found:false — axial capacity must come from RAG + "
+                "disclosed plate/anchor geometry; beam bolt group must not be applied to P_N."
+            ),
+        }
+    dc = None
+    if demand_P_N is not None and float(capacity_N) > 0:
+        dc = float(demand_P_N) / float(capacity_N)
+    return {
+        "found": True,
+        "capacity_N": float(capacity_N),
+        "DC": dc,
+        "demand_P_N": float(demand_P_N) if demand_P_N is not None else None,
+        "limit_state": limit_state or "column axial Pn (base/splice)",
+        "cite": cite,
+        "note": "Axial Pn from RAG — not invented; not from beam bolt shear.",
+    }
+
+
+def panel_zone_apply_doubler_in_model(
+    pz_result=None,
+    *,
+    doubler_t_mm_in_model=None,
+    cfg=None,
+):
+    """Re-evaluate panel zone when doubler thickness is present in the model/cfg.
+
+    If doubler_t_mm_in_model (or cfg['panel_zone_doubler_t_mm']) is provided and the
+    prior panel_zone_check inputs are retained on pz_result['inputs'], re-run with
+    doubler_t_mm. Otherwise document FAIL / found detail until plate is in cfg —
+    do not invent doubler thickness.
+    """
+    pz = dict(pz_result or {})
+    cfg = cfg or {}
+    t_model = doubler_t_mm_in_model
+    if t_model is None:
+        t_model = cfg.get("panel_zone_doubler_t_mm") or cfg.get("doubler_t_mm")
+    detail = {
+        "doubler_t_mm_in_model": float(t_model) if t_model is not None else None,
+        "cite": "IS 800:2007 §12.11.2.3–12.11.2.4 doubler in model/cfg",
+    }
+    if t_model is None:
+        detail.update({
+            "found": False,
+            "required_inputs": ["doubler_t_mm_in_model or cfg['panel_zone_doubler_t_mm']"],
+            "note": (
+                "Panel-zone shear remains FAIL / pending until doubler plate thickness is "
+                "placed in the model or cfg — sizing from panel_zone_check is advisory only; "
+                "do not invent plate in model."
+            ),
+            "panel_zone_pass": pz.get("pass"),
+            "doubler_required_mm": pz.get("doubler_required_mm"),
+        })
+        pz["doubler_in_model"] = detail
+        return pz
+
+    inputs = dict(pz.get("inputs") or {})
+    need = ("d_col_mm", "tw_mm", "bf_mm", "tf_mm", "d_beam_mm", "V_design_N", "fy_MPa")
+    if not all(inputs.get(k) is not None for k in need):
+        # Cannot re-run without stored inputs — attach provisionally
+        detail.update({
+            "found": True,
+            "doubler_provided_mm": float(t_model),
+            "recomputed": False,
+            "required_inputs": ["pz_result['inputs'] with panel_zone_check kwargs to re-run"],
+            "note": (
+                "Doubler t=%.1f mm disclosed in model/cfg; re-run panel_zone_check with "
+                "doubler_t_mm to confirm shear/thickness pass." % float(t_model)
+            ),
+        })
+        pz["doubler_in_model"] = detail
+        pz["doubler_provided_mm"] = float(t_model)
+        return pz
+
+    recomputed = panel_zone_check(
+        d_col_mm=inputs["d_col_mm"],
+        tw_mm=inputs["tw_mm"],
+        bf_mm=inputs["bf_mm"],
+        tf_mm=inputs["tf_mm"],
+        d_beam_mm=inputs["d_beam_mm"],
+        V_design_N=inputs["V_design_N"],
+        fy_MPa=inputs["fy_MPa"],
+        doubler_t_mm=float(t_model),
+        gamma_m0=inputs.get("gamma_m0", GAMMA_M0_DEFAULT),
+    )
+    detail.update({
+        "found": True,
+        "recomputed": True,
+        "doubler_provided_mm": float(t_model),
+        "panel_zone_pass": recomputed.get("pass"),
+        "DC_shear": recomputed.get("DC_shear"),
+        "note": (
+            "Panel zone re-checked with doubler t=%.1f mm in model/cfg." % float(t_model)
+        ),
+    })
+    recomputed["doubler_in_model"] = detail
+    if pz.get("doubler_detail"):
+        recomputed["doubler_detail"] = pz["doubler_detail"]
+    return recomputed
+
+
+def scwb_multi_joint(
+    joints=None,
+    *,
+    fy_MPa=250.0,
+    representative_only=False,
+):
+    """Optional multi-joint SCWB. Each joint: {columns: [...], beams: [...], id?}.
+
+    If joints is None/empty → found:false with note that representative-joint scope is OK.
+    If representative_only and one joint → same as scwb_ratio with scope note.
+    """
+    cite = "IS 800:2007 §12.11.3.2 ΣMpc/ΣMpb ≥ 1.2"
+    if not joints:
+        return {
+            "found": False,
+            "scope": "representative_joint_optional_multi",
+            "joints": [],
+            "cite": cite,
+            "required_inputs": ["joints=[{columns, beams, id?}, ...]"],
+            "note": (
+                "Multi-joint SCWB optional — provide joints list to refine beyond the "
+                "representative joint documented in wave2."
+            ),
+        }
+    results = []
+    for i, j in enumerate(joints):
+        j = j or {}
+        r = scwb_ratio(
+            columns=j.get("columns") or j.get("column_props"),
+            beams=j.get("beams") or j.get("beam_props"),
+            fy_MPa=j.get("fy_MPa", fy_MPa),
+        )
+        r = dict(r)
+        r["joint_id"] = j.get("id") or j.get("joint_id") or "joint_%d" % i
+        results.append(r)
+    any_found = any(r.get("found") for r in results)
+    worst = None
+    for r in results:
+        if r.get("found") and r.get("ratio") is not None:
+            if worst is None or r["ratio"] < worst:
+                worst = r["ratio"]
+    return {
+        "found": any_found,
+        "scope": "representative_only" if (representative_only or len(results) == 1) else "multi_joint",
+        "n_joints": len(results),
+        "worst_ratio": worst,
+        "pass": (worst is not None and worst >= 1.2) if any_found else None,
+        "joints": results,
+        "cite": cite,
+        "note": (
+            "Multi-joint SCWB from provided joint list; worst ΣMpc/ΣMpb reported. "
+            "H6/H7 remain process stubs."
+            if len(results) > 1 else
+            "Single/representative joint SCWB (multi-joint optional refinement not required)."
+        ),
+    }
+

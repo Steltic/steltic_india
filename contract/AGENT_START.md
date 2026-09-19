@@ -88,6 +88,10 @@ the wrong units.
   that warning you entered feet — fix the `cfg` to inches and re-run BEFORE chasing the numbers.**
 
 
+## complete-gap wave3
+
+See `docs/INDIA_COMPLETE_GAP_WAVE3.md` — base-plate bending, B5 SI, Whitmore/block shear, end-plate Rn, column Pn, PZ doubler-in-model, multi-joint SCWB. H6/H7 stay stubs.
+
 ## India process notes (H6 / H7) — do not invent
 
 - **H6 Composite Ch. I:** When the brief says composite deck, the demand package seeds
