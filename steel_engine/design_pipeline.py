@@ -370,11 +370,76 @@ def design(name, outdir=None):
             }
         elif kind == "col" or "base" in ctype.lower() or "column" in ctype.lower():
             # complete-gap wave1 / IN_Ex3: base-plate / weld component worksheets
+            # wave4: pass cfg-supplied plate/anchor geometry + RAG formula inputs
             try:
                 import india_is800 as I8
+                _geom = (
+                    (cfg.get("base_plate_geometry") if isinstance(cfg, dict) else None)
+                    or (cfg.get("column_base_geometry") if isinstance(cfg, dict) else None)
+                    or (cfg.get("splice_geometry") if isinstance(cfg, dict) else None)
+                    or {}
+                )
+                _rag_base = {}
+                if isinstance(cfg, dict):
+                    _rm = cfg.get("connection_rag_capacities") or {}
+                    if isinstance(_rm, dict):
+                        _rag_base = (_rm.get("base") or _rm.get("col") or _rm.get("default") or {})
                 bp = I8.base_plate_worksheet(
                     P_N=(dem.get("P_N") if isinstance(dem, dict) else None),
+                    M_Nmm=((dem.get("M_kNm") or 0) * 1e6 if isinstance(dem, dict) and dem.get("M_kNm") else None),
+                    cfg=cfg if isinstance(cfg, dict) else None,
+                    geometry=_geom if isinstance(_geom, dict) else None,
+                    capacity_bearing_N=(_rag_base.get("bearing", {}) or {}).get("capacity_N")
+                        if isinstance(_rag_base.get("bearing"), dict)
+                        else (_rag_base.get("bearing") if isinstance(_rag_base.get("bearing"), (int, float)) else None),
+                    capacity_anchor_N=(_rag_base.get("anchors", {}) or {}).get("capacity_N")
+                        if isinstance(_rag_base.get("anchors"), dict)
+                        else (_rag_base.get("anchors") if isinstance(_rag_base.get("anchors"), (int, float)) else None),
+                    bearing_stress_MPa=(
+                        (_rag_base.get("bearing") or {}).get("bearing_stress_MPa")
+                        if isinstance(_rag_base.get("bearing"), dict) else None
+                    ),
+                    bearing_factor=(
+                        (_rag_base.get("bearing") or {}).get("bearing_factor")
+                        if isinstance(_rag_base.get("bearing"), dict) else None
+                    ),
+                    capacity_one_anchor_N=(
+                        (_rag_base.get("anchors") or {}).get("capacity_one_N")
+                        if isinstance(_rag_base.get("anchors"), dict) else None
+                    ),
+                    cited=(_rag_base.get("cite") if isinstance(_rag_base, dict) else None),
                 )
+                # Optional splice/base Pn from same geometry + RAG
+                try:
+                    pn = I8.column_base_or_splice_Pn_capacity_N(
+                        demand_P_N=(dem.get("P_N") if isinstance(dem, dict) else None),
+                        cfg=cfg if isinstance(cfg, dict) else None,
+                        geometry=_geom if isinstance(_geom, dict) else None,
+                        capacity_bearing_N=(
+                            (_rag_base.get("bearing") or {}).get("capacity_N")
+                            if isinstance(_rag_base.get("bearing"), dict) else None
+                        ),
+                        capacity_anchor_N=(
+                            (_rag_base.get("anchors") or {}).get("capacity_N")
+                            if isinstance(_rag_base.get("anchors"), dict) else None
+                        ),
+                        bearing_stress_MPa=(
+                            (_rag_base.get("bearing") or {}).get("bearing_stress_MPa")
+                            if isinstance(_rag_base.get("bearing"), dict) else None
+                        ),
+                        bearing_factor=(
+                            (_rag_base.get("bearing") or {}).get("bearing_factor")
+                            if isinstance(_rag_base.get("bearing"), dict) else None
+                        ),
+                        capacity_one_anchor_N=(
+                            (_rag_base.get("anchors") or {}).get("capacity_one_N")
+                            if isinstance(_rag_base.get("anchors"), dict) else None
+                        ),
+                        cite=(_rag_base.get("cite") if isinstance(_rag_base, dict) else None),
+                    )
+                    entry["column_base_or_splice_Pn"] = pn
+                except Exception as _pne:
+                    entry["column_base_or_splice_Pn"] = {"found": False, "error": str(_pne)}
                 entry["base_plate_worksheet"] = bp
                 entry["component_checks"] = {
                     s["component"]: {
