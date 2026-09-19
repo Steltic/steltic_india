@@ -1,0 +1,33 @@
+{
+  "_label": "EXAMPLE / not-for-construction",
+  "_purpose": "CI / COMPLETE-gate exercise for IN_Ex6 EBF L-plan Pune — EOR-documented R when IS 1893 Table 9 steel EBF row found:false. Do NOT treat values as project law.",
+  "_building": "IN_Ex6_EBF_8levels_Lplan_Pune",
+  "_disclaimer": "EXAMPLE only. Real jobs require LIVE RAG for IS 875/1893 load_plan and project-specific EOR R cite. Never invent ASCE Ω0 or silent R proxies.",
+
+  "system": "EBF",
+  "structure_kind": "hr_steel",
+  "jurisdiction": "india",
+  "units": "N-mm",
+
+  "R": 4.0,
+  "R_source": "eor_documented",
+  "R_cite": "EXAMPLE EOR memo: IS 1893 Part 1 Table 9 steel EBF / eccentric braced frame row found:false; project adopts R=4.0 with EOR concurrence for COMPLETE-gate exercise — NOT an IS 800 silent proxy and NOT ASCE 7 R.",
+  "R_table9_found": false,
+  "R_steel_ebf_table9_found": false,
+
+  "seis": {
+    "R": 4.0,
+    "R_source": "eor_documented",
+    "R_cite": "EXAMPLE EOR memo (see top-level R_cite)",
+    "R_table9_found": false,
+    "Omega0_found": false,
+    "Om0_found": false,
+    "Om0_note": "IS 1893 has no Ω0 — found:false (honest). Optional Omega0 + Omega0_source=eor_documented + cite for project EOR; never invent ASCE 7 Ω0."
+  },
+
+  "notes": {
+    "table9": "Steel EBF R row found:false in LIVE RAG — eor_documented path OK",
+    "omega0": "found:false / N/A under IS 1893 — does not alone block COMPLETE",
+    "irregularity": "L-plan re-entrant corner — MRSA; collectors at re-entrant lines"
+  }
+}

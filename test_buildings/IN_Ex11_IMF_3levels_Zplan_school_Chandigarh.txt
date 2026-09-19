@@ -1,0 +1,8 @@
+IN_Ex11 — 3-storey IMF school, Z-plan, Chandigarh (importance)
+
+Location: Chandigarh — RETRIEVE IS 1893 Zone, Z, soil; importance I for school (important
+  building — cite Table/clause; do not invent). R for IMF / intermediate MRF.
+Geometry (SI N-mm): Z-plan three wings — classroom 3×3.6 m storeys; link 2 storeys; gym
+  single tall ~8 m clear. Bays ~8.5 m; perimeter/distributed IMF; plan re-entrant offsets.
+Loads: RETRIEVE IS 875 P1/P2 (classrooms, corridors, gym roof); P3 wind — check gym wind.
+Design: IS 800 LSD IMF; connections IS 816/4000. LIVE cfg['load_plan'] RAG mandatory.

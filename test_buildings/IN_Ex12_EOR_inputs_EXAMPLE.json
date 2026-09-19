@@ -1,0 +1,39 @@
+{
+  "_label": "EXAMPLE / not-for-construction",
+  "_purpose": "CI / COMPLETE-gate exercise for IN_Ex12 SMF soft-story podium Kochi — SMF R from Table 9 when found; Ω0 / soft-story overstrength via eor_documented when needed.",
+  "_building": "IN_Ex12_SMF_softstory_podium_Kochi",
+  "_disclaimer": "EXAMPLE only. Prefer LIVE IS 1893 Table 9 SMF R when found. Soft-story / transfer / discontinuous columns: IS 1893 has no ASCE Ω0 — use eor_documented Omega0 + cite OR IS 800 §12 capacity-design factors. Never invent ASCE 7 Ω0.",
+
+  "system": "SMF",
+  "structure_kind": "hr_steel",
+  "jurisdiction": "india",
+  "units": "N-mm",
+
+  "R": 5.0,
+  "R_source": "eor_documented",
+  "R_cite": "EXAMPLE EOR memo: prefer LIVE IS 1893 Table 9 steel SMRF R when RAG hits; if Table 9 SMRF row digits miss, EOR documents R=5.0 (COMPLETE-gate EXAMPLE) — confirm against printed Table 9. Not ASCE R=8.",
+  "R_table9_found": false,
+  "R_prefer_table9_when_found": true,
+
+  "Omega0": 2.5,
+  "Omega0_source": "eor_documented",
+  "Omega0_cite": "EXAMPLE EOR memo: soft-story / Level-1 discontinuous columns / transfer girder — IS 1893 Ω0 found:false; project EOR adopts Omega0=2.5 for overstrength design of transfer members and supporting columns (COMPLETE-gate EXAMPLE). Prefer IS 800 §12 capacity-design factors when Ω0 not used.",
+  "Omega0_found": true,
+
+  "seis": {
+    "R": 5.0,
+    "R_source": "eor_documented",
+    "R_cite": "EXAMPLE EOR memo (see top-level R_cite); prefer Table 9 when LIVE found:true",
+    "Omega0": 2.5,
+    "Omega0_source": "eor_documented",
+    "Omega0_cite": "EXAMPLE soft-story / transfer overstrength (see top-level Omega0_cite)",
+    "Omega0_found": true,
+    "Om0_note": "Soft/weak first-story classification required; extreme soft/weak may be prohibited — screen per IS 1893 irregularity clauses LIVE."
+  },
+
+  "notes": {
+    "soft_story": "Compute storey stiffness/strength ratios at L1 vs typical; classify soft/weak; apply consequences",
+    "omega0": "eor_documented OK when IS 1893 miss; never invent ASCE 7 Ω0 silently",
+    "coastal_wind": "Kochi — LIVE IS 875 P3 Vb/k1–k4/Cp; check wind drift"
+  }
+}
