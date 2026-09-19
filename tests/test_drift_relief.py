@@ -14,9 +14,11 @@ import preflight as P  # noqa: E402
 # Minimal RAG-shaped load_plan so India mandatory gate is not the only ERROR.
 _LOAD_PLAN = {
     "jurisdiction": "india",
+    "no_wind": "unit-test fixture — gravity/seismic drift-relief only (no wind laterals)",
     "retrieval": [
         {"stem": "IS_875_Part_2_1987", "query": "imposed", "found": True, "cite": "T1"},
         {"stem": "IS_1893_Part_1_2016", "query": "Z", "found": True, "cite": "T3"},
+        {"stem": "IS_875_Part_3_2015", "query": "wind omitted for fixture", "found": False, "cite": "no_wind"},
         {"stem": "IS_800_2007", "query": "combinations", "found": True, "cite": "T4"},
     ],
     "combinations": [
