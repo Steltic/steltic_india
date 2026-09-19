@@ -674,3 +674,473 @@ def section12_or_base_connection_stubs(role="brace"):
         "status": "defer_to_section12_component_stubs",
         "note": "Use design_pipeline._section12_component_stubs for gusset/bolt/weld",
     }
+
+
+# --- complete-gap wave2: RAG → component capacity / D/C -----------------------
+
+def fillet_weld_capacity_N(
+    *,
+    throat_mm=None,
+    size_mm=None,
+    length_mm=None,
+    permissible_stress_MPa=None,
+    permissible_stress_kgf_cm2=None,
+    cite=None,
+    n_sides=1,
+):
+    """Fillet weld design/allowable capacity from RAG stress + geometry.
+
+    IS 816:1969 §7.1.2 — permissible stress on throat 1100 kgf/cm² (ASD).
+    Throat a = size/√2 when only leg size given. Capacity = stress × a × L × n_sides.
+    Missing stress or length → found:false (never invent stress or size).
+    """
+    missing = []
+    stress = permissible_stress_MPa
+    if stress is None and permissible_stress_kgf_cm2 is not None:
+        # 1 kgf/cm² = 0.0980665 N/mm² (MPa)
+        stress = float(permissible_stress_kgf_cm2) * 0.0980665
+    if stress is None:
+        missing.append("permissible_stress_MPa or permissible_stress_kgf_cm2 from RAG (IS 816)")
+    a = throat_mm
+    if a is None and size_mm is not None:
+        a = float(size_mm) / math.sqrt(2.0)
+    if a is None or float(a) <= 0:
+        missing.append("throat_mm or size_mm (leg)")
+    if length_mm is None or float(length_mm) <= 0:
+        missing.append("length_mm")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "cite": cite or "IS 816:1969 §7.1.2",
+            "required_inputs": missing,
+            "note": "Do not invent weld size/length or stress — RAG stress + geometry required.",
+        }
+    cap = float(stress) * float(a) * float(length_mm) * float(n_sides or 1)
+    return {
+        "found": True,
+        "capacity_N": cap,
+        "throat_mm": float(a),
+        "size_mm": float(size_mm) if size_mm is not None else None,
+        "length_mm": float(length_mm),
+        "n_sides": int(n_sides or 1),
+        "stress_MPa": float(stress),
+        "cite": cite or "IS 816:1969 §7.1.2 fillet weld throat stress",
+        "note": "Capacity = stress × throat × length × n_sides — stress from RAG; geometry disclosed.",
+    }
+
+
+def bolt_group_capacity_N(
+    *,
+    n_bolts=None,
+    V_one_bolt_N=None,
+    cite=None,
+    limit_state=None,
+):
+    """Bolt-group shear/bearing capacity = n × V_one from RAG (IS 800 §10 / IS 4000).
+
+    Never invents per-bolt capacity — V_one_bolt_N must come from LIVE RAG.
+    """
+    missing = []
+    if n_bolts is None or int(n_bolts) < 1:
+        missing.append("n_bolts")
+    if V_one_bolt_N is None or float(V_one_bolt_N) <= 0:
+        missing.append("V_one_bolt_N from LIVE RAG (IS 800 §10 / IS 4000)")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "cite": cite or "IS 800:2007 §10 / IS 4000:1992",
+            "required_inputs": missing,
+            "note": "Do not invent bolt grade/diameter capacity — retrieve Vdsb/Vdpb etc.",
+        }
+    return {
+        "found": True,
+        "capacity_N": float(n_bolts) * float(V_one_bolt_N),
+        "n_bolts": int(n_bolts),
+        "V_one_bolt_N": float(V_one_bolt_N),
+        "limit_state": limit_state,
+        "cite": cite or "IS 800:2007 §10 / IS 4000:1992",
+        "note": "n × RAG per-bolt capacity — no invented V_one.",
+    }
+
+
+def apply_rag_capacities_to_connection(
+    connection: Dict[str, Any],
+    *,
+    rag_capacities: Optional[Dict[str, Any]] = None,
+    demand_N: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Fill gusset/bolt/weld / base-plate slots from a RAG capacity map.
+
+    rag_capacities keys (any subset):
+      welds: {capacity_N|throat_mm+size_mm+length_mm+stress..., cite}
+      bolts: {capacity_N|n_bolts+V_one_bolt_N, cite}
+      gusset: {capacity_N, cite}
+      bearing / anchors: {capacity_N, cite} for base plate
+
+    found:false on any component whose RAG capacity is missing — never invent.
+    """
+    conn = dict(connection or {})
+    rag = rag_capacities or conn.get("rag_capacities") or {}
+    dem = demand_N
+    if dem is None and isinstance(conn.get("demand"), dict):
+        d = conn["demand"]
+        dem = d.get("axial_N") or d.get("P_N") or d.get("V_N")
+
+    # Prefer existing worksheet slots
+    ws = conn.get("section12_worksheet") or conn.get("base_plate_worksheet")
+    if not isinstance(ws, dict):
+        ws = {"status": "stubs", "slots": [], "fill_helper": "india_is800.fill_connection_component_dc"}
+
+    slots = list(ws.get("slots") or [])
+    if not slots and conn.get("component_checks"):
+        slots = []
+        for name, slot in (conn.get("component_checks") or {}).items():
+            s = dict(slot or {})
+            s.setdefault("component", name)
+            slots.append(s)
+
+    def _cap_for(component: str):
+        aliases = {
+            "welds": ["welds", "weld", "column_to_plate_welds"],
+            "bolts": ["bolts", "bolt", "bolt_group"],
+            "gusset": ["gusset", "gusset_plate"],
+            "base_plate_bearing": ["bearing", "base_plate_bearing"],
+            "anchor_bolts": ["anchors", "anchor_bolts", "anchor"],
+            "base_plate_bending": ["plate_bending", "base_plate_bending"],
+            "end_plate_or_continuity": ["end_plate_or_continuity", "end_plate", "continuity", "gusset"],
+        }
+        # Direct + forward aliases
+        keys = list(aliases.get(component, [])) + [component]
+        # Reverse: if component is an alias value, include the group keys
+        for group, names in aliases.items():
+            if component in names or component == group:
+                keys.extend(names)
+                keys.append(group)
+        seen = set()
+        for k in keys:
+            if k in seen:
+                continue
+            seen.add(k)
+            if k in rag and rag[k] is not None and rag[k] != {}:
+                return rag[k]
+        return None
+
+    filled_slots = []
+    for slot in slots:
+        comp = slot.get("component") or "component"
+        rag_c = _cap_for(comp)
+        cap_N = None
+        cited = None
+        if isinstance(rag_c, (int, float)):
+            cap_N = float(rag_c)
+        elif isinstance(rag_c, dict):
+            cited = rag_c.get("cite") or rag_c.get("cited")
+            if rag_c.get("capacity_N") is not None:
+                cap_N = float(rag_c["capacity_N"])
+            elif comp in ("welds", "column_to_plate_welds") or "weld" in str(comp):
+                w = fillet_weld_capacity_N(
+                    throat_mm=rag_c.get("throat_mm"),
+                    size_mm=rag_c.get("size_mm") or rag_c.get("leg_mm"),
+                    length_mm=rag_c.get("length_mm"),
+                    permissible_stress_MPa=rag_c.get("permissible_stress_MPa") or rag_c.get("stress_MPa"),
+                    permissible_stress_kgf_cm2=rag_c.get("permissible_stress_kgf_cm2"),
+                    cite=cited,
+                    n_sides=rag_c.get("n_sides", 1),
+                )
+                if w.get("found"):
+                    cap_N = w["capacity_N"]
+                    cited = w.get("cite")
+                    slot = dict(slot)
+                    slot["weld_capacity_detail"] = w
+                else:
+                    slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
+                    slot["missing_rag"] = w.get("required_inputs")
+                    filled_slots.append(slot)
+                    continue
+            elif "bolt" in str(comp):
+                b = bolt_group_capacity_N(
+                    n_bolts=rag_c.get("n_bolts") or rag_c.get("n"),
+                    V_one_bolt_N=rag_c.get("V_one_bolt_N") or rag_c.get("Vdsb_N"),
+                    cite=cited,
+                    limit_state=rag_c.get("limit_state"),
+                )
+                if b.get("found"):
+                    cap_N = b["capacity_N"]
+                    cited = b.get("cite")
+                    slot = dict(slot)
+                    slot["bolt_capacity_detail"] = b
+                else:
+                    slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
+                    slot["missing_rag"] = b.get("required_inputs")
+                    filled_slots.append(slot)
+                    continue
+        slot = fill_connection_component_dc(
+            slot, demand_N=dem, capacity_N=cap_N, cited=cited,
+        )
+        filled_slots.append(slot)
+
+    ws = dict(ws)
+    ws["slots"] = filled_slots
+    ws["status"] = "filled" if any(s.get("found") for s in filled_slots) else ws.get("status", "stubs")
+    if "base_plate" in str(conn.get("type") or "").lower() or conn.get("base_plate_worksheet"):
+        conn["base_plate_worksheet"] = ws
+    else:
+        conn["section12_worksheet"] = ws
+    conn["component_checks"] = {
+        s.get("component"): {
+            "found": s.get("found"), "DC": s.get("DC"),
+            "demand_N": s.get("demand_N"), "capacity": s.get("capacity"),
+            "cited": s.get("cited"), "note": s.get("note"),
+            "required_inputs": s.get("required_inputs"),
+            "missing": s.get("missing"),
+        }
+        for s in filled_slots if s.get("component")
+    }
+    # Parent connection DC = max of filled component DCs when any found
+    dcs = [s["DC"] for s in filled_slots if s.get("found") and s.get("DC") is not None]
+    if dcs:
+        conn["DC"] = max(dcs)
+        conn["found_components"] = True
+        conn["limit_state"] = conn.get("limit_state") or "component D/C from RAG capacities"
+        if not conn.get("cited"):
+            cites = [s.get("cited") for s in filled_slots if s.get("cited")]
+            if cites:
+                conn["cited"] = cites[0]
+    return conn
+
+
+def scwb_and_panel_from_schedule(
+    *,
+    column_props: Optional[Sequence[Dict[str, Any]]] = None,
+    beam_props: Optional[Sequence[Dict[str, Any]]] = None,
+    fy_MPa: float = 250.0,
+    V_design_N: Optional[float] = None,
+    panel_col: Optional[Dict[str, Any]] = None,
+    panel_beam_d_mm: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compute SCWB + panel-zone when schedule Mp/geometry inputs exist (wave2).
+
+    Returns dict with SCWB / panel_zone results (found:false if inputs missing).
+    """
+    scwb = scwb_ratio(columns=column_props, beams=beam_props, fy_MPa=fy_MPa)
+    pz_kwargs = {}
+    pc = panel_col or ((column_props or [None])[0] if column_props else None) or {}
+    if isinstance(pc, dict):
+        pz_kwargs = dict(
+            d_col_mm=pc.get("d_mm") or pc.get("d"),
+            tw_mm=pc.get("tw_mm") or pc.get("tw"),
+            bf_mm=pc.get("bf_mm") or pc.get("bf"),
+            tf_mm=pc.get("tf_mm") or pc.get("tf"),
+            fy_MPa=pc.get("fy_MPa", fy_MPa),
+        )
+    pz_kwargs["d_beam_mm"] = panel_beam_d_mm
+    if panel_beam_d_mm is None and beam_props:
+        b0 = beam_props[0] if beam_props else {}
+        if isinstance(b0, dict):
+            pz_kwargs["d_beam_mm"] = b0.get("d_mm") or b0.get("d")
+    pz_kwargs["V_design_N"] = V_design_N
+    pz = panel_zone_check(**{k: v for k, v in pz_kwargs.items() if v is not None})
+    return {"SCWB": scwb, "panel_zone": pz}
+
+
+# --- IS 4000:1992 Table 2 (retrieved LIVE) — max permissible shear Vob, kN ----
+# Source: engineering_rag_india exact_table 2 on IS_4000_1992 (clauses 5.2 / 5.3.2).
+# Values are corpus-verbatim; do not invent additional diameters/classes.
+IS4000_TABLE2_Vob_kN = {
+    # (nominal_mm, property_class, plane) -> kN ; plane in {"shank","thread"}
+    (16, "8.8", "shank"): 40.2, (16, "8.8", "thread"): 31.4,
+    (16, "10.9", "shank"): 52.3, (16, "10.9", "thread"): 40.8,
+    (20, "8.8", "shank"): 65.2, (20, "8.8", "thread"): 50.8,
+    (20, "10.9", "shank"): 81.6, (20, "10.9", "thread"): 63.7,
+    (24, "8.8", "shank"): 93.8, (24, "8.8", "thread"): 73.2,
+    (24, "10.9", "shank"): 117.0, (24, "10.9", "thread"): 91.8,
+    (30, "8.8", "shank"): 146.0, (30, "8.8", "thread"): 116.0,
+    (30, "10.9", "shank"): 148.0, (30, "10.9", "thread"): 146.0,
+    (36, "8.8", "shank"): 211.0, (36, "8.8", "thread"): 169.0,
+    (36, "10.9", "shank"): 264.0, (36, "10.9", "thread"): 212.0,
+}
+IS4000_TABLE2_CITE = (
+    "IS 4000:1992 Table 2 — Maximum Permissible Applied Forces for Joints "
+    "(bearing-type shear Vob); RAG exact_table 2"
+)
+
+# IS 800 Table 5 γmw shop welds (common) — corpus; site welds use 1.5
+GAMMA_MW_SHOP = 1.25
+GAMMA_MW_SITE = 1.50
+
+
+def is4000_bolt_shear_capacity_N(
+    *,
+    n_bolts=None,
+    diameter_mm=None,
+    property_class="8.8",
+    plane="thread",
+    cite=None,
+):
+    """n × Vob from IS 4000 Table 2 (RAG-backed constants). found:false if size missing."""
+    missing = []
+    if n_bolts is None or int(n_bolts) < 1:
+        missing.append("n_bolts")
+    if diameter_mm is None:
+        missing.append("diameter_mm (M16/M20/M24/M30/M36)")
+    key = None
+    if diameter_mm is not None:
+        key = (int(diameter_mm), str(property_class), str(plane).lower())
+        if key not in IS4000_TABLE2_Vob_kN:
+            missing.append("diameter/property_class/plane in IS 4000 Table 2 corpus set")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "cite": cite or IS4000_TABLE2_CITE,
+            "required_inputs": missing,
+            "note": "Do not invent Vob — use Table 2 rows present in India RAG.",
+        }
+    Vob_kN = IS4000_TABLE2_Vob_kN[key]
+    return {
+        "found": True,
+        "capacity_N": float(n_bolts) * Vob_kN * 1000.0,  # kN → N
+        "Vob_one_kN": Vob_kN,
+        "n_bolts": int(n_bolts),
+        "diameter_mm": int(diameter_mm),
+        "property_class": str(property_class),
+        "plane": str(plane).lower(),
+        "cite": cite or IS4000_TABLE2_CITE,
+        "note": "Bearing-type joint shear — IS 4000 Table 2 RAG; LSD conversion not applied (ASD table).",
+    }
+
+
+def fillet_weld_capacity_is800_N(
+    *,
+    throat_mm=None,
+    size_mm=None,
+    length_mm=None,
+    fu_MPa=None,
+    gamma_mw=GAMMA_MW_SHOP,
+    n_sides=1,
+    cite=None,
+):
+    """IS 800:2007 §10.5.7.1.1 — fwd = fu/(√3 γmw); capacity = fwd × a × L × n_sides.
+
+    fu and geometry required — never invent fu or size. Typical RAG: fu=410 E250; γmw=1.25 shop.
+    """
+    missing = []
+    if fu_MPa is None or float(fu_MPa) <= 0:
+        missing.append("fu_MPa from RAG (weld or parent; IS 800 §10.5.7.1.1)")
+    a = throat_mm
+    if a is None and size_mm is not None:
+        a = float(size_mm) / math.sqrt(2.0)
+    if a is None or float(a) <= 0:
+        missing.append("throat_mm or size_mm")
+    if length_mm is None or float(length_mm) <= 0:
+        missing.append("length_mm")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "cite": cite or "IS 800:2007 §10.5.7.1.1",
+            "required_inputs": missing,
+            "note": "Do not invent fu or weld size — RAG + disclosed geometry required.",
+        }
+    fwd = float(fu_MPa) / (math.sqrt(3.0) * float(gamma_mw))
+    cap = fwd * float(a) * float(length_mm) * float(n_sides or 1)
+    return {
+        "found": True,
+        "capacity_N": cap,
+        "fwd_MPa": fwd,
+        "fu_MPa": float(fu_MPa),
+        "gamma_mw": float(gamma_mw),
+        "throat_mm": float(a),
+        "length_mm": float(length_mm),
+        "n_sides": int(n_sides or 1),
+        "cite": cite or "IS 800:2007 §10.5.7.1.1 fwd=fu/(√3 γmw); γmw Table 5",
+        "note": "LSD fillet capacity from RAG fu + disclosed throat/length — no invented size.",
+    }
+
+
+def panel_zone_doubler_detail(
+    pz_result: Optional[Dict[str, Any]] = None,
+    *,
+    plate_fy_MPa=None,
+    plate_fu_MPa=None,
+    plate_grade=None,
+    electrode=None,
+    electrode_cite=None,
+    plate_cite=None,
+):
+    """Attach plate grade / electrode provenance to a panel_zone_check result.
+
+    Thickness (doubler_required_mm) comes from panel_zone_check. Grade/electrode
+    must come from RAG or eor_documented — never invent E250B availability (H7)
+    or electrode classification.
+    """
+    pz = dict(pz_result or {})
+    t_req = pz.get("doubler_required_mm")
+    detail = {
+        "doubler_required_mm": t_req,
+        "plate_fy_MPa": plate_fy_MPa,
+        "plate_fu_MPa": plate_fu_MPa,
+        "plate_grade": plate_grade,
+        "electrode": electrode,
+        "plate_cite": plate_cite,
+        "electrode_cite": electrode_cite,
+    }
+    missing = []
+    if t_req is None and not pz.get("found"):
+        missing.append("panel_zone_check result with doubler_required_mm")
+    if plate_fy_MPa is None and not plate_grade:
+        missing.append("plate_fy_MPa or plate_grade from RAG / eor_documented")
+    if not electrode:
+        missing.append("electrode (IS 814 / IS 816 class) from RAG — do not invent")
+    if missing:
+        detail.update({
+            "found": False,
+            "required_inputs": missing,
+            "cite": "IS 800:2007 §12.11.2.3–12.11.2.4 doubler; grade/electrode from RAG",
+            "note": (
+                "Doubler thickness may be flagged by panel_zone_check; plate grade and "
+                "electrode remain found:false until RAG/EOR supplies them. H7 E250B "
+                "procurement is a separate process note — do not invent availability."
+            ),
+        })
+        pz["doubler_detail"] = detail
+        return pz
+
+    detail.update({
+        "found": True,
+        "cite": plate_cite or "IS 2062 plate grade (RAG) + IS 814/816 electrode (RAG)",
+        "electrode_cite": electrode_cite or "IS 814 / IS 816 electrode (RAG)",
+        "note": (
+            "Doubler t≈%.1f mm from panel_zone_check; plate grade/electrode from RAG — "
+            "confirm mill cert (H7) before seal." % (float(t_req or 0),)
+        ),
+    })
+    pz["doubler_detail"] = detail
+    # Thickness path may still fail shear until doubler is provided in the model
+    return pz
+
+
+def end_plate_or_continuity_capacity_N(
+    *,
+    capacity_N=None,
+    cite=None,
+    limit_state=None,
+):
+    """Passthrough for end-plate / continuity capacity from LIVE RAG only."""
+    if capacity_N is None or float(capacity_N) <= 0:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "cite": cite or "IS 800:2007 §10 / §12.11 end-plate / continuity",
+            "required_inputs": ["capacity_N from LIVE RAG (do not invent)"],
+            "note": "End-plate/continuity capacity must come from RAG sizing — no silent invent.",
+        }
+    return {
+        "found": True,
+        "capacity_N": float(capacity_N),
+        "limit_state": limit_state,
+        "cite": cite or "IS 800:2007 §10 / §12.11",
+        "note": "Capacity from provided RAG value — not invented.",
+    }

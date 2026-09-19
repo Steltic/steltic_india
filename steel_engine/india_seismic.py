@@ -567,3 +567,63 @@ def validate_Ta_for_system(cfg, plan: dict | None = None) -> list:
         ))
     return out
 
+
+
+def mass_irregularity_screen_note(W_by_floor_kN=None, *, zone=None, ratio_trigger=1.5):
+    """Document IS 1893 Table 6(ii) mass irregularity screen (mezzanine / partial floors).
+
+    Flags when any floor seismic weight > 150% of the floor below. Returns found screen
+    result + Zone applicability note. Does not invent a dynamic-analysis mandate beyond
+    what the clause/table requires — agent/policy decides RS vs ELF follow-up.
+    """
+    clause = CLAUSES.get("mass_irregularity") or {}
+    trigger = float(clause.get("ratio_trigger") or ratio_trigger)
+    weights = [float(w) for w in (W_by_floor_kN or []) if w is not None]
+    ratios = []
+    flagged = []
+    for i in range(1, len(weights)):
+        below = weights[i - 1]
+        if below <= 0:
+            continue
+        r = weights[i] / below
+        ratios.append({"floor_above_1based": i + 1, "ratio": r, "W_above": weights[i], "W_below": below})
+        if r > trigger:
+            flagged.append(ratios[-1])
+    irregular = len(flagged) > 0
+    zone_s = str(zone or "").upper().replace("ZONE", "").strip()
+    return {
+        "found": True if weights else False,
+        "irregular": irregular if weights else None,
+        "ratio_trigger": trigger,
+        "ratios": ratios,
+        "flagged": flagged,
+        "cite": clause.get("clause") or "IS 1893 Table 6 (ii)",
+        "clause_text": clause.get("text"),
+        "zone": zone,
+        "note": (
+            "Mass irregularity Table 6(ii): seismic weight of any floor > 150%% of floor below. "
+            "Mezzanine / partial-footprint floors often trigger. Zone %s — document screen; "
+            "dynamic analysis / RS follow-up is a project-policy choice when irregular "
+            "(do not invent a mandatory RS path beyond code). ELF + disclosure OK when "
+            "policy accepts and drift/strength gates pass."
+            % (zone_s or "(undeclared)")
+        ),
+        "required_inputs": [] if weights else ["W_by_floor_kN list (seismic weight per floor)"],
+    }
+
+# --- complete-gap wave2: R / Ω0 provenance (re-export) -------------------------
+try:
+    from india_seismic_gates import (  # noqa: E402
+        resolve_R,
+        resolve_Omega0,
+        validate_R,
+        complete_allowed,
+        R_is_proxy,
+        omega0_blocks_complete,
+        design_status,
+        R_OK_SOURCES,
+        R_PROXY_SOURCES,
+    )
+except ImportError:  # pragma: no cover
+    pass
+
