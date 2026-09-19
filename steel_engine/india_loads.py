@@ -104,6 +104,149 @@ def _as_lateral(raw):
     return out
 
 
+
+def _retrieval_hits(plan, pred):
+    """Return retrieval entries matching pred(stem_lower, hit)."""
+    out = []
+    for hit in (plan.get("retrieval") or []):
+        if not isinstance(hit, dict):
+            continue
+        stem = str(hit.get("stem") or hit.get("doc") or "").lower()
+        if pred(stem, hit):
+            out.append(hit)
+    return out
+
+
+def _is_part3_stem(stem: str) -> bool:
+    s = stem.lower()
+    return (
+        "875_part_3" in s or "875_p3" in s or "is875_p3" in s
+        or "is_875_part_3" in s or "part3" in s and "875" in s
+        or "part_3" in s and "875" in s
+    )
+
+
+def _no_wind_flag(cfg, plan):
+    """Return (active: bool, reason: str|None)."""
+    for src in (plan, cfg):
+        if not isinstance(src, dict):
+            continue
+        for key in ("no_wind", "omit_wind", "wind_not_applicable", "wind_omitted"):
+            val = src.get(key)
+            if val is True:
+                reason = (
+                    src.get("no_wind_reason")
+                    or src.get("omit_wind_reason")
+                    or src.get("wind_omit_reason")
+                    or ""
+                )
+                return True, str(reason).strip() or None
+            if isinstance(val, str) and val.strip():
+                return True, val.strip()
+            if isinstance(val, dict):
+                reason = str(val.get("reason") or val.get("note") or "").strip()
+                return True, reason or None
+    return False, None
+
+
+def _has_wind_lateral_evidence(plan) -> bool:
+    """True when wind story forces or WL combinations are present (not invented Ka/Cpe)."""
+    if not isinstance(plan, dict):
+        return False
+    ws = plan.get("wind_summary") or plan.get("wind") or {}
+    if isinstance(ws, dict) and ws:
+        # Numeric base shear / story forces count as evidence; params-only without forces do not
+        for k in ("VB_x_kN", "VB_y_kN", "VB_x", "VB_y", "Qi_x_kN", "Qi_y_kN", "story_forces", "Fx", "Fy"):
+            if ws.get(k) not in (None, "", [], {}):
+                return True
+        if ws.get("applied") is True or ws.get("laterals_applied") is True:
+            return True
+    sf = plan.get("story_forces") or {}
+    if isinstance(sf, dict):
+        for name, forces in sf.items():
+            n = str(name).lower()
+            if any(t in n for t in ("wind", "wl", "w_x", "w_y", "wx", "wy")) and forces:
+                return True
+    for c in (plan.get("combinations") or []):
+        if not isinstance(c, dict):
+            continue
+        lab = str(c.get("label") or "").upper()
+        cite = str(c.get("cite") or "").upper()
+        if not any(t in lab or t in cite for t in ("WL", "WIND", "+W", " W", "W+", "W-", "W_X", "W_Y")):
+            # also accept bare W as load letter when combined with DL
+            if "W" not in lab.replace("SW", "").replace("OWN", ""):
+                continue
+        lat = c.get("lateral") or {}
+        ref = c.get("lateral_ref")
+        if lat or ref:
+            return True
+    return False
+
+
+def validate_wind_gate(cfg, plan: dict | None = None) -> list:
+    """S5/H2: require wind retrieval evidence OR explicit found:false + documented no-wind.
+
+    Never allow silent omission of wind laterals. found:false alone is honest but
+    insufficient without ``no_wind`` + reason — do not invent Ka/Cpe.
+    """
+    out = []
+    if not isinstance(cfg, dict):
+        return out
+    plan = plan if plan is not None else (cfg.get("load_plan") or {})
+    if not isinstance(plan, dict) or not plan:
+        return out
+
+    no_wind, reason = _no_wind_flag(cfg, plan)
+    part3 = _retrieval_hits(plan, lambda stem, _h: _is_part3_stem(stem))
+    part3_found = [h for h in part3 if h.get("found") is True]
+    part3_false = [h for h in part3 if h.get("found") is False]
+    has_laterals = _has_wind_lateral_evidence(plan)
+
+    if no_wind:
+        if not reason:
+            out.append((
+                "ERROR",
+                "load_plan declares no_wind/omit_wind but no reason is documented — "
+                "set no_wind to a non-empty reason string (or no_wind_reason). "
+                "found:false on Part 3 is honest; inventing Ka/Cpe is not.",
+            ))
+        elif not part3 and not part3_false:
+            out.append((
+                "WARN",
+                "no_wind documented (%s) but load_plan.retrieval has no IS 875 Part 3 hit — "
+                "prefer an explicit found:false Part 3 retrieval for provenance." % reason,
+            ))
+        return out
+
+    # Wind is expected for a normal building job
+    if not part3:
+        out.append((
+            "ERROR",
+            "Wind gate (S5/H2): load_plan.retrieval has no IS 875 Part 3 stem — "
+            "RAG-query Part 3 for Vb/k1/k2/Cp OR set load_plan.no_wind with a documented "
+            "reason. Never silently omit wind laterals before design_and_report.",
+        ))
+        return out
+
+    if not part3_found and part3_false:
+        out.append((
+            "ERROR",
+            "Wind gate (S5/H2): IS 875 Part 3 retrieval is found:false and no_wind is not "
+            "set — do not invent Ka/Cpe or silently drop wind laterals. Either retry RAG "
+            "until found:true and apply wind forces, or set load_plan.no_wind='<reason>'.",
+        ))
+        return out
+
+    if part3_found and not has_laterals:
+        out.append((
+            "ERROR",
+            "Wind gate (S5/H2): Part 3 retrieved (found:true) but no wind laterals / "
+            "wind_summary forces / WL combinations are present — never silently omit wind "
+            "laterals. Write wind story forces into load_plan or set no_wind with reason.",
+        ))
+    return out
+
+
 def validate_load_plan(cfg) -> list:
     """Return a list of (level, message) findings. level in ERROR/WARN/INFO.
 
@@ -180,6 +323,14 @@ def validate_load_plan(cfg) -> list:
             if not c.get("cite"):
                 out.append(("WARN", "combinations[%d] (%s) has no cite — attach the retrieved clause"
                             % (i, c.get("label", "?"))))
+
+    # ---- P0 gates: wind (S5/H2) + Ta fail-closed (H1) ----
+    out.extend(validate_wind_gate(cfg, plan))
+    try:
+        from india_seismic import validate_Ta_for_system as _vTa
+        out.extend(_vTa(cfg, plan))
+    except Exception as _ex:
+        out.append(("WARN", "Ta fail-closed gate unavailable: %s" % _ex))
 
     # Hard ban: residual ASCE keys that imply the USA hardcoded path is still driving loads
     if cfg.get("use_asce7_engine_loads"):
