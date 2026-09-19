@@ -366,23 +366,40 @@ def _design_basis_issues(cfg, name=None, pkg=None):
     # NOTE: IS 875/1893 deleted the 7-16 Table 12.6-1 analysis-procedure matrix; sec.12.6 permits ELF
     # for ALL structures, so an irregular SDC D+ building no longer FAILS for lacking 'RS'. The
     # MRSA-recommended advisory is rendered in the report (Ch.2 irregularity screen) instead.
-    dl=float(cfg.get("drift_limit",0.020) or 0.020)
-    _mfrho=(" (for a moment-frame-only SFRS in SDC D-F the allowable is further divided by rho, "
-            "12.12.1.1 -- the engine drift gates apply this)")
-    # IS 875/1893 16.1.2: a Chapter 16 analysis relaxes the 12.12.1 limits for RC I-III (never IV).
-    # preflight.relief_findings is the single source of the rules; its ERRORs are consistency flags.
-    _relief_on=False
+    # S2: India / SI jobs use IS 1893 0.004 h — strip USA Table 12.12-1 / 0.025h scaffold.
+    _india = False
     try:
-        from preflight import relief_findings as _rf, relief_active as _ra
-        for _sev,_msg in _rf(cfg):
-            if _sev=="ERROR": out.append("16.1.2 drift relief: "+_msg)
-        _relief_on=_ra(cfg)
+        from engine3d import _india_job as _ij
+        _india = _ij(cfg)
     except Exception:
-        pass
-    if Ie>=1.5 and dl>0.0101:
-        out.append("Risk Category IV (Ie=%.2f): allowable story drift is 0.010 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.010"%Ie+_mfrho)
-    elif Ie>=1.25 and dl>0.0151 and not _relief_on:
-        out.append("Risk Category III (Ie=%.2f): allowable story drift is 0.015 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.015"%Ie+_mfrho)
+        u = str(cfg.get("units") or "").lower()
+        j = str(cfg.get("jurisdiction") or "").lower()
+        _india = u in ("n-mm", "n-mm-sec", "si", "metric") or j in ("india", "in", "bis", "is")
+    if _india:
+        dl = float(cfg.get("drift_limit", 0.004) or 0.004)
+        if dl > 0.00401 and not cfg.get("drift_limit_rag_cite"):
+            out.append(
+                "India drift_limit=%.4f exceeds IS 1893 cl.7.11.1.1 default 0.004 — set "
+                "cfg['drift_limit_rag_cite'] if a RAG-justified special limit applies "
+                "(e.g. 0.002 soft-storey), else use 0.004" % dl
+            )
+    else:
+        dl=float(cfg.get("drift_limit",0.020) or 0.020)
+        _mfrho=(" (for a moment-frame-only SFRS in SDC D-F the allowable is further divided by rho, "
+                "12.12.1.1 -- the engine drift gates apply this)")
+        # ASCE 7-22 16.1.2: Chapter 16 analysis relaxes 12.12.1 for RC I-III (never IV).
+        _relief_on=False
+        try:
+            from preflight import relief_findings as _rf, relief_active as _ra
+            for _sev,_msg in _rf(cfg):
+                if _sev=="ERROR": out.append("16.1.2 drift relief: "+_msg)
+            _relief_on=_ra(cfg)
+        except Exception:
+            pass
+        if Ie>=1.5 and dl>0.0101:
+            out.append("Risk Category IV (Ie=%.2f): allowable story drift is 0.010 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.010"%Ie+_mfrho)
+        elif Ie>=1.25 and dl>0.0151 and not _relief_on:
+            out.append("Risk Category III (Ie=%.2f): allowable story drift is 0.015 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.015"%Ie+_mfrho)
     if R is not None and float(R)<=3.0:
         out.append("R=%.2f is a 'not specifically detailed for seismic' system -- AISC 341 does NOT apply (no SCWB / "
                    "capacity design); design members & connections to IS 800 only, and CONFIRM whether wind or seismic governs each direction"%float(R))

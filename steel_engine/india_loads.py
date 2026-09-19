@@ -376,3 +376,28 @@ def render_findings(findings) -> str:
     for lvl, msg in findings:
         lines.append("  [%s] %s" % (lvl, msg))
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# S6: Ka / Cpe — prefer corpus; verified overrides in india_wind_tables
+# ---------------------------------------------------------------------------
+def wind_table_override_policy() -> dict:
+    """Documented Ka/Cpe policy for agents (S6). See docs/IS875_P3_Ka_Cpe_OVERRIDES.md."""
+    try:
+        from india_wind_tables import override_policy
+        return override_policy()
+    except Exception as ex:
+        return {"error": str(ex), "note": "india_wind_tables unavailable"}
+
+
+def ka_fallback(A_m2: float) -> dict:
+    """Optional Table 4 Ka fallback when corpus exact_table 4 is unavailable."""
+    from india_wind_tables import ka_for_area_m2
+    return ka_for_area_m2(A_m2)
+
+
+def cpe_walls_override(h_over_w: float, l_over_w: float, theta_deg: float = 0.0) -> dict:
+    """Verified Table 5 wall Cpe (PDF). Do not use Docling OCR for design Cpe."""
+    from india_wind_tables import cpe_walls
+    return cpe_walls(h_over_w, l_over_w, theta_deg)
+
