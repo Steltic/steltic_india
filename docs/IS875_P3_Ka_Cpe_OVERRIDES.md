@@ -1,36 +1,34 @@
-# IS 875 Part 3 — Ka / Cpe override policy (S6)
+# IS 875 Part 3 — Ka / Cpe policy (S6) — corpus-prefer
 
 **Date:** 2026-09-19 Asia/Bangkok (ICT)  
 **Module:** `steel_engine/india_wind_tables.py`  
-**Stem:** `IS_875_Part_3_2015` · collection `engineering_standards_IS875_P3`
+**Stem:** `IS_875_Part_3_2015` · collection `engineering_standards_IS875_P3`  
+**QFM note:** `/workspace/handoff/qfm/IS875_P3_OCR_reingest_2026-09-19.md`
 
-## Policy
+## Policy (after OCR reingest HIT)
 
-| Table | Prefer | Fallback / override | Never |
-|-------|--------|---------------------|-------|
-| **Table 4 Ka** (cl.7.2.2) | Corpus **exact_table 4** (QFM: reliable as of 2026-09-19) | In-repo breakpoints ≤10 m²→1.0, 25→0.9, ≥100→0.8 + linear interp (`ka_for_area_m2`) | Invent Ka outside Table 4 |
-| **Table 5 Cpe walls** (cl.7.3.3.1) | **Verified in-repo** `cpe_walls()` / `TABLE_5_CPE_WALLS` | — | **Docling OCR cells** for design Cpe; invent outside shipped bands |
+| Table | Prefer | Fallback (corpus `found:false` only) | Never |
+|-------|--------|--------------------------------------|-------|
+| **Table 4 Ka** (cl.7.2.2) | Corpus **exact_table 4** | In-repo breakpoints ≤10 m²→1.0, 25→0.9, ≥100→0.8 + linear interp (`ka_for_area_m2`) | Invent Ka outside Table 4 |
+| **Table 5 Cpe walls** (cl.7.3.3.1) | Corpus **exact_table 5** (HIT 2026-09-19) | In-repo `cpe_walls()` / `TABLE_5_CPE_WALLS` | Invent Cpe; legacy Docling OCR cells |
+| **Tables 6 / 7 / 11 / 18 / 21 / 22 / 29** | Corpus **exact_table** (now HIT) | — (no in-repo duplicates; retrieve or `found:false`) | Invent roof/member Cp/Cf |
 
-When corpus OCR of Table 4/5 is clean and RAG returns `found:true`, **corpus remains authoritative**.  
-Overrides exist so agents do not invent numbers when OCR is noisy (Table 5) or retrieval is unavailable (Table 4 fallback).
-
-## Provenance
-
-* PDF: BIS `IS_875_Part_3_2015.pdf` (workspace `INDIA_STEEL/pdfs/`).
-* Table 4: pdftotext + QFM `Table_4_Ka_recovered.md`; corpus exact_table 4 OK.
-* Table 5: transcribed from PDF table figure (raster page); Docling CSV/MD for that page is garbled.
+When RAG returns `found:true`, **corpus is authoritative**.  
+`india_wind_tables.py` agent overrides are **fallback only**.
 
 ## Agent usage
 
 ```python
-from india_wind_tables import ka_for_area_m2, cpe_walls, override_policy
+from india_wind_tables import resolve_ka, resolve_cpe_walls, override_policy
+# or: from india_loads import resolve_ka, resolve_cpe_walls
 
-# Ka — only if RAG exact_table 4 missed:
-ka_for_area_m2(40.0)   # interpolate; cite as fallback
+# After RAG exact_table 4 / 5:
+resolve_ka(40.0, corpus_hit)          # uses corpus when found:true
+resolve_cpe_walls(0.8, 1.2, 0, corpus_hit)
 
-# Cpe walls — use override for design (do not trust Docling OCR):
-cpe_walls(h_over_w=0.8, l_over_w=1.2, theta_deg=0)
-# found:false if geometry outside shipped bands → stop; do not invent
+# Only if corpus found:false:
+resolve_ka(40.0, {"found": False})    # in-repo fallback
+resolve_cpe_walls(0.8, 1.2, 0, {"found": False})
 ```
 
-See `override_policy()` for the machine-readable summary.
+See `override_policy()` / `CORPUS_LIVE_WIND_TABLES` for the machine-readable summary.

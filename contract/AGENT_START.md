@@ -87,6 +87,18 @@ the wrong units.
 - The framework's geometry check flags story heights < 6 ft or bays < 5 ft as "looks like FEET." **If you see
   that warning you entered feet — fix the `cfg` to inches and re-run BEFORE chasing the numbers.**
 
+
+## India process notes (H6 / H7) — do not invent
+
+- **H6 Composite Ch. I:** When the brief says composite deck, the demand package seeds
+  `composite_design.chI_worksheet` with **found:false** slots (see `COMPOSITE_I3.md` India note).
+  Fill from LIVE IS 800 Ch. I RAG or record an explicit scope statement. **Do not invent** stud
+  schedules, camber, or wet-stage D/C.
+- **H7 E250B procurement:** Confirming mill / stock availability for **IS 2062 E250B** (or the
+  brief's grade) is an **open procurement process item**, not an engine invent. Leave a
+  confirm-flag / note in the report when procurement is unconfirmed; do **not** fabricate
+  availability, certificates, or substitute grades silently.
+
 ## Gotchas that fail SILENTLY (read this once — they will not error loudly)
 These are the traps that pass every obvious check yet corrupt the result. Most are now auto-handled by the
 framework; this list tells you what it does so you do not fight it.

@@ -1,3 +1,17 @@
+# COMPOSITE_I3.md — India note (H6)
+
+**India / IS 800:** Composite floor design is **not auto-computed** by the engine. When the brief
+declares composite deck, the pipeline seeds `calc_package.composite_design.chI_worksheet` with
+**found:false** slots (b_eff, studs, partial composite, camber, wet stage, I_LB) — parallel to
+§12 connection stubs. Fill those slots from **LIVE IS 800 Ch. I RAG**, or record an explicit
+scope statement (bare-steel lower bound / excluded / delegated). **Do not invent** stud counts,
+camber, or wet-stage D/C when retrieval misses.
+
+The USA AISC 360 Ch. I method notes below remain a procedural checklist; for India jobs cite
+**IS 800:2007 Ch. I** (not AISC I3/I8 clause numbers) when filling the stubs.
+
+---
+
 # COMPOSITE_I3.md - composite floor beam design method (AISC 360-22 Ch. I) - read when floors are composite
 The engine designs BARE steel: treat that as the STRENGTH LOWER BOUND and the construction-stage
 check, then do these composite checks BY HAND from the RAG (query engineering_standards_A360 Ch. I

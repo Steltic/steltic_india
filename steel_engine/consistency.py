@@ -570,7 +570,14 @@ def _consultancy_issues(cfg, pkg):
             keys = (keys,) if isinstance(keys, str) else keys
             if not any(k in blob for k in keys):
                 missing.append(what)
-        scoped = ("composite" in blob and any(k in blob for k in
+        stubs_ok = False
+        cd = pkg.get("composite_design") if isinstance(pkg, dict) else None
+        if isinstance(cd, dict):
+            ws = cd.get("chI_worksheet") or {}
+            slots = ws.get("slots") if isinstance(ws, dict) else None
+            if isinstance(slots, list) and slots and all(s.get("found") is False for s in slots):
+                stubs_ok = True  # H6: honest found:false stubs — do not invent
+        scoped = stubs_ok or ("composite" in blob and any(k in blob for k in
                   ("lower bound", "lower-bound model", "scope", "excluded", "not relied", "delegated")))
         if missing and not scoped:
             out.append("COMPOSITE floor system declared and the package lacks: " + "; ".join(missing) +

@@ -1,21 +1,20 @@
-"""IS 875 (Part 3) : 2015 verified override tables for Ka / Cpe (S6).
+"""IS 875 (Part 3) : 2015 Ka / Cpe helpers (S6) — corpus-prefer, in-repo fallback.
 
-Policy (QFM 2026-09-19):
-  * Table 4 Ka — corpus RAG ``exact_table 4`` is now reliable. Prefer live retrieval.
-    The breakpoints below are an optional fallback cite when OCR/RAG is unavailable;
-    never invent values beyond these three points (interpolate between them only).
-  * Table 5 Cpe (walls of rectangular clad buildings) — Docling OCR cells remain noisy.
-    Use the verified in-repo table below for design Cpe. Do NOT trust Docling OCR cells.
-  * When corpus OCR of Table 4/5 is clean and retrieved with found:true, corpus remains
-    authoritative; these overrides are the fail-safe / noisy-OCR path only.
-  * Never invent Ka/Cpe outside the shipped tables (and linear Ka interpolation per Note *).
+Policy (QFM 2026-09-19 OCR reingest — Tables 5/6/7/11/18/21/22/29 corpus-HIT):
+  * Table 4 Ka — prefer corpus RAG ``exact_table 4``. In-repo breakpoints are **fallback only**
+    when corpus returns found:false / unavailable. Never invent beyond the three points
+    (interpolate between them only).
+  * Table 5 wall Cpe — prefer corpus RAG ``exact_table 5`` (clean after OCR reingest).
+    In-repo ``TABLE_5_CPE_WALLS`` / ``cpe_walls()`` are **fallback only** when corpus
+    found:false. Do NOT invent Cpe; do NOT use legacy Docling OCR cells if they reappear.
+  * Other wind-path tables now live in corpus (prefer exact_table): 6, 7, 11, 18, 21, 22, 29.
+  * Never invent Ka/Cpe outside corpus / shipped fallback tables.
 
-Provenance:
+Provenance / QFM note:
+  * ``/workspace/handoff/qfm/IS875_P3_OCR_reingest_2026-09-19.md``
   * PDF: /workspace/INDIA_STEEL/pdfs/IS_875_Part_3_2015.pdf (BIS)
-  * Table 4: Clause 7.2.2 — pdftotext page + QFM recovered
-    ``engineering_rag_india/.../tables/Table_4_Ka_recovered.md``; corpus exact_table 4 OK.
-  * Table 5: Clause 7.3.3.1 — verified by reading rasterized PDF page 15 (table figure);
-    Docling CSV/MD for this page is garbled and must not be used for design numbers.
+  * Table 4: QFM ``Table_4_Ka_recovered.md``; corpus exact_table 4 OK.
+  * Table 5: QFM recovered page 015 + ``Table_5_recovered``; corpus exact_table 5 HIT.
 """
 from __future__ import annotations
 
@@ -114,12 +113,14 @@ TABLE_5_CPE_WALLS = {
     "clause": "7.3.3.1",
     "table": "Table 5",
     "title": "External Pressure Coefficients (Cpe) for Walls of Rectangular Clad Buildings",
-    "source": "verified_pdf_override",  # Docling OCR for this table is NOT authoritative
-    "ocr_trust": False,
+    "source": "corpus_preferred",  # exact_table 5 HIT after 2026-09-19 QFM OCR reingest
+    "fallback_ok": True,
+    "ocr_trust": False,  # legacy Docling cells still untrusted if they reappear
     "provenance": (
         "IS 875 (Part 3) : 2015 Table 5 / cl.7.3.3.1. "
-        "Transcribed from BIS PDF raster (page with Table 5 figure), 2026-09-19. "
-        "Docling OCR cells for this table are noisy — do NOT use them for design Cpe. "
+        "Prefer RAG exact_table 5 from engineering_standards_IS875_P3 "
+        "(QFM OCR reingest 2026-09-19 HIT). "
+        "In-repo rows match QFM Table_5_recovered — use only when corpus found:false. "
         "h = height to eaves/parapet; l = greater plan dim; w = lesser plan dim."
     ),
     "definitions": {
@@ -234,7 +235,7 @@ def cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0) -> dict:
                 "l_over_w": float(l_over_w),
                 "theta_deg": theta_key,
                 "band": {"h_over_w": hw, "l_over_w": lw},
-                "cite": "IS 875 (Part 3) : 2015 Table 5 / cl.7.3.3.1 (verified in-repo override; OCR not used)",
+                "cite": "IS 875 (Part 3) : 2015 Table 5 / cl.7.3.3.1 (in-repo fallback; prefer corpus exact_table 5)",
                 "source": "india_wind_tables.TABLE_5_CPE_WALLS",
                 "table_meta": {k: TABLE_5_CPE_WALLS[k] for k in ("stem", "clause", "table", "provenance")},
             }
@@ -264,18 +265,98 @@ TERRAIN_CATEGORIES = {
 }
 
 
+# Tables now corpus-HIT for the wind path (QFM OCR reingest 2026-09-19).
+CORPUS_LIVE_WIND_TABLES = (4, 5, 6, 7, 11, 18, 21, 22, 29)
+QFM_OCR_NOTE = "/workspace/handoff/qfm/IS875_P3_OCR_reingest_2026-09-19.md"
+
+
+def _corpus_found(hit) -> bool:
+    """True when an agent/RAG exact_table payload is usable (found:true with content)."""
+    if not isinstance(hit, dict):
+        return False
+    if hit.get("found") is False:
+        return False
+    if hit.get("found") is True:
+        return True
+    # tolerate alternate shapes: non-empty text/rows with content
+    if hit.get("text") or hit.get("rows") or hit.get("Ka") is not None or hit.get("Cpe"):
+        return True
+    return False
+
+
+def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> dict:
+    """Prefer corpus exact_table 4; demote in-repo Ka to fallback when corpus found:false."""
+    if _corpus_found(corpus_hit):
+        out = dict(corpus_hit)
+        out.setdefault("found", True)
+        out.setdefault("source", "corpus_exact_table_4")
+        out.setdefault(
+            "cite",
+            out.get("cite") or "IS 875 (Part 3) : 2015 Table 4 (corpus exact_table 4)",
+        )
+        out["A_m2"] = float(A_m2)
+        out["resolved_via"] = "corpus"
+        return out
+    fb = ka_for_area_m2(A_m2, allow_fallback=allow_fallback)
+    fb["resolved_via"] = "fallback" if fb.get("found") else "refused"
+    fb["corpus_found"] = False
+    return fb
+
+
+def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
+                      corpus_hit=None, *, allow_fallback: bool = True) -> dict:
+    """Prefer corpus exact_table 5; demote in-repo wall Cpe to fallback when corpus found:false."""
+    if _corpus_found(corpus_hit):
+        out = dict(corpus_hit)
+        out.setdefault("found", True)
+        out.setdefault("source", "corpus_exact_table_5")
+        out.setdefault(
+            "cite",
+            out.get("cite") or "IS 875 (Part 3) : 2015 Table 5 (corpus exact_table 5)",
+        )
+        out["h_over_w"] = float(h_over_w)
+        out["l_over_w"] = float(l_over_w)
+        out["theta_deg"] = float(theta_deg)
+        out["resolved_via"] = "corpus"
+        return out
+    if not allow_fallback:
+        return {
+            "found": False,
+            "Cpe": None,
+            "cite": "Table 5 fallback disabled — retrieve exact_table 5 from corpus",
+            "source": "refused",
+            "resolved_via": "refused",
+            "corpus_found": False,
+        }
+    fb = cpe_walls(h_over_w, l_over_w, theta_deg)
+    fb["resolved_via"] = "fallback" if fb.get("found") else fb.get("source", "refused")
+    fb["corpus_found"] = False
+    return fb
+
+
 def override_policy() -> dict:
-    """Agent-facing policy summary for load_plan / wind RAG."""
+    """Agent-facing policy summary for load_plan / wind RAG (corpus-prefer)."""
     return {
         "Ka_Table_4": {
             "prefer": "corpus exact_table 4 (reliable as of 2026-09-19 QFM)",
-            "fallback": "india_wind_tables.ka_for_area_m2 — breakpoints ≤10→1.0, 25→0.9, ≥100→0.8 only",
+            "fallback": (
+                "india_wind_tables.ka_for_area_m2 — breakpoints ≤10→1.0, 25→0.9, ≥100→0.8 "
+                "only when corpus found:false"
+            ),
             "never": "invent Ka outside Table 4 / interpolation note",
         },
         "Cpe_Table_5_walls": {
-            "prefer": "india_wind_tables.cpe_walls verified override (PDF-verified)",
-            "do_not_use": "Docling OCR cells for Table 5 design Cpe",
-            "never": "invent Cpe outside shipped bands; found:false if outside",
+            "prefer": "corpus exact_table 5 (HIT after 2026-09-19 QFM OCR reingest)",
+            "fallback": (
+                "india_wind_tables.cpe_walls / TABLE_5_CPE_WALLS — only when corpus found:false"
+            ),
+            "do_not_use": "legacy Docling OCR cells for Table 5 design Cpe (if they reappear)",
+            "never": "invent Cpe outside corpus / shipped fallback bands; found:false if outside",
         },
-        "corpus_when_clean": "When RAG returns found:true with clean Table 4/5 text, corpus remains authoritative.",
+        "other_wind_tables_corpus_live": list(CORPUS_LIVE_WIND_TABLES),
+        "qfm_note": QFM_OCR_NOTE,
+        "corpus_when_clean": (
+            "When RAG returns found:true for Table 4/5 (and 6/7/11/18/21/22/29 as needed), "
+            "corpus is authoritative; in-repo tables are fallback only."
+        ),
     }

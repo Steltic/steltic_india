@@ -1418,15 +1418,15 @@ def _extra_blocks_section(pkg):
 
 
 def _composite_section(pkg):
-    """Chapter-6 'Composite floor design (IS 800 Ch. I)' section. Two tolerant sources:
-    (a) the standard top-level `composite_design` block (rendered as nested tables), and
-    (b) composite values embedded in member capacity dicts (stud counts / partial ratio / camber /
-        I_LB / wet stage) -- summarised one row per member. Renders nothing when neither exists."""
+    """Chapter-6 'Composite floor design (IS 800 Ch. I)' section. Sources:
+    (a) top-level `composite_design` (incl. H6 Ch.I worksheet stubs),
+    (b) composite values embedded in member capacity dicts.
+    Renders nothing when neither exists."""
     if not isinstance(pkg, dict):
         return ""
     parts = []
     cd = pkg.get("composite_design")
-    rows = []
+    mem_rows = []
     for m in pkg.get("members", []) or []:
         cap = m.get("capacity") if isinstance(m.get("capacity"), dict) else {}
         found = {}
@@ -1435,26 +1435,41 @@ def _composite_section(pkg):
                 if kk in cap and cap[kk] not in (None, ""):
                     found[col] = cap[kk]; break
         if found:
-            rows.append([str(m.get("id", "")), str((m.get("inputs") or {}).get("section", "")),
-                         str(found.get("pct", "&mdash;")), str(found.get("Qn", "&mdash;")),
-                         str(found.get("studs", "&mdash;")), str(found.get("camber", "&mdash;")),
-                         str(found.get("ILB", "&mdash;")), str(found.get("wet", "&mdash;"))])
-    if not cd and not rows:
+            mem_rows.append([str(m.get("id", "")), str((m.get("inputs") or {}).get("section", "")),
+                             str(found.get("pct", "&mdash;")), str(found.get("Qn", "&mdash;")),
+                             str(found.get("studs", "&mdash;")), str(found.get("camber", "&mdash;")),
+                             str(found.get("ILB", "&mdash;")), str(found.get("wet", "&mdash;"))])
+    ws = (cd or {}).get("chI_worksheet") if isinstance(cd, dict) else None
+    has_ws = isinstance(ws, dict) and bool(ws.get("slots"))
+    if not cd and not mem_rows and not has_ws:
         return ""
     parts.append("<h3>Composite floor design (IS 800 Ch. I)</h3>")
-    if rows:
+    if has_ws:
+        parts.append("<p class='cnote'><b>IS 800 Ch. I worksheet (H6 stubs):</b> "
+                     "b_eff / studs / camber / wet-stage / I_LB slots — fill from RAG; "
+                     "<code>found:false</code> means do not invent stud or camber designs.</p>")
+        stub_rows = [[s.get("component", ""),
+                      "found:false" if s.get("found") is False else str(s.get("found")),
+                      ("%.2f" % s["DC"] if isinstance(s.get("DC"), (int, float)) else "—"),
+                      s.get("note", "")] for s in ws["slots"]]
+        parts.append(_table(["Component", "found", "D/C", "Note"], stub_rows))
+    if mem_rows:
         parts.append("<p>Per-member composite design values recorded in the calc package (partial-"
                      "composite ratio, stud strength/schedule, camber, lower-bound moment of inertia, "
                      "unshored wet-concrete stage):</p>")
         parts.append(_table(["member", "section", "partial comp.", f"Q<sub>n</sub> ({_ul('F')})", "studs",
-                             "camber (in)", "I<sub>LB</sub> (in<sup>4</sup>)", "wet stage"], rows))
-    if cd:
+                             "camber (in)", "I<sub>LB</sub> (in<sup>4</sup>)", "wet stage"], mem_rows))
+    if cd and not has_ws:
         parts.append("<h4>Composite design record (calc package `composite_design`)</h4>")
         parts.append(_capdesign_html(cd))
+    elif cd and isinstance(cd, dict) and cd.get("note"):
+        parts.append("<p class='cnote'>%s</p>" % cd.get("note"))
     parts.append("<p class='note'>Stud strengths per IS 800:2007 &sect;I8.2a (with deck-rib position "
                  "factors); flexure per &sect;I3.2a; service deflection on the lower-bound moment of "
-                 "inertia; camber rule and the unshored construction stage as recorded above.</p>")
+                 "inertia; camber rule and the unshored construction stage as recorded above. "
+                 "H6: leave found:false rather than inventing stud/camber designs.</p>")
     return "".join(parts)
+
 
 
 def _member_dc_summary(pkg):
