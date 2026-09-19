@@ -607,10 +607,155 @@ def _lateral_inputs_table(cfg):
     if w: rows.append(["Wind V / Exposure", f"{w.get('V','?')} mph / {w.get('exposure','C')}"])
     return _table(["Lateral-load input", "Value"], rows)
 
+def _load_plan_wind(cfg):
+    """India load_plan wind_summary / story W_X W_Y — preferred over legacy cfg['wind']."""
+    plan = cfg.get("load_plan") or {}
+    ws = plan.get("wind_summary") or plan.get("wind") or {}
+    sf = plan.get("story_forces") or {}
+    return ws, sf
+
+
+def _story_force_dict(raw, NF, component=0):
+    """Normalize story force map/list to {1..NF} scalar forces (N for SI).
+
+    load_plan story_forces may be scalars or [Fx, Fy, Fz] vectors; component selects axis
+    (0=X for W_X, 1=Y for W_Y).
+    """
+    if raw is None:
+        return None
+    def _scalar(v):
+        if isinstance(v, (list, tuple)):
+            if len(v) == 0:
+                return 0.0
+            idx = min(int(component), len(v) - 1)
+            return float(v[idx])
+        return float(v)
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                ik = int(k)
+            except Exception:
+                continue
+            out[ik] = _scalar(v)
+    elif isinstance(raw, (list, tuple)):
+        for i, v in enumerate(raw, start=1):
+            out[i] = _scalar(v)
+    return out or None
+
+
 def _wind_section(cfg):
-    """Returns (html, VwX, VwY). VwX/VwY are base shears (None if no wind defined)."""
+    """Returns (html, VwX, VwY). Prefers India load_plan wind when present.
+
+    complete-gap wave1: India jobs apply wind via load_plan laterals but often omit
+    legacy cfg['wind'], so Ch.3 previously said "no wind parameters" while combos
+    already carried W_X/W_Y. Display applied wind_summary / story forces when available.
+    """
+    ws, sf = _load_plan_wind(cfg)
+    NF = len(cfg.get("heights") or []) or 1
+    if ws or sf.get("W_X") or sf.get("W_Y"):
+        try:
+            FX = _story_force_dict(sf.get("W_X"), NF, component=0)
+            FY = _story_force_dict(sf.get("W_Y"), NF, component=1)
+            VwX = sum(FX.values()) if FX else None
+            VwY = sum(FY.values()) if FY else None
+            try:
+                from india_units import is_si as _is_si
+                _si = _is_si(cfg)
+            except Exception:
+                _si = (str(cfg.get("units") or "").upper() in ("N-MM", "SI", "METRIC")
+                       or cfg.get("si_native"))
+            scale = 1000.0 if _si else 1.0  # kN→N for SI summaries
+            if VwX is None and ws.get("VB_x_kN") is not None:
+                VwX = float(ws["VB_x_kN"]) * scale
+            if VwY is None and ws.get("VB_y_kN") is not None:
+                VwY = float(ws["VB_y_kN"]) * scale
+            if FX is None and ws.get("Qi_x_kN"):
+                FX = {i + 1: float(q) * scale for i, q in enumerate(ws["Qi_x_kN"])}
+                if VwX is None:
+                    VwX = sum(FX.values())
+            if FY is None and ws.get("Qi_y_kN"):
+                FY = {i + 1: float(q) * scale for i, q in enumerate(ws["Qi_y_kN"])}
+                if VwY is None:
+                    VwY = sum(FY.values())
+            param_rows = []
+            if ws.get("cite"):
+                param_rows.append(["Code / cite", str(ws.get("cite"))])
+            if ws.get("site"):
+                param_rows.append(["Site", str(ws.get("site"))])
+            if ws.get("Vb_mps") is not None:
+                param_rows.append(["Vb (m/s)", str(ws.get("Vb_mps"))])
+            if ws.get("terrain_category") is not None:
+                param_rows.append(["Terrain category", str(ws.get("terrain_category"))])
+            if any(ws.get(k) is not None for k in ("k1", "k2", "k3", "k4")):
+                param_rows.append([
+                    "k1 / k2 / k3 / k4",
+                    f"{ws.get('k1','—')} / {ws.get('k2','—')} / {ws.get('k3','—')} / {ws.get('k4','—')}",
+                ])
+            if ws.get("Vz_mps") is not None:
+                param_rows.append(["Vz (m/s)", str(ws.get("Vz_mps"))])
+            if ws.get("pz_kNm2") is not None or ws.get("pd_kNm2") is not None:
+                param_rows.append([
+                    "pz / pd (kN/m²)",
+                    f"{ws.get('pz_kNm2','—')} / {ws.get('pd_kNm2','—')}",
+                ])
+            if any(ws.get(k) is not None for k in ("Kd", "Ka", "Kc")):
+                param_rows.append([
+                    "Kd / Ka / Kc",
+                    f"{ws.get('Kd','—')} / {ws.get('Ka','—')} / {ws.get('Kc','—')}",
+                ])
+            if ws.get("Cpe_windward") is not None or ws.get("Cpe_leeward") is not None:
+                param_rows.append([
+                    "Cpe windward / leeward",
+                    f"{ws.get('Cpe_windward','—')} / {ws.get('Cpe_leeward','—')}",
+                ])
+            if ws.get("net_Cp") is not None or ws.get("Cpi") is not None:
+                param_rows.append([
+                    "net Cp / Cpi",
+                    f"{ws.get('net_Cp','—')} / {ws.get('Cpi','—')}",
+                ])
+            applied = ws.get("laterals_applied", ws.get("applied", bool(FX or FY)))
+            param_rows.append(["Laterals applied", "yes" if applied else "no"])
+            src_bits = ["load_plan.wind_summary"]
+            if sf.get("W_X") or sf.get("W_Y"):
+                src_bits.append("load_plan.story_forces W_X/W_Y")
+            ka_r = ws.get("ka_resolve") or {}
+            cpe_r = ws.get("cpe_resolve") or {}
+            if ka_r.get("resolved_via") or ka_r.get("source"):
+                src_bits.append(f"Ka via {ka_r.get('resolved_via') or ka_r.get('source')}")
+            if cpe_r.get("source") or cpe_r.get("resolved_via"):
+                src_bits.append(f"Cpe via {cpe_r.get('resolved_via') or cpe_r.get('source')}")
+            nstory = NF
+            if FX:
+                nstory = max(nstory, max(FX))
+            if FY:
+                nstory = max(nstory, max(FY))
+            rows = []
+            for k in range(1, int(nstory) + 1):
+                rows.append([
+                    k,
+                    f"{_F((FX or {}).get(k, 0))}" if FX else "—",
+                    f"{_F((FY or {}).get(k, 0))}" if FY else "—",
+                ])
+            h = [
+                "<p><b>India IS 875 (Part 3) wind</b> from <code>cfg['load_plan']</code> "
+                f"(sources: {', '.join(src_bits)}). Story forces below feed the W_X / W_Y "
+                "combinations — wind laterals <b>are applied</b> when listed.</p>",
+                _table(["Parameter", "Value"], param_rows) if param_rows else "",
+                f"<p><b>Story wind forces ({_ul('F')}):</b></p>",
+                (_table(["Story", "X (E-W wind)", "Y (N-S wind)"], rows) if rows else
+                 "<p class='note'>Story force breakdown not in load_plan; base shears from wind_summary.</p>"),
+                f"<p><b>Wind base shear:</b> X = {_F(VwX,0) if VwX is not None else '—'} {_ul('F')}, "
+                f"Y = {_F(VwY,0) if VwY is not None else '—'} {_ul('F')}.</p>",
+            ]
+            return "".join(h), VwX, VwY
+        except Exception as ex:
+            return f"<p class='note'>[load_plan wind display failed: {ex}]</p>", None, None
+
     if not cfg.get("wind"):
-        return "<p class='note'>No wind parameters defined for this building.</p>", None, None
+        return ("<p class='note'>No wind parameters defined for this building "
+                "(neither <code>cfg['wind']</code> nor <code>load_plan.wind_summary</code> / "
+                "W_X/W_Y story forces).</p>", None, None)
     try:
         w = cfg["wind"]; FX = E.wind_forces(cfg, "X"); FY = E.wind_forces(cfg, "Y")
         VwX = sum(FX.values()); VwY = sum(FY.values()); NF = len(cfg["heights"])
@@ -627,6 +772,7 @@ def _wind_section(cfg):
         return "".join(h), VwX, VwY
     except Exception as ex:
         return f"<p class='note'>[wind determination failed: {ex}]</p>", None, None
+
 
 def _horizontal_distribution(cfg, Fx, VwX, VwY):
     Vseis = sum(Fx.values()); nframe = 2
@@ -1507,8 +1653,13 @@ def _drift_from_forces(cfg, Fdict, direction):
     return drift
 
 def _wind_drift_section(cfg):
-    if not cfg.get("wind"):
+    ws, sf = _load_plan_wind(cfg)
+    if not cfg.get("wind") and not (ws or sf.get("W_X") or sf.get("W_Y")):
         return "<p class='cnote'>Wind drift not evaluated (no wind parameters defined).</p>"
+    if not cfg.get("wind") and (ws or sf.get("W_X") or sf.get("W_Y")):
+        return ("<p class='cnote'>Wind drift: India load_plan wind laterals are applied for strength "
+                "combinations; serviceability wind-drift re-analysis via engine wind_forces() is "
+                "not run when legacy <code>cfg['wind']</code> is absent (see Ch.3 wind_summary).</p>")
     NF = len(cfg["heights"]); lim = cfg.get("wind_drift_limit", 1.0/400.0)
     try:
         dX = _drift_from_forces(cfg, E.wind_forces(cfg, "X"), "X")

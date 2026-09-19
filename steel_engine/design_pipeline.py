@@ -43,7 +43,19 @@ def _section12_component_stubs(role="brace"):
     Brace capacity-design *demand* is already written on the connection. These stubs
     give the agent empty slots so a RAG miss does not become invented sizes/capacities.
     found:false until the agent fills from IS 800 / IS 816 / IS 4000 retrieval.
+
+    complete-gap wave1: slots list required_inputs and accept fill via
+    india_is800.fill_connection_component_dc when RAG+cfg provide fy/Ag/demand + capacity.
     """
+    try:
+        import india_is800 as I8
+        req = I8.CONN_COMPONENT_REQUIRED
+    except Exception:
+        req = {
+            "gusset": ["demand_N", "capacity_N", "cited"],
+            "bolts": ["demand_N", "capacity_N", "cited"],
+            "welds": ["demand_N", "capacity_N", "cited"],
+        }
     def _slot(component, note):
         return {
             "component": component,
@@ -53,6 +65,7 @@ def _section12_component_stubs(role="brace"):
             "size": None,
             "DC": None,
             "found": False,
+            "required_inputs": list(req.get(component, ["demand_N", "capacity_N", "cited"])),
             "note": note,
         }
     return {
@@ -60,8 +73,11 @@ def _section12_component_stubs(role="brace"):
         "cite": "IS 800:2007 §12 (seismic connections) / §10; IS 816 welds; IS 4000 HSFG",
         "policy": (
             "Fill from LIVE RAG only. Do not invent bolt grade/diameter, weld size, or "
-            "gusset thickness when retrieval misses — leave found:false."
+            "gusset thickness when retrieval misses — leave found:false. "
+            "When fy/Ag (or demand_N) and a RAG capacity_N are both available, use "
+            "india_is800.fill_connection_component_dc to write D/C — still no invented capacities."
         ),
+        "fill_helper": "india_is800.fill_connection_component_dc",
         "slots": [
             _slot("gusset",
                   "Gusset plate: thickness/Fy/Whitmore/block shear — RAG IS 800; found:false until sized."),
@@ -72,6 +88,19 @@ def _section12_component_stubs(role="brace"):
         ],
     }
 
+
+def _section12_smf_worksheets():
+    """complete-gap wave1: SMF SCWB + panel-zone worksheets (compute when data available)."""
+    try:
+        import india_is800 as I8
+        return I8.section12_smf_worksheets_stub()
+    except Exception as ex:
+        return {
+            "status": "stubs_error",
+            "error": str(ex),
+            "SCWB": {"found": False, "required_inputs": ["column_Mp", "beam_Mp"]},
+            "panel_zone": {"found": False, "required_inputs": ["column geometry", "V_design"]},
+        }
 
 
 def _composite_chI_worksheet_stubs():
@@ -335,9 +364,30 @@ def design(name, outdir=None):
                 s["component"]: {
                     "limit_state": None, "cited": None, "capacity": {}, "DC": None,
                     "found": False, "note": s["note"],
+                    "required_inputs": s.get("required_inputs"),
                 }
                 for s in entry["section12_worksheet"]["slots"]
             }
+        elif kind == "col" or "base" in ctype.lower() or "column" in ctype.lower():
+            # complete-gap wave1 / IN_Ex3: base-plate / weld component worksheets
+            try:
+                import india_is800 as I8
+                bp = I8.base_plate_worksheet(
+                    P_N=(dem.get("P_N") if isinstance(dem, dict) else None),
+                )
+                entry["base_plate_worksheet"] = bp
+                entry["component_checks"] = {
+                    s["component"]: {
+                        "limit_state": s.get("limit_state"), "cited": s.get("cited"),
+                        "capacity": s.get("capacity") or {}, "DC": s.get("DC"),
+                        "found": s.get("found"), "note": s.get("note"),
+                        "required_inputs": s.get("required_inputs"),
+                        "demand_N": s.get("demand_N"),
+                    }
+                    for s in bp.get("slots") or []
+                }
+            except Exception as _bpe:
+                entry["base_plate_worksheet"] = {"status": "stubs_error", "error": str(_bpe)}
         pkg["connections"].append(entry)
     # ---- SEEDED COLLECTOR SLOTS + FRAMEWORK IRREGULARITY SCREEN (hardening #3/#9) ----
     # When the footprint screen finds a re-entrant corner or setback, seed a collector design slot
@@ -454,6 +504,33 @@ def design(name, outdir=None):
             }
     except Exception as _ce:
         pkg.setdefault("composite_design", {"status": "stubs_error", "error": str(_ce)})
+
+
+    # complete-gap wave1: seed SMF SCWB / panel-zone worksheets when system is SMF/MRF
+    try:
+        _sys = (str(cfg.get("system", "")) + " " + str(cfg.get("arch", ""))).lower()
+        if any(k in _sys for k in ("smf", "smrf", "moment frame", "mrf")):
+            pkg.setdefault("capacity_design", {})
+            if not isinstance(pkg["capacity_design"], dict):
+                pkg["capacity_design"] = {}
+            _ws = _section12_smf_worksheets()
+            pkg["capacity_design"].setdefault("system", cfg.get("system") or cfg.get("arch") or "SMF")
+            pkg["capacity_design"].setdefault("cite", "IS 800:2007 §12.11 Special Moment Frames")
+            pkg["capacity_design"].setdefault("status", "worksheets_seeded")
+            checks = pkg["capacity_design"].setdefault("checks", {})
+            if "SCWB" not in checks or checks["SCWB"].get("found") is not True:
+                checks["SCWB"] = _ws.get("SCWB") or {"found": False}
+            if "panel_zone" not in checks or checks["panel_zone"].get("found") is not True:
+                checks["panel_zone"] = _ws.get("panel_zone") or {"found": False}
+            pkg["capacity_design"]["smf_worksheets"] = _ws
+            pkg["capacity_design"].setdefault(
+                "note",
+                "SCWB/panel-zone worksheets seeded; call india_is800.scwb_ratio / "
+                "panel_zone_check when member strengths / joint geometry available. "
+                "found:false only when inputs missing — not an always-stub.",
+            )
+    except Exception as _s12e:
+        pkg.setdefault("capacity_design", {"status": "smf_worksheet_error", "error": str(_s12e)})
 
     json.dump(pkg, open(_cp, "w"), indent=1)
 
