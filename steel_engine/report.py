@@ -546,6 +546,17 @@ def appendix(cfg, name, pkg):
                          ("%.2f" % k["DC"] if isinstance(k.get("DC"), (int, float)) else str(k.get("DC", ""))),
                          "OK" if (isinstance(k.get("DC"), (int, float)) and k["DC"] <= 1.0) else ""] for k in chks]
                 h.append(_table(["Limit state", "D/C", "&le;1.0"], rows))
+            ws = c.get("section12_worksheet") or {}
+            slots = ws.get("slots") if isinstance(ws, dict) else None
+            if isinstance(slots, list) and slots:
+                h.append("<p class='cnote'><b>IS 800 §12 component worksheet (H5 stubs):</b> "
+                         "gusset/bolt/weld D/C slots — fill from RAG; "
+                         "<code>found:false</code> means do not invent sizes.</p>")
+                rows = [[s.get("component", ""),
+                         "found:false" if s.get("found") is False else str(s.get("found")),
+                         ("%.2f" % s["DC"] if isinstance(s.get("DC"), (int, float)) else "—"),
+                         s.get("note", "")] for s in slots]
+                h.append(_table(["Component", "found", "D/C", "Note"], rows))
     return "".join(h)
 
 def _num(x):
@@ -832,7 +843,7 @@ CHAPTERS = {
    "Stability method (Direct Analysis Method preferred) applied correctly end-to-end.",
    "B<sub>2</sub> / &theta; per story within limits; P-&Delta; included in member demands."]),
  8: ("Serviceability", [
-   "Seismic design drift &delta;=C<sub>d</sub>&delta;<sub>xe</sub>/I<sub>e</sub> &le; allowable; wind drift &le; project limit; inter-story compatible with cladding/partitions.",
+   "Seismic design storey drift &le; 0.004 h (IS 1893 Part 1:2016 cl.7.11.1.1 under V<sub>B</sub> with &gamma;=1.0; soft-storey 0.002 where Table 6(i) applies); wind drift &le; project limit; inter-storey compatible with cladding/partitions. No ASCE Table 12.12-1 / C<sub>d</sub>/I<sub>e</sub> rows.",
    "Deflections: floor LL &le; L/360, TL &le; L/240; camber; roof ponding; long-span/cantilever limits.",
    "Floor vibration (AISC DG11) for the occupancy where applicable.",
    "Building separation / pounding; differential movement at joints."]),
@@ -884,37 +895,22 @@ def _risk_category(Ie):
 
 
 def _drift_relief_note(cfg):
-    """Chapter 8 paragraph when cfg['drift_relief_16_1_2'] is in force (IS 875/1893 16.1.2: a Chapter 16
-    analysis relaxes the 12.12.1 drift limits for Risk Category I-III). Empty string otherwise; the
-    RC IV misuse is reported as a preflight/consistency ERROR, and named here so the reader sees it."""
+    """USA ASCE 7-22 §16.1.2 / Table 12.12-1 drift-relief scaffold.
+
+    On steltic_india this is a legacy artefact only: if cfg still carries
+    drift_relief_16_1_2, warn the reader — IS 1893 cl.7.11.1.1 (0.004 h) governs.
+    """
     try:
-        from preflight import drift_relief, relief_active
+        from preflight import drift_relief
         r = drift_relief(cfg)
     except Exception:
         return ""
     if r is None:
         return ""
-    Ie = float((cfg.get("seis") or {}).get("Ie", 1.0) or 1.0)
-    if not relief_active(cfg):
-        return ("<p class='note'><b>cfg['drift_relief_16_1_2'] is present but NOT in force</b> "
-                + ("(Risk Category IV, I<sub>e</sub> = %.2f: IS 875/1893 &sect;16.1.2 keeps the Table 12.12-1 limits)" % Ie
-                   if Ie >= 1.5 else "(block incomplete -- see the preflight findings)")
-                + " &mdash; the Table 12.12-1 limit above governs.</p>")
-    def _f(k, scale=100.0, fmt="%.2f%%"):
-        v = r.get(k)
-        return (fmt % (float(v) * scale)) if isinstance(v, (int, float)) else "&mdash;"
-    table_val = r.get("table_12_12_1") if isinstance(r.get("table_12_12_1"), (int, float)) else (0.015 if Ie >= 1.25 else 0.020)
-    return ("<p class='cnote'><b>IS 875/1893 &sect;16.1.2 drift relief in force.</b> A Chapter 16 nonlinear response "
-            "history analysis of this building (Nonlinear module job <code>%s</code>%s) gave a suite-mean MCE<sub>R</sub> "
-            "story drift of %s against the &sect;16.4.1.2 limit of %s (verdict: %s). For Risk Category I&ndash;III the "
-            "&sect;12.12.1 limits therefore need not apply; the linear design target was reset to %s of story height "
-            "(the Table 12.12-1 value would be %s). <b>This design is provisional until the Chapter 16 analysis is "
-            "re-run on it and passes &sect;16.4.</b>%s</p>"
-            % (_esc(str(r.get("nlrha_job", "?"))),
-               (" run " + _esc(str(r.get("nlrha_run")))) if r.get("nlrha_run") else "",
-               _f("nlrha_mean_drift"), _f("nlrha_limit"), _esc(str(r.get("nlrha_verdict", "n/a"))),
-               _f("linear_target"), "%.2f%%" % (100.0 * float(table_val)),
-               (" " + _esc(str(r.get("note")))) if r.get("note") else ""))
+    return ("<p class='note'><b>Legacy ASCE drift_relief_16_1_2 present but non-authoritative on "
+            "steltic_india.</b> India storey-drift gate is <b>IS 1893 Part 1:2016 cl.7.11.1.1</b> "
+            "(0.004 h under V<sub>B</sub>, &gamma;=1.0; soft-storey 0.002 where applicable). "
+            "Strip USA Table 12.12-1 / C<sub>d</sub>/I<sub>e</sub> scaffolding from the job cfg.</p>")
 
 
 def _design_of_record_rows(root):
@@ -968,16 +964,17 @@ def _design_basis_codes(cfg, s, root=None):
                   ["R / C<sub>d</sub> / &Omega;<sub>0</sub>", f"{s['R']} / {s.get('Cd')} / {s.get('Om0')}"],
                   ["Redundancy &rho;", f"{cfg.get('rho', 1.3)}"]]
         try:
-            from preflight import drift_relief, relief_active
+            from preflight import drift_relief
             _r = drift_relief(cfg)
+            crows.append(["Storey drift limit basis",
+                          "IS 1893 Part 1:2016 cl.7.11.1.1 — 0.004 h under V<sub>B</sub> (&gamma;=1.0); "
+                          "soft-storey 0.002 where Table 6(i) applies. No ASCE Table 12.12-1 / C<sub>d</sub>/I<sub>e</sub>."])
             if _r is not None:
-                crows.append(["Story drift limit basis",
-                              ("IS 875/1893 &sect;16.1.2 relief in force &mdash; linear target %.2f%% from the Chapter 16 result "
-                               "(Nonlinear module job <code>%s</code>)" % (100.0 * float(_r.get("linear_target", 0) or 0), _esc(str(_r.get("nlrha_job", "?")))))
-                              if relief_active(cfg) else
-                              "Table 12.12-1 (a cfg['drift_relief_16_1_2'] block is present but NOT in force &mdash; see Chapter 8)"])
+                crows.append(["Legacy USA drift_relief_16_1_2",
+                              "PRESENT but non-authoritative on steltic_india — strip; see Chapter 8 note"])
         except Exception:
-            pass
+            crows.append(["Storey drift limit basis",
+                          "IS 1893 Part 1:2016 cl.7.11.1.1 — 0.004 h (soft-storey 0.002 where applicable)"])
     crows += _design_of_record_rows(root)
     w = cfg.get("wind", {})
     if w:
@@ -2319,20 +2316,37 @@ def build_report(name, root=None):
     # ============================ Chapter 8 — Serviceability =============================
     parts.append(_chapter(8))
     if Fx is not None and drX is not None:
-        Cd = s.get("Cd", 5.0); Ie = s["Ie"]
-        lim, limrho = E.drift_allowable(cfg)   # Table 12.12-1, /rho for MF-only SDC D-F (12.12.1.1)
-        parts.append("<h3>Seismic design drift</h3>")
-        _limtxt = (f"allowable {lim*100:.2f}% of story height"
-                   + (f" = &Delta;<sub>a</sub>/&rho; = {cfg.get('drift_limit',0.020)*100:.1f}%/"
-                      f"{float(cfg.get('rho',1.3) or 1.3):.2f} (moment-frame-only SFRS in SDC D-F, "
-                      "&sect;12.12.1.1)" if limrho else " (Table 12.12-1)"))
-        parts.append(f"<p>Elastic story drift &delta;<sub>e</sub> amplified to &delta; = C<sub>d</sub>&delta;<sub>e</sub>/I<sub>e</sub> "
-                     f"(&sect;12.8.6, C<sub>d</sub>={Cd}, I<sub>e</sub>={Ie}); {_limtxt}.</p>")
+        lim, _limrho = E.drift_allowable(cfg)   # IS 1893 cl.7.11.1.1 default 0.004
+        parts.append("<h3>Seismic design storey drift (IS 1893)</h3>")
+        try:
+            from india_seismic import design_story_drifts, drift_limit_label, drift_allowable_for_storey
+            dX = design_story_drifts(drX, cfg); dY = design_story_drifts(drY, cfg)
+            _limlab = drift_limit_label(cfg)
+        except Exception:
+            dX, dY = list(drX), list(drY)
+            _limlab = f"{lim*100:.2f}% of storey height (IS 1893 Part 1:2016 cl.7.11.1.1)"
+            def drift_allowable_for_storey(cfg, storey_index=0):  # noqa: F811
+                return lim
+        parts.append(
+            "<p>Design storey drifts under design base shear V<sub>B</sub> with partial factors "
+            "&gamma;=1.0 (<b>IS 1893 Part 1:2016 cl.7.11.1.1</b>). "
+            "<b>No</b> ASCE C<sub>d</sub>/I<sub>e</sub> amplification and <b>no</b> Table 12.12-1 / 0.025h "
+            "USA scaffold. Limit: <b>" + _limlab + "</b>; soft-storey storeys use 0.002 h where "
+            "Table 6(i) applies.</p>")
         parts.append(_drift_relief_note(cfg))
-        drow = [[k, f"{drX[k-1]*100:.3f}", f"{drX[k-1]*Cd/Ie*100:.3f}", f"{drY[k-1]*100:.3f}",
-                 f"{drY[k-1]*Cd/Ie*100:.3f}", "OK" if max(drX[k-1], drY[k-1])*Cd/Ie <= lim else "NG"]
-                for k in range(1, NF+1)]
-        parts.append(_table(["Story", "&delta;e X %", "&delta; X %", "&delta;e Y %", "&delta; Y %", f"&le;{lim*100:.2f}%"], drow))
+        drow = []
+        for k in range(1, NF + 1):
+            try:
+                lim_k = float(drift_allowable_for_storey(cfg, k - 1))
+            except Exception:
+                lim_k = float(lim)
+            dxk, dyk = abs(dX[k - 1]), abs(dY[k - 1])
+            ok = "OK" if max(dxk, dyk) <= lim_k + 1e-12 else "NG"
+            drow.append([k, f"{dxk*100:.3f}", f"{dyk*100:.3f}",
+                         f"{lim_k*100:.2f}%", ok])
+        parts.append(_table(
+            ["Storey", "design &delta; X %", "design &delta; Y %", "limit", "status"],
+            drow))
     parts.append(_wind_drift_section(cfg))
     parts.append(_floor_serviceability(pkg))
     parts.append(_deflection_section(cfg))
