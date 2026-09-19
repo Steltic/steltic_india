@@ -88,6 +88,10 @@ the wrong units.
   that warning you entered feet — fix the `cfg` to inches and re-run BEFORE chasing the numbers.**
 
 
+## complete-gap wave4
+
+See `docs/INDIA_COMPLETE_GAP_WAVE4.md` — end-plate EOR-documented Rn (CFS-style), cfg base/splice plate+anchor geometry + RAG formulas. H6/H7 stay stubs; multi-joint SCWB optional.
+
 ## complete-gap wave3
 
 See `docs/INDIA_COMPLETE_GAP_WAVE3.md` — base-plate bending, B5 SI, Whitmore/block shear, end-plate Rn, column Pn, PZ doubler-in-model, multi-joint SCWB. H6/H7 stay stubs.
@@ -138,6 +142,19 @@ See `docs/INDIA_COMPLETE_GAP_WAVE3.md` — base-plate bending, B5 SI, Whitmore/b
   - **ARPACK warnings** — OpenSees eigen stderr suppressed around solve; modal sanity PASS is real — do not fake PASS.
   - **Mezz storage height (Ex5)** — `resolve_storage_height_m`: prefer `cfg['storage_height_m']`; else documented assumption + cite (no silent 2.5 m).
   - **Mass irregularity Table 6(ii)** — `mass_irregularity_screen_note(W_by_floor)` documents screen; Zone note; do not invent mandatory RS.
+
+
+- **complete-gap wave4 helpers:**
+  - **End-plate / continuity Rn** — `end_plate_or_continuity_capacity_N`: prefer LIVE RAG/QFM
+    when clauses yield `capacity_N`; else `Rn` + `cite` + `source='eor_documented'`
+    (CFS-style R parallel). Refuse assumed/silent invent. COMPLETE may use labeled EOR path.
+  - **Base / splice geometry** — `resolve_base_or_splice_geometry(cfg)` reads
+    `base_plate_geometry` / `column_base_geometry` / `splice_geometry` (plate t, B, L,
+    anchor n/dia/grade). `base_plate_bearing_capacity_N` / `anchor_group_capacity_N` combine
+    cfg geometry with RAG stress/factor or per-anchor capacity. Wired into
+    `base_plate_worksheet` and `column_base_or_splice_Pn_capacity_N`. found:false if neither.
+  - **H6 / H7** — stubs / E250B procurement process **kept** (do not invent).
+  - **Multi-joint SCWB** — still optional; representative joint OK.
 
 ## Gotchas that fail SILENTLY (read this once — they will not error loudly)
 These are the traps that pass every obvious check yet corrupt the result. Most are now auto-handled by the

@@ -585,6 +585,195 @@ WELD_COMPONENT_REQUIRED = [
 ]
 
 
+def resolve_base_or_splice_geometry(cfg=None, *, geometry=None):
+    """Pull disclosed base/splice plate + anchor geometry from cfg (wave4).
+
+    Accepts cfg['base_plate_geometry'], cfg['column_base_geometry'],
+    cfg['splice_geometry'], cfg['base_plate'], or a direct geometry dict.
+    Never invents sizes — returns found:false when nothing disclosed.
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    g = geometry if isinstance(geometry, dict) else {}
+    for key in (
+        "base_plate_geometry", "column_base_geometry", "splice_geometry",
+        "base_plate", "column_splice",
+    ):
+        block = cfg.get(key)
+        if isinstance(block, dict) and block:
+            # shallow merge: later explicit geometry wins
+            merged = dict(block)
+            merged.update(g)
+            g = merged
+            break
+    # Also accept flat cfg keys
+    flat_map = {
+        "plate_B_mm": ("plate_B_mm", "B_mm", "base_plate_B_mm"),
+        "plate_L_mm": ("plate_L_mm", "L_mm", "base_plate_L_mm"),
+        "plate_t_mm": ("plate_t_mm", "t_mm", "base_plate_t_mm"),
+        "fy_plate_MPa": ("fy_plate_MPa", "fy_MPa", "plate_fy_MPa"),
+        "fck_MPa": ("fck_MPa", "concrete_fck_MPa"),
+        "cantilever_m_mm": ("cantilever_m_mm", "m_mm", "projection_mm"),
+        "anchor_n": ("anchor_n", "n_anchors", "n"),
+        "anchor_dia_mm": ("anchor_dia_mm", "dia_mm", "anchor_diameter_mm"),
+        "anchor_grade": ("anchor_grade", "grade"),
+        "fy_col_MPa": ("fy_col_MPa",),
+    }
+    out = dict(g) if g else {}
+    for dest, keys in flat_map.items():
+        if out.get(dest) is not None:
+            continue
+        for k in keys:
+            if g.get(k) is not None:
+                out[dest] = g[k]
+                break
+            if cfg.get(k) is not None and k.startswith(("plate_", "base_plate_", "anchor_", "fck", "cantilever", "fy_")):
+                out[dest] = cfg[k]
+                break
+    has = any(
+        out.get(k) is not None
+        for k in (
+            "plate_B_mm", "plate_L_mm", "plate_t_mm",
+            "anchor_n", "anchor_dia_mm", "cantilever_m_mm",
+        )
+    )
+    if not has:
+        return {
+            "found": False,
+            "geometry": {},
+            "required_inputs": [
+                "cfg base_plate_geometry / column_base_geometry / splice_geometry "
+                "(plate_t_mm, plate_B_mm, plate_L_mm, anchor_n, anchor_dia_mm, …)",
+            ],
+            "note": (
+                "No disclosed base/splice plate or anchor geometry in cfg — "
+                "found:false (do not invent plate t / B / L / anchors)."
+            ),
+        }
+    return {
+        "found": True,
+        "geometry": out,
+        "cite": out.get("cite") or "cfg-disclosed base/splice geometry",
+        "note": "Geometry from cfg / disclosed inputs — sizes not invented.",
+    }
+
+
+def base_plate_bearing_capacity_N(
+    *,
+    plate_B_mm=None,
+    plate_L_mm=None,
+    bearing_stress_MPa=None,
+    fck_MPa=None,
+    bearing_factor=None,
+    capacity_N=None,
+    cite=None,
+):
+    """Concrete bearing under base plate — RAG capacity or geometry × RAG stress.
+
+    Paths: (1) capacity_N from RAG; (2) B×L × bearing_stress from RAG;
+    (3) B×L × (bearing_factor × fck) when both factor and fck from RAG/disclosed.
+    Never invents bearing stress or plate plan.
+    """
+    cite = cite or "IS 800:2007 Ch.11 / IS 456 concrete bearing"
+    if capacity_N is not None and float(capacity_N) > 0:
+        return {
+            "found": True,
+            "capacity_N": float(capacity_N),
+            "cite": cite,
+            "path": "rag_capacity_N",
+            "note": "Bearing capacity from LIVE RAG — not invented.",
+        }
+    missing = []
+    stress = bearing_stress_MPa
+    if stress is None and fck_MPa is not None and bearing_factor is not None:
+        stress = float(bearing_factor) * float(fck_MPa)
+    if plate_B_mm is None or plate_L_mm is None:
+        missing.append("plate_B_mm and plate_L_mm (cfg-disclosed geometry)")
+    if stress is None:
+        missing.append(
+            "bearing_stress_MPa from RAG OR (fck_MPa + bearing_factor from RAG) "
+            "— do not invent 0.45 fck silently"
+        )
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "required_inputs": missing,
+            "cite": cite,
+            "note": "Bearing found:false — need RAG capacity or geometry + RAG stress/factor.",
+        }
+    area = float(plate_B_mm) * float(plate_L_mm)
+    cap = area * float(stress)
+    return {
+        "found": True,
+        "capacity_N": cap,
+        "plate_B_mm": float(plate_B_mm),
+        "plate_L_mm": float(plate_L_mm),
+        "bearing_stress_MPa": float(stress),
+        "area_mm2": area,
+        "cite": cite,
+        "path": "geometry_x_rag_stress",
+        "note": "Bearing = B×L×σ_bearing — plan from cfg; stress/factor from RAG. Not invented.",
+    }
+
+
+def anchor_group_capacity_N(
+    *,
+    n_anchors=None,
+    capacity_one_N=None,
+    dia_mm=None,
+    grade=None,
+    capacity_N=None,
+    cite=None,
+    limit_state=None,
+):
+    """Anchor group axial/shear capacity — RAG total or n × RAG per-anchor.
+
+    Never invents per-anchor capacity from dia/grade alone (need RAG V/T one).
+    dia/grade may be recorded as disclosed geometry provenance.
+    """
+    cite = cite or "IS 800:2007 Ch.11 / IS 456 anchorage — RAG"
+    if capacity_N is not None and float(capacity_N) > 0:
+        return {
+            "found": True,
+            "capacity_N": float(capacity_N),
+            "cite": cite,
+            "path": "rag_capacity_N",
+            "anchor_dia_mm": float(dia_mm) if dia_mm is not None else None,
+            "anchor_grade": grade,
+            "note": "Anchor capacity from LIVE RAG — not invented.",
+        }
+    missing = []
+    if n_anchors is None or int(n_anchors) < 1:
+        missing.append("n_anchors (cfg-disclosed)")
+    if capacity_one_N is None or float(capacity_one_N) <= 0:
+        missing.append("capacity_one_N from LIVE RAG (do not invent from dia/grade alone)")
+    if missing:
+        return {
+            "found": False,
+            "capacity_N": None,
+            "required_inputs": missing,
+            "cite": cite,
+            "anchor_dia_mm": float(dia_mm) if dia_mm is not None else None,
+            "anchor_grade": grade,
+            "note": (
+                "Anchors found:false — disclose n (+ dia/grade geometry OK) and RAG "
+                "per-anchor capacity; never invent from size alone."
+            ),
+        }
+    return {
+        "found": True,
+        "capacity_N": float(n_anchors) * float(capacity_one_N),
+        "n_anchors": int(n_anchors),
+        "capacity_one_N": float(capacity_one_N),
+        "anchor_dia_mm": float(dia_mm) if dia_mm is not None else None,
+        "anchor_grade": grade,
+        "limit_state": limit_state,
+        "cite": cite,
+        "path": "n_x_rag_one",
+        "note": "n × RAG per-anchor capacity — geometry disclosed; capacity not invented.",
+    }
+
+
 def base_plate_worksheet(
     *,
     P_N=None,
@@ -601,14 +790,48 @@ def base_plate_worksheet(
     fy_plate_MPa=None,
     cantilever_m_mm=None,
     bearing_pressure_MPa=None,
+    bearing_stress_MPa=None,
+    bearing_factor=None,
+    anchor_n=None,
+    anchor_dia_mm=None,
+    anchor_grade=None,
+    capacity_one_anchor_N=None,
     gamma_m0=None,
     cited=None,
+    cfg=None,
+    geometry=None,
 ):
     """IS 800 Ch.11 / base-plate component worksheet.
 
-    Sizes/flags when RAG capacities present; otherwise found:false with required_inputs.
-    Never invents plate thickness or anchor capacity.
+    Wave4: cfg-supplied geometry (plate t/B/L, anchors) + RAG capacity formulas
+    close slots when present; found:false if neither RAG capacity nor
+    (geometry + RAG formula inputs). Never invents plate thickness or anchor capacity.
     """
+    # Merge cfg / geometry disclosures (explicit kwargs win)
+    geo_res = resolve_base_or_splice_geometry(cfg, geometry=geometry)
+    geo = geo_res.get("geometry") or {}
+    if plate_B_mm is None:
+        plate_B_mm = geo.get("plate_B_mm")
+    if plate_L_mm is None:
+        plate_L_mm = geo.get("plate_L_mm")
+    if plate_t_mm is None:
+        plate_t_mm = geo.get("plate_t_mm")
+    if fy_plate_MPa is None:
+        fy_plate_MPa = geo.get("fy_plate_MPa")
+    if fy_col_MPa is None:
+        fy_col_MPa = geo.get("fy_col_MPa")
+    if fck_MPa is None:
+        fck_MPa = geo.get("fck_MPa")
+    if cantilever_m_mm is None:
+        cantilever_m_mm = geo.get("cantilever_m_mm")
+    if anchor_n is None:
+        anchor_n = geo.get("anchor_n")
+    if anchor_dia_mm is None:
+        anchor_dia_mm = geo.get("anchor_dia_mm")
+    if anchor_grade is None:
+        anchor_grade = geo.get("anchor_grade")
+    if bearing_stress_MPa is None and bearing_pressure_MPa is not None:
+        bearing_stress_MPa = bearing_pressure_MPa
     missing = []
     if P_N is None:
         missing.append("P_N")
@@ -646,16 +869,52 @@ def base_plate_worksheet(
                 slots[k]["demand_Nmm"] = float(M_Nmm)
             elif k == "plate_bending" and P_N is not None:
                 slots[k]["demand_N"] = float(P_N)
-    # Fill D/C only when RAG capacities provided
+    # Fill D/C when RAG capacities OR (cfg geometry + RAG formula inputs) provided
+    if capacity_bearing_N is None:
+        br = base_plate_bearing_capacity_N(
+            plate_B_mm=plate_B_mm, plate_L_mm=plate_L_mm,
+            bearing_stress_MPa=bearing_stress_MPa or bearing_pressure_MPa,
+            fck_MPa=fck_MPa, bearing_factor=bearing_factor,
+            cite=cited,
+        )
+        if br.get("found"):
+            capacity_bearing_N = br["capacity_N"]
+            slots["bearing"]["bearing_capacity_detail"] = br
+            cited_br = br.get("cite")
+        else:
+            slots["bearing"]["missing"] = br.get("required_inputs")
+            cited_br = None
+    else:
+        cited_br = cited or "IS 800 Ch.11 bearing"
     if capacity_bearing_N is not None and P_N is not None:
         slots["bearing"] = fill_connection_component_dc(
             slots["bearing"], demand_N=float(P_N), capacity_N=float(capacity_bearing_N),
-            cited=cited or "IS 800 Ch.11 bearing",
+            cited=cited_br or cited or "IS 800 Ch.11 bearing",
         )
+    if capacity_anchor_N is None:
+        an = anchor_group_capacity_N(
+            n_anchors=anchor_n, capacity_one_N=capacity_one_anchor_N,
+            dia_mm=anchor_dia_mm, grade=anchor_grade, cite=cited,
+        )
+        if an.get("found"):
+            capacity_anchor_N = an["capacity_N"]
+            slots["anchors"]["anchor_capacity_detail"] = an
+            cited_an = an.get("cite")
+        else:
+            slots["anchors"]["missing"] = an.get("required_inputs")
+            # Still record disclosed geometry on the slot for audit
+            if anchor_n is not None or anchor_dia_mm is not None:
+                slots["anchors"]["disclosed_geometry"] = {
+                    "anchor_n": anchor_n, "anchor_dia_mm": anchor_dia_mm,
+                    "anchor_grade": anchor_grade,
+                }
+            cited_an = None
+    else:
+        cited_an = cited or "IS 800 anchors"
     if capacity_anchor_N is not None and P_N is not None:
         slots["anchors"] = fill_connection_component_dc(
             slots["anchors"], demand_N=float(P_N), capacity_N=float(capacity_anchor_N),
-            cited=cited or "IS 800 anchors",
+            cited=cited_an or cited or "IS 800 anchors",
         )
     # Plate bending thickness / capacity — IS 800 LSD cantilever; no invent t
     bend = base_plate_bending_check(
@@ -698,16 +957,22 @@ def base_plate_worksheet(
         "geometry": {
             "plate_B_mm": plate_B_mm, "plate_L_mm": plate_L_mm, "plate_t_mm": plate_t_mm,
             "fy_col_MPa": fy_col_MPa, "fck_MPa": fck_MPa,
+            "cantilever_m_mm": cantilever_m_mm,
+            "anchor_n": anchor_n, "anchor_dia_mm": anchor_dia_mm,
+            "anchor_grade": anchor_grade,
+            "cfg_geometry_found": bool(geo_res.get("found")),
         },
         "slots": list(slots.values()),
         "policy": (
-            "Fill component capacities from LIVE RAG only. Demand may be prefilled from "
-            "analysis; never invent plate t, bearing, anchors, or weld size."
+            "Fill component capacities from LIVE RAG, or cfg-disclosed geometry + RAG "
+            "capacity formulas. Demand may be prefilled from analysis; never invent "
+            "plate t, bearing stress, anchors, or weld size."
         ),
         "note": (
-            "Base-plate worksheet seeded. found:false on slots until RAG capacities present."
+            "Base-plate worksheet seeded. found:false on slots until RAG capacities "
+            "or (cfg geometry + RAG formula inputs) present."
             if not any_filled else
-            "One or more base-plate components filled from provided RAG capacities."
+            "One or more base-plate components filled from RAG and/or cfg geometry + RAG formulas."
         ),
     }
 
@@ -925,6 +1190,64 @@ def apply_rag_capacities_to_connection(
                 else:
                     slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
                     slot["missing_rag"] = b.get("required_inputs")
+                    filled_slots.append(slot)
+                    continue
+            elif "bearing" in str(comp) or comp == "base_plate_bearing":
+                br = base_plate_bearing_capacity_N(
+                    plate_B_mm=rag_c.get("plate_B_mm") or rag_c.get("B_mm"),
+                    plate_L_mm=rag_c.get("plate_L_mm") or rag_c.get("L_mm"),
+                    bearing_stress_MPa=rag_c.get("bearing_stress_MPa") or rag_c.get("stress_MPa"),
+                    fck_MPa=rag_c.get("fck_MPa"),
+                    bearing_factor=rag_c.get("bearing_factor"),
+                    capacity_N=rag_c.get("capacity_N"),
+                    cite=cited,
+                )
+                if br.get("found"):
+                    cap_N = br["capacity_N"]
+                    cited = br.get("cite")
+                    slot = dict(slot)
+                    slot["bearing_capacity_detail"] = br
+                else:
+                    slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
+                    slot["missing_rag"] = br.get("required_inputs")
+                    filled_slots.append(slot)
+                    continue
+            elif "anchor" in str(comp):
+                an = anchor_group_capacity_N(
+                    n_anchors=rag_c.get("n_anchors") or rag_c.get("n") or rag_c.get("anchor_n"),
+                    capacity_one_N=rag_c.get("capacity_one_N") or rag_c.get("V_one_N"),
+                    dia_mm=rag_c.get("dia_mm") or rag_c.get("anchor_dia_mm"),
+                    grade=rag_c.get("grade") or rag_c.get("anchor_grade"),
+                    capacity_N=rag_c.get("capacity_N"),
+                    cite=cited,
+                )
+                if an.get("found"):
+                    cap_N = an["capacity_N"]
+                    cited = an.get("cite")
+                    slot = dict(slot)
+                    slot["anchor_capacity_detail"] = an
+                else:
+                    slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
+                    slot["missing_rag"] = an.get("required_inputs")
+                    filled_slots.append(slot)
+                    continue
+            elif "end_plate" in str(comp) or "continuity" in str(comp):
+                ep = end_plate_or_continuity_capacity_N(
+                    capacity_N=rag_c.get("capacity_N") or rag_c.get("Rn"),
+                    Rn=rag_c.get("Rn"),
+                    cite=cited or rag_c.get("cite"),
+                    source=rag_c.get("source") or rag_c.get("Rn_source"),
+                    limit_state=rag_c.get("limit_state"),
+                    demand_N=dem,
+                )
+                if ep.get("found"):
+                    cap_N = ep["capacity_N"]
+                    cited = ep.get("cite")
+                    slot = dict(slot)
+                    slot["end_plate_detail"] = ep
+                else:
+                    slot = fill_connection_component_dc(slot, demand_N=dem, capacity_N=None)
+                    slot["missing_rag"] = ep.get("required_inputs")
                     filled_slots.append(slot)
                     continue
         slot = fill_connection_component_dc(
@@ -1173,27 +1496,183 @@ def panel_zone_doubler_detail(
     return pz
 
 
+# Allowlisted provenance for EOR-documented end-plate / continuity Rn (CFS-style R).
+# Prefer LIVE RAG / QFM when clauses yield a numeric capacity; never invent Rn.
+END_PLATE_RN_OK_SOURCES = frozenset({
+    "rag", "corpus", "qfm", "live_rag", "is800", "is_800",
+    "eor_documented", "eor", "documented", "explicit", "eor_explicit",
+})
+END_PLATE_RN_REFUSED_SOURCES = frozenset({
+    "assumed", "assumption", "silent", "silent_default", "invented",
+    "placeholder", "todo", "tbd", "guess", "thin_air",
+})
+
+
+def _norm_src(s):
+    return (str(s or "").strip().lower().replace(" ", "_").replace("-", "_"))
+
+
 def end_plate_or_continuity_capacity_N(
     *,
     capacity_N=None,
+    Rn=None,
     cite=None,
+    source=None,
     limit_state=None,
+    cfg=None,
+    demand_N=None,
 ):
-    """Passthrough for end-plate / continuity capacity from LIVE RAG only."""
-    if capacity_N is None or float(capacity_N) <= 0:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "cite": cite or "IS 800:2007 §10 / §12.11 end-plate / continuity",
-            "required_inputs": ["capacity_N from LIVE RAG (do not invent)"],
-            "note": "End-plate/continuity capacity must come from RAG sizing — no silent invent.",
+    """End-plate / continuity Rn — RAG preferred; EOR-documented parallel to CFS R.
+
+    Paths (never invent from thin air):
+      1) LIVE RAG / QFM capacity_N (or Rn with source in rag/corpus/qfm) — preferred
+         when QFM finds clauses that yield a numeric capacity.
+      2) EOR-documented: Rn + cite + source='eor_documented' (allowlisted) —
+         COMPLETE may use when labeled; refuse assumed/silent/invented sources.
+      3) found:false if neither — required_inputs listed.
+
+    cfg optional keys: end_plate_Rn / end_plate_capacity_N, end_plate_Rn_cite,
+    end_plate_Rn_source (or nested under cfg['end_plate'] / cfg['continuity']).
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    ep = cfg.get("end_plate") if isinstance(cfg.get("end_plate"), dict) else {}
+    cont = cfg.get("continuity") if isinstance(cfg.get("continuity"), dict) else {}
+
+    cite = (cite or cfg.get("end_plate_Rn_cite") or cfg.get("end_plate_cite")
+            or ep.get("cite") or ep.get("Rn_cite") or cont.get("cite"))
+    src = _norm_src(
+        source or cfg.get("end_plate_Rn_source") or cfg.get("end_plate_source")
+        or ep.get("source") or ep.get("Rn_source") or cont.get("source")
+    )
+    cap = capacity_N if capacity_N is not None else Rn
+    if cap is None:
+        cap = (cfg.get("end_plate_capacity_N") or cfg.get("end_plate_Rn")
+               or ep.get("capacity_N") or ep.get("Rn")
+               or cont.get("capacity_N") or cont.get("Rn"))
+    dem = demand_N
+    if dem is None and isinstance(cfg.get("end_plate"), dict):
+        dem = ep.get("demand_N")
+
+    default_cite = "IS 800:2007 §10 / §12.11 end-plate / continuity"
+
+    # Path 1: RAG / QFM numeric capacity (preferred when clauses found)
+    rag_like = (not src) or src in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800")
+    if cap is not None and float(cap) > 0 and rag_like and src not in END_PLATE_RN_REFUSED_SOURCES:
+        # Bare capacity_N without source → treat as RAG passthrough (wave2/3 contract)
+        if not src or src in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800"):
+            out = {
+                "found": True,
+                "capacity_N": float(cap),
+                "Rn": float(cap),
+                "limit_state": limit_state,
+                "source": src or "rag",
+                "resolved_via": "rag",
+                "cite": cite or default_cite,
+                "note": (
+                    "End-plate/continuity Rn from LIVE RAG / QFM — preferred when clauses "
+                    "yield a numeric capacity. Not invented."
+                ),
+                "policy": "prefer_rag_when_qfm_finds_clauses",
+            }
+            if dem is not None and float(cap) > 0:
+                out["DC"] = float(dem) / float(cap)
+                out["demand_N"] = float(dem)
+            return out
+
+    # Path 2: EOR-documented (CFS-style R parallel) — Rn + cite + allowlisted source
+    if (cap is not None and float(cap) > 0
+            and src in END_PLATE_RN_OK_SOURCES
+            and src not in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800")
+            and cite):
+        if src in END_PLATE_RN_REFUSED_SOURCES:
+            return {
+                "found": False,
+                "capacity_N": None,
+                "Rn": None,
+                "source": src,
+                "resolved_via": "refused",
+                "cite": default_cite,
+                "required_inputs": [
+                    "Rn + cite + source=eor_documented (not assumed/silent/invented)",
+                    "OR capacity_N from LIVE RAG / QFM",
+                ],
+                "note": (
+                    "Refused end-plate Rn source=%r — never invent from thin air. "
+                    "Use LIVE RAG when QFM finds clauses, or EOR-documented Rn+cite."
+                    % (src,)
+                ),
+            }
+        out = {
+            "found": True,
+            "capacity_N": float(cap),
+            "Rn": float(cap),
+            "limit_state": limit_state,
+            "source": src,
+            "resolved_via": "eor_documented" if ("eor" in src or src == "documented") else src,
+            "cite": str(cite),
+            "note": (
+                "End-plate/continuity Rn from EOR-documented path (CFS-style eor_documented R "
+                "parallel). Corpus/QFM often found:false for numeric Rn — COMPLETE may use "
+                "this when labeled with cite. Not invented from thin air. Prefer RAG when "
+                "QFM finds clauses."
+            ),
+            "policy": "eor_documented_ok_when_corpus_miss",
         }
+        if dem is not None and float(cap) > 0:
+            out["DC"] = float(dem) / float(cap)
+            out["demand_N"] = float(dem)
+        return out
+
+    # Path 1b: capacity_N with explicit cite but no source → still RAG passthrough
+    if cap is not None and float(cap) > 0 and (not src or src in END_PLATE_RN_OK_SOURCES):
+        if src in END_PLATE_RN_REFUSED_SOURCES:
+            pass  # fall through to miss
+        elif cite or not src:
+            out = {
+                "found": True,
+                "capacity_N": float(cap),
+                "Rn": float(cap),
+                "limit_state": limit_state,
+                "source": src or "rag",
+                "resolved_via": "rag" if (not src or src in ("rag", "corpus", "qfm", "live_rag")) else src,
+                "cite": cite or default_cite,
+                "note": "Capacity from provided RAG / disclosed value — not invented.",
+            }
+            if dem is not None and float(cap) > 0:
+                out["DC"] = float(dem) / float(cap)
+                out["demand_N"] = float(dem)
+            return out
+
+    refused = []
+    if cap is None or (cap is not None and float(cap) <= 0):
+        refused.append("capacity_N or Rn (LIVE RAG / QFM preferred; or EOR-documented)")
+    if cap is not None and float(cap) > 0 and src and src not in END_PLATE_RN_OK_SOURCES:
+        refused.append(
+            "source in {%s} (got %r) — refused assumed/silent invent"
+            % (", ".join(sorted(END_PLATE_RN_OK_SOURCES)), src)
+        )
+    if cap is not None and float(cap) > 0 and src in END_PLATE_RN_OK_SOURCES and src not in (
+        "rag", "corpus", "qfm", "live_rag", "is800", "is_800",
+    ) and not cite:
+        refused.append("cite (required with eor_documented Rn)")
     return {
-        "found": True,
-        "capacity_N": float(capacity_N),
-        "limit_state": limit_state,
-        "cite": cite or "IS 800:2007 §10 / §12.11",
-        "note": "Capacity from provided RAG value — not invented.",
+        "found": False,
+        "capacity_N": None,
+        "Rn": None,
+        "source": src or None,
+        "resolved_via": "found_false",
+        "cite": cite or default_cite,
+        "required_inputs": refused or [
+            "capacity_N from LIVE RAG / QFM (prefer when clauses found)",
+            "OR Rn + cite + source=eor_documented (CFS-style; never invent)",
+        ],
+        "note": (
+            "End-plate/continuity Rn found:false — India corpus often lacks numeric capacity. "
+            "Prefer RAG when QFM finds clauses; else supply EOR-documented Rn+cite+"
+            "source=eor_documented. Never invent from thin air."
+        ),
+        "demand_N": float(dem) if dem is not None else None,
+        "DC": None,
     }
 
 
@@ -1442,39 +1921,124 @@ def column_base_or_splice_Pn_capacity_N(
     cite=None,
     limit_state=None,
     demand_P_N=None,
+    cfg=None,
+    geometry=None,
+    plate_B_mm=None,
+    plate_L_mm=None,
+    plate_t_mm=None,
+    bearing_stress_MPa=None,
+    fck_MPa=None,
+    bearing_factor=None,
+    capacity_bearing_N=None,
+    anchor_n=None,
+    anchor_dia_mm=None,
+    anchor_grade=None,
+    capacity_one_anchor_N=None,
+    capacity_anchor_N=None,
 ):
-    """Column base / splice axial Pn from RAG only — never reuse beam bolt-group shear.
+    """Column base / splice axial Pn — RAG capacity or cfg geometry + RAG formulas.
 
-    Returns found:false until LIVE RAG (or disclosed base-plate/anchor axial capacity) is
-    supplied. Optional demand_P_N yields DC when capacity present.
+    Never reuse beam bolt-group shear on P_N. Paths:
+      1) capacity_N from LIVE RAG (direct)
+      2) cfg/disclosed plate plan + RAG bearing stress/factor → bearing Pn
+      3) cfg/disclosed anchors + RAG per-anchor → anchor Pn
+      Governing = min of available component capacities when both present.
+    found:false if neither RAG capacity nor (geometry + RAG formula). Optional
+    demand_P_N yields DC when capacity present.
     """
     cite = cite or "IS 800:2007 Ch.11 / §10 column base or splice axial — RAG"
-    if capacity_N is None or float(capacity_N) <= 0:
+    geo_res = resolve_base_or_splice_geometry(cfg, geometry=geometry)
+    geo = geo_res.get("geometry") or {}
+    if plate_B_mm is None:
+        plate_B_mm = geo.get("plate_B_mm")
+    if plate_L_mm is None:
+        plate_L_mm = geo.get("plate_L_mm")
+    if plate_t_mm is None:
+        plate_t_mm = geo.get("plate_t_mm")
+    if fck_MPa is None:
+        fck_MPa = geo.get("fck_MPa")
+    if anchor_n is None:
+        anchor_n = geo.get("anchor_n")
+    if anchor_dia_mm is None:
+        anchor_dia_mm = geo.get("anchor_dia_mm")
+    if anchor_grade is None:
+        anchor_grade = geo.get("anchor_grade")
+
+    components = {}
+    if capacity_N is not None and float(capacity_N) > 0:
+        components["rag_direct"] = {
+            "found": True, "capacity_N": float(capacity_N), "cite": cite, "path": "rag_capacity_N",
+        }
+
+    br = base_plate_bearing_capacity_N(
+        plate_B_mm=plate_B_mm, plate_L_mm=plate_L_mm,
+        bearing_stress_MPa=bearing_stress_MPa, fck_MPa=fck_MPa,
+        bearing_factor=bearing_factor, capacity_N=capacity_bearing_N, cite=cite,
+    )
+    if br.get("found"):
+        components["bearing"] = br
+
+    an = anchor_group_capacity_N(
+        n_anchors=anchor_n, capacity_one_N=capacity_one_anchor_N,
+        dia_mm=anchor_dia_mm, grade=anchor_grade,
+        capacity_N=capacity_anchor_N, cite=cite,
+    )
+    if an.get("found"):
+        components["anchors"] = an
+
+    if not components:
+        missing = [
+            "capacity_N from LIVE RAG base-plate/anchor/splice "
+            "(do not apply beam bolt shear to P_N)",
+            "OR cfg plate_B/L + RAG bearing_stress/factor",
+            "OR cfg anchor_n + RAG capacity_one_anchor_N",
+        ]
         return {
             "found": False,
             "capacity_N": None,
             "DC": None,
             "demand_P_N": float(demand_P_N) if demand_P_N is not None else None,
-            "required_inputs": [
-                "capacity_N from LIVE RAG base-plate/anchor/splice (do not apply beam bolt shear to P_N)",
-            ],
+            "required_inputs": missing,
+            "geometry": {
+                "plate_B_mm": plate_B_mm, "plate_L_mm": plate_L_mm,
+                "plate_t_mm": plate_t_mm, "anchor_n": anchor_n,
+                "anchor_dia_mm": anchor_dia_mm, "cfg_geometry_found": bool(geo_res.get("found")),
+            },
+            "bearing_detail": br,
+            "anchor_detail": an,
             "cite": cite,
             "note": (
-                "Column splice/base Pn found:false — axial capacity must come from RAG + "
-                "disclosed plate/anchor geometry; beam bolt group must not be applied to P_N."
+                "Column splice/base Pn found:false — need RAG axial capacity or "
+                "cfg-disclosed plate/anchor geometry + RAG capacity formulas; "
+                "beam bolt group must not be applied to P_N."
             ),
         }
+
+    # Governing = min of available component capacities
+    caps = [(k, float(v["capacity_N"])) for k, v in components.items() if v.get("capacity_N")]
+    gov_key, gov_cap = min(caps, key=lambda x: x[1])
     dc = None
-    if demand_P_N is not None and float(capacity_N) > 0:
-        dc = float(demand_P_N) / float(capacity_N)
+    if demand_P_N is not None and gov_cap > 0:
+        dc = float(demand_P_N) / gov_cap
     return {
         "found": True,
-        "capacity_N": float(capacity_N),
+        "capacity_N": gov_cap,
         "DC": dc,
         "demand_P_N": float(demand_P_N) if demand_P_N is not None else None,
+        "governing": gov_key,
+        "components": {k: {"capacity_N": v.get("capacity_N"), "path": v.get("path"), "cite": v.get("cite")}
+                       for k, v in components.items()},
+        "geometry": {
+            "plate_B_mm": plate_B_mm, "plate_L_mm": plate_L_mm,
+            "plate_t_mm": plate_t_mm, "anchor_n": anchor_n,
+            "anchor_dia_mm": anchor_dia_mm, "cfg_geometry_found": bool(geo_res.get("found")),
+        },
         "limit_state": limit_state or "column axial Pn (base/splice)",
         "cite": cite,
-        "note": "Axial Pn from RAG — not invented; not from beam bolt shear.",
+        "note": (
+            "Axial Pn from RAG and/or cfg geometry + RAG formulas — not invented; "
+            "not from beam bolt shear. Governing=%s." % gov_key
+        ),
     }
 
 
