@@ -99,6 +99,16 @@ the wrong units.
   confirm-flag / note in the report when procurement is unconfirmed; do **not** fabricate
   availability, certificates, or substitute grades silently.
 
+- **complete-gap wave1 helpers (`india_is800.py`):**
+  - Column **Pd with χ** — `design_compressive_strength(...)` (IS 800 §7.1.2 / Table 7). Do **not**
+    use bare `A·fy/γm0` as the final column Pd when KL/r is known.
+  - **SMF SCWB** — `scwb_ratio(...)` computes ΣMpc/ΣMpb when Mp or Zx available; `found:false` **only**
+    when inputs missing (not an always-stub). Cite §12.11.3.2.
+  - **Panel-zone / doubler** — `panel_zone_check(...)`; lists `required_inputs` when geometry/V missing.
+  - **§12 connection component D/C** — `fill_connection_component_dc(...)` writes D/C only when both
+    demand and a RAG capacity are present; never invent bolt/weld/gusset capacities.
+  - Report Ch.3 wind reads `load_plan.wind_summary` / W_X/W_Y (no false “no wind parameters” when laterals applied).
+
 ## Gotchas that fail SILENTLY (read this once — they will not error loudly)
 These are the traps that pass every obvious check yet corrupt the result. Most are now auto-handled by the
 framework; this list tells you what it does so you do not fight it.
