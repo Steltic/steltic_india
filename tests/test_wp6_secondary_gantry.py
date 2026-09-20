@@ -140,3 +140,17 @@ def test_member_wind_rows_pass_table4_validation():
             {"label": "0.9DL+1.5WM0-", "fD": 0.9, "fL": 0.0, "fLr": 0.0, "fWM": 1.5}]
     assert IL.validate_table4(rows) == []
     assert IL.validate_table4([{"label": "x", "fD": 1.2, "fL": 1.2, "fLr": 0.0, "fWM": 0.9}])
+
+
+def test_sfrs_beam_one_end_rigid_needs_column_node():
+    """WP6-fix: a beam pinned at one end and rigid at a hanging mid node (two-element girder, no column there) is a
+    gravity member; the one-end-rigid moment-frame rule needs the rigid end at a column node."""
+    import engine3d as E
+    reg = {1: ("col", "WPB300X300X88.34", E.ntag(0, 0, 0), E.ntag(0, 0, 1)),
+           2: ("beam", "NPB700X250X171.48", E.ntag(0, 0, 1), E.ntag(0, 1, 1)),      # I pinned at the column, rigid at the hanging node
+           3: ("beam", "NPB700X250X171.48", E.ntag(0, 1, 1), E.ntag(0, 2, 1)),
+           4: ("beam", "NPB400X180X66.31", E.ntag(0, 0, 1), E.ntag(1, 0, 1))}       # corner-bay MF beam: rigid at the column
+    info0 = {"beam_rel": {2: ("I", "none"), 3: ("J", "none"), 4: ("J", "none")},
+             "moment_nodes": {E.ntag(0, 1, 1), E.ntag(0, 0, 1)}}
+    tags = DP.sfrs_beam_tags(reg, info0)
+    assert 2 not in tags and 3 not in tags and 4 in tags

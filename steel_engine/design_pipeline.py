@@ -691,7 +691,10 @@ def sfrs_beam_tags(reg, info0):
     (a brace frames into the bay at the beam's level)."""
     rel = info0.get("beam_rel") or {}
     bays = set()
+    col_nodes = set()
     for t, (kind, sec, n1, n2) in reg.items():
+        if kind == "col":
+            col_nodes |= {n1, n2}
         if kind == "brace":
             l1 = ((n1 % 100000) // 100, n1 % 100); l2 = ((n2 % 100000) // 100, n2 % 100)
             for k in (n1 // 100000, n2 // 100000):
@@ -709,7 +712,9 @@ def sfrs_beam_tags(reg, info0):
             # one end pinned, the other rigid (e.g. the corner bay of a perimeter moment frame whose corner column
             # belongs to the orthogonal frame): a moment-frame beam at its rigid end only (WP6-fix)
             rigid = n2 if rel[t][0] == "I" else n1
-            if rigid in info0.get("moment_nodes", set()):
+            # the rigid end must be at a COLUMN node: a girder made of two elements continuous over a hanging mid
+            # node (no column) is a gravity member, not a moment-frame beam (WP6-fix, Ex11 gym 17 m girder)
+            if rigid in info0.get("moment_nodes", set()) and rigid in col_nodes:
                 out.add(t)
     return out
 
