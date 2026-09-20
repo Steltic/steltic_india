@@ -207,6 +207,17 @@ detailing (IS 800 Section 12); 10 Connections (IS 800 Section 10); 11 Foundation
 * Adjacent units: IS 1893 7.11.3 separation or a designed connection.
 * Semi-rigid joints: run both bounds (rigid and pinned) and report the envelope.
 
+## Process notes (H6 / H7) — do not invent
+* **H6 Composite:** a composite-deck brief seeds `composite_design` slots with found:false; fill them only
+  from retrieved text or record the bare-steel scope statement (`COMPOSITE_INDIA.md`). Do not invent stud
+  schedules, camber or wet-stage results.
+* **H7 E250B procurement:** for SCBF braces IS 2062 E250B is a DESIGN requirement (IS 800 12.8.2.1), checked
+  by the framework. Confirming mill / stock availability of the grade is an open procurement process item:
+  leave a confirm flag in the report; do not fabricate availability or certificates, and never substitute a
+  grade silently.
+* Earlier hardening notes: `docs/INDIA_COMPLETE_GAP_WAVE1.md` … `docs/INDIA_COMPLETE_GAP_WAVE4.md`
+  (complete-gap wave4: EOR-documented values must carry `source` and `cite`).
+
 ## Completion gate (single authority: `india_seismic_gates.design_status`)
 `design_status` returns `complete`, `partial` or `example_only`. The run cannot finish as COMPLETE while
 any member, connection, Section 12 check, gantry girder, deformation-compatibility or serviceability item
