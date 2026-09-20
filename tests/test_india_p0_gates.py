@@ -72,7 +72,7 @@ def test_Ta_ok_for_scbf_009():
         }),
     }
     findings = IL.validate_load_plan(cfg)
-    assert not any("Ta" in m and s == "ERROR" for s, m in findings)
+    assert not any("7.6.2" in m and s == "ERROR" for s, m in findings)
 
 
 def test_wind_gate_requires_part3_or_no_wind():
