@@ -440,7 +440,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     bearing = {"e_mm": e, "L_over_6_mm": L_mm / 6.0}
     if P > 0 and e <= L_mm / 6.0:
         fmax = P / (B_mm * L_mm) + 6 * M_dem / (B_mm * L_mm ** 2)
-        bearing.update(method="trapezoidal (e <= L/6)", fp_max_MPa=fmax, Y_mm=L_mm)
+        bearing.update(method="trapezoidal: eccentricity within the middle third (e_mm vs L_over_6_mm above)", fp_max_MPa=fmax, Y_mm=L_mm)
         checks["bearing"] = _check(fmax, fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     elif P > 0:
         if not modular_ratio and not Ec_MPa:

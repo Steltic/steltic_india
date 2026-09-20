@@ -498,10 +498,31 @@ def _cd_blob(pkg):
     walk(cd if cd is not None else {})
     return " ".join(parts).lower()
 
+def _is_numeric(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _gather_uncomputed_text(obj, acc):
+    """Like _gather_text, but a record that carries a numeric value / limit / dc IS a computed check: its
+    clause / cite formula strings (e.g. '(V/Vdb)^2+(T/Tdb)^2 <= 1') are the requirement it evaluated, not an
+    unevaluated symbolic requirement, so they are skipped (WP6-fix: false positives on computed base / anchor rows)."""
+    if isinstance(obj, str):
+        acc.append(obj)
+    elif isinstance(obj, dict):
+        computed = _is_numeric(obj.get("dc")) or (_is_numeric(obj.get("value")) and "limit" in obj)
+        for k, v in obj.items():
+            if computed and isinstance(v, str):
+                continue
+            _gather_uncomputed_text(v, acc)
+    elif isinstance(obj, list):
+        for v in obj:
+            _gather_uncomputed_text(v, acc)
+
+
 def _named_not_computed_issues(pkg):
     out=[]; cd=pkg.get("capacity_design") if isinstance(pkg,dict) else None
     if cd is None: return out
-    txt=[]; _gather_text(cd,txt)
+    txt=[]; _gather_uncomputed_text(cd,txt)
     for t in txt:
         if not isinstance(t,str) or not re.search(r">=|<=|≥|≤",t): continue
         bare=set(v.lower() for v in re.findall(r"(?<![A-Za-z0-9])[A-Za-z](?![A-Za-z0-9])", t))  # single-letter symbols (t,h,L,e,...)
@@ -758,7 +779,7 @@ def rag_evidence_issues(plan, job_dir):
 
 _COMPONENT_REQUIRES = (
     (re.compile(r"crane|gantry|runway", re.I), lambda c, comps: bool(c.get("crane") or c.get("cranes"))),
-    (re.compile(r"\bbrb|brb_core|buckling", re.I), lambda c, comps: "nobasis:brbf" in comps),
+    (re.compile(r"\bbrb|brb_core|buckling[_ -]?restrained", re.I), lambda c, comps: "nobasis:brbf" in comps),   # WP6-fix: not every 'buckling' key (gusset 12.8.3.4) is a BRB
     (re.compile(r"\blink\b|link_", re.I), lambda c, comps: "sbf_eccentric" in comps),
     (re.compile(r"web_plate|spsw|plate_shear", re.I), lambda c, comps: "nobasis:spsw" in comps),
     (re.compile(r"scwb|panel_zone|smf_", re.I), lambda c, comps: "steel_smrf" in comps),
