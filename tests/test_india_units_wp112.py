@@ -59,3 +59,15 @@ def test_metre_xcoords_converted_or_flagged():
 def test_plf_helper_renamed():
     assert not hasattr(U, "kn_per_m_to_plf")
     assert U.kn_per_m_to_kip_per_ft(14.5939) == pytest.approx(1.0, rel=1e-3)
+
+
+def test_si_conversion_record_has_no_imperial_factor():
+    """WP6: the cfg['_units_converted'] record (written into design/cfg_snapshot.json) carries SI factors only --
+    no 'ksi' / 'in' legacy factor, so the package residue grep (ASCE|AISC|...|ksi|kip|...) is clean."""
+    import json, re
+    import india_units as IU
+    cfg = {"units": "m", "jurisdiction": "india", "heights": [3.6], "bay_x": 6.0, "bay_y": 6.0, "NX": 1, "NY": 1}
+    IU.apply_si_geometry(cfg)
+    rec = cfg["_units_converted"]
+    assert rec["to"] == "mm" and rec["factors"]["m_to_mm"] == 1000.0
+    assert not re.search(r"ksi|kip|psf|\bin\b", json.dumps(rec))
