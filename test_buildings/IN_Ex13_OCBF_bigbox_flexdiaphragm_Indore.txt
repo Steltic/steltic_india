@@ -1,9 +1,0 @@
-IN_Ex13 — 1-storey OCBF big-box retail, flexible roof diaphragm, Indore (wind)
-
-Location: Indore — RETRIEVE IS 1893 Zone, Z, soil, I (commercial); R for OCBF. Wind often governs.
-Geometry (SI N-mm): single storey eave ~9.5 m; plan ~90 m × 60 m; 6×4 bays @ 15 m; perimeter
-  OCBF braced bays; interior gravity only; bare metal roof deck = FLEXIBLE diaphragm
-  (distribute lateral by tributary area, not relative stiffness).
-Loads: RETRIEVE IS 875 P1/P2 roof dead+imposed; P3 wind (MWFRS + net uplift anchorage) —
-  do not invent. Check wind vs seismic both directions.
-Design: IS 800 LSD OCBF; connections IS 816/4000. LIVE load_plan RAG mandatory.

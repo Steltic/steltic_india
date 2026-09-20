@@ -1,0 +1,31 @@
+IN_Ex13 — single-storey big-box retail, perimeter SCBF, flexible (bare metal deck) roof diaphragm, Indore
+
+Location: Indore — not listed in IS 1893 (Part 1):2016 Annex E nor in IS 875 (Part 3):2015 Annex A; both values are
+  Fig. 1 map readings at 22.72 N, 75.86 E recorded as derived_from_map (VERIFY): seismic Zone III, Z = 0.16 (Table 3);
+  basic wind speed Vb = 39 m/s (western Madhya Pradesh zone; Bhopal 39, Jabalpur 47). Soil Type II.
+  Retail (mercantile) hall of 5,400 m² → occupancy > 200 persons → I = 1.2 (Table 8 (ii), D8).
+  Lateral system: steel special concentrically braced frame (SCBF, IS 800:2007 12.8 + IS 18168:2023), R = 4.5
+  (Table 9 ii)(b) SBF with concentric braces); OBF/OCBF is banned in Zone III (Table 9 Note 1, IS 800 12.7.1.1, D4).
+  IS 18168 applied: a retail store is read as a business building (1.2 (b)); stricter provisions govern.
+Geometry (SI): plan 6 × 4 bays @ 15 m (90 × 60 m), single storey, eave 9.5 m, flat roof falling 1:60 to eave gutters.
+  Perimeter X-braced bays, two per wall, symmetric (bays 2 and 5 on the 90 m walls, bays 1 and 4 on the 60 m walls);
+  IS 808 WPB braces of IS 2062 E250 B0 (12.8.2.1) connected at the crossing; all roof beams pinned (gussets + fin plates);
+  all column bases pinned (IS 18168 9.4 minimum base moment on the SCBF columns). Interior columns are gravity columns.
+  Roof: bare metal deck on IS 808 joists spanning 15 m in X at 2.5 m into the Y-direction girders (one-way load path);
+  the bare deck is a FLEXIBLE diaphragm (IS 1893 7.6.4 declaration): storey shear to the braced walls by tributary
+  width, collector / chord forces on the perimeter beams. Wall girts at 2.375 m restrain the column weak axis.
+Loads: IS 875 (Part 2):1987 Table 2 roof 0.75 kN/m² (maintenance access); Table 1 vi)(a) retail 4.0 kN/m² on the slab
+  on grade (not on the steel). IS 875 (Part 1):2026 dead loads: roof assembly 0.85 kN/m² (deck 0.10, joists 0.20,
+  insulation / roofing 0.20, services and sprinklers 0.25, ceiling / lighting 0.10); wall cladding + girts 0.40 kN/m².
+  IS 875 (Part 3):2015 wind: Vb 39 m/s (map), terrain category 3, k1 1.0, k3 1.0, inland (no cyclone belt → k4 1.0,
+  Kd 0.9), Ka 0.8 on the frame tributary (142.5 m²) / 0.88 on the joists; Table 5 walls (h/w 0.158, l/w 1.5), Table 6
+  flat roof (−0.8 / −0.4) with Cpi ±0.2 (openings ≤ 5 %) as member-level cases incl. 0.9 DL uplift.
+  IS 875 (Part 4) snow: not applicable (Indore). Ponding (IS 875-4 4.4 screen): 1:60 fall, overflow scuppers.
+  Seismic weight per IS 1893 7.3/7.4: roof dead + cladding + self-weight (roof imposed load not in W).
+Design: IS 800:2007 LSD (Table 4 combinations); SCBF per 12.8 (braces KL/r ≤ 160, plastic, P ≤ Pd, 30–70 % tension
+  share, connections for the 12.8.3.1 / IS 18168 10.4.1 force max(1.1 Ry fy Ag, Ru fu An), gusset 1.2 Mp, columns
+  plastic 12.8.4.1) with IS 18168:2023 (5.5 Ω = 2.5 combinations on columns, collector beams and connections; Table 2
+  width-thickness; 7.2 column KL/r < 75; 9.4 pinned bases; 10.2 brace slenderness < 160); ESM Ta = 0.09 h/√d
+  (7.6.2(c)), Sa/g 2.5, RSA run and scaled per 7.7.3.1; 7.8.2 torsion (upper bound in the rigid model); 12.2.3;
+  drift 0.004 h; 7.11.2 for the gravity columns; collector / chord axial per 7.6.4 tributary distribution.
+  Connections IS 800 Section 10 (HSFG IS 4000, CJP welds 12.4.2); sections IS 808, steel IS 2062 E250 B0.
