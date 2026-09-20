@@ -1,19 +1,23 @@
-IN_Ex1 — 5-storey office, special concentrically braced frame (India)
+IN_Ex1 — 5-storey office, special concentrically braced frame (SCBF), New Delhi (India)
 
-Location: New Delhi (seismic Zone per IS 1893 Part 1:2016 — RETRIEVE zone factor Z, importance
-factor, response reduction R for SCBF, design spectrum; do not invent).
-Soil: medium — retrieve from IS 1893.
+Site: New Delhi. Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE zone (Annex E), Z (Table 3),
+importance factor (Table 8), R for the special concentrically braced frame (Table 9), design spectrum (6.4.2).
+Soil: medium (Type II) — retrieve Sa/g from IS 1893.
+Occupancy: office, 5 floors x 720 m2 = 3,600 m2 (persons not stated; > 2,000 m2 -> I per Table 8 (ii), D8).
 
-Geometry (convert to inches for the engine):
-- 5 storeys @ 3.6 m; plan 5 bays × 4 bays @ 6.0 m
-- Perimeter SCBF both directions; interior gravity framing pinned
-- Roof + floors: composite metal deck (model as one-way); cladding 0.5 kN/m²
+Geometry (metres; the engine works in N-mm):
+- 5 storeys @ 3.6 m; plan 5 bays x 4 bays @ 6.0 m (30 m x 24 m)
+- Lateral system: perimeter SCBF (X-bracing) in both directions, IS 800:2007 12.8 with IS 18168:2023 (Zone IV);
+  interior gravity framing pinned; braced-bay beams pinned (gusset + shear tab)
+- Roof + floors: composite metal deck spanning X (model one-way, bare-steel scope); cladding 0.5 kN/m2
 
-Gravity (RETRIEVE from IS 875 Part 1 dead / Part 2 imposed — do not invent):
-- Office imposed loads, floor finishes, roof live/access as applicable
+Gravity (RETRIEVE from IS 875 (Part 1) dead / (Part 2) imposed — do not invent):
+- Office imposed load (rooms without separate storage), partition allowance (3.1.2), floor finishes,
+  roof imposed load (Table 2, access for maintenance only)
 
-Wind (RETRIEVE IS 875 Part 3:2015 — design wind speed, terrain, Cp):
-- Delhi basic wind speed — cite retrieved table/clause
+Wind (RETRIEVE IS 875 (Part 3):2015 — basic wind speed Annex A, terrain category 3, Table 5 Cpe, Table 4 Ka):
+- New Delhi is inland, outside the cyclone belt (6.3.4): k4 = 1.0, Kd = 0.9
 
-Design: IS 800:2007 LSD. Material IS 2062 E250/E350 as retrieved. Sections IS 808.
-Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from LIVE RAG before pipeline.
+Design: IS 800:2007 LSD; IS 2062 E250 (fy by thickness), SCBF braces E250 B0 (12.8.2.1); sections IS 808.
+Analysis: response spectrum (IS 1893 7.7.1, Zone IV, h >= 15 m) scaled to V-bar_B (7.7.3.1); generated combinations.
+Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.
