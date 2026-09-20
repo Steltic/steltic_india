@@ -289,6 +289,46 @@ def _check_aisc_allowed(name_u):
             "An AISC shape needs sections.allow_aisc_shapes(eor_cite) (HR800-21)." % (name_u,))
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# WP6-fix: built-up welded BOX sections from IS 2062 plates (L6: 'built-up box columns ... built-up from plates').
+# Registered per job by the agent (cfg['custom_sections'] -> register_box); properties are computed from the four
+# plates, never read from a catalogue.  section_type 'box' is handled by india_is800 (Table 2 internal elements,
+# Table 10 welded box class, 8.2.2(b) no LTB, 8.4.1.1 shear area of the two webs).
+# ---------------------------------------------------------------------------------------------------------------
+CUSTOM = {}
+
+
+def register_box(name, B_mm, D_mm, tf_mm, tw_mm, *, source="built-up welded box from IS 2062 plates (declared in cfg)"):
+    """Welded box: two flange plates B x tf (outside) and two web plates (D - 2 tf) x tw at the outer faces.
+    Returns the mm property dict (also stored in CUSTOM under the normalised label)."""
+    B, D, tf, tw = float(B_mm), float(D_mm), float(tf_mm), float(tw_mm)
+    d = D - 2.0 * tf
+    A = 2.0 * B * tf + 2.0 * d * tw
+    Ix = 2.0 * (B * tf ** 3 / 12.0 + B * tf * ((D - tf) / 2.0) ** 2) + 2.0 * tw * d ** 3 / 12.0
+    Iy = 2.0 * (tf * B ** 3 / 12.0) + 2.0 * (d * tw ** 3 / 12.0 + d * tw * ((B - tw) / 2.0) ** 2)
+    Sx, Sy = 2.0 * Ix / D, 2.0 * Iy / B
+    Zx = B * tf * (D - tf) + 2.0 * tw * (d / 2.0) ** 2            # plastic: flanges + webs
+    Zy = d * tw * (B - tw) + 2.0 * tf * (B / 2.0) ** 2
+    Am = (B - tw) * (D - tf)                                       # enclosed area to the mid-lines
+    J = 4.0 * Am ** 2 / (2.0 * (B - tw) / tf + 2.0 * (D - tf) / tw)   # thin-walled closed section
+    props_ = {"_units": "mm", "section_type": "box", "Type": "BOX", "source": source, "A": A, "Ix": Ix, "Iy": Iy,
+              "Zx": Zx, "Zy": Zy, "Sx": Sx, "Sy": Sy, "rx": math.sqrt(Ix / A), "ry": math.sqrt(Iy / A),
+              "r_min": math.sqrt(min(Ix, Iy) / A), "d": D, "bf": B, "tf": tf, "tw": tw, "J": J, "Cw": 0.0,
+              "ho": D - tf, "Aw": 2.0 * d * tw, "R1": 0.0, "Mass_kg_m": A * 7850.0 / 1e6, "welded": True,
+              "plates": {"flange_mm": [B, tf], "web_mm": [d, tw]}}
+    CUSTOM[normalize_label(name)] = props_
+    return props_
+
+
+def register_custom_sections(cfg):
+    """cfg['custom_sections'] = {name: {'type': 'box', 'B_mm', 'D_mm', 'tf_mm', 'tw_mm', 'source'}} -> CUSTOM."""
+    for nm, spec in (cfg.get("custom_sections") or {}).items():
+        if str(spec.get("type", "box")).lower() != "box":
+            raise KeyError("custom section %r: only built-up welded 'box' sections are supported" % nm)
+        register_box(nm, spec["B_mm"], spec["D_mm"], spec["tf_mm"], spec["tw_mm"],
+                     source=spec.get("source") or "built-up welded box from IS 2062 plates (declared in cfg)")
+
+
 def props(name, SEC=None, unit_system=None, *, grade=None, process=None):
     """Section properties in the active (or requested) unit system.
 
@@ -297,6 +337,10 @@ def props(name, SEC=None, unit_system=None, *, grade=None, process=None):
     """
     name_u = normalize_label(name)
     us = unit_system or _active_us()
+    if name_u in CUSTOM:
+        if us != "N-mm":
+            raise KeyError("custom built-up section %r is defined in mm only" % (name,))
+        return dict(CUSTOM[name_u])
     q = _load_quarantine()
     if name_u in q:
         raise KeyError("section %r is quarantined (found:false): IS 808:2021 row fails the WP2.2 validator (%s); "

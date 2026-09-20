@@ -2188,6 +2188,26 @@ def section_class_table2(sec, fy_MPa, *, P_N=0.0, welded=False, gamma_m0=GAMMA_M
         else:
             el += [dict(element="angle b/t (bending)", ratio=b / t, limits=(9.4 * eps, 10.5 * eps, 15.7 * eps)),
                    dict(element="angle d/t (bending)", ratio=d / t, limits=(9.4 * eps, 10.5 * eps, 15.7 * eps))]
+    elif st == "box":
+        # WP6-fix: built-up welded box -- Table 2 internal elements: compression flange between the webs
+        # (29.3 / 33.5 / 42 eps) and the webs as internal elements in bending / with axial (same rows as I webs)
+        D, B, tw, tf = p["d"], p["bf"], p["tw"], p["tf"]
+        el.append(dict(element="box flange internal element (b - 2 tw)/tf", ratio=(B - 2.0 * tw) / tf,
+                       limits=(29.3 * eps, 33.5 * eps, 42 * eps)))
+        d = D - 2.0 * tf
+        P = float(P_N or 0.0)
+        if abs(P) < 1e-9:
+            el.append(dict(element="box web d/tw (neutral axis at mid-depth)", ratio=d / tw,
+                           limits=(84 * eps, 105 * eps, 126 * eps)))
+        else:
+            fcd = float(fy_MPa) / float(gamma_m0)
+            r1 = (P / (2.0 * d * tw)) / fcd
+            r2 = (P / p["A"]) / fcd
+            lp = max(84 * eps / (1 + r1), 42 * eps)
+            lc = max((105 * eps / (1 + r1)) if r1 < 0 else (105 * eps / (1 + 1.5 * r1)), 42 * eps)
+            ls = max(126 * eps / (1 + 2 * r2), 42 * eps)
+            el.append(dict(element="box web d/tw (generally, r1=%.3f, r2=%.3f)" % (r1, r2), ratio=d / tw,
+                           limits=(lp, lc, ls), r1=r1, r2=r2))
     else:
         D, B, tw, tf = p["d"], p["bf"], p["tw"], p["tf"]
         R1 = p.get("R1") or 0.0
@@ -2286,6 +2306,11 @@ def buckling_class_for_section(sec, axis, *, process=None, welded=False):
         return buckling_class("angle", axis=axis)
     if st == "channel":
         return buckling_class("channel", axis=axis)
+    if st == "box":
+        # Table 10 welded box: 'generally b'; 'thick welds and b/tf < 30 (z-z) / h/tw < 30 (y-y): c' -- the
+        # conservative row c is taken for every built-up box (WP6-fix)
+        return buckling_class("box", axis=axis, welded=True, tw=p["tw"], h=p["d"], b=p["bf"], tf=p["tf"],
+                              thick_welds=True)
     return buckling_class("welded_I" if welded else "I", h=p["d"], b=p["bf"], tf=p["tf"], axis=axis, welded=welded)
 
 
@@ -2413,7 +2438,7 @@ def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None
     Ze = p["Sx"] if axis == "z" else p["Sy"]
     base = design_moment_8_2_1(Zp, Ze, fy_MPa, section_class, support=support, gamma_m0=gamma_m0)
     st = p.get("section_type")
-    if axis != "z" or st == "CHS":
+    if axis != "z" or st in ("CHS", "box"):
         base.update(ltb="not applicable (8.2.2 a/b: minor-axis bending or hollow section)", lambda_LT=None,
                     chi_LT=1.0, cite=cite)
         return base
@@ -2462,6 +2487,9 @@ def shear_capacity(sec, fy_MPa, *, axis="z", welded=False, stiffener_spacing_mm=
     if st == "CHS":
         Av = 2.0 * p["A"] / math.pi
         basis = "circular hollow tube: 2A/pi"
+    elif st == "box":
+        Av = (2.0 * (p["d"] - 2 * p["tf"]) * p["tw"]) if axis == "z" else (2.0 * p["bf"] * p["tf"])
+        basis = "welded box: two webs d tw (major) / two flanges b tf (minor) (8.4.1.1 welded plate elements)"
     elif axis == "z":
         tf = p["tf"]
         Av = (p["d"] * p["tw"]) if not welded else (p["d"] - 2 * tf) * p["tw"]
@@ -2474,7 +2502,7 @@ def shear_capacity(sec, fy_MPa, *, axis="z", welded=False, stiffener_spacing_mm=
     Vn = Vp
     if st not in ("CHS",) and axis == "z":
         R1 = p.get("R1") or 0.0
-        d = p["d"] - 2 * p["tf"] - (0.0 if welded else 2 * R1)
+        d = p["d"] - 2 * p["tf"] - (0.0 if (welded or st == "box") else 2 * R1)
         dtw = d / p["tw"]
         if stiffener_spacing_mm:
             cd = float(stiffener_spacing_mm) / d

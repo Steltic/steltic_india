@@ -179,6 +179,13 @@ def Ipack(name):
     """
     key = str(name).upper().replace(" ", "").strip()
     if _UNIT_SYSTEM == "N-mm":
+        try:
+            import sections as _SEC
+            c = _SEC.CUSTOM.get(_SEC.normalize_label(name))      # WP6-fix: built-up box sections (register_box)
+        except Exception:
+            c = None
+        if c is not None:
+            return (c["A"], c["Ix"], c["Iy"], c["J"])
         s = _shapes_csv_si().get(key)
         if s is not None:
             return s
@@ -264,6 +271,9 @@ def build(cfg,transf="Linear"):
     engine/example_build.py for a complete worked reference to copy.  When no custom_build is given
     (the built-in B-archetypes and quick self-checks) the model is built by example_build()."""
     cb = cfg.get("custom_build")
+    if cfg.get("custom_sections"):
+        import sections as _SEC
+        _SEC.register_custom_sections(cfg)             # WP6-fix: built-up box sections declared by the job
     if cb is not None and "present" not in cfg:
         # PROBE build: run the custom builder once, throw the ops domain away, and capture the
         # per-level footprint into cfg['present'] so grid()/floor_area/perim/wind/masses all see
@@ -1314,6 +1324,10 @@ def beam_deflection_si(cfg):
             continue
         A, Ix, Iy, J = Ipack(sec)
         delta = 5.0 * w * L ** 4 / (384.0 * E * Ix)
+        if roof and cfg.get("deflection_key_roof"):
+            div, cite = IL.floor_deflection_limit(cfg, roof=True)     # declared Table 6 roof row (e.g. rafter, WP6-fix)
+        else:
+            div, cite = IL.floor_deflection_limit(cfg)
         lim = L / div
         r = delta / lim
         rows.append({"section": sec, "span_mm": round(L, 0), "roof": roof, "w_LL_N_per_mm": round(w, 3),

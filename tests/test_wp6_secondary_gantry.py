@@ -154,3 +154,28 @@ def test_sfrs_beam_one_end_rigid_needs_column_node():
              "moment_nodes": {E.ntag(0, 1, 1), E.ntag(0, 0, 1)}}
     tags = DP.sfrs_beam_tags(reg, info0)
     assert 2 not in tags and 3 not in tags and 4 in tags
+
+
+def test_builtup_box_section_registry_and_checks():
+    """WP6-fix: built-up welded box sections (L6) -- properties from the four plates, IS 800 Table 2 internal-element
+    classification, Table 10 welded-box class, no LTB (8.2.2(b)), two-web shear area; member_check_is800 runs."""
+    import sections as S, engine3d as E, india_is800 as I8
+    E.activate_si_units()
+    p = S.register_box("BOX600X600X32", 600.0, 600.0, 32.0, 32.0)
+    assert S.props("BOX600X600X32")["A"] == pytest.approx(2 * 600 * 32 + 2 * 536 * 32)
+    assert p["section_type"] == "box" and abs(p["rx"] - 232.0) < 5.0
+    assert E.Ipack("BOX600X600X32")[0] == pytest.approx(p["A"])
+    sc = I8.section_class_table2(p, 240.0)
+    assert sc["section_class"] == "plastic"                     # (600 - 64)/32 = 16.8 < 29.3 eps; 536/32 = 16.8 < 84 eps
+    assert I8.buckling_class_for_section(p, "y")["buckling_class"] in ("b", "c")
+    comp = I8.compression_capacity(p, 240.0, KLz_mm=6600.0, KLy_mm=6600.0)
+    assert comp["found"] and comp["Pd_N"] > 12.0e6                # > 12 MN at 6.6 m
+    sh = I8.shear_capacity(p, 240.0, axis="z")
+    assert sh["Av_mm2"] == pytest.approx(2 * 536 * 32)
+    mem = {"id": "c", "section": "BOX600X600X32", "grade": "E250 B0", "role": "column", "L_mm": 6600.0, "Kz": 1.0, "Ky": 1.0}
+    r = I8.member_check_is800(mem, [{"combo": "1.5DL+1.5LL", "P_N": 10.5e6, "Mz_i_Nmm": 1.0e8, "Mz_j_Nmm": -1.0e8,
+                                     "My_i_Nmm": 5.0e7, "My_j_Nmm": 0.0, "Vy_N": 5.0e4, "Vz_N": 0.0}])
+    assert r["found"] and r["ok"] and 0.7 < r["dc"] < 1.0
+    # cfg registration
+    S.register_custom_sections({"custom_sections": {"BOX500X500X25": {"type": "box", "B_mm": 500, "D_mm": 500, "tf_mm": 25, "tw_mm": 25}}})
+    assert "BOX500X500X25" in S.CUSTOM
