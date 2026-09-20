@@ -585,3 +585,20 @@ def complete_gate_disclosure(cfg, pkg=None) -> dict:
             "proxy/is800_omrf refuse COMPLETE."
         ),
     }
+
+
+# --- IS 18168 live Ω corpus helper (re-export) ---------------------------------
+try:
+    from india_omega_is18168 import (  # noqa: E402
+        fetch_is18168_omega,
+        fetch_is18168_section_55,
+        resolve_Omega0_with_is18168,
+        normalize_sfrs as normalize_omega_sfrs,
+        parse_omega_table_from_hit_text,
+        corpus_available as is18168_corpus_available,
+        IS18168_CITE,
+        IS18168_DOC,
+        IS18168_SECTION,
+    )
+except ImportError:  # pragma: no cover
+    pass

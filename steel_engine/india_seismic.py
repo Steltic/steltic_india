@@ -627,6 +627,8 @@ try:
         R_OK_SOURCES,
         R_PROXY_SOURCES,
         TABLE9_SYSTEM_FLAGS,
+        fetch_is18168_omega,
+        resolve_Omega0_with_is18168,
     )
 except ImportError:  # pragma: no cover
     pass

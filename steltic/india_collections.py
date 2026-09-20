@@ -44,6 +44,10 @@ COLLECTION_TO_STEM: dict[str, str] = {
     "IS_1893": "IS_1893_Part_1_2016",
     "IS1893_P1": "IS_1893_Part_1_2016",
     "IS1893_PART1": "IS_1893_Part_1_2016",
+    # Steel SFRS ductile design / overstrength (Ω)
+    "IS18168": "IS_18168_2023",
+    "IS_18168": "IS_18168_2023",
+    "IS18168_2023": "IS_18168_2023",
 }
 
 # Also accept full engineering_standards_* names
@@ -76,6 +80,7 @@ STEM_TO_COLLECTION: dict[str, str] = {
     "IS_875_Part_4_1987": "engineering_standards_IS875_P4",
     "IS_875_Part_5_1987": "engineering_standards_IS875_P5",
     "IS_1893_Part_1_2016": "engineering_standards_IS1893",
+    "IS_18168_2023": "engineering_standards_IS18168",
 }
 
 INDIA_CORPUS_ROOT = "/workspace/engineering_rag_india"
@@ -132,5 +137,5 @@ def is_india_spec_collection(name: str) -> bool:
     if stem_for_collection(name):
         return True
     return "engineering_standard" in c or any(
-        t in c for t in ("is800", "is808", "is875", "is1893", "is816", "is4000", "is1161", "is2062", "is9595")
+        t in c for t in ("is800", "is808", "is875", "is1893", "is18168", "is816", "is4000", "is1161", "is2062", "is9595")
     )
