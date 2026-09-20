@@ -499,6 +499,8 @@ def validate_table4(combos, cfg=None) -> list:
         except (TypeError, ValueError):
             continue
         f, _ = combo_lateral_factor(c)
+        if f is None and c.get("fWM") is not None:               # WP6-fix: member-wind rows carry their factor in fWM
+            f = float(c["fWM"])
         fl = abs(f) if f is not None else 0.0
         vert = c.get("vertical") if isinstance(c.get("vertical"), dict) else {}
         if f is not None and abs(abs(float(vert.get("coef", 0.0))) - 1.0) < 1e-9:

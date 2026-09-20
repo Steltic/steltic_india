@@ -129,3 +129,14 @@ def test_table5_square_plan_first_band():
         assert r["Cpe"]["A"] in (0.7, 0.8)
     mw = WT.lowrise_member_wind(1.0, 8.0, 17.0, 17.0, 0.0, 0.05, ridge_axis="X")
     assert mw["found"] and len(mw["patterns"]) == 4
+
+
+def test_member_wind_rows_pass_table4_validation():
+    """WP6-fix: the generated member-wind rows (1.2DL+1.2LL+1.2WM.., +0.6WM..) carry the lateral factor in fWM and
+    must validate against IS 800 Table 4 (the gym run was blocked by its own generator's rows)."""
+    import india_loads as IL
+    rows = [{"label": "1.2DL+1.2LL+1.2WM0+", "fD": 1.2, "fL": 1.2, "fLr": 1.2, "fWM": 1.2},
+            {"label": "1.2DL+1.2LL+0.6WM0+", "fD": 1.2, "fL": 1.2, "fLr": 1.2, "fWM": 0.6},
+            {"label": "0.9DL+1.5WM0-", "fD": 0.9, "fL": 0.0, "fLr": 0.0, "fWM": 1.5}]
+    assert IL.validate_table4(rows) == []
+    assert IL.validate_table4([{"label": "x", "fD": 1.2, "fL": 1.2, "fLr": 0.0, "fWM": 0.9}])
