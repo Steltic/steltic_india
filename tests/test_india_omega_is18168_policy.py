@@ -76,3 +76,51 @@ def test_asce_omega0_still_refused():
     )
     assert corpus_asce["found"] is False
     assert corpus_asce["Omega0"] is None
+
+
+def test_refuse_concrete_is15988_is13920_corpus_even_if_found_true():
+    """IS 15988 / IS 13920 are concrete — never steel Ω, even with a HIT value."""
+    for src in ("is15988", "is13920", "is_15988", "is_13920",
+                "is15988_2013", "is13920_2016"):
+        r = ISG.resolve_Omega0(
+            {},
+            corpus_hit={
+                "found": True,
+                "source": src,
+                "Omega": 2.5,
+                "cite": "concrete code — must not resolve for steel",
+            },
+        )
+        assert r["found"] is False, src
+        assert r["Omega0"] is None, src
+        note = (r.get("note") or "").lower()
+        cite = (r.get("cite") or "").lower()
+        assert "concrete" in note or "concrete" in cite, src
+        assert "15988" in note or "13920" in note or "15988" in cite or "13920" in cite, src
+
+
+def test_refuse_omega0_source_is15988_is13920_with_cite():
+    """Literal Omega0_source pointing at concrete codes is refused."""
+    for src in ("is15988", "is13920", "is_15988", "is_13920"):
+        r = ISG.resolve_Omega0(
+            {
+                "Omega0": 2.5,
+                "Omega0_source": src,
+                "Omega0_cite": "IS %s — must not be steel overstrength" % src,
+            }
+        )
+        assert r["found"] is False, src
+        assert r["Omega0"] is None, src
+        blob = ((r.get("note") or "") + " " + (r.get("cite") or "")).lower()
+        assert "concrete" in blob, src
+        assert src.replace("_", "") in blob.replace("_", "") or "15988" in blob or "13920" in blob, src
+
+
+def test_policy_note_names_is18168_only_and_refuses_concrete():
+    note = (ISG.OMEGA0_POLICY.get("note") or "").lower()
+    assert "is 18168" in note or "18168" in note
+    assert "15988" in note and "13920" in note
+    assert "concrete" in note
+    for key in ("is15988", "is_15988", "is13920", "is_13920",
+                "is15988_2013", "is13920_2016"):
+        assert key in ISG.OMEGA0_REFUSED, key
