@@ -421,6 +421,21 @@ def column_checks(system, model_data, cfg):
                             clause="IS 800:2007 12.11.3.1", member=m["id"],
                             cite="beam and column sections plastic or compact (plastic at hinge locations)",
                             ok=(sc["section_class"] in ("plastic", "compact")) if sc["section_class"] else None))
+        if sysn == "SMF":
+            f1223_all = [f for f in _forces(model_data, m["id"]) if f.get("family") == "12.2.3"]
+            if f1223_all and fy and m.get("L_mm"):
+                mc = I8.member_check_is800(dict(m), f1223_all)
+                out.append(_chk("12.11.3.4_out_of_plane_12.2.3", mc.get("dc"), 1.0, clause="IS 800:2007 12.11.3.4",
+                                member=m["id"], ok=mc.get("ok"), dc=mc.get("dc"),
+                                cite="plane frame non-sway out of plane: buckling check under 12.2.3 (9.3.2.2)",
+                                governing_combo=mc.get("governing_combo")))
+            else:
+                out.append(_na("12.11.3.4_out_of_plane_12.2.3", clause="IS 800:2007 12.11.3.4", member=m["id"],
+                               cite="buckling under 12.2.3", reason="no 12.2.3 forces / fy / L"))
+            ls = m.get("lateral_support_both_flanges")
+            out.append(_chk("12.11.3.3_column_lateral_support", ls, True, clause="IS 800:2007 12.11.3.3",
+                            member=m["id"], dc=None, ok=None if ls is None else bool(ls),
+                            cite="lateral support at top and bottom beam flange levels for 2 % of flange strength"))
         if not fy or not m.get("L_mm"):
             out.append(_na("12.5.1_column", clause="IS 800:2007 12.5.1", cite="P/Pd > 0.4 -> 12.2.3",
                            member=m["id"], reason="fy or L_mm missing"))
