@@ -1121,8 +1121,29 @@ def india_drift(cfg, eccentricity=None, gravity=(1.0, 1.0)):
         best = best or base
         best["ratio"] = [max(a, b) for a, b in zip(best["ratio"], base["ratio"])]
         best["drift_cm_no_torsion"] = base["drift_cm"]
+        # Table 6(i) (Amd 2) storey lateral stiffness = storey shear / inter-storey drift under the design
+        # lateral-force distribution.  Stiffness is a property of the structure, so it is taken from a FIRST-ORDER
+        # solve of the lateral forces alone: the gravity P-Delta amplification of the drift check above is larger in
+        # the lower storeys and would read as a 1-2 % "soft storey" in every uniform frame (WP6-fix, L3).
+        info = build(cfg, "Linear"); NF = info["NF"]
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        for k in range(1, NF + 1):
+            fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
+            ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
+        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        ops.test("NormDispIncr", 1e-9, 20); ops.algorithm("Linear")
+        ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+        if ops.analyze(1) != 0:
+            raise RuntimeError("first-order stiffness analysis (%s) did not converge" % d)
+        di = 0 if d == "X" else 1
+        um1 = [ops.nodeDisp(mtag(k), di + 1) for k in range(1, NF + 1)]
+        dcm1 = [abs(um1[k] - (um1[k - 1] if k else 0.0)) / cfg["heights"][k] for k in range(NF)]
+        best["drift_cm_first_order"] = dcm1
         best["stiffness_N_per_mm"] = [(V / (dc * h)) if dc > 0 else float("inf")
-                                      for V, dc, h in zip(base["storey_shear_N"], base["drift_cm"], cfg["heights"])]
+                                      for V, dc, h in zip(base["storey_shear_N"], dcm1, cfg["heights"])]
+        best["stiffness_basis"] = ("IS 1893 Table 6(i) (Amd 2): storey shear / inter-storey drift at the CM under the "
+                                   "design lateral-force distribution, first-order (no gravity P-Delta); the drift "
+                                   "check itself is second-order with 1.0 DL + 1.0 LL")
         out[d] = best
     return out
 

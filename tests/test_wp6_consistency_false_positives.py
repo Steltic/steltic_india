@@ -42,3 +42,35 @@ def test_base_plate_trapezoidal_bearing_label_is_not_symbolic():
                              P_N=500e3, M_Nmm=10e6, V_N=0.0, col_d_mm=300.0, col_bf_mm=300.0, col_tf_mm=15.0)
     pkg = {"capacity_design": {"checks": {"base": {"ok": True, "detail": r}}}}
     assert CC._named_not_computed_issues(pkg) == []
+
+
+def test_joints_skip_the_pinned_end_of_a_one_end_released_beam():
+    """WP6-fix: a moment-frame beam pinned at the corner column (release 'I' at node_i) forms no joint there; the
+    rigid end still forms the joint at the next column."""
+    import india_is800_s12 as S12
+    nodes = {1: (0.0, 0.0, 3500.0), 2: (7500.0, 0.0, 3500.0), 11: (0.0, 0.0, 0.0), 12: (7500.0, 0.0, 0.0)}
+    els = [{"id": "c1", "role": "column", "node_i": 11, "node_j": 1, "section": "WPB600X300X285.48"},
+           {"id": "c2", "role": "column", "node_i": 12, "node_j": 2, "section": "WPB600X300X285.48"},
+           {"id": "b1", "role": "beam", "node_i": 1, "node_j": 2, "section": "NPB550X210X105.52", "release_major": "I"}]
+    js = S12.joints_from_model(nodes, els)
+    assert [j["node"] for j in js] == [2] and js[0]["beams"][0]["member_id"] == "b1"
+    els[2]["release_major"] = "none"
+    assert sorted(j["node"] for j in S12.joints_from_model(nodes, els)) == [1, 2]
+    els[2]["release_major"] = "both"
+    assert S12.joints_from_model(nodes, els) == []
+
+
+def test_7112_gate_accepts_a_model_with_no_non_sfrs_columns():
+    """WP6-fix: when every column is on a moment / braced line the 7.11.2 record says so and the gate does not
+    demand a gravity-column check that has no member."""
+    import india_seismic_gates as G
+    cfg = {"system": "SMF", "seis": {"Z": 0.16, "I": 1.2, "R": 5.0, "zone": "III", "soil": "II"},
+           "occupancy": {"use": "office", "persons": 300}}
+    pkg = {"members": [{"id": "m", "DC": 0.5, "checks": [{"name": "x", "value": 0.5, "limit": 1.0, "dc": 0.5, "ok": True, "clause": "IS 800 9.3"}]}],
+           "connections": [{"id": "c", "DC": 0.5, "checks": [{"name": "x", "value": 0.5, "limit": 1.0, "dc": 0.5, "ok": True, "clause": "IS 800 10"}]}],
+           "deformation_compatibility": {"clause": "IS 1893 7.11.2", "zone": "III", "checks": [], "no_non_sfrs_columns": True}}
+    r1 = G.design_status(cfg, pkg)["reasons"]
+    assert not any("7.11.2" in x for x in r1)
+    pkg["deformation_compatibility"].pop("no_non_sfrs_columns")
+    r2 = G.design_status(cfg, pkg)["reasons"]
+    assert any("7.11.2" in x for x in r2)

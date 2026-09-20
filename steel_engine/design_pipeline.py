@@ -1690,9 +1690,11 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
                 lat_lines.add(((nd % 100000) // 100, nd % 100))
     lat_lines |= {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
     worst = None
+    n_candidates = 0
     for t, (kind, sec, n1, n2) in reg.items():
         if kind != "col" or ((n1 % 100000) // 100, n1 % 100) in lat_lines:
             continue
+        n_candidates += 1
         e = env.get(frozenset((n1, n2)))
         if not e:
             continue
@@ -1707,6 +1709,11 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
             worst = rec
     if worst:
         out["checks"].append(worst)
+    if n_candidates == 0:
+        # every column line carries a moment-frame beam or a brace: there is no non-SFRS column to check (WP6)
+        out["no_non_sfrs_columns"] = True
+        out["note"] = ("every column belongs to a lateral-load-resisting line (moment or braced frame); IS 1893 7.11.2 "
+                       "has no non-SFRS member to check -- the SFRS members are designed for the 7.11.1 drift")
     sep = cfg.get("adjacent_units") or []
     if sep:
         import india_seismic as IS

@@ -151,6 +151,26 @@ def test_soft_storey_detected_in_model(eng):
     assert s["soft"][0] and K[0] / K[1] < 0.7                                    # Ex12 pattern (0.57)
 
 
+def test_uniform_frame_has_no_pdelta_soft_storey(eng):
+    """WP6-fix (L3): Table 6(i) storey stiffness is first-order (structure property).  A uniform 6-storey moment
+    frame with heavy gravity must NOT read as a soft storey through the gravity P-Delta amplification of the drift
+    (lower storeys 1-2 % 'softer'); the drift check itself stays second-order."""
+    E = eng
+    n = 6
+    cfg = {"NX": 2, "NY": 2, "SX": 7500.0, "SY": 7500.0, "heights": [3500.0] * n, "base": "fixed",
+           "col": "WPB400X400X191.11", "beam": "NPB500X200X90.69", "units": "N-mm", "jurisdiction": "india",
+           "D_floor": 5.0, "D_roof": 4.0, "L_floor": 5.0, "Lr": 0.75, "clad": 0.0, "self_weight": False,
+           "load_plan": {"jurisdiction": "india", "story_forces_units": "N",
+                         "story_forces": {"EQ_X": {str(k): [2e4 * k * k, 0, 0] for k in range(1, n + 1)},
+                                          "EQ_Y": {str(k): [0, 2e4 * k * k, 0] for k in range(1, n + 1)}}}}
+    dr = E.india_drift(cfg, {"X": {}, "Y": {}})
+    K = dr["X"]["stiffness_N_per_mm"]
+    assert all(K[i] >= K[i + 1] for i in range(n - 1)), [K[i] / K[i + 1] for i in range(n - 1)]
+    assert "first-order" in dr["X"]["stiffness_basis"]
+    # the second-order drift at the CM is larger than the first-order one (P-Delta present in the drift check)
+    assert max(dr["X"]["drift_cm"]) > max(dr["X"]["drift_cm_first_order"])
+
+
 # ---- WP1.9 ------------------------------------------------------------------------------------
 def test_drift_cap_and_soft_storey_limits():
     assert IS.drift_allowable({"drift_limit": 0.010})[0] == 0.004

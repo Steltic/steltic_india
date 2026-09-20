@@ -1020,7 +1020,7 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
             for i, c in enumerate((dc_.get("checks") or []) + (dc_.get("separation") or [])):
                 reasons += entry_findings("7.11.2/7.11.3", {"id": c.get("element") or c.get("unit") or i,
                                                              "checks": [c]})
-            if G_zone_needs_7112(cfg) and not dc_.get("checks"):
+            if G_zone_needs_7112(cfg) and not dc_.get("checks") and not dc_.get("no_non_sfrs_columns"):
                 reasons.append("IS 1893 7.11.2 deformation-compatibility check of the gravity columns missing")
         reasons += _screen_findings(pk, cfg)
         reasons += analysis_findings(cfg, pk)
