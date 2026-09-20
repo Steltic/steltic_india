@@ -1975,6 +1975,30 @@ def gusset_whitmore_block_shear_status(
 
 
 
+def composite_is11384_worksheet_stubs(cfg=None):
+    """WP2.9: composite floor worksheet. Composite beams are IS 11384 (not in the corpus) -> found:false slots.
+    Scope 'bare_steel' replaces them with IS 800 8.2 bare-steel + construction-stage checks (see COMPOSITE_INDIA.md)."""
+    cfg = cfg or {}
+    scope = str(cfg.get("composite_scope") or "").lower()
+
+    def _slot(component, note, cite):
+        return {"component": component, "found": False, "DC": None, "capacity": {}, "cited": None,
+                "cite": cite, "note": note}
+    slots = [
+        _slot("is11384_composite_strength", "IS 11384 composite flexure - not in corpus (found:false)", "IS 11384"),
+        _slot("is11384_shear_connectors", "IS 11384 shear connectors - not in corpus (found:false)", "IS 11384"),
+        _slot("bare_steel_8_2", "bare-steel IS 800 8.2.1.2 / 8.2.2 check of each floor beam",
+              "IS 800:2007 8.2"),
+        _slot("construction_stage", "unshored wet-concrete stage: 8.2.2 with pre-hardening restraint + camber",
+              "IS 800:2007 8.2.2"),
+    ]
+    return {"status": "stubs", "scope": scope or None,
+            "cite": "IS 11384 (not in corpus); IS 800:2007 8.2 bare-steel scope - COMPOSITE_INDIA.md",
+            "policy": "found:false until bare_steel (IS 800 8.2 + construction stage) or delegated scope is recorded",
+            "blocks_complete": scope not in ("bare_steel", "bare-steel", "delegated"),
+            "slots": slots}
+
+
 def h6_h7_residual_status(cfg=None, pkg=None):
     """H6 / H7 status (WP2.9, HR800-13/14).
 

@@ -97,8 +97,11 @@ def test_agent_start_has_h6_h7_process_notes():
     assert "Do not invent" in src or "do not invent" in src
 
 
-def test_composite_i3_has_india_stub_note():
-    src = (ROOT / "steel_engine" / "COMPOSITE_I3.md").read_text()
-    assert "found:false" in src
-    assert "Do not invent" in src or "do not invent" in src
-    assert "IS 800" in src
+def test_composite_india_note_is11384_found_false():
+    """WP2.9: composite = IS 11384 (not in corpus) -> found:false; no 'IS 800 Ch. I', no AISC I3/I8."""
+    src = (ROOT / "steel_engine" / "COMPOSITE_INDIA.md").read_text()
+    assert "found:false" in src and "IS 11384" in src and "bare steel" in src.lower()
+    assert "invent" in src.lower()
+    import re
+    body = src.split("## Never")[0]
+    assert not re.search(r"I3\.1a|I8\.2a|Qn|psf|IS 800 Ch\. I\b", body)
