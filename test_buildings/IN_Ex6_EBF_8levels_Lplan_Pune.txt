@@ -1,10 +1,22 @@
-IN_Ex6 — 8-storey EBF office, L-plan (re-entrant), Pune
+IN_Ex6 — 8-storey office, L-plan (re-entrant corner), eccentrically braced frames (EBF), Pune
 
-Location: Pune — RETRIEVE IS 1893 Part 1 Zone, Z, soil, I (office); R for EBF —
-  if Table 9 steel EBF row found:false, use eor_documented path (see IN_Ex6_EOR_inputs_EXAMPLE.json).
-Geometry (SI N-mm): L-plan — north bar 7×2 bays @ 9.0 m (8 storeys); west leg 4×3 bays @ 9.0 m
-  (5 storeys stepped roof). Storey 1 = 4.8 m; typical = 3.9 m. Perimeter/re-entrant EBF with
-  shear links both directions; interior gravity pinned.
-Loads: RETRIEVE IS 875 P1/P2 dead+imposed (office); P3 wind — do not invent. MRSA for plan irregularity.
-Design: IS 800:2007 LSD (+ §12 capacity design for EBF links); connections IS 816/4000.
-LIVE cfg['load_plan'] RAG mandatory before pipeline.
+Location: Pune — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone III, Z 0.16; soil medium (Type II).
+Occupancy: office, 13,932 m2 (> 2,000 m2) -> importance factor I = 1.2 (Table 8 (ii)).
+Lateral system: eccentrically braced frames (IS 1893 Table 9 (ii)(c) SBF with eccentric braces, R = 5.0), links
+  designed to IS 18168:2023 cl. 11 / 12.3 (mandatory in Zone III, cl. 1.2); chevron EBF bays with 900 mm centre
+  shear links on the perimeter / re-entrant lines both directions; interior gravity framing pinned (IS 18168 1.4).
+Geometry (m): L-plan — north bar 7 x 2 bays @ 9.0 m, 8 storeys; west leg 4 x 3 bays @ 9.0 m, 5 storeys (stepped
+  roof). Storey 1 = 4.8 m; typical = 3.9 m (H = 32.1 m). Composite metal deck floors, one-way (deck spans 3.0 m
+  between secondary beams; secondaries span X onto the Y girders); cladding 0.5 kN/m2.
+Gravity (IS 875 Part 1 / Part 2): floor dead 3.0 kN/m2, roof dead 2.8 kN/m2 (unit weights per Part 1 Table 1);
+  office imposed 4.0 kN/m2 (Part 2 Table 1, rooms without separate storage) + 1.0 kN/m2 partition allowance (3.1.2);
+  roof imposed 0.75 kN/m2 (Table 2, access not provided); IS 875-2 3.2.1 imposed-load reduction for columns.
+Seismic weight: full dead + self-weight + partitions (7.3.6) + 50 % of the imposed load (Table 10, > 3.0 kN/m2).
+Wind (IS 875 Part 3:2015): Pune Vb = 39 m/s (Annex A); terrain category 3; k1 1.0, k3 1.0; outside the cyclone
+  belt -> k4 = 1.0, Kd = 0.9 (7.2.1); Ka per Table 4 for the 7.2.2.1 frame tributary area; Table 5 Cpe;
+  gust factor (10.2) if the first-mode frequency is below 1 Hz (9.1).
+Analysis: response spectrum (7.7.1: Zone III, H > 15 m, re-entrant plan), CQC, scaled to V-bar_B (7.7.3.1),
+  7.8.2 design eccentricity; storey drift 0.004 h (7.11.1.1); IS 800 Table 4 + 12.2.3 (= IS 18168 5.5) combinations.
+Design: IS 800:2007 LSD; IS 808 sections, IS 2062 E250 B0 (E350 B0 where stated); connections IS 800 Section 10
+  / 12 (CJP welds 12.4.2, HSFG 12.4.1), IS 18168 capacity design (12.3.2.2, 12.3.4).
+Deliverable: report.html + viewer_3d.html; cfg['load_plan'] from the corpus retrievals stored in rag/.
