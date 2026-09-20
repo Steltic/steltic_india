@@ -2791,10 +2791,6 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     res["capacities"] = {"compression": comp, "shear_z": shz, "shear_y": shy, "Mdy": Md_y, "Mdz_section": Md_z_sec,
                          "section_class": sc0, "tension": Td}
     klr = comp.get("KL_over_r_max")
-    if klr is not None:
-        lim = TABLE3_LIMITS["compression_WL_EL_only"] if member.get("compression_only_from_WL_EL") else TABLE3_LIMITS["compression_DL_LL"]
-        res["table3_slenderness"] = {"value": klr, "limit": lim, "dc": klr / lim, "ok": klr <= lim,
-                                     "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 maximum KL/r"}
     per = []
     for cf in combo_forces or []:
         P = float(cf.get("P_N") or 0.0)
@@ -2851,6 +2847,29 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             rec["ok"] = rec["dc"] <= 1.0
         per.append(rec)
     res["per_combo"] = per
+    # IS 800 Table 3 (3.8) maximum effective slenderness -- the row depends on what the member carries (WP6-fix):
+    # (i) 180 for compression from DL + LL; (iii) 250 when the compression arises only in WL / EL combinations;
+    # (iv) 300 on the compression flange of a beam (LLT / ry) when the member carries no axial compression at all
+    # (an 8.5 m NPB450 floor beam is not a "member carrying compressive loads": row (i) must not fail it).
+    if klr is not None:
+        Ps = [(r["P_N"], str(r.get("combo") or "")) for r in per]
+        Pmax = max([P for P, _ in Ps] or [0.0])
+        is_beam = str(member.get("role") or "").lower() == "beam"
+        comp_only_lat = Pmax > 1e-6 and all(P <= 1e-6 or ("EQ" in lab or "W_" in lab or "WL" in lab or "EL" in lab)
+                                            for P, lab in Ps)
+        if is_beam and Pmax <= 1e-6:
+            ry = comp.get("axes", {}).get("y", {}).get("r_mm") or p.get("ry") or p.get("r_min")
+            LLTs = [v for v in (member.get("LLT_sag_mm"), member.get("LLT_hog_mm")) if v]
+            v3 = (max(LLTs) if LLTs else L) / float(ry) if ry else None
+            lim = TABLE3_LIMITS["beam_compression_flange_LTB"]
+            row = "(iv) compression flange of a beam against LTB: LLT / ry"
+        elif comp_only_lat or member.get("compression_only_from_WL_EL"):
+            v3, lim, row = klr, TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
+        else:
+            v3, lim, row = klr, TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"
+        if v3 is not None:
+            res["table3_slenderness"] = {"value": v3, "limit": lim, "dc": v3 / lim, "ok": v3 <= lim,
+                                         "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim)}
     if not per:
         res.update(found=False, ok=None, dc=None, reason="no combination forces")
         return res

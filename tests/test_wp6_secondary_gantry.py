@@ -81,3 +81,23 @@ def test_gantry_girder_checks_numeric():
     # no fatigue declaration -> that row is not evaluated and DC is None (blocks COMPLETE)
     g3 = DP.gantry_girder_checks(dict(cfg, crane={k: v for k, v in EX14.items() if k != "fatigue"}), gd)
     assert g3["DC"] is None
+
+
+def test_table3_row_by_member_action():
+    """WP6-fix: IS 800 Table 3 row (iv) 300 on LLT/ry for a beam with no axial compression; row (i) 180 stays for
+    members in compression under DL + LL; row (iii) 250 when compression comes only from EQ / WL combinations."""
+    import india_is800 as I8
+    _cfg()
+    mem = {"id": "b", "section": "NPB450X190X67.16", "grade": "E250 B0", "role": "beam", "L_mm": 8500.0, "Kz": 1.0, "Ky": 1.0,
+           "LLT_sag_mm": 600.0, "LLT_hog_mm": 2833.0}
+    cf = [{"combo": "1.5DL+1.5LL", "P_N": 0.0, "Mz_i_Nmm": -2.0e8, "Mz_j_Nmm": -2.0e8, "Mz_mid_Nmm": 2.5e8, "Vy_N": 1.5e5}]
+    r = I8.member_check_is800(mem, cf)
+    t3 = r["table3_slenderness"]
+    assert t3["limit"] == 300 and t3["value"] == pytest.approx(2833.0 / 41.1, rel=0.02) and t3["ok"]
+    assert r["ok"] and r["dc"] < 1.0
+    # the same beam with a DL+LL axial compression -> row (i) 180 on KL/r (8500 / 41.1 = 207 > 180)
+    r2 = I8.member_check_is800(mem, [dict(cf[0], P_N=5.0e4)])
+    assert r2["table3_slenderness"]["limit"] == 180 and not r2["table3_slenderness"]["ok"]
+    # compression only in an EQ combination (collector) -> row (iii) 250
+    r3 = I8.member_check_is800(mem, cf + [dict(cf[0], combo="1.5DL+1.5EQ_X", P_N=5.0e4)])
+    assert r3["table3_slenderness"]["limit"] == 250
