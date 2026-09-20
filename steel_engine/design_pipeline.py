@@ -468,89 +468,8 @@ def design(name, outdir=None):
             except Exception as _rage:
                 entry["rag_capacities_error"] = str(_rage)
         pkg["connections"].append(entry)
-    # ---- SEEDED COLLECTOR SLOTS + FRAMEWORK IRREGULARITY SCREEN (hardening #3/#9) ----
-    # When the footprint screen finds a re-entrant corner or setback, seed a collector design slot
-    # with the diaphragm-force demand so the package CANNOT silently omit it (weak-LLM miss #1).
-    # Also write the framework-computed irregularity screen (story-stiffness ratios + torsion
-    # ratio + classification) so the agent only has to RESPOND to it, not derive it.
-    try:
-        pir = E.plan_irregularities(cfg)
-    except Exception:
-        pir = {}
-    try:
-        NFq = len(cfg["heights"])
-        Tq, w2q, eXq, eYq, Mtq = E.modal(cfg, min(3 * NFq, 12))
-        Csq, Vq, Tuq, Taq, kq, Fxq, Wq = E.elf(cfg, Tq[0])
-        wlev = {k: E.floor_w(cfg, k) for k in range(1, NFq + 1)}
-        SDSq = float(cfg["seis"].get("SDS", 1.0)); Ieq = float(cfg["seis"].get("Ie", 1.0))
-        Fpx = {}
-        for k in range(1, NFq + 1):
-            num = sum(Fxq[i] for i in range(k, NFq + 1)); den = sum(wlev[i] for i in range(k, NFq + 1))
-            Fpx[k] = min(max(num / den * wlev[k], 0.2 * SDSq * Ieq * wlev[k]), 0.4 * SDSq * Ieq * wlev[k])
-        Fp_max = max(Fpx.values())
-        # story-stiffness soft-story screen (both directions) + torsion ratio -- computed BEFORE the
-        # collector seeding so a IS 1893 torsional irregularity (δmax/δmin > 1.5, Table 5(i)) can trigger the
-        # 12.3.3.5 25% increase there
-        sxq = E.static_lateral(cfg, Fxq, "X"); syq = E.static_lateral(cfg, Fxq, "Y")
-        def _kratio(s_):
-            dr = s_[2]
-            Vst = [sum(Fxq[i] for i in range(k, NFq + 1)) for k in range(1, NFq + 1)]
-            K = [abs(Vst[k - 1] / dr[k - 1]) if abs(dr[k - 1]) > 1e-12 else 1e9 for k in range(1, NFq + 1)]
-            r1 = K[0] / K[1] if NFq >= 2 else 9.9
-            r3 = K[0] / (sum(K[1:4]) / max(len(K[1:4]), 1)) if NFq >= 4 else r1
-            return round(r1, 2), round(r3, 2)
-        kx, kx3 = _kratio(sxq); ky, ky3 = _kratio(syq)
-        cls = ("none" if min(kx, ky) >= 0.70 and min(kx3, ky3) >= 0.80 else
-               ("Type 1b EXTREME soft story (PROHIBITED SDC E/F, 12.3.3.1)"
-                if min(kx, ky) < 0.60 or min(kx3, ky3) < 0.70 else "Type 1a soft story"))
-        tr = max(sxq[4], syq[4])
-        # 7-22 Table 12.3-1/-1a: SINGLE Type 1 torsional irregularity keyed to the TIR with
-        # cumulative tiers >1.2 / >1.4 / >1.6 (no 1a/1b split, no SDC E/F prohibition). The engine
-        # ratio is a per-story DRIFT-based screen (the Eq. 12.3-2 TIR basis; static_lateral).
-        tcls = ("none" if tr <= 1.2 else
-                ("Type 1 torsional, TIR screen %.2f (>1.6 tier)" % tr if tr > 1.6 else
-                 "Type 1 torsional, TIR screen %.2f (>1.4 tier)" % tr if tr > 1.4 else
-                 "Type 1 torsional, TIR screen %.2f (>1.2 tier)" % tr))
-        Ax = round(min((tr / 1.2) ** 2, 3.0), 2) if tr > 1.2 else 1.0
-        # 12.3.3.5 (SDC D-F): 25% diaphragm-force increase for horizontal Type 1 (TIR>1.2),
-        # 2 (re-entrant), 3, 4 (out-of-plane offset) or vertical Type 3. Type 4 is not auto-screened
-        # here -- declare it via the collector design if present.
-        tors_trig = tr > 1.2
-        if pir.get("reentrant") or pir.get("setback") or tors_trig:
-            Om0q = float(cfg["seis"].get("Om0", 2.5) or 2.5)
-            bump = 1.25 if (pir.get("reentrant") or tors_trig) else 1.0
-            pkg["connections"].append({
-                "id": "collector-irregularity-lines", "type": "collector / drag strut (SEEDED - REQUIRED)",
-                "demand": ({"Fpx_max_N": round(Fp_max, 0), "Om0": Om0q,
-                            "increase_12_3_3_5": bump,
-                            "P_basis_N": round(bump * Om0q * Fp_max * 0.5, 0)}
-                           if _SI else
-                           {"Fpx_max_kip": round(Fp_max, 0), "Om0": Om0q,
-                            "increase_12_3_3_5": bump,
-                            "P_basis_kip": round(bump * Om0q * Fp_max * 0.5, 0)}),
-                "design_basis": "SEEDED because the screen found %s: collectors on the "
-                                "re-entrant/setback/transfer lines are a REQUIRED deliverable. Design "
-                                "with the overstrength / capacity-design combinations (IS 800 / IS 1893 — cite retrieved clause)%s. Refine the "
-                                "line share from your diaphragm geometry; fill limit_state/cited/"
-                                "capacity/DC like any other connection." % (
-                                    "/".join(k for k, on in (("reentrant", pir.get("reentrant")),
-                                                             ("setback", pir.get("setback")),
-                                                             ("torsional TIR>1.2", tors_trig)) if on),
-                                    " + the 25%% increase (12.3.3.5: Type 1 torsional / Type 2 "
-                                    "re-entrant / Type 4)" if bump > 1.0 else ""),
-                "limit_state": None, "cited": None, "capacity": {}, "DC": None})
-        pkg["framework_screen"] = {
-            "note": "FRAMEWORK-COMPUTED irregularity screen -- the agent RESPONDS to these (classify "
-                    "consequences, apply rho/Ax/25% collector increases as required); do not re-derive.",
-            "plan": {k: bool(v) for k, v in pir.items()},
-            "soft_story": {"K1_over_K2": {"X": kx, "Y": ky}, "K1_over_avg3": {"X": kx3, "Y": ky3},
-                           "classification": cls, "cite": "IS 1893 Part 1:2016 Table 5/6 + cl.7.1 (see india_seismic.py)"},
-            "torsion": {"ratio_max": round(tr, 2), "classification": tcls, "Ax": Ax,
-                        "cite": "IS 1893 torsional provisions (agent/RAG)"},
-            ("Fpx_N_by_level" if _SI else "Fpx_kip_by_level"): {k: round(v, 0) for k, v in Fpx.items()},
-        }
-    except Exception as _se:
-        pkg["framework_screen"] = {"error": "screen failed: %s" % _se}
+    # WP2.6: the ASCE diaphragm-force collector stub was removed.  India collectors / chords come
+    # from the diaphragm load path (india_diaphragm.collector_demands, applied in design_india).
     _cp = os.path.join(outdir, "calc_package.json")
     try:                                            # never silently destroy the agent's filled package
         if os.path.exists(_cp):
@@ -858,6 +777,16 @@ def design_india(name, cfg, outdir):
     fs_ = "two-way" if "two" in str(cfg.get("floor_system", "one-way")).lower() else "one-way"
     nseg = int(cfg.get("demand_nseg", 6))
     per_case, kinds, sinfo = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el)
+    # WP2.6: collector / chord axial from the diaphragm load path (rigid diaphragm gives beams P = 0)
+    coll_added, coll_error = {}, None
+    amp1223 = str(cfg.get("collector_basis") or "").lower() in ("is800_12_2_3", "12.2.3")
+    try:
+        import india_diaphragm as DIA
+        _i = E.build(cfg, "PDelta")
+        _reg = {t: (kind, sec, n1, n2) for (t, kind, sec, n1, n2) in _i["ele"]}
+        coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223)
+    except Exception as ex:
+        coll_error = "%s: %s" % (type(ex).__name__, ex)
     env = SM.envelope_from_records(per_case, kinds, cases)
 
     info0 = E.build(cfg, "PDelta")
@@ -914,7 +843,7 @@ def design_india(name, cfg, outdir):
         worst = None
         for t in tags:
             recs = {l: r for l, r in (envt[t].get("records") or {}).items()}
-            if kind != "col":
+            if kind != "col" and not (amp1223 and t in coll_added):
                 recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {})}
             mem = _member_input_record(cfg, t, kind, sec, reg[t][2], reg[t][3], length[t], role)
             res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
@@ -1028,6 +957,8 @@ def design_india(name, cfg, outdir):
     pkg["zero_demand_elements"] = zero
     pkg["beam_deflection"] = run.get("beam_deflection_rows")
     pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
+    pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
+    pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
         try:
             hook(cfg, pkg, run, envt, reg)
@@ -1068,13 +999,16 @@ def design_india(name, cfg, outdir):
 
 
 def _collector_demands(cfg, pkg, run, envt, reg):
-    """WP2.6 hook -- replaced by the diaphragm load-path implementation (see _collectors_is1893)."""
-    try:
-        from india_diaphragm import collector_demands
-    except ImportError:
-        pkg.setdefault("collectors", [])
-        return
-    pkg["collectors"] = collector_demands(cfg, run, reg)
+    """WP2.6: collector / chord rows (india_diaphragm); the forces were already added to the beam
+    records before the member checks."""
+    from india_diaphragm import collector_demands
+    rows = collector_demands(cfg, run, reg)
+    pkg["collectors"] = {"rows": rows, "applied_to_member_checks": bool(pkg.get("_coll_added")),
+                         "n_beams_with_axial": len(pkg.get("_coll_added") or {}),
+                         "basis_12_2_3": pkg.get("_coll_amp"), "error": pkg.get("_coll_error"),
+                         "cite": "india_diaphragm (equilibrium of the analysed model); IS 800 9.3"}
+    for k in ("_coll_added", "_coll_error", "_coll_amp"):
+        pkg.pop(k, None)
 
 
 def _secondary_member_demands(cfg, pkg, run, envt, reg):
