@@ -210,9 +210,13 @@ def india_checks(cfg):
             if abs(VB - float(ss["Ah"]) * W) > 0.01 * VB:
                 say("ERROR", "seismic_summary VB_kN %.1f != Ah x W = %.1f (7.6.1)" % (VB, float(ss["Ah"]) * W))
             import engine3d as E
-            E.build(cfg, "Linear")
-            NF = len(cfg["heights"])
-            We = sum(E.floor_w(cfg, k) for k in range(1, NF + 1)) / 1000.0
+            try:
+                E.build(cfg, "Linear")
+                NF = len(cfg["heights"])
+                We = sum(E.floor_w(cfg, k) for k in range(1, NF + 1)) / 1000.0
+            except Exception as ex:
+                say("ERROR", "model build failed (%s: %s) -- geometry / units inconsistent" % (type(ex).__name__, ex))
+                return out
             if abs(We - W) > 0.02 * W:
                 say("ERROR", "engine seismic weight %.1f kN differs from design W %.1f kN by %.1f %% (> 2 %%): W must be "
                              "full DL + self-weight + partitions (7.3.6) + Table 10 IL + 7.3.5 snow (WP1.6)"

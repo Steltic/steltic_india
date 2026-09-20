@@ -322,10 +322,7 @@ def design(name, outdir=None):
         if _SI:
             inp.update(P_comp_N=round(g["comp"], 2), P_tens_N=round(g["tens"], 2),
                        Mz_Nmm=round(g["Mz"], 1), My_Nmm=round(g["My"], 1), V_N=round(g["V"], 2),
-                       # legacy aliases for viewers that still read *_kip keys (values are N / N·mm)
-                       P_comp_kip=round(g["comp"], 2), P_tens_kip=round(g["tens"], 2),
-                       Mz_kipin=round(g["Mz"], 1), My_kipin=round(g["My"], 1), V_kip=round(g["V"], 2),
-                       governing_combo=g["combo"])
+                       governing_combo=g["combo"])       # WP1.12: no *_kip aliases holding N / N-mm
         else:
             inp.update(P_comp_kip=round(g["comp"], 2), P_tens_kip=round(g["tens"], 2),
                        Mz_kipin=round(g["Mz"], 1), My_kipin=round(g["My"], 1), V_kip=round(g["V"], 2),

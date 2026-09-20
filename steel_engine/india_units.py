@@ -114,7 +114,11 @@ def is_si(cfg: dict | None = None) -> bool:
             return True
         if cfg.get("metric") or cfg.get("si_native"):
             return True
-        # Ambiguous / unset units: infer from geometry magnitude
+        if _india_declared(cfg):
+            # WP1.12: an India job must declare its units -- never guessed from magnitudes
+            raise UnitsError("India job without cfg['units'] (declare 'N-mm', 'mm' or 'm'); units are "
+                             "never inferred from geometry magnitudes on steltic_india (WP1.12)")
+        # Ambiguous / unset units (legacy USA archetypes only): infer from geometry magnitude
         probe = cfg.get("heights") or cfg.get("story_heights") or cfg.get("SX")
         h0 = None
         if isinstance(probe, (list, tuple)) and probe:
@@ -130,6 +134,17 @@ def is_si(cfg: dict | None = None) -> bool:
             return False      # looks like inches
         return UNIT_SYSTEM == "N-mm"
     return UNIT_SYSTEM == "N-mm"
+
+
+class UnitsError(ValueError):
+    """Missing / ambiguous units on an India job."""
+
+
+def _india_declared(cfg: dict) -> bool:
+    j = str(cfg.get("jurisdiction") or cfg.get("code_jurisdiction") or cfg.get("code_region") or "").lower()
+    lp = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
+    return j in ("india", "in", "bis", "is", "is_bis") or \
+        str(lp.get("jurisdiction") or "").lower() in ("india", "in", "is", "is_bis", "bis")
 
 
 def wants_legacy_kip_in(cfg: dict) -> bool:
@@ -221,8 +236,8 @@ def metric_stress_to_ksi(value, unit: str = "MPa") -> float:
     raise ValueError(f"unsupported stress unit {unit!r}")
 
 
-def kn_per_m_to_plf(value) -> float:
-    """kN/m → kip/ft (legacy)."""
+def kn_per_m_to_kip_per_ft(value) -> float:
+    """kN/m -> kip/ft (legacy USA display only; WP1.12 renamed from the misleading 'plf')."""
     return float(value) * KN_TO_KIP / (M_TO_IN / 12.0)
 
 
@@ -236,7 +251,7 @@ def mpa_to_ksi(value) -> float:
 _LENGTH_KEYS = (
     "story_heights", "storey_heights", "heights", "bay_x", "bay_y",
     "bay_spacing_x", "bay_spacing_y", "height", "width", "depth",
-    "eave_height", "ridge_height",
+    "eave_height", "ridge_height", "xcoords", "ycoords",
 )
 
 
@@ -275,19 +290,9 @@ def apply_si_geometry(cfg: dict) -> dict:
         "metric", "si", "m", "mm", "india_metric", "india_si", "n-mm", "n-mm-s",
         "n-mm-sec",
     )
-    # India jurisdiction with UNSET units: only treat as SI if geometry looks like metres
-    # (storey height < 30). Inch archetypes (heights~156, SX~360) must not be ×1000'd.
-    if not metric and str(cfg.get("jurisdiction") or "").lower() in ("india", "in", "bis"):
-        probe = cfg.get("heights") or cfg.get("story_heights") or cfg.get("storey_heights")
-        h0 = None
-        if isinstance(probe, (list, tuple)) and probe:
-            h0 = probe[0]
-        elif isinstance(probe, (int, float)):
-            h0 = probe
-        if h0 is not None and float(h0) < 30.0:
-            metric = True
-        elif units in ("n-mm", "si", "metric"):
-            metric = True
+    # India jurisdiction with UNSET units: refused (WP1.12) -- no guessing from magnitudes.
+    if not metric and _india_declared(cfg):
+        raise UnitsError("India job without cfg['units']: declare 'N-mm' (lengths mm), 'mm' or 'm' (WP1.12)")
     if not metric:
         return cfg
     if cfg.get("_units_converted") and str(cfg.get("units")) == "N-mm":
