@@ -114,7 +114,8 @@ def example_build(cfg, transf="PDelta"):
 
     # ---- braces (optional; single concentric diagonal per braced bay/story) ----
     if cfg.get("braces"):
-        ops.uniaxialMaterial("Elastic", 1, eng.E); brA = eng.HSS[cfg["brace"]]
+        ops.uniaxialMaterial("Elastic", 1, eng.E); brA = (eng.Ipack(cfg["brace"])[0] if eng.unit_system() == "N-mm"  # WP2.2: IS CHS unpatched
+                                                           else eng.HSS[cfg["brace"]])
         for k in range(1, NF+1):
             for (dirn, i, j) in cfg["braces"](k, NX, NY):
                 a = (i, j); b = (i+1, j) if dirn == "X" else (i, j+1)

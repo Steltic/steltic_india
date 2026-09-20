@@ -213,7 +213,47 @@ def main():
     print(f"wrote {OUT} rows={len(rows)} errors={len(errors)}")
     if errors[:10]:
         print("sample errors:", *errors[:10], sep="\n  ")
+    annotate_materials(OUT)
+
+
+# ---------------------------------------------------------------------------------------------
+# WP2.2 / HR800-13: IS 1161 material is NOT IS 2062. Tubes are graded YSt 210/240/310/355 and made
+# HFS / CDS / ERW / HFIW (IS 1161:2014 cl. 3.1, 5 and Table 2, pdf p.6). The grade and process are
+# job inputs (cfg), so each row carries empty `grade`/`process`/`fy_MPa`/`fu_MPa` columns that
+# sections.props(..., grade=, process=) resolves from IS1161_TABLE2. There is NO default fy (never 250).
+# ---------------------------------------------------------------------------------------------
+MATERIAL_FIELDS = ["grade", "process", "fy_MPa", "fu_MPa", "D_mm", "t_mm", "r_mm", "Ze_mm3", "Zp_mm3",
+                   "It_mm4", "Iw_mm6", "validated"]
+
+
+def annotate_materials(path=OUT):
+    rows = list(csv.DictReader(open(path, newline="")))
+    fields = list(rows[0].keys())
+    for k in MATERIAL_FIELDS:
+        if k not in fields:
+            fields.append(k)
+    for r in rows:
+        D = float(r["d"]) * 25.4
+        t = float(r["tw"]) * 25.4
+        A = float(r["A_si_mm2"])
+        I = float(r["Izz_si_mm4"])
+        Di = D - 2 * t
+        r.update({"grade": "", "process": "", "fy_MPa": "", "fu_MPa": "",
+                  "D_mm": round(D, 2), "t_mm": round(t, 2), "r_mm": round(math.sqrt(I / A), 2),
+                  "Ze_mm3": round(2 * I / D, 1), "Zp_mm3": round((D ** 3 - Di ** 3) / 6.0, 1),
+                  "It_mm4": round(2 * I, 1), "Iw_mm6": 0.0})
+        ok = (abs(A / (math.pi / 4 * (D ** 2 - Di ** 2)) - 1) <= 0.03
+              and abs(float(r["Mass_kg_m"]) / (0.00785 * A) - 1) <= 0.03)
+        r["validated"] = "ok" if ok else "FAIL"
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"annotated {path}: {sum(r['validated'] == 'ok' for r in rows)}/{len(rows)} rows validated")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--annotate":
+        annotate_materials(OUT)
+    else:
+        main()
