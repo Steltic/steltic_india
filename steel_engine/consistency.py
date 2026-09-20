@@ -363,9 +363,9 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         _sp=(pkg.get("framework_screen") or {}).get("plan") or {}
         if any(_sp.get(k) for k in ("reentrant","setback","nonparallel")):
             pir={k: bool(_sp.get(k)) for k in ("reentrant","setback","nonparallel")}
-    # NOTE: IS 875/1893 deleted the 7-16 Table 12.6-1 analysis-procedure matrix; sec.12.6 permits ELF
-    # for ALL structures, so an irregular SDC D+ building no longer FAILS for lacking 'RS'. The
-    # MRSA-recommended advisory is rendered in the report (Ch.2 irregularity screen) instead.
+    # IS 1893 7.6/7.7.1: ESM only for regular buildings < 15 m in Zone II; every other building
+    # needs linear dynamic analysis (scaled RSA forces in the demands).  Enforced by
+    # india_issues() below and by india_seismic_gates.design_status (WP0.2 / WP1.3).
     # S2: India / SI jobs use IS 1893 0.004 h — strip USA Table 12.12-1 / 0.025h scaffold.
     _india = False
     try:
@@ -568,20 +568,25 @@ def _consultancy_issues(cfg, pkg):
     arch = (str(cfg.get("arch", "")) + " " + str(cfg.get("system", ""))).lower()
     mem = pkg.get("members") or []
     # A3 ponding: long-span flat roof beams and no ponding statement
+    def _len_m(m):
+        inp = (m.get("inputs") or {}) if isinstance(m, dict) else {}
+        if inp.get("length_mm") is not None:
+            return float(inp.get("length_mm") or 0) / 1000.0
+        return float(inp.get("length_in") or 0) * 0.0254
     roof_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "roof"
-                    and float((m.get("inputs") or {}).get("length_in") or 0) >= 480 for m in mem)
+                    and _len_m(m) >= 12.0 for m in mem)
     if roof_long and "ponding" not in blob:
-        out.append("long-span (>=40 ft) roof framing and NO ponding evaluation in calc_package -- "
-                   "check ponding stability/impounded rain (IS 800:2007 App. 2 / IS 875/1893 Ch. 8: "
-                   "roof slope + secondary drainage head) and record it")
+        out.append("long-span (>= 12 m) roof framing and NO ponding evaluation in calc_package -- "
+                   "check ponding / impounded rain (roof slope + secondary drainage head; IS 875 (Part 4) "
+                   "for snow-water) and record it")
     # A6 footfall vibration: long floor spans or vibration-sensitive occupancy
     floor_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor"
-                     and float((m.get("inputs") or {}).get("length_in") or 0) >= 480 for m in mem)
+                     and _len_m(m) >= 12.0 for m in mem)
     sens = any(k in arch for k in ("lab", "laborator", "hospital", "gym", "assembly", "vibration"))
     if (floor_long or sens) and "vibration" not in blob:
         out.append("footfall VIBRATION serviceability not addressed (long floor spans and/or "
-                   "vibration-sensitive occupancy) -- do the AISC Design Guide 11 screen (fn, a_peak "
-                   "vs occupancy limit) and record it")
+                   "vibration-sensitive occupancy) -- IS 800:2007 5.6.4 / Annex (floor vibration) screen: "
+                   "fundamental frequency and acceleration vs occupancy, recorded in the package")
     # A1 composite floors: the cfg declares a composite floor system -> the package must carry the
     # Ch. I essentials (studs + camber + the unshored wet-concrete stage), OR an explicit scope
     # statement (bare-steel lower bound / composite excluded / delegated). Content-clearable.
@@ -607,20 +612,19 @@ def _consultancy_issues(cfg, pkg):
                   ("lower bound", "lower-bound model", "scope", "excluded", "not relied", "delegated")))
         if missing and not scoped:
             out.append("COMPOSITE floor system declared and the package lacks: " + "; ".join(missing) +
-                       " -- design the composite floor per IS 800:2007 Ch. I (see COMPOSITE_I3.md: "
-                       "b_eff I3.1a, studs I8.2a, partial composite I3.2a, camber rule, I_LB deflection) "
-                       "or record an explicit composite scope statement")
+                       " -- composite beams in India fall under IS 11384 (not in the corpus -> found:false): "
+                       "record the scope (bare-steel design per IS 800 8.2 + construction stage, or delegated)")
     # A8 seismic joint / pounding: multi-wing keywords and no joint decision
     if any(k in arch for k in ("twin", "two tower", "wings", "wing ")) and \
             not any(k in blob for k in ("seismic joint", "pounding", "joint width", "no seismic joint")):
         out.append("multi-wing/tower configuration and NO seismic-joint decision recorded -- either "
-                   "size the joint (sum of Cd-amplified drifts, IS 875/1893 12.12.3 + pounding check) "
-                   "or record why the wings are intentionally connected (with the interaction designed)")
+                   "size the joint per IS 1893 7.11.3 (R x (D1 + D2), or (R1 D1 + R2 D2)/2 at equal floor "
+                   "levels, Amd 1) or record why the wings are intentionally connected")
     # B6 snow drift at steps/parapets
     stepish = any(k in arch for k in ("step", "setback", "parapet", "penthouse", "tier", "wedding"))
     if float(cfg.get("snow", 0) or 0) > 0 and stepish and "drift" not in blob.replace("drift_", ""):
         out.append("snow present with roof steps/parapets/setbacks and no DRIFT surcharge in the "
-                   "package (IS 875/1893 7.7/7.8) -- add the drift check to the step-adjacent members")
+                   "package (IS 875 (Part 4) drift / unbalanced cases) -- add it to the step-adjacent members")
     # B8 delegated-design register
     if any(k in blob for k in ("joist", "sji", " deck", "brb", "stair", "curtain wall")) and \
             "delegat" not in blob:
@@ -628,6 +632,273 @@ def _consultancy_issues(cfg, pkg):
                    "'delegated_design' register in capacity_design -- list each delegated item, the "
                    "design criteria handed off, and the interface forces")
     return out
+
+
+# =====================================================================================
+# WP0.3 -- India extensions (FAIL rules).  All return lists of issue strings.
+# =====================================================================================
+GREP_RULES = (
+    (re.compile(r"cap\w*\s*=\s*max\(.*(\*\s*1\.(15|25)|1\.(15|25)\s*\*)"), "capacity computed from its own demand (cap = max(.. * 1.15/1.25))"),
+    (re.compile(r"DC['\"\]]*\s*[:=]\s*0\.8\b"), "literal D/C constant 0.8 in a job script"),
+    (re.compile(r"DC['\"\]]*\s*[:=]\s*0\.9\b"), "literal D/C constant 0.9 in a job script"),
+    (re.compile(r"seeded\s+D/C", re.I), "'seeded D/C' in a job script"),
+    (re.compile(r"governing\s*=\s*[\"']seismic[\"']"), "governing='seismic' forced in a job script"),
+    (re.compile(r"\.pass\"?\]?\s*=\s*True|\"pass\"\s*:\s*True\s*,\s*#\s*force", re.I), "forced pass flag"),
+)
+
+
+def script_grep_issues(job_dir):
+    """Grep the job's python scripts for capacity-from-demand / seeded-D/C patterns."""
+    out = []
+    if not job_dir or not os.path.isdir(job_dir):
+        return out
+    for dp, dn, fn in os.walk(job_dir):
+        if os.path.basename(dp) in ("rag", "figs", "__pycache__"):
+            continue
+        for f in fn:
+            if not f.endswith(".py"):
+                continue
+            p = os.path.join(dp, f)
+            try:
+                lines = open(p, encoding="utf-8", errors="replace").read().splitlines()
+            except Exception:
+                continue
+            for i, ln in enumerate(lines, 1):
+                for rx, why in GREP_RULES:
+                    if rx.search(ln):
+                        out.append("%s:%d %s" % (os.path.relpath(p, job_dir), i, why))
+    return out
+
+
+def bak_issues(job_dir):
+    out = []
+    d = os.path.join(job_dir or "", "design")
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d)):
+            if ".bak" in f or f.endswith("bak"):
+                out.append("stale backup design/%s shipped -- delete it" % f)
+    for f in ("pipeline_error.txt",):
+        if job_dir and os.path.exists(os.path.join(job_dir, f)):
+            out.append("%s shipped with the package -- delete it (stale failed run)" % f)
+    return out
+
+
+def report_residue_issues(job_dir):
+    p = os.path.join(job_dir or "", "report.html")
+    if not os.path.exists(p):
+        return []
+    try:
+        from india_contract_residue import residue_hits
+        h = residue_hits(open(p, encoding="utf-8", errors="replace").read())
+    except Exception as ex:
+        return ["report residue scan failed: %s" % ex]
+    return ["report.html US-residue: %d hit(s), e.g. %r" % (len(h), h[:3])] if h else []
+
+
+_NUM = re.compile(r"(?<![\w.])\d+\.\d+(?![\d.])|(?<==)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?(?=\s*(?:m/s|kN|kPa|mm|percent|%))")
+
+
+def _rag_texts(job_dir):
+    out = []
+    d = os.path.join(job_dir or "", "rag")
+    if not os.path.isdir(d):
+        return out
+    for dp, dn, fn in os.walk(d):
+        for f in fn:
+            p = os.path.join(dp, f)
+            try:
+                raw = open(p, encoding="utf-8", errors="replace").read()
+            except Exception:
+                continue
+            q = None
+            try:
+                js = json.loads(raw)
+                q = js.get("query") if isinstance(js, dict) else None
+                txt = []
+                _gather_text(js, txt)
+                raw = " ".join(t for t in txt if isinstance(t, str))
+            except Exception:
+                pass
+            out.append((os.path.relpath(p, job_dir), q, re.sub(r"\s+", " ", raw).lower()))
+    return out
+
+
+def rag_evidence_issues(plan, job_dir):
+    """found:true retrieval entries must have a stored hit in rag/ containing the cited text:
+    either {hit_file, quote} with the quote in that file, or a stored hit for the same query whose
+    text contains every number quoted in the cite."""
+    out = []
+    ret = (plan or {}).get("retrieval") if isinstance(plan, dict) else None
+    if not isinstance(ret, list):
+        return out
+    texts = _rag_texts(job_dir)
+    for i, h in enumerate(ret):
+        if not isinstance(h, dict) or h.get("found") is not True:
+            continue
+        cite = str(h.get("cite") or "")
+        ok = False
+        hf, quote = h.get("hit_file"), h.get("quote")
+        if hf and quote:
+            qn = re.sub(r"\s+", " ", str(quote)).lower()
+            ok = any(rel.endswith(str(hf)) and qn in t for rel, _q, t in texts)
+        else:
+            nums = [n.strip() for n in _NUM.findall(cite)]
+            for rel, q, t in texts:
+                if q is not None and str(q).strip().lower() != str(h.get("query") or "").strip().lower():
+                    continue
+                if nums and all(n in t for n in nums):
+                    ok = True
+                    break
+        if not ok:
+            out.append("load_plan.retrieval[%d] (%s) is found:true but no stored rag/ hit contains the cited "
+                       "text/values -- persist the hit (hit_file + quote) or set found:false" % (i, h.get("query")))
+    return out
+
+
+_COMPONENT_REQUIRES = (
+    (re.compile(r"crane|gantry|runway", re.I), lambda c, comps: bool(c.get("crane") or c.get("cranes"))),
+    (re.compile(r"\bbrb|brb_core|buckling", re.I), lambda c, comps: "nobasis:brbf" in comps),
+    (re.compile(r"\blink\b|link_", re.I), lambda c, comps: "sbf_eccentric" in comps),
+    (re.compile(r"web_plate|spsw|plate_shear", re.I), lambda c, comps: "nobasis:spsw" in comps),
+    (re.compile(r"scwb|panel_zone|smf_", re.I), lambda c, comps: "steel_smrf" in comps),
+)
+
+
+def absent_component_issues(cfg, pkg):
+    """capacity_design / connection keys for components that the model does not contain."""
+    out = []
+    if not isinstance(cfg, dict) or not isinstance(pkg, dict):
+        return out
+    try:
+        from india_seismic_gates import parse_systems, system_text
+        comps = parse_systems(system_text(cfg), imf_as_smrf=bool(cfg.get("imf_as_smrf")))
+    except Exception:
+        comps = []
+    keys = []
+    cd = pkg.get("capacity_design") or {}
+    if isinstance(cd, dict):
+        keys += list((cd.get("checks") or {}).keys()) if isinstance(cd.get("checks"), dict) else []
+        keys += [k for k in cd.keys() if k not in ("checks", "note", "cite", "status", "system", "R")]
+    keys += [str(c.get("id") or "") for c in (pkg.get("connections") or []) if isinstance(c, dict)]
+    for k in keys:
+        for rx, pred in _COMPONENT_REQUIRES:
+            if rx.search(k) and not pred(cfg, comps):
+                out.append("package carries '%s' for a component absent from the model/system" % k)
+    return out
+
+
+def literal_dc_issues(pkg):
+    """D/C exactly 0.80 / 0.90 / 1.000 without derived capacity fields, or a capacity that is an
+    exact multiple of its own demand."""
+    out = []
+    if not isinstance(pkg, dict):
+        return out
+    for kind in ("members", "connections"):
+        for e in (pkg.get(kind) or []):
+            if not isinstance(e, dict):
+                continue
+            ch = e.get("checks")
+            recs = [e]
+            if isinstance(ch, list):
+                recs += [c for c in ch if isinstance(c, dict)]
+            elif isinstance(ch, dict):
+                recs += [v for v in ch.values() if isinstance(v, dict)]
+            for c in recs:
+                dc = c.get("DC", c.get("dc"))
+                if isinstance(dc, bool) or not isinstance(dc, (int, float)):
+                    continue
+                if any(abs(float(dc) - k) < 1e-9 for k in (0.8, 0.9, 1.0)):
+                    derived = any(c.get(k) is not None for k in ("value", "demand", "demand_N")) and \
+                        any(c.get(k) is not None for k in ("limit", "capacity", "capacity_N")) and \
+                        (c.get("inputs") or c.get("geometry") or c.get("derivation") or c.get("clause"))
+                    if not derived:
+                        out.append("%s '%s': literal D/C %.3f without a capacity derived from geometry + clause"
+                                   % (kind[:-1], e.get("id"), float(dc)))
+    return out
+
+
+def zero_demand_issues(pkg):
+    out = []
+    for m in (pkg or {}).get("members") or []:
+        if not isinstance(m, dict):
+            continue
+        inp = m.get("inputs") or {}
+        vals = [inp.get(k) for k in ("P_comp_N", "P_tens_N", "Mz_Nmm", "My_Nmm", "V_N")]
+        if all(isinstance(v, (int, float)) for v in vals) and all(abs(float(v)) < 1e-6 for v in vals):
+            out.append("member '%s' has zero demand in every combination -- load path missing (WP2.7)" % m.get("id"))
+    for t in (pkg or {}).get("zero_demand_elements") or []:
+        out.append("element %s has zero demand in every combination (load not distributed)" % t)
+    return out
+
+
+def _india_design_basis_issues(cfg, pkg):
+    """India replacement for _design_basis_issues (no ASCE Table 12.12-1 / AISC 341 / 12.3.3.5 text)."""
+    out = []
+    if not isinstance(cfg, dict):
+        return out
+    if not cfg.get("system"):
+        out.append("declare cfg['system'] = the IS 1893 Table 9 system (e.g. 'SCBF', 'SMRF')")
+    dl = cfg.get("drift_limit")
+    if dl not in (None, "") and float(dl) > 0.004 + 1e-9:
+        out.append("drift_limit=%.4f exceeds IS 1893 7.11.1.1 (0.004 h) -- not permitted" % float(dl))
+    _dia = str(cfg.get("diaphragm", "rigid")).lower()
+    if _dia in ("flexible", "semi-rigid") and isinstance(pkg, dict):
+        blob = json.dumps(pkg).lower()
+        if "tributary" not in blob and "semi_rigid" not in blob and "semi-rigid" not in blob:
+            out.append("cfg['diaphragm']='%s' but no tributary / semi-rigid diaphragm distribution is recorded "
+                       "(IS 1893 7.6.4)" % _dia)
+    _dex = cfg.get("drift_exempt_stories") or {}
+    if _dex and isinstance(pkg, dict):
+        blob3 = json.dumps(pkg).lower()
+        if not any(w in blob3 for w in ("step", "split-level", "inter-diaphragm", "offset")):
+            out.append("drift_exempt_stories declared (%s) but no step/split-level transfer detail is designed"
+                       % sorted(_dex))
+    try:
+        import engine3d as _E
+        pir = _E.plan_irregularities(cfg)
+    except Exception:
+        pir = {}
+    if (pir.get("reentrant") or pir.get("setback")) and isinstance(pkg, dict):
+        conns = pkg.get("connections") or []
+        coll = [c for c in conns if isinstance(c, dict) and "collector" in (str(c.get("id", "")) + str(c.get("type", ""))).lower()]
+        if not coll and not (pkg.get("collectors") or []):
+            out.append("re-entrant/setback plan but no collector / chord design in calc_package (IS 1893 7.6.4; WP2.6)")
+    return out
+
+
+def india_issues(cfg, pkg, job_dir):
+    """All WP0.3 India FAIL rules."""
+    out = []
+    try:
+        import india_seismic_gates as G
+        out += G._R_system_agreement(cfg or {}, pkg)
+        out += [m for s, m in G.system_zone_findings(cfg or {}) if s == "ERROR"] if cfg else []
+    except Exception as ex:
+        out.append("seismic gates unavailable: %s" % ex)
+    out += zero_demand_issues(pkg)
+    out += absent_component_issues(cfg, pkg)
+    out += literal_dc_issues(pkg)
+    out += script_grep_issues(job_dir)
+    out += bak_issues(job_dir)
+    out += report_residue_issues(job_dir)
+    plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None
+    if plan is None and isinstance(pkg, dict):
+        plan = pkg.get("load_plan")
+    if plan is None and job_dir and os.path.exists(os.path.join(job_dir, "load_plan.json")):
+        try:
+            plan = json.load(open(os.path.join(job_dir, "load_plan.json")))
+        except Exception:
+            plan = None
+    out += rag_evidence_issues(plan, job_dir)
+    return out
+
+
+def _is_india(cfg):
+    try:
+        from engine3d import _india_job
+        return bool(_india_job(cfg or {}))
+    except Exception:
+        return str((cfg or {}).get("jurisdiction") or "").lower() in ("india", "in", "is", "bis")
 
 
 def check(name, root=None, pkg=None, verbose=True):
@@ -668,14 +939,28 @@ def check(name, root=None, pkg=None, verbose=True):
         issues.append("jobs/%s/cfg.py not found -- write the building's cfg (including any custom_build) to cfg.py "
                       "FIRST and keep it; the saved OpenSees model must be reproducible and editable for later studies." % name)
     _dcfg = _load_cfg(_root, name)
+    if _dcfg is None:
+        try:
+            import engine3d as _E
+            _dcfg = _E.CFG.get(name)
+        except Exception:
+            _dcfg = None
     issues += _geometry_issues(_dcfg)                       # units/geometry sanity (story heights in ft, etc.)
-    issues += _design_basis_issues(_dcfg, name, pkg)        # R1/R2/R8/R12/R14/R16
-    issues += _height_limit_issues(_dcfg)                   # R19 system height limit
-    issues += _transfer_issues(_dcfg, name, pkg)            # R7/R15 transfer/backstay
-    issues += _nonparallel_issues(_dcfg, pkg)               # R10 skewed frame
-    issues += _consultancy_issues(_dcfg, pkg)               # Tier A/B real-world guards
-    issues += _named_not_computed_issues(pkg)               # R9 named-not-computed
-    issues += _system_checks_issues(_dcfg, pkg)             # R9 per-system required checks
+    if _is_india(_dcfg) or (isinstance(pkg, dict) and pkg.get("unit_system") == "N-mm"):
+        # India path: the USA ASCE/AISC generators (Table 12.2-1 heights, AISC 341 R<=3 text,
+        # 12.12.3 joints, AISC DG11 ...) are not applied (WP1.13); WP0.3 rules instead.
+        issues += _india_design_basis_issues(_dcfg, pkg)
+        issues += _named_not_computed_issues(pkg)
+        issues += _consultancy_issues(_dcfg, pkg)
+        issues += india_issues(_dcfg, pkg, _root)
+    else:
+        issues += _design_basis_issues(_dcfg, name, pkg)        # R1/R2/R8/R12/R14/R16
+        issues += _height_limit_issues(_dcfg)                   # R19 system height limit
+        issues += _transfer_issues(_dcfg, name, pkg)            # R7/R15 transfer/backstay
+        issues += _nonparallel_issues(_dcfg, pkg)               # R10 skewed frame
+        issues += _consultancy_issues(_dcfg, pkg)               # Tier A/B real-world guards
+        issues += _named_not_computed_issues(pkg)               # R9 named-not-computed
+        issues += _system_checks_issues(_dcfg, pkg)             # R9 per-system required checks
     issues += _completeness_issues(pkg)
     if verbose:
         _print(name, issues)
