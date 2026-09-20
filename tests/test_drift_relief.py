@@ -81,6 +81,8 @@ def test_consistency_mirrors_the_rules():
 
 
 def test_restore_archives_and_keeps_the_viewer():
+    import pytest
+    pytest.importorskip("fastapi", reason="fastapi not installed in this interpreter")
     from fastapi.testclient import TestClient
     import steltic.main as M
     client = TestClient(M.app)

@@ -9,22 +9,16 @@ import india_seismic_gates as ISG
 
 
 def test_honest_is1893_omega0_miss_is_non_blocking_and_disclosed():
-    cfg = {
-        "system": "SCBF",
-        "R": 4.5,
-        "R_source": "eor_documented",
-        "R_cite": "EOR example — IS 1893 Table 9 row review",
-        "Omega0_found": False,
-    }
+    cfg = {"system": "SCBF", "R": 4.5, "zone": "IV", "Omega0_found": False}
     r = ISG.resolve_Omega0(cfg)
     assert r["found"] is False
     assert r["Omega0"] is None
     assert r["omega0_policy"]["blocks_complete"] is False
     assert r["omega0_policy"]["preferred_source_when_available"] == "is18168"
     d = ISG.complete_gate_disclosure(cfg)
-    assert d["complete_allowed"] is True
-    assert d["omega0_policy"]["blocks_complete"] is False
-    assert d["disclosure"]["preferred_source_when_available"] == "is18168"
+    # no package -> not complete, but Omega0 is never among the reasons (IS 800 12.2.3 governs)
+    assert d["complete_allowed"] is False
+    assert not any("omega" in r.lower() for r in d["reasons"])
 
 
 def test_is18168_corpus_hit_resolves_and_uses_hit_cite():

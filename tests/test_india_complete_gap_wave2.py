@@ -13,63 +13,42 @@ import india_loads as IL
 
 # ---- Dual / steel R provenance ----------------------------------------------
 
-def test_dual_R_eor_documented_allowlisted():
+# WP0.5 / D3: the EOR-adopted R path is removed; a steel "dual" has no IS 1893 Table 9 row.
+def test_dual_R_eor_documented_refused_no_is_basis():
     cfg = {
-        "system": "dual SMF + SCBF",
-        "R": 4.5,
-        "R_source": "eor_documented",
-        "R_cite": (
-            "IS 1893 Table 9 steel dual row found:false; EOR uses Table 9(ii)(b) "
-            "SBF concentric R=4.5 with §7.2.7 dual rule"
-        ),
-        "R_steel_dual_table9_found": False,
+        "system": "dual SMF + SCBF", "R": 4.5, "R_source": "eor_documented",
+        "R_cite": "IS 1893 Table 9 steel dual row found:false; EOR uses SBF R=4.5",
+        "R_steel_dual_table9_found": False, "Z": 0.16, "zone": "III",
     }
-    assert "eor_documented" in ISG.R_OK_SOURCES
-    findings = ISG.validate_R(cfg)
-    assert not any(s == "ERROR" for s, _ in findings), findings
-    assert ISG.R_is_proxy(cfg) is False
+    assert "eor_documented" not in ISG.R_OK_SOURCES
+    assert any(s == "ERROR" and "D3" in m for s, m in ISG.validate_R(cfg))
+    assert any(s == "ERROR" and "no Indian design basis" in m for s, m in ISG.system_zone_findings(cfg))
     ok, reasons = ISG.complete_allowed(cfg)
-    assert ok is True, reasons
-    assert ISG.design_status(cfg)["status"] == "complete"
+    assert ok is False and reasons
+    assert ISG.design_status(cfg)["status"] == "partial"
 
 
 def test_dual_R_silent_sbf_without_source_errors():
-    cfg = {
-        "system": "dual SMF + SCBF hospital",
-        "R": 4.5,
-        # no R_source — silent invent of dual R from SBF row
-        "R_steel_dual_table9_found": False,
-    }
-    findings = ISG.validate_R(cfg)
-    assert any(s == "ERROR" and "R_source" in m for s, m in findings)
+    cfg = {"system": "dual SMF + SCBF hospital", "R": 4.5, "R_steel_dual_table9_found": False}
+    assert any(s == "ERROR" for s, _ in ISG.system_zone_findings(cfg))
     ok, reasons = ISG.complete_allowed(cfg)
     assert ok is False
     assert ISG.R_is_proxy(cfg) is True
 
 
 def test_dual_R_proxy_source_refuses_complete():
-    cfg = {
-        "system": "dual SMF+SCBF",
-        "R": 4.5,
-        "R_source": "sbf_proxy",
-        "R_cite": "silent proxy",
-        "R_steel_dual_table9_found": False,
-    }
+    cfg = {"system": "dual SMF+SCBF", "R": 4.5, "R_source": "sbf_proxy", "R_cite": "silent proxy",
+           "R_steel_dual_table9_found": False}
     assert ISG.R_is_proxy(cfg) is True
     ok, _ = ISG.complete_allowed(cfg)
     assert ok is False
 
 
-def test_dual_R_sbf_for_dual_ok_with_cite():
-    cfg = {
-        "system": "dual SMF + SCBF",
-        "R": 4.5,
-        "R_source": "sbf_concentric_for_dual",
-        "R_cite": "Table 9(ii)(b) SBF R=4.5; steel dual row absent; §7.2.7",
-        "R_steel_dual_table9_found": False,
-    }
-    ok, reasons = ISG.complete_allowed(cfg)
-    assert ok is True, reasons
+def test_scbf_table9_R_no_R_errors():
+    cfg = {"system": "SCBF", "R": 4.5, "R_source": "is1893_table9", "zone": "IV"}
+    assert not [m for s, m in ISG.validate_R(cfg) if s == "ERROR"]
+    cfg["R"] = 6.0          # ASCE R for SCBF -> refused (> Table 9 4.5)
+    assert any(s == "ERROR" and "exceeds" in m for s, m in ISG.validate_R(cfg))
 
 
 # ---- Ω0 ---------------------------------------------------------------------
@@ -82,16 +61,11 @@ def test_omega0_default_found_false_no_invent():
     assert ISG.omega0_blocks_complete({}) is False  # honest gap does not block
 
 
-def test_omega0_eor_documented_hook():
-    r = ISG.resolve_Omega0(
-        {},
-        eor_Omega0=2.0,
-        eor_cite="Project EOR capacity-design overstrength (not IS 1893)",
-        eor_source="eor_documented",
-    )
-    assert r["found"] is True
-    assert r["Omega0"] == 2.0
-    assert r["resolved_via"] == "eor_documented"
+def test_omega0_eor_literal_refused_D3():
+    r = ISG.resolve_Omega0({}, eor_Omega0=2.0, eor_cite="Project EOR overstrength (not IS 1893)",
+                           eor_source="eor_documented")
+    assert r["found"] is False and r["Omega0"] is None
+    assert "12.2.3" in r["cite"] or "12.2.3" in r["note"]
 
 
 def test_omega0_refuses_silent_asce():

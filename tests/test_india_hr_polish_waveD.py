@@ -24,97 +24,58 @@ def test_omega0_never_invented_default_found_false():
 
 
 def test_omega0_complete_gate_disclosure_wired():
-    cfg = {
-        "system": "BRBF",
-        "R": 4.5,
-        "R_source": "eor_documented",
-        "R_cite": "EXAMPLE EOR — Table 9 BRBF found:false",
-        "R_steel_brbf_table9_found": False,
-        "Omega0_found": False,
-    }
+    cfg = {"system": "BRBF", "R": 4.5, "R_source": "eor_documented",
+           "R_cite": "EXAMPLE EOR — Table 9 BRBF found:false", "R_steel_brbf_table9_found": False,
+           "Omega0_found": False}
     d = ISG.complete_gate_disclosure(cfg)
-    assert d["complete_allowed"] is True
+    assert d["complete_allowed"] is False                 # D3: BRBF has no IS basis
+    assert d["status"] == "example_only"                  # EXAMPLE label in the R cite
     assert d["Omega0"]["found"] is False
-    assert d["Omega0"]["blocks_complete"] is False
-    assert "steel_brbf_table9_found" in d["table9"]["misses"]
-    assert "never invents" in d["policy"].lower() or "never invent" in d["policy"].lower()
+    assert "never invent" in d["policy"].lower()
 
 
-def test_omega0_eor_documented_still_ok():
-    r = ISG.resolve_Omega0(
-        {},
-        eor_Omega0=2.0,
-        eor_cite="Project EOR overstrength (not IS 1893)",
-        eor_source="eor_documented",
-    )
-    assert r["found"] is True and r["Omega0"] == 2.0
+def test_omega0_eor_literal_refused():
+    r = ISG.resolve_Omega0({}, eor_Omega0=2.0, eor_cite="Project EOR overstrength (not IS 1893)",
+                           eor_source="eor_documented")
+    assert r["found"] is False and r["Omega0"] is None
 
 
-# ---- Table 9 eor / proxy refuse ---------------------------------------------
+# ---- Table 9 / D3 -----------------------------------------------------------
 
-def test_brbf_table9_miss_eor_allows_complete():
-    cfg = {
-        "system": "BRBF midrise",
-        "R": 4.5,
-        "R_source": "eor_documented",
-        "R_cite": "EXAMPLE labeled not-for-construction — BRBF Table 9 found:false",
-        "R_steel_brbf_table9_found": False,
-    }
-    ok, reasons = ISG.complete_allowed(cfg)
-    assert ok is True, reasons
+def test_brbf_spsw_dual_have_no_is_basis():
+    for sysname in ("BRBF midrise", "SPSW core", "dual SMF+BRBF"):
+        cfg = {"system": sysname, "R": 4.5, "zone": "IV"}
+        errs = [m for s, m in ISG.system_zone_findings(cfg) if s == "ERROR"]
+        assert any("no Indian design basis" in m for m in errs), sysname
+        assert ISG.complete_allowed(cfg)[0] is False
 
 
-def test_spsw_ebf_imf_table9_miss_silent_refuses_complete():
-    for sysname, flag in (
-        ("SPSW", "R_steel_spsw_table9_found"),
-        ("EBF", "R_steel_ebf_table9_found"),
-        ("IMF school", "R_steel_imf_table9_found"),
-    ):
-        cfg = {"system": sysname, "R": 4.0, flag: False}
-        ok, _ = ISG.complete_allowed(cfg)
-        assert ok is False, sysname
-        assert ISG.R_is_proxy(cfg) is True
+def test_ebf_is_table9_row_R5():
+    r = ISG.resolve_system_R({"system": "EBF"})
+    assert r["R_table9"] == 5.0 and r["components"] == ["sbf_eccentric"]
+    assert not any("ebf" in k for k in ISG.table9_system_flags({"system": "EBF"}))
 
 
 def test_is800_omrf_proxy_refuses_complete():
-    cfg = {
-        "system": "IMF",
-        "R": 3.0,
-        "R_source": "is800_omrf",
-        "R_cite": "silent IS 800 OMRF invent",
-        "R_steel_imf_table9_found": False,
-    }
+    cfg = {"system": "OMRF", "R": 4.0, "R_source": "is800_omrf", "R_cite": "IS 800 Table 23 OMF 4",
+           "zone": "II"}
     assert "is800_omrf" in ISG.R_PROXY_SOURCES
-    ok, reasons = ISG.complete_allowed(cfg)
-    assert ok is False
-    assert ISG.R_is_proxy(cfg) is True
+    errs = [m for s, m in ISG.validate_R(cfg) if s == "ERROR"]
+    assert any("proxy" in m for m in errs) and any("exceeds" in m for m in errs)
+    assert ISG.complete_allowed(cfg)[0] is False
 
 
-def test_imf_disclosed_table9_smrf_map_allows_complete():
-    """Ex11 pattern: IMF row found:false → disclosed SMRF Table 9 R=5 with cite."""
-    cfg = {
-        "system": "IMF school Chandigarh",
-        "R": 5.0,
-        "R_source": "is1893_table9",
-        "R_cite": (
-            "IMF Table 9 found:false; Zone IV → design as SMRF R=5.0 "
-            "IS 1893 Table 9 (i)(d) found:true — disclosed mapping, not is800_omrf"
-        ),
-        "R_steel_imf_table9_found": False,
-    }
-    ok, reasons = ISG.complete_allowed(cfg)
-    assert ok is True, reasons
+def test_imf_maps_to_omrf_unless_declared_smrf():
+    assert ISG.resolve_system_R({"system": "IMF school"})["R_table9"] == 3.0
+    assert ISG.resolve_system_R({"system": "IMF school", "imf_as_smrf": True})["R_table9"] == 5.0
+    errs = [m for s, m in ISG.system_zone_findings({"system": "IMF school", "R": 3.0, "zone": "IV"}) if s == "ERROR"]
+    assert any("not allowed in Seismic Zone IV" in m for m in errs)
 
 
-def test_example_fixture_label_policy_flag():
-    st = ISG.design_status({
-        "system": "BRBF",
-        "R": 4.5,
-        "R_source": "eor_documented",
-        "R_cite": "EXAMPLE",
-        "R_steel_brbf_table9_found": False,
-    })
-    assert st["table9"]["example_fixtures_ok_when_labeled"] is True
+def test_example_label_gives_example_only():
+    st = ISG.design_status({"system": "SCBF", "R": 4.5, "zone": "IV",
+                            "R_cite": "EXAMPLE / not-for-construction memo"})
+    assert st["status"] == "example_only"
 
 
 # ---- Whitmore / block shear -------------------------------------------------

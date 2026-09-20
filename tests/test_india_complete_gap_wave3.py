@@ -217,7 +217,18 @@ def test_design_basis_codes_india_no_asce_boilerplate():
     # Unit-level: SI cfg selects India rows (no IBC/ASCE)
     fake_is_si = types.ModuleType("india_units")
     fake_is_si.is_si = lambda cfg=None: True
+    _saved_iu = sys.modules.get("india_units")          # WP0.5: never leak the stub into later tests
     sys.modules["india_units"] = fake_is_si
+    try:
+        _run_design_basis_codes_stub(src)
+    finally:
+        if _saved_iu is not None:
+            sys.modules["india_units"] = _saved_iu
+        else:
+            sys.modules.pop("india_units", None)
+
+
+def _run_design_basis_codes_stub(src):
     # Extract and exec just _design_basis_codes with a tiny harness
     start = src.find("def _design_basis_codes")
     # find next top-level def after it
