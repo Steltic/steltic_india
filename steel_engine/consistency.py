@@ -206,8 +206,9 @@ def _entry_issues(kind, entry):
 
     if not ls_present:
         out.append(f"[{kind} {cid}] no limit_state given (top-level or in a check)")
-    if not entry.get("cited") and not any(isinstance(c, dict) and c.get("cited") for c in checks):
-        out.append(f"[{kind} {cid}] no cited AISC clause")
+    if not entry.get("cited") and not any(isinstance(c, dict) and (c.get("cited") or c.get("clause") or c.get("cite"))
+                                          for c in checks):
+        out.append(f"[{kind} {cid}] no cited code clause")
     if not all_dcs:
         out.append(f"[{kind} {cid}] no D/C reported (top-level or in a check)")
     else:

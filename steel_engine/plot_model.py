@@ -56,8 +56,12 @@ def _depth_dir(kind,p1,p2,i_is_perim):
     else:
         x,y,z=_local_axes(p1,p2,(0.,0.,1.)); return z
 
+_LEN_UNIT = ["in"]
+
+
 def _model(name):
     cfg=E.CFG[name]; info=E.build(cfg,"Linear")
+    _LEN_UNIT[0] = "mm" if E._india_job(cfg) else "in"
     NX=cfg["NX"]
     nodes={}; eles=[]
     for (et,kind,sec,n1,n2) in info["ele"]:
@@ -71,8 +75,9 @@ def _model(name):
     return cfg,info,nodes,eles,bxyz
 
 def _setup(ax,title):
-    ax.set_title(title,fontsize=10); ax.set_xlabel("X (in)"); ax.set_ylabel("Y (in)")
-    ax.set_zlabel("Z (in)");
+    u=_LEN_UNIT[0]
+    ax.set_title(title,fontsize=10); ax.set_xlabel("X (%s)" % u); ax.set_ylabel("Y (%s)" % u)
+    ax.set_zlabel("Z (%s)" % u);
     # TRUE proportions from the data extents — otherwise a squat wide building (e.g. T06,
     # 210x120 ft plan x 55 ft tall) gets vertically stretched and reads like a tall tower.
     try:

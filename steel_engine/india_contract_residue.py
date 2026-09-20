@@ -48,6 +48,8 @@ def contract_hits(text: str) -> list:
 def residue_hits(html_or_text: str) -> list:
     """Hits of REPORT_RESIDUE_RE in visible report text (tags, scripts, styles removed)."""
     t = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html_or_text or "", flags=re.S | re.I)
+    # quotations of earlier residue findings (the consistency section) are not themselves residue
+    t = re.sub(r"<span class=['\"]residue-quote['\"]>.*?</span>", " ", t, flags=re.S)
     t = re.sub(r"data:[a-z/+]+;base64,[A-Za-z0-9+/=]+", " ", t)
     t = _TAGS.sub(" ", t)
     t = _strip(t)

@@ -194,7 +194,7 @@ def _calc(title, rows, note=""):
     body = "".join(f"<tr><td>{q}</td><td>{c}</td><td class='v'>{v}</td><td class='r'>{r}</td></tr>"
                    for (q, c, v, r) in rows)
     return (f"<h5>{title}</h5>{n}<table class='calc'>"
-            "<tr class='hd'><th>Quantity</th><th>Calculation</th><th>Value</th><th>Ref. (AISC)</th></tr>"
+            "<tr class='hd'><th>Quantity</th><th>Calculation</th><th>Value</th><th>Ref. (IS 800)</th></tr>"
             + body + "</table>")
 
 def _img(uri, caption, full=False):
@@ -2214,6 +2214,9 @@ def build_report(name, root=None):
     _register(name); cfg = E.CFG[name]
     if root is None:
         root = os.path.join(os.environ.get("STEEL_BUILDER_JOBS") or HERE, name)
+    if E._india_job(cfg):                      # WP1.13 / WP2.10: IS-only report, no foreign-code chapters
+        import report_india
+        return report_india.build_report_india(name, root)
     NF = len(cfg["heights"]); s = cfg["seis"]
     SX, SY = cfg["SX"], cfg["SY"]; NX, NY = cfg["NX"], cfg["NY"]
     Lx = (cfg["xcoords"][-1] if cfg.get("xcoords") else NX*SX); Ly = (cfg["ycoords"][-1] if cfg.get("ycoords") else NY*SY)
