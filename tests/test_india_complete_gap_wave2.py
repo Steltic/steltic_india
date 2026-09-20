@@ -94,13 +94,17 @@ def test_resolve_k4_hospital_eor_when_ocr_miss():
 
 # ---- RAG connection capacities ----------------------------------------------
 
-def test_is4000_bolt_table2_capacity():
+def test_is4000_bolt_table2_is_permissible_not_capacity():
+    """WP0.5: IS 4000 Table 2 is a working-stress permissible force, never an LSD capacity_N."""
     r = I8.is4000_bolt_shear_capacity_N(
         n_bolts=4, diameter_mm=20, property_class="8.8", plane="thread",
     )
     assert r["found"] is True
-    assert abs(r["capacity_N"] - 4 * 50.8 * 1000.0) < 1.0
+    assert r["capacity_N"] is None
+    assert abs(r["permissible_N"] - 4 * 50.8 * 1000.0) < 1.0
     assert "IS 4000" in r["cite"]
+    m30 = I8.is4000_bolt_shear_capacity_N(n_bolts=1, diameter_mm=30, property_class="10.9", plane="shank")
+    assert abs(m30["permissible_N"] - 183.6e3) < 1.0
 
 
 def test_is4000_bolt_unknown_size_found_false():
@@ -110,24 +114,29 @@ def test_is4000_bolt_unknown_size_found_false():
 
 
 def test_fillet_weld_is800_lsd():
+    """WP0.5: throat = K s with K = 0.70 (IS 800 Table 22), not s/sqrt2."""
     r = I8.fillet_weld_capacity_is800_N(
         size_mm=6.0, length_mm=300.0, fu_MPa=410.0, gamma_mw=1.25, n_sides=2,
     )
     assert r["found"] is True
-    a = 6.0 / math.sqrt(2.0)
+    a = 0.70 * 6.0
     fwd = 410.0 / (math.sqrt(3.0) * 1.25)
     expect = fwd * a * 300.0 * 2
     assert abs(r["capacity_N"] - expect) / expect < 1e-9
+    assert abs(r["capacity_N"] / 1e3 - 477.2) < 0.1
+    site = I8.fillet_weld_capacity_is800_N(size_mm=6.0, length_mm=300.0, fu_MPa=410.0, n_sides=2, site=True)
+    assert abs(site["capacity_N"] / 1e3 - 397.7) < 0.1
 
 
-def test_fillet_weld_is816_asd_path():
+def test_fillet_weld_is816_only_explicit_wsm_and_permissible():
     r = I8.fillet_weld_capacity_N(
         size_mm=6.0, length_mm=200.0,
         permissible_stress_kgf_cm2=1100.0,  # IS 816 §7.1.2
         n_sides=1,
     )
-    assert r["found"] is True
-    assert r["capacity_N"] > 0
+    assert r["found"] is False  # IS 816 needs method="WSM"
+    r = I8.fillet_weld_capacity_N(size_mm=6.0, length_mm=200.0, permissible_stress_kgf_cm2=1100.0, method="WSM")
+    assert r["found"] is True and r["capacity_N"] is None and r["permissible_N"] > 0
 
 
 def test_apply_rag_capacities_fills_weld_and_bolts():
@@ -143,13 +152,13 @@ def test_apply_rag_capacities_fills_weld_and_bolts():
             ],
         },
     }
-    bolt = I8.is4000_bolt_shear_capacity_N(n_bolts=6, diameter_mm=20, property_class="8.8", plane="thread")
-    weld = I8.fillet_weld_capacity_is800_N(size_mm=6, length_mm=400, fu_MPa=410, n_sides=2)
     out = I8.apply_rag_capacities_to_connection(
         conn,
         rag_capacities={
-            "bolts": {"capacity_N": bolt["capacity_N"], "cite": bolt["cite"]},
-            "welds": {"capacity_N": weld["capacity_N"], "cite": weld["cite"]},
+            # IS 800 10.3 from geometry (not IS 4000 working values)
+            "bolts": {"n_bolts": 6, "d_mm": 20, "grade": "8.8", "t_mm": 10, "fu_plate_MPa": 410, "e_mm": 35,
+                      "p_mm": 60, "d0_mm": 22},
+            "welds": {"size_mm": 6, "length_mm": 400, "fu_MPa": 410, "n_sides": 2},
             # gusset intentionally missing → stays found:false
         },
     )
@@ -158,6 +167,7 @@ def test_apply_rag_capacities_fills_weld_and_bolts():
     assert checks["welds"]["found"] is True
     assert checks["gusset"]["found"] is False
     assert out["DC"] == max(checks["bolts"]["DC"], checks["welds"]["DC"])
+    assert abs(checks["bolts"]["DC"] - 150e3 / (6 * 86.97e3)) < 1e-3  # Vdb = min(90.5, 87.0) kN per bolt
 
 
 def test_apply_rag_miss_stays_found_false():
@@ -174,7 +184,7 @@ def test_base_plate_with_rag_bearing_and_anchor():
         P_N=184e3,
         capacity_bearing_N=500e3,
         capacity_anchor_N=400e3,
-        cited="IS 800 Ch.11 RAG",
+        cited="IS 800:2007 7.4.1 / 10.3",
     )
     assert bp["found"] is True
     bearing = next(s for s in bp["slots"] if s["component"] == "base_plate_bearing")
@@ -189,7 +199,13 @@ def test_panel_zone_doubler_detail_requires_grade_electrode():
         d_beam_mm=450, V_design_N=500e3, fy_MPa=250.0,
     )
     assert pz["found"] is True
-    assert pz["doubler_required_mm"] > 0
+    # 12.11.2.4 individual thickness: tw 8 < (450+360)/90 = 9 -> no doubler can cure the web (WP2.4)
+    assert pz["web_thickness_ok"] is False and pz["doubler_required_mm"] is None
+    pz = I8.panel_zone_check(
+        d_col_mm=400, tw_mm=10.0, bf_mm=400, tf_mm=20.0,
+        d_beam_mm=450, V_design_N=800e3, fy_MPa=250.0,
+    )
+    assert pz["doubler_required_mm"] >= pz["t_min_mm"]
     bare = I8.panel_zone_doubler_detail(pz)
     assert bare["doubler_detail"]["found"] is False
     assert "electrode" in str(bare["doubler_detail"]["required_inputs"])

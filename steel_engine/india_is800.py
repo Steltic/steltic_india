@@ -1,4 +1,4 @@
-"""IS 800:2007 helpers for India HR design (buckling χ, SMF SCWB, panel-zone, §12 slots).
+"""IS 800:2007 helpers for India HR design: member capacities (WP2.3), SMF SCWB/panel zone, connection worksheets.
 
 Grounded on local India RAG / corpus equations (IS_800_2007 pages 40–41, §12.11).
 Never invent capacities: when required inputs are missing, return found:false with
@@ -335,106 +335,97 @@ def panel_zone_check(
     gamma_m0: float = GAMMA_M0_DEFAULT,
     doubler_t_mm: float = 0.0,
     Av_override_mm2: Optional[float] = None,
+    continuity_plates: bool = True,
+    tf_beam_mm: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Panel-zone / doubler worksheet — IS 800 §12.11.2.3–12.11.2.4 + §8.4.2 shear.
+    """Panel zone - IS 800:2007 12.11.2.3 / 12.11.2.4 (HR800-17).
 
-    Thickness rule: t ≥ (dp + bp)/90 with dp≈d_beam, bp≈d_col−2 tf (panel width between flanges).
-    Shear capacity (simplified): Vd = Av fy /(√3 γm0) with Av ≈ (d_col−2 tf)·(tw+tdoubler).
-    Missing inputs → found:false with required_inputs listed (no invented doubler size).
+    12.11.2.4: the INDIVIDUAL thickness of the column web and of each doubler plate shall satisfy
+    t >= (dp + bp)/90 (dp = panel depth between continuity plates, bp = width between column flanges).
+    12.11.2.3: shear buckling per 8.4.2 at the 12.11.2.2 design shear: each plate's tau_b from 8.4.2.2(a)
+    (Kv from c/d with c = dp when continuity plates bound the panel, else 5.35); Vd = sum(bp t_i tau_b_i)/gamma_m0.
+    V_design_N = panel shear (see india_is800_s12.panel_zone_design_shear). Missing inputs -> found:false.
     """
     missing = []
-    for name, val in (
-        ("column_d_mm", d_col_mm),
-        ("column_tw_mm", tw_mm),
-        ("column_bf_mm", bf_mm),
-        ("column_tf_mm", tf_mm),
-        ("beam_d_mm", d_beam_mm),
-        ("V_design_N", V_design_N),
-        ("fy_col_MPa", fy_MPa),
-    ):
-        if val is None or (isinstance(val, (int, float)) and val <= 0 and name != "V_design_N"):
+    for name, val in (("column_d_mm", d_col_mm), ("column_tw_mm", tw_mm), ("column_bf_mm", bf_mm),
+                      ("column_tf_mm", tf_mm), ("beam_d_mm", d_beam_mm), ("fy_col_MPa", fy_MPa)):
+        if val is None or val <= 0:
             missing.append(name)
-        if name == "V_design_N" and (val is None or val < 0):
-            if "V_design_N" not in missing:
-                missing.append("V_design_N")
+    if V_design_N is None or V_design_N < 0:
+        missing.append("V_design_N")
     if missing:
-        return {
-            "found": False,
-            "pass": None,
-            "doubler_required_mm": None,
-            "cite": "IS 800:2007 §12.11.2.3 / §12.11.2.4 / §8.4.2",
-            "required_inputs": list(PANEL_ZONE_REQUIRED),
-            "missing": missing,
-            "note": "Panel-zone worksheet cannot size/flag without listed inputs",
-        }
-
-    d_col = float(d_col_mm)
-    tw = float(tw_mm)
-    bf = float(bf_mm)
-    tf = float(tf_mm)
-    d_beam = float(d_beam_mm)
-    V = float(V_design_N)
-    fy = float(fy_MPa)
+        return {"found": False, "pass": None, "doubler_required_mm": None,
+                "cite": "IS 800:2007 12.11.2.3 / 12.11.2.4 / 8.4.2",
+                "required_inputs": list(PANEL_ZONE_REQUIRED), "missing": missing,
+                "note": "Panel-zone check cannot run without listed inputs"}
+    d_col, tw, tf = float(d_col_mm), float(tw_mm), float(tf_mm)
+    fy, V = float(fy_MPa), float(V_design_N)
     t_dbl = float(doubler_t_mm or 0.0)
-
-    # Panel geometry (corpus §12.11.2.4): dp = panel-zone depth between continuity plates ≈ beam depth
-    # bp = panel-zone width between column flanges ≈ d_col − 2 tf
-    dp = d_beam
+    dp = float(d_beam_mm) - (float(tf_beam_mm) if tf_beam_mm else 0.0)
     bp = max(d_col - 2.0 * tf, 1.0)
-    t_min = (dp + bp) / 90.0
-    t_provided = tw + t_dbl
-    thickness_ok = t_provided >= t_min
+    t_min = (float(d_beam_mm) + bp) / 90.0 if not tf_beam_mm else (dp + bp) / 90.0
+    web_ok = tw >= t_min
+    dbl_ok = (t_dbl >= t_min) if t_dbl > 0 else None
+    thickness_ok = web_ok and (dbl_ok is not False)
+    eps = math.sqrt(250.0 / fy)
 
-    # Shear area & capacity (§8.4.1 / 8.4.2 style)
-    if Av_override_mm2 is not None and Av_override_mm2 > 0:
-        Av = float(Av_override_mm2)
-    else:
-        Av = max(d_col - 2.0 * tf, 0.0) * t_provided
-    Vd = Av * fy / (math.sqrt(3.0) * float(gamma_m0)) if Av > 0 else 0.0
-    dc = (V / Vd) if Vd > 0 else None
-    shear_ok = (dc is not None) and (dc <= 1.0)
+    def _tau_b(t):
+        dt = bp / t
+        if continuity_plates:
+            cd = dp / bp
+            Kv = (4.0 + 5.35 / cd ** 2) if cd < 1.0 else (5.35 + 4.0 / cd ** 2)
+        else:
+            Kv = 5.35
+        limit = 67 * eps * math.sqrt(Kv / 5.35)
+        if dt <= limit:
+            return fy / math.sqrt(3.0), dt, Kv, False
+        tcr = Kv * math.pi ** 2 * E_DEFAULT_MPA / (12 * (1 - 0.3 ** 2) * dt ** 2)
+        lw = math.sqrt(fy / (math.sqrt(3.0) * tcr))
+        if lw <= 0.8:
+            tb = fy / math.sqrt(3.0)
+        elif lw < 1.2:
+            tb = (1 - 0.8 * (lw - 0.8)) * fy / math.sqrt(3.0)
+        else:
+            tb = fy / (math.sqrt(3.0) * lw ** 2)
+        return tb, dt, Kv, True
 
-    # Suggested doubler if thickness fails (honest sizing from t_min only — not inventing grade)
-    t_need_extra = max(0.0, t_min - tw)
-    # If shear governs, estimate extra t from required Av
+    plates = [("column web", tw)] + ([("doubler", t_dbl)] if t_dbl > 0 else [])
+    detail = []
+    Vn = 0.0
+    for name, t in plates:
+        tb, dt, Kv, buck = _tau_b(t)
+        Vn += bp * t * tb
+        detail.append({"plate": name, "t_mm": t, "t_min_mm": t_min, "t_ok": t >= t_min, "b_over_t": dt,
+                       "Kv": Kv, "tau_b_MPa": tb, "shear_buckling": buck})
+    if Av_override_mm2:
+        Vn = float(Av_override_mm2) * fy / math.sqrt(3.0)
+    Vd = Vn / float(gamma_m0)
+    dc = V / Vd if Vd > 0 else None
+    shear_ok = dc is not None and dc <= 1.0
     t_need_shear = 0.0
-    if Vd > 0 and dc is not None and dc > 1.0 and (d_col - 2.0 * tf) > 0:
-        Av_need = V * math.sqrt(3.0) * float(gamma_m0) / fy
-        t_need_shear = max(0.0, Av_need / (d_col - 2.0 * tf) - tw)
-
-    doubler_req = max(t_need_extra, t_need_shear)
-
+    if dc is not None and dc > 1.0:
+        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - tw)
+    # A doubler (if needed for shear) must itself be >= t_min (12.11.2.4); a web thinner than t_min cannot be
+    # cured by a doubler -> doubler_required None (change the column section).
+    if not web_ok:
+        doubler_req = None
+    elif t_need_shear > 0:
+        doubler_req = max(t_need_shear, t_min)
+    else:
+        doubler_req = 0.0
     return {
-        "found": True,
-        "pass": bool(thickness_ok and shear_ok),
-        "thickness_ok": thickness_ok,
-        "shear_ok": shear_ok,
-        "t_provided_mm": t_provided,
-        "t_min_mm": t_min,
-        "dp_mm": dp,
-        "bp_mm": bp,
-        "Av_mm2": Av,
-        "Vd_N": Vd,
-        "V_design_N": V,
-        "DC_shear": dc,
-        "doubler_required_mm": doubler_req if doubler_req > 1e-6 else 0.0,
+        "found": True, "pass": bool(thickness_ok and shear_ok), "ok": bool(thickness_ok and shear_ok),
+        "thickness_ok": bool(thickness_ok), "web_thickness_ok": web_ok, "doubler_thickness_ok": dbl_ok,
+        "shear_ok": shear_ok, "t_provided_mm": tw + t_dbl, "t_min_mm": t_min, "dp_mm": dp, "bp_mm": bp,
+        "plates": detail, "Vd_N": Vd, "V_design_N": V, "DC_shear": dc, "dc": max(dc or 0.0, (t_min / tw) if tw else 0.0),
+        "doubler_required_mm": doubler_req,
         "doubler_provided_mm": t_dbl,
-        "cite": "IS 800:2007 §12.11.2.3–12.11.2.4 (t≥(dp+bp)/90); shear §8.4.2 / §8.4.1",
-        "note": (
-            "Doubler suggestion is thickness-only from code inequalities; confirm electrode/"
-            "plate grade via IS 816 / IS 800 RAG before detailing."
-        ),
-        "inputs": {
-            "d_col_mm": d_col_mm,
-            "tw_mm": tw_mm,
-            "bf_mm": bf_mm,
-            "tf_mm": tf_mm,
-            "d_beam_mm": d_beam_mm,
-            "V_design_N": V_design_N,
-            "fy_MPa": fy_MPa,
-            "gamma_m0": gamma_m0,
-            "doubler_t_mm": doubler_t_mm,
-        }
+        "clause": "IS 800:2007 12.11.2.3 / 12.11.2.4",
+        "cite": "IS 800:2007 12.11.2.4 individual thickness t >= (dp+bp)/90; 12.11.2.3 shear buckling per 8.4.2",
+        "note": ("Web alone fails 12.11.2.4; a doubler must itself satisfy t >= (dp+bp)/90 (thicknesses are not "
+                 "summed) - replace the column or use a thicker web section" if not web_ok else ""),
+        "inputs": {"d_col_mm": d_col_mm, "tw_mm": tw_mm, "bf_mm": bf_mm, "tf_mm": tf_mm, "d_beam_mm": d_beam_mm,
+                   "V_design_N": V_design_N, "fy_MPa": fy_MPa, "gamma_m0": gamma_m0, "doubler_t_mm": doubler_t_mm},
     }
 
 
@@ -448,12 +439,14 @@ def fill_connection_component_dc(
     limit_state: Optional[str] = None,
     fy_MPa: Optional[float] = None,
     Ag_mm2: Optional[float] = None,
-    demand_factor: float = 1.2,
+    demand_factor: Optional[float] = None,
+    system: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Fill a §12 gusset/bolt/weld slot D/C when demand + RAG capacity are both present.
+    """Fill a §12 gusset/bolt/weld slot D/C when demand + capacity are both present.
 
-    If demand omitted but fy+Ag given, demand defaults to demand_factor·fy·Ag (N)
-    (IS 800 §12.7.3.1 brace CD form) — still requires an explicit capacity from RAG.
+    If demand omitted but fy+Ag given, the brace capacity-design tension is system-aware (HR800-03):
+    SCBF 1.1·fy·Ag (IS 800 12.8.3.1a), OCBF 1.2·fy·Ag (12.7.3.1a; the caller must still take the minimum with
+    the 12.2.3 force and the system maximum). Without a system (or explicit demand_factor) no demand is formed.
     Never invents capacity_N.
     """
     out = dict(slot or {})
@@ -462,8 +455,18 @@ def fill_connection_component_dc(
 
     dem = demand_N
     if dem is None and fy_MPa and Ag_mm2:
-        dem = float(demand_factor) * float(fy_MPa) * float(Ag_mm2)  # MPa·mm² = N
-        out["demand_basis"] = f"{demand_factor}·fy·Ag (IS 800 §12.7.3.1 style)"
+        sysu = str(system or "").upper()
+        if demand_factor is None and "SCBF" in sysu:
+            demand_factor, clause = 1.1, "IS 800:2007 12.8.3.1(a) 1.1 fy Ag (SCBF)"
+        elif demand_factor is None and ("OCBF" in sysu or "OBF" in sysu):
+            demand_factor, clause = 1.2, "IS 800:2007 12.7.3.1(a) 1.2 fy Ag (OCBF; min with 12.2.3 force and system max)"
+        else:
+            clause = "explicit demand_factor"
+        if demand_factor is not None:
+            dem = float(demand_factor) * float(fy_MPa) * float(Ag_mm2)  # MPa·mm² = N
+            out["demand_basis"] = f"{demand_factor}·fy·Ag ({clause})"
+        else:
+            out["demand_basis"] = "system (SCBF/OCBF) not given: no capacity-design demand formed"
     if dem is not None:
         out["demand_N"] = float(dem)
 
@@ -647,13 +650,15 @@ def base_plate_bearing_capacity_N(
     capacity_N=None,
     cite=None,
 ):
-    """Concrete bearing under base plate — RAG capacity or geometry × RAG stress.
+    """Concrete bearing under a base plate: IS 800:2007 7.4.1 bearing strength 0.6 fck (HR800-12).
 
-    Paths: (1) capacity_N from RAG; (2) B×L × bearing_stress from RAG;
-    (3) B×L × (bearing_factor × fck) when both factor and fck from RAG/disclosed.
-    Never invents bearing stress or plate plan.
+    Paths: (1) capacity_N supplied; (2) B×L × bearing_stress; (3) B×L × 0.6 fck (7.4.1; bearing_factor defaults to
+    the IS 800 value 0.6 - 0.45 fck 'IS 456' is not the IS 800 LSD value). Concentric load only: for P+M use
+    india_connections.base_plate_design (linear bearing).
     """
-    cite = cite or "IS 800:2007 Ch.11 / IS 456 concrete bearing"
+    cite = cite or "IS 800:2007 7.4.1 bearing strength 0.6 fck"
+    if bearing_factor is None and fck_MPa is not None:
+        bearing_factor = 0.6
     if capacity_N is not None and float(capacity_N) > 0:
         return {
             "found": True,
@@ -670,8 +675,7 @@ def base_plate_bearing_capacity_N(
         missing.append("plate_B_mm and plate_L_mm (cfg-disclosed geometry)")
     if stress is None:
         missing.append(
-            "bearing_stress_MPa from RAG OR (fck_MPa + bearing_factor from RAG) "
-            "— do not invent 0.45 fck silently"
+            "bearing_stress_MPa OR fck_MPa (IS 800 7.4.1: 0.6 fck)"
         )
     if missing:
         return {
@@ -711,7 +715,7 @@ def anchor_group_capacity_N(
     Never invents per-anchor capacity from dia/grade alone (need RAG V/T one).
     dia/grade may be recorded as disclosed geometry provenance.
     """
-    cite = cite or "IS 800:2007 Ch.11 / IS 456 anchorage — RAG"
+    cite = cite or "IS 800:2007 10.3.5 / 10.3.6 anchor rods (embedment outside IS 800)"
     if capacity_N is not None and float(capacity_N) > 0:
         return {
             "found": True,
@@ -781,7 +785,7 @@ def base_plate_worksheet(
     cfg=None,
     geometry=None,
 ):
-    """IS 800 Ch.11 / base-plate component worksheet.
+    """IS 800 §7.4 / §10 base-plate component worksheet (concentric P; use india_connections.base_plate_design for P+M+V).
 
     Wave4: cfg-supplied geometry (plate t/B/L, anchors) + RAG capacity formulas
     close slots when present; found:false if neither RAG capacity nor
@@ -820,7 +824,7 @@ def base_plate_worksheet(
             "component": "base_plate_bearing",
             "found": False, "DC": None, "capacity": {},
             "required_inputs": ["P_N", "plate plan BxL", "fck_MPa", "bearing capacity from RAG"],
-            "note": "Concrete bearing under plate — RAG IS 800 Ch.11 / IS 456; found:false until sized.",
+            "note": "Concrete bearing under plate - IS 800 7.4.1 (0.6 fck); found:false until geometry declared.",
         },
         "plate_bending": {
             "component": "base_plate_bending",
@@ -832,13 +836,13 @@ def base_plate_worksheet(
             "component": "anchor_bolts",
             "found": False, "DC": None, "capacity": {},
             "required_inputs": ["shear/tension demand", "n, dia, grade from RAG", "embedment"],
-            "note": "Anchor rods — RAG IS 800 / IS 456; found:false until sized.",
+            "note": "Anchor rods - IS 800 10.3.5/10.3.6; found:false until declared (never sized from demand).",
         },
         "welds": {
             "component": "column_to_plate_welds",
             "found": False, "DC": None, "capacity": {},
             "required_inputs": list(WELD_COMPONENT_REQUIRED),
-            "note": "Fillet welds column-to-plate — RAG IS 816; found:false until sized.",
+            "note": "Column-to-plate welds - IS 800 10.5 (12.4.2 CJP in SFRS); found:false until declared.",
         },
     }
     # Prefill demand side only
@@ -865,11 +869,11 @@ def base_plate_worksheet(
             slots["bearing"]["missing"] = br.get("required_inputs")
             cited_br = None
     else:
-        cited_br = cited or "IS 800 Ch.11 bearing"
+        cited_br = cited or "IS 800:2007 7.4.1 bearing"
     if capacity_bearing_N is not None and P_N is not None:
         slots["bearing"] = fill_connection_component_dc(
             slots["bearing"], demand_N=float(P_N), capacity_N=float(capacity_bearing_N),
-            cited=cited_br or cited or "IS 800 Ch.11 bearing",
+            cited=cited_br or cited or "IS 800:2007 7.4.1 bearing",
         )
     if capacity_anchor_N is None:
         an = anchor_group_capacity_N(
@@ -931,7 +935,7 @@ def base_plate_worksheet(
     return {
         "status": "worksheets",
         "found": any_filled,  # True only if at least one component closed from RAG
-        "cite": "IS 800:2007 Ch.11 / §10; IS 816 welds",
+        "cite": "IS 800:2007 7.4 (bases), 10.3 (anchors), 10.5 (welds)",
         "required_inputs": list(BASE_PLATE_REQUIRED) if missing or not any_filled else [],
         "missing_top": missing,
         "geometry": {
@@ -980,47 +984,39 @@ def fillet_weld_capacity_N(
     permissible_stress_kgf_cm2=None,
     cite=None,
     n_sides=1,
+    method=None,
 ):
-    """Fillet weld design/allowable capacity from RAG stress + geometry.
+    """IS 816:1969 WORKING-STRESS fillet weld value (HR800-10). Only with explicit method='WSM'.
 
-    IS 816:1969 §7.1.2 — permissible stress on throat 1100 kgf/cm² (ASD).
-    Throat a = size/√2 when only leg size given. Capacity = stress × a × L × n_sides.
-    Missing stress or length → found:false (never invent stress or size).
+    Returns permissible_N (working load) - never capacity_N: a working-stress value must not be compared with a
+    factored (LSD) demand. For IS 800 LSD use fillet_weld_capacity_is800_N. Throat = 0.7 s (K, 90-degree faces).
     """
+    if str(method or "").upper() != "WSM":
+        return {"found": False, "capacity_N": None, "permissible_N": None, "method": method,
+                "cite": cite or "IS 816:1969 7.1.2 (working stress)",
+                "required_inputs": ["method='WSM' (IS 816 is working stress; use fillet_weld_capacity_is800_N for LSD)"]}
     missing = []
     stress = permissible_stress_MPa
     if stress is None and permissible_stress_kgf_cm2 is not None:
-        # 1 kgf/cm² = 0.0980665 N/mm² (MPa)
-        stress = float(permissible_stress_kgf_cm2) * 0.0980665
+        stress = float(permissible_stress_kgf_cm2) * 0.0980665   # 1 kgf/cm2 = 0.0980665 MPa
     if stress is None:
-        missing.append("permissible_stress_MPa or permissible_stress_kgf_cm2 from RAG (IS 816)")
+        missing.append("permissible_stress_MPa or permissible_stress_kgf_cm2 (IS 816)")
     a = throat_mm
     if a is None and size_mm is not None:
-        a = float(size_mm) / math.sqrt(2.0)
+        a = 0.70 * float(size_mm)
     if a is None or float(a) <= 0:
         missing.append("throat_mm or size_mm (leg)")
     if length_mm is None or float(length_mm) <= 0:
         missing.append("length_mm")
     if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "cite": cite or "IS 816:1969 §7.1.2",
-            "required_inputs": missing,
-            "note": "Do not invent weld size/length or stress — RAG stress + geometry required.",
-        }
-    cap = float(stress) * float(a) * float(length_mm) * float(n_sides or 1)
-    return {
-        "found": True,
-        "capacity_N": cap,
-        "throat_mm": float(a),
-        "size_mm": float(size_mm) if size_mm is not None else None,
-        "length_mm": float(length_mm),
-        "n_sides": int(n_sides or 1),
-        "stress_MPa": float(stress),
-        "cite": cite or "IS 816:1969 §7.1.2 fillet weld throat stress",
-        "note": "Capacity = stress × throat × length × n_sides — stress from RAG; geometry disclosed.",
-    }
+        return {"found": False, "capacity_N": None, "permissible_N": None, "method": "WSM",
+                "cite": cite or "IS 816:1969 §7.1.2", "required_inputs": missing}
+    perm = float(stress) * float(a) * float(length_mm) * float(n_sides or 1)
+    return {"found": True, "capacity_N": None, "permissible_N": perm, "method": "WSM", "throat_mm": float(a),
+            "size_mm": float(size_mm) if size_mm is not None else None, "length_mm": float(length_mm),
+            "n_sides": int(n_sides or 1), "stress_MPa": float(stress),
+            "cite": cite or "IS 816:1969 §7.1.2 fillet weld permissible stress (working stress)",
+            "note": "Working-stress permissible load: compare only with SERVICE-level demand."}
 
 
 def bolt_group_capacity_N(
@@ -1029,33 +1025,29 @@ def bolt_group_capacity_N(
     V_one_bolt_N=None,
     cite=None,
     limit_state=None,
+    d_mm=None,
+    grade=None,
+    **geometry,
 ):
-    """Bolt-group shear/bearing capacity = n × V_one from RAG (IS 800 §10 / IS 4000).
-
-    Never invents per-bolt capacity — V_one_bolt_N must come from LIVE RAG.
-    """
+    """Bolt-group capacity = n x Vdb (IS 800 10.3.2). With d_mm + grade (+ plate t, fu, e, p, d0) the per-bolt
+    value is computed by india_connections.bolt_capacity_is800 (10.3.3 + 10.3.4); a supplied V_one_bolt_N must be an
+    IS 800 LSD value with a cite. Never an IS 4000 working value (HR800-09)."""
+    if n_bolts and d_mm and grade:
+        import india_connections as _C
+        g = _C.bolt_group_capacity_is800(n_bolts, d_mm, grade, **geometry)
+        g.setdefault("limit_state", limit_state or "10.3.2 min(Vdsb, Vdpb)")
+        return g
     missing = []
     if n_bolts is None or int(n_bolts) < 1:
         missing.append("n_bolts")
     if V_one_bolt_N is None or float(V_one_bolt_N) <= 0:
-        missing.append("V_one_bolt_N from LIVE RAG (IS 800 §10 / IS 4000)")
+        missing.append("d_mm + grade + plate t/fu/e/p/d0 (IS 800 10.3), or V_one_bolt_N (IS 800 LSD) with cite")
     if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "cite": cite or "IS 800:2007 §10 / IS 4000:1992",
-            "required_inputs": missing,
-            "note": "Do not invent bolt grade/diameter capacity — retrieve Vdsb/Vdpb etc.",
-        }
-    return {
-        "found": True,
-        "capacity_N": float(n_bolts) * float(V_one_bolt_N),
-        "n_bolts": int(n_bolts),
-        "V_one_bolt_N": float(V_one_bolt_N),
-        "limit_state": limit_state,
-        "cite": cite or "IS 800:2007 §10 / IS 4000:1992",
-        "note": "n × RAG per-bolt capacity — no invented V_one.",
-    }
+        return {"found": False, "capacity_N": None, "cite": cite or "IS 800:2007 10.3",
+                "required_inputs": missing, "note": "Do not invent bolt capacity."}
+    return {"found": True, "capacity_N": float(n_bolts) * float(V_one_bolt_N), "n_bolts": int(n_bolts),
+            "V_one_bolt_N": float(V_one_bolt_N), "limit_state": limit_state,
+            "cite": cite or "IS 800:2007 10.3", "note": "n x supplied per-bolt IS 800 LSD capacity."}
 
 
 def apply_rag_capacities_to_connection(
@@ -1079,7 +1071,8 @@ def apply_rag_capacities_to_connection(
     dem = demand_N
     if dem is None and isinstance(conn.get("demand"), dict):
         d = conn["demand"]
-        dem = d.get("axial_N") or d.get("P_N") or d.get("V_N")
+        # HR800-03: brace connections use the Section 12 capacity-design force when it is recorded
+        dem = d.get("Pu_capacity_design_N") or d.get("axial_N") or d.get("P_N") or d.get("V_N")
 
     # Prefer existing worksheet slots
     ws = conn.get("section12_worksheet") or conn.get("base_plate_worksheet")
@@ -1136,15 +1129,17 @@ def apply_rag_capacities_to_connection(
             if rag_c.get("capacity_N") is not None:
                 cap_N = float(rag_c["capacity_N"])
             elif comp in ("welds", "column_to_plate_welds") or "weld" in str(comp):
-                w = fillet_weld_capacity_N(
-                    throat_mm=rag_c.get("throat_mm"),
-                    size_mm=rag_c.get("size_mm") or rag_c.get("leg_mm"),
-                    length_mm=rag_c.get("length_mm"),
-                    permissible_stress_MPa=rag_c.get("permissible_stress_MPa") or rag_c.get("stress_MPa"),
-                    permissible_stress_kgf_cm2=rag_c.get("permissible_stress_kgf_cm2"),
-                    cite=cited,
-                    n_sides=rag_c.get("n_sides", 1),
-                )
+                if rag_c.get("fu_MPa") is not None:
+                    w = fillet_weld_capacity_is800_N(
+                        throat_mm=rag_c.get("throat_mm"), size_mm=rag_c.get("size_mm") or rag_c.get("leg_mm"),
+                        length_mm=rag_c.get("length_mm"), fu_MPa=rag_c.get("fu_MPa"),
+                        n_sides=rag_c.get("n_sides", 1), site=bool(rag_c.get("site")), lj_mm=rag_c.get("lj_mm"),
+                        cite=cited,
+                    )
+                else:
+                    w = {"found": False, "required_inputs": [
+                        "fu_MPa + size_mm + length_mm (IS 800 10.5.7 LSD); IS 816 working-stress values are not "
+                        "compared with factored demand"]}
                 if w.get("found"):
                     cap_N = w["capacity_N"]
                     cited = w.get("cite")
@@ -1156,11 +1151,13 @@ def apply_rag_capacities_to_connection(
                     filled_slots.append(slot)
                     continue
             elif "bolt" in str(comp):
+                geo = {k: rag_c[k] for k in ("t_mm", "fu_plate_MPa", "e_mm", "p_mm", "d0_mm", "nn", "ns", "lj_mm",
+                                             "lg_mm", "hole") if rag_c.get(k) is not None}
                 b = bolt_group_capacity_N(
                     n_bolts=rag_c.get("n_bolts") or rag_c.get("n"),
                     V_one_bolt_N=rag_c.get("V_one_bolt_N") or rag_c.get("Vdsb_N"),
-                    cite=cited,
-                    limit_state=rag_c.get("limit_state"),
+                    cite=cited, limit_state=rag_c.get("limit_state"),
+                    d_mm=rag_c.get("d_mm") or rag_c.get("diameter_mm"), grade=rag_c.get("grade"), **geo,
                 )
                 if b.get("found"):
                     cap_N = b["capacity_N"]
@@ -1299,11 +1296,12 @@ def scwb_and_panel_from_schedule(
     return {"SCWB": scwb, "panel_zone": pz}
 
 
-# --- IS 4000:1992 Table 2 (retrieved LIVE) — max permissible shear Vob, kN ----
-# Source: engineering_rag_india exact_table 2 on IS_4000_1992 (clauses 5.2 / 5.3.2).
-# Values are corpus-verbatim; do not invent additional diameters/classes.
+# --- IS 4000:1992 Table 2 - WORKING-STRESS permissible applied forces (HR800-09) ---------------------------------
+# IS 4000:1992 Table 2 "Maximum Permissible Applied Forces for Joints" (pdf p.4) - working loads, Note 2:
+# Vob = 0.25 x Rm,min x stress area. Kept ONLY as permissible_N (serviceability / installation data); IS 800 LSD
+# bolt capacity is india_connections.bolt_capacity_is800 (M20 8.8 thread 90.5 kN vs 50.8 kN here).
+# M30 10.9 shank prints "148" in the PDF - a misprint: 0.25 x 1040 x 706 = 183.6 kN (thread 146 = 0.25x1040x561).
 IS4000_TABLE2_Vob_kN = {
-    # (nominal_mm, property_class, plane) -> kN ; plane in {"shank","thread"}
     (16, "8.8", "shank"): 40.2, (16, "8.8", "thread"): 31.4,
     (16, "10.9", "shank"): 52.3, (16, "10.9", "thread"): 40.8,
     (20, "8.8", "shank"): 65.2, (20, "8.8", "thread"): 50.8,
@@ -1311,16 +1309,16 @@ IS4000_TABLE2_Vob_kN = {
     (24, "8.8", "shank"): 93.8, (24, "8.8", "thread"): 73.2,
     (24, "10.9", "shank"): 117.0, (24, "10.9", "thread"): 91.8,
     (30, "8.8", "shank"): 146.0, (30, "8.8", "thread"): 116.0,
-    (30, "10.9", "shank"): 148.0, (30, "10.9", "thread"): 146.0,
+    (30, "10.9", "shank"): 183.6, (30, "10.9", "thread"): 146.0,
     (36, "8.8", "shank"): 211.0, (36, "8.8", "thread"): 169.0,
     (36, "10.9", "shank"): 264.0, (36, "10.9", "thread"): 212.0,
 }
 IS4000_TABLE2_CITE = (
-    "IS 4000:1992 Table 2 — Maximum Permissible Applied Forces for Joints "
-    "(bearing-type shear Vob); RAG exact_table 2"
+    "IS 4000:1992 Table 2 - Maximum Permissible Applied Forces for Joints (working stress, Vob); "
+    "M30 10.9 shank corrected 148 -> 183.6 kN (0.25 Rm As)"
 )
 
-# IS 800 Table 5 γmw shop welds (common) — corpus; site welds use 1.5
+# IS 800 Table 5 gamma_mw: shop 1.25, site 1.50
 GAMMA_MW_SHOP = 1.25
 GAMMA_MW_SITE = 1.50
 
@@ -1333,7 +1331,7 @@ def is4000_bolt_shear_capacity_N(
     plane="thread",
     cite=None,
 ):
-    """n × Vob from IS 4000 Table 2 (RAG-backed constants). found:false if size missing."""
+    """n x Vob from IS 4000 Table 2 as a WORKING-STRESS permissible_N (never an LSD capacity_N)."""
     missing = []
     if n_bolts is None or int(n_bolts) < 1:
         missing.append("n_bolts")
@@ -1343,26 +1341,19 @@ def is4000_bolt_shear_capacity_N(
     if diameter_mm is not None:
         key = (int(diameter_mm), str(property_class), str(plane).lower())
         if key not in IS4000_TABLE2_Vob_kN:
-            missing.append("diameter/property_class/plane in IS 4000 Table 2 corpus set")
+            missing.append("diameter/property_class/plane in IS 4000 Table 2")
     if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "cite": cite or IS4000_TABLE2_CITE,
-            "required_inputs": missing,
-            "note": "Do not invent Vob — use Table 2 rows present in India RAG.",
-        }
+        return {"found": False, "capacity_N": None, "permissible_N": None,
+                "cite": cite or IS4000_TABLE2_CITE, "required_inputs": missing}
     Vob_kN = IS4000_TABLE2_Vob_kN[key]
     return {
-        "found": True,
-        "capacity_N": float(n_bolts) * Vob_kN * 1000.0,  # kN → N
-        "Vob_one_kN": Vob_kN,
-        "n_bolts": int(n_bolts),
-        "diameter_mm": int(diameter_mm),
-        "property_class": str(property_class),
-        "plane": str(plane).lower(),
+        "found": True, "capacity_N": None, "method": "WSM",
+        "permissible_N": float(n_bolts) * Vob_kN * 1000.0,
+        "Vob_one_kN": Vob_kN, "n_bolts": int(n_bolts), "diameter_mm": int(diameter_mm),
+        "property_class": str(property_class), "plane": str(plane).lower(),
         "cite": cite or IS4000_TABLE2_CITE,
-        "note": "Bearing-type joint shear — IS 4000 Table 2 RAG; LSD conversion not applied (ASD table).",
+        "note": "Working-stress permissible load (IS 4000). Not an IS 800 LSD capacity: use "
+                "india_connections.bolt_capacity_is800.",
     }
 
 
@@ -1372,46 +1363,19 @@ def fillet_weld_capacity_is800_N(
     size_mm=None,
     length_mm=None,
     fu_MPa=None,
-    gamma_mw=GAMMA_MW_SHOP,
+    gamma_mw=None,
     n_sides=1,
     cite=None,
+    site=False,
+    lj_mm=None,
+    angle_deg=90.0,
 ):
-    """IS 800:2007 §10.5.7.1.1 — fwd = fu/(√3 γmw); capacity = fwd × a × L × n_sides.
-
-    fu and geometry required — never invent fu or size. Typical RAG: fu=410 E250; γmw=1.25 shop.
-    """
-    missing = []
-    if fu_MPa is None or float(fu_MPa) <= 0:
-        missing.append("fu_MPa from RAG (weld or parent; IS 800 §10.5.7.1.1)")
-    a = throat_mm
-    if a is None and size_mm is not None:
-        a = float(size_mm) / math.sqrt(2.0)
-    if a is None or float(a) <= 0:
-        missing.append("throat_mm or size_mm")
-    if length_mm is None or float(length_mm) <= 0:
-        missing.append("length_mm")
-    if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "cite": cite or "IS 800:2007 §10.5.7.1.1",
-            "required_inputs": missing,
-            "note": "Do not invent fu or weld size — RAG + disclosed geometry required.",
-        }
-    fwd = float(fu_MPa) / (math.sqrt(3.0) * float(gamma_mw))
-    cap = fwd * float(a) * float(length_mm) * float(n_sides or 1)
-    return {
-        "found": True,
-        "capacity_N": cap,
-        "fwd_MPa": fwd,
-        "fu_MPa": float(fu_MPa),
-        "gamma_mw": float(gamma_mw),
-        "throat_mm": float(a),
-        "length_mm": float(length_mm),
-        "n_sides": int(n_sides or 1),
-        "cite": cite or "IS 800:2007 §10.5.7.1.1 fwd=fu/(√3 γmw); γmw Table 5",
-        "note": "LSD fillet capacity from RAG fu + disclosed throat/length — no invented size.",
-    }
+    """IS 800:2007 LSD fillet weld (delegates to india_connections): throat K s (Table 22, 0.70), fwd =
+    fu/(sqrt3 gamma_mw) (10.5.7.1.1), gamma_mw 1.25 shop / 1.50 site, long joints beta_lw (10.5.7.3)."""
+    import india_connections as _C
+    return _C.fillet_weld_capacity_is800_N(size_mm=size_mm, length_mm=length_mm, fu_MPa=fu_MPa, n_sides=n_sides,
+                                          angle_deg=angle_deg, site=site, lj_mm=lj_mm, throat_mm=throat_mm,
+                                          gamma_mw=gamma_mw, cite=cite)
 
 
 def panel_zone_doubler_detail(
@@ -1427,7 +1391,7 @@ def panel_zone_doubler_detail(
     """Attach plate grade / electrode provenance to a panel_zone_check result.
 
     Thickness (doubler_required_mm) comes from panel_zone_check. Grade/electrode
-    must come from RAG or eor_documented — never invent E250B availability (H7)
+    must come from IS 2062 (grade) and IS 814 (electrode) - never invented
     or electrode classification.
     """
     pz = dict(pz_result or {})
@@ -1445,7 +1409,7 @@ def panel_zone_doubler_detail(
     if t_req is None and not pz.get("found"):
         missing.append("panel_zone_check result with doubler_required_mm")
     if plate_fy_MPa is None and not plate_grade:
-        missing.append("plate_fy_MPa or plate_grade from RAG / eor_documented")
+        missing.append("plate_fy_MPa or plate_grade (IS 2062)")
     if not electrode:
         missing.append("electrode (IS 814 / IS 816 class) from RAG — do not invent")
     if missing:
@@ -1455,8 +1419,8 @@ def panel_zone_doubler_detail(
             "cite": "IS 800:2007 §12.11.2.3–12.11.2.4 doubler; grade/electrode from RAG",
             "note": (
                 "Doubler thickness may be flagged by panel_zone_check; plate grade and "
-                "electrode remain found:false until RAG/EOR supplies them. H7 E250B "
-                "procurement is a separate process note — do not invent availability."
+                "electrode remain found:false until declared. E250B (12.8.2.1/12.11.1) is a design "
+                "requirement checked by india_is800_s12.material_gate."
             ),
         })
         pz["doubler_detail"] = detail
@@ -1476,15 +1440,12 @@ def panel_zone_doubler_detail(
     return pz
 
 
-# Allowlisted provenance for EOR-documented end-plate / continuity Rn (CFS-style R).
-# Prefer LIVE RAG / QFM when clauses yield a numeric capacity; never invent Rn.
-END_PLATE_RN_OK_SOURCES = frozenset({
-    "rag", "corpus", "qfm", "live_rag", "is800", "is_800",
-    "eor_documented", "eor", "documented", "explicit", "eor_explicit",
-})
+# End-plate / continuity capacity (D3 ruling: no "eor_documented" bypass). A capacity is accepted only when it is
+# derived from geometry + an IS 800 clause (source rag/corpus/is800/computed) and carries a cite.
+END_PLATE_RN_OK_SOURCES = frozenset({"rag", "corpus", "qfm", "live_rag", "is800", "is_800", "computed"})
 END_PLATE_RN_REFUSED_SOURCES = frozenset({
-    "assumed", "assumption", "silent", "silent_default", "invented",
-    "placeholder", "todo", "tbd", "guess", "thin_air",
+    "assumed", "assumption", "silent", "silent_default", "invented", "placeholder", "todo", "tbd", "guess",
+    "thin_air", "eor_documented", "eor", "documented", "explicit", "eor_explicit",
 })
 
 
@@ -1502,158 +1463,40 @@ def end_plate_or_continuity_capacity_N(
     cfg=None,
     demand_N=None,
 ):
-    """End-plate / continuity Rn — RAG preferred; EOR-documented parallel to CFS R.
-
-    Paths (never invent from thin air):
-      1) LIVE RAG / QFM capacity_N (or Rn with source in rag/corpus/qfm) — preferred
-         when QFM finds clauses that yield a numeric capacity.
-      2) EOR-documented: Rn + cite + source='eor_documented' (allowlisted) —
-         COMPLETE may use when labeled; refuse assumed/silent/invented sources.
-      3) found:false if neither — required_inputs listed.
-
-    cfg optional keys: end_plate_Rn / end_plate_capacity_N, end_plate_Rn_cite,
-    end_plate_Rn_source (or nested under cfg['end_plate'] / cfg['continuity']).
-    """
+    """End-plate / continuity capacity. Accepted only with an IS 800-derived source (rag/corpus/is800/computed);
+    'eor_documented' / assumed sources are refused (D3: no foreign or undocumented design basis). found:false
+    otherwise - never invented. Section 12 demands (1.2 Mp) come from india_is800_s12."""
     cfg = cfg if isinstance(cfg, dict) else {}
     ep = cfg.get("end_plate") if isinstance(cfg.get("end_plate"), dict) else {}
     cont = cfg.get("continuity") if isinstance(cfg.get("continuity"), dict) else {}
-
     cite = (cite or cfg.get("end_plate_Rn_cite") or cfg.get("end_plate_cite")
             or ep.get("cite") or ep.get("Rn_cite") or cont.get("cite"))
-    src = _norm_src(
-        source or cfg.get("end_plate_Rn_source") or cfg.get("end_plate_source")
-        or ep.get("source") or ep.get("Rn_source") or cont.get("source")
-    )
+    src = _norm_src(source or cfg.get("end_plate_Rn_source") or cfg.get("end_plate_source")
+                    or ep.get("source") or ep.get("Rn_source") or cont.get("source"))
     cap = capacity_N if capacity_N is not None else Rn
     if cap is None:
-        cap = (cfg.get("end_plate_capacity_N") or cfg.get("end_plate_Rn")
-               or ep.get("capacity_N") or ep.get("Rn")
+        cap = (cfg.get("end_plate_capacity_N") or cfg.get("end_plate_Rn") or ep.get("capacity_N") or ep.get("Rn")
                or cont.get("capacity_N") or cont.get("Rn"))
-    dem = demand_N
-    if dem is None and isinstance(cfg.get("end_plate"), dict):
-        dem = ep.get("demand_N")
-
+    dem = demand_N if demand_N is not None else ep.get("demand_N")
     default_cite = "IS 800:2007 §10 / §12.11 end-plate / continuity"
-
-    # Path 1: RAG / QFM numeric capacity (preferred when clauses found)
-    rag_like = (not src) or src in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800")
-    if cap is not None and float(cap) > 0 and rag_like and src not in END_PLATE_RN_REFUSED_SOURCES:
-        # Bare capacity_N without source → treat as RAG passthrough (wave2/3 contract)
-        if not src or src in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800"):
-            out = {
-                "found": True,
-                "capacity_N": float(cap),
-                "Rn": float(cap),
-                "limit_state": limit_state,
-                "source": src or "rag",
-                "resolved_via": "rag",
-                "cite": cite or default_cite,
-                "note": (
-                    "End-plate/continuity Rn from LIVE RAG / QFM — preferred when clauses "
-                    "yield a numeric capacity. Not invented."
-                ),
-                "policy": "prefer_rag_when_qfm_finds_clauses",
-            }
-            if dem is not None and float(cap) > 0:
-                out["DC"] = float(dem) / float(cap)
-                out["demand_N"] = float(dem)
-            return out
-
-    # Path 2: EOR-documented (CFS-style R parallel) — Rn + cite + allowlisted source
-    if (cap is not None and float(cap) > 0
-            and src in END_PLATE_RN_OK_SOURCES
-            and src not in ("rag", "corpus", "qfm", "live_rag", "is800", "is_800")
-            and cite):
-        if src in END_PLATE_RN_REFUSED_SOURCES:
-            return {
-                "found": False,
-                "capacity_N": None,
-                "Rn": None,
-                "source": src,
-                "resolved_via": "refused",
-                "cite": default_cite,
-                "required_inputs": [
-                    "Rn + cite + source=eor_documented (not assumed/silent/invented)",
-                    "OR capacity_N from LIVE RAG / QFM",
-                ],
-                "note": (
-                    "Refused end-plate Rn source=%r — never invent from thin air. "
-                    "Use LIVE RAG when QFM finds clauses, or EOR-documented Rn+cite."
-                    % (src,)
-                ),
-            }
-        out = {
-            "found": True,
-            "capacity_N": float(cap),
-            "Rn": float(cap),
-            "limit_state": limit_state,
-            "source": src,
-            "resolved_via": "eor_documented" if ("eor" in src or src == "documented") else src,
-            "cite": str(cite),
-            "note": (
-                "End-plate/continuity Rn from EOR-documented path (CFS-style eor_documented R "
-                "parallel). Corpus/QFM often found:false for numeric Rn — COMPLETE may use "
-                "this when labeled with cite. Not invented from thin air. Prefer RAG when "
-                "QFM finds clauses."
-            ),
-            "policy": "eor_documented_ok_when_corpus_miss",
-        }
-        if dem is not None and float(cap) > 0:
+    if cap is not None and float(cap) > 0 and (not src or src in END_PLATE_RN_OK_SOURCES) and \
+            src not in END_PLATE_RN_REFUSED_SOURCES:
+        out = {"found": True, "capacity_N": float(cap), "Rn": float(cap), "limit_state": limit_state,
+               "source": src or "rag", "resolved_via": "rag", "cite": cite or default_cite,
+               "note": "Capacity from IS 800 geometry + clause (supplied) - not invented."}
+        if dem is not None:
             out["DC"] = float(dem) / float(cap)
             out["demand_N"] = float(dem)
         return out
-
-    # Path 1b: capacity_N with explicit cite but no source → still RAG passthrough
-    if cap is not None and float(cap) > 0 and (not src or src in END_PLATE_RN_OK_SOURCES):
-        if src in END_PLATE_RN_REFUSED_SOURCES:
-            pass  # fall through to miss
-        elif cite or not src:
-            out = {
-                "found": True,
-                "capacity_N": float(cap),
-                "Rn": float(cap),
-                "limit_state": limit_state,
-                "source": src or "rag",
-                "resolved_via": "rag" if (not src or src in ("rag", "corpus", "qfm", "live_rag")) else src,
-                "cite": cite or default_cite,
-                "note": "Capacity from provided RAG / disclosed value — not invented.",
-            }
-            if dem is not None and float(cap) > 0:
-                out["DC"] = float(dem) / float(cap)
-                out["demand_N"] = float(dem)
-            return out
-
-    refused = []
-    if cap is None or (cap is not None and float(cap) <= 0):
-        refused.append("capacity_N or Rn (LIVE RAG / QFM preferred; or EOR-documented)")
-    if cap is not None and float(cap) > 0 and src and src not in END_PLATE_RN_OK_SOURCES:
-        refused.append(
-            "source in {%s} (got %r) — refused assumed/silent invent"
-            % (", ".join(sorted(END_PLATE_RN_OK_SOURCES)), src)
-        )
-    if cap is not None and float(cap) > 0 and src in END_PLATE_RN_OK_SOURCES and src not in (
-        "rag", "corpus", "qfm", "live_rag", "is800", "is_800",
-    ) and not cite:
-        refused.append("cite (required with eor_documented Rn)")
-    return {
-        "found": False,
-        "capacity_N": None,
-        "Rn": None,
-        "source": src or None,
-        "resolved_via": "found_false",
-        "cite": cite or default_cite,
-        "required_inputs": refused or [
-            "capacity_N from LIVE RAG / QFM (prefer when clauses found)",
-            "OR Rn + cite + source=eor_documented (CFS-style; never invent)",
-        ],
-        "note": (
-            "End-plate/continuity Rn found:false — India corpus often lacks numeric capacity. "
-            "Prefer RAG when QFM finds clauses; else supply EOR-documented Rn+cite+"
-            "source=eor_documented. Never invent from thin air."
-        ),
-        "demand_N": float(dem) if dem is not None else None,
-        "DC": None,
-    }
+    reasons = []
+    if cap is None or float(cap) <= 0:
+        reasons.append("capacity_N derived from geometry + IS 800 clause (source rag/is800/computed)")
+    if src in END_PLATE_RN_REFUSED_SOURCES:
+        reasons.append("source %r refused (D3: no eor_documented / assumed capacities)" % src)
+    return {"found": False, "capacity_N": None, "Rn": None, "source": src or None, "resolved_via": "found_false",
+            "cite": cite or default_cite, "required_inputs": reasons,
+            "note": "End-plate/continuity capacity found:false - derive from geometry + IS 800 clause; never invent.",
+            "demand_N": float(dem) if dem is not None else None, "DC": None}
 
 
 # --- complete-gap wave3: base-plate bending, Whitmore/block shear, Pn, PZ-in-model ---
@@ -1672,104 +1515,66 @@ def base_plate_bending_check(
     capacity_bending_Nmm=None,
     gamma_m0=None,
     cited=None,
+    a_mm=None,
+    b_mm=None,
+    tf_col_mm=None,
 ):
-    """IS 800 LSD base-plate bending / thickness check (Ch.11 practice).
-
-    Paths (any one closes found:true — never invent t or m):
-      1) RAG capacity_bending_N vs P_N, or capacity_bending_Nmm vs M_Nmm
-      2) Disclosed plate_t_mm + fy + cantilever m (+ bearing pressure or P/plan)
-         → t_req = m * sqrt(3 * w * γ_m0 / fy) from M = w m²/2 per unit width
-            and σ_allow = fy/γ_m0 (equivalent to t = sqrt(6 M γ_m0 / fy))
-
-    found:false when RAG/disclosed inputs miss — do not invent plate thickness.
+    """IS 800:2007 7.4.3.1 slab-base thickness (concentric axial compression):
+    ts = sqrt(2.5 w (a^2 - 0.3 b^2) gamma_m0 / fy) > tf. With only one projection m: b = 0 (a = m).
+    DC = (t_req / t_prov)^2 (strength ratio, HR800-12). For P + M use india_connections.base_plate_design.
+    found:false when geometry is not declared - thickness is never invented or sized from demand.
     """
     gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
-    cite = cited or "IS 800:2007 Ch.11 / LSD plate bending (cantilever); γ_m0 Table 5"
+    cite = cited or "IS 800:2007 7.4.3.1 ts = sqrt(2.5 w (a^2-0.3b^2) gamma_m0/fy) > tf"
     missing = []
-
-    # Path 1: direct RAG capacity
     if capacity_bending_N is not None and P_N is not None and float(capacity_bending_N) > 0:
-        dc = float(P_N) / float(capacity_bending_N) if float(capacity_bending_N) > 0 else None
-        return {
-            "found": True,
-            "DC": dc,
-            "capacity_N": float(capacity_bending_N),
-            "capacity": {"capacity_N": float(capacity_bending_N), "path": "rag_capacity_N"},
-            "cite": cite,
-            "cited": cite,
-            "note": "Base-plate bending D/C from LIVE RAG capacity_N — t not invented.",
-        }
+        dc = float(P_N) / float(capacity_bending_N)
+        return {"found": True, "DC": dc, "capacity_N": float(capacity_bending_N),
+                "capacity": {"capacity_N": float(capacity_bending_N), "path": "supplied_capacity_N"},
+                "cite": cite, "cited": cite, "note": "Base-plate D/C from a supplied capacity - t not invented."}
     if capacity_bending_Nmm is not None and M_Nmm is not None and float(capacity_bending_Nmm) > 0:
         dc = float(M_Nmm) / float(capacity_bending_Nmm)
-        return {
-            "found": True,
-            "DC": dc,
-            "capacity_Nmm": float(capacity_bending_Nmm),
-            "capacity": {"capacity_Nmm": float(capacity_bending_Nmm), "path": "rag_capacity_Nmm"},
-            "cite": cite,
-            "cited": cite,
-            "note": "Base-plate bending moment D/C from LIVE RAG — t not invented.",
-        }
-
-    # Path 2: thickness from cantilever projection (disclosed / RAG geometry)
-    m = cantilever_m_mm
+        return {"found": True, "DC": dc, "capacity_Nmm": float(capacity_bending_Nmm),
+                "capacity": {"capacity_Nmm": float(capacity_bending_Nmm), "path": "supplied_capacity_Nmm"},
+                "cite": cite, "cited": cite, "note": "Base-plate moment D/C from a supplied capacity."}
+    if M_Nmm:
+        return {"found": False, "DC": None, "capacity": {}, "cite": cite,
+                "required_inputs": ["P+M base: use india_connections.base_plate_design (7.4.1 linear bearing)"],
+                "missing": ["moment present - 7.4.3.1 applies to axial compression only (7.4.3.2)"],
+                "note": "7.4.3.1 is for concentric compression; eccentric bases need 7.4.3.2 special calculation."}
+    a = a_mm if a_mm is not None else cantilever_m_mm
+    b = b_mm if b_mm is not None else (0.0 if cantilever_m_mm is not None else None)
     fy = fy_plate_MPa
     t_prov = plate_t_mm
     w = bearing_pressure_MPa
     if w is None and P_N is not None and plate_B_mm and plate_L_mm:
         area = float(plate_B_mm) * float(plate_L_mm)
         if area > 0:
-            w = float(P_N) / area  # N/mm² = MPa
-    if m is None:
-        missing.append("cantilever_m_mm from RAG / disclosed projection")
+            w = float(P_N) / area
+    if a is None:
+        missing.append("projections a_mm/b_mm (or cantilever_m_mm) - declared geometry")
     if fy is None:
-        missing.append("fy_plate_MPa from RAG / IS 2062")
+        missing.append("fy_plate_MPa (IS 2062 Table 3 for the plate thickness)")
     if t_prov is None:
-        missing.append("plate_t_mm disclosed (do not invent t)")
+        missing.append("plate_t_mm declared (do not invent t)")
     if w is None:
-        missing.append("bearing_pressure_MPa or P_N with plate_B_mm×plate_L_mm")
+        missing.append("bearing_pressure_MPa or P_N with plate_B_mm x plate_L_mm")
     if missing:
-        return {
-            "found": False,
-            "DC": None,
-            "capacity": {},
-            "t_required_mm": None,
-            "t_provided_mm": float(t_prov) if t_prov is not None else None,
-            "required_inputs": missing,
-            "missing": missing,
-            "cite": cite,
-            "note": (
-                "Base-plate bending found:false — need RAG/disclosed m, fy, t, and bearing "
-                "pressure (or P with plate plan). Never invent plate thickness."
-            ),
-        }
-
-    m = float(m); fy = float(fy); t_prov = float(t_prov); w = float(w)
-    # M per unit width = w * m² / 2; t_req = sqrt(6 M γ_m0 / fy) = m * sqrt(3 w γ_m0 / fy)
-    t_req = m * math.sqrt(max(3.0 * w * gm0 / fy, 0.0))
-    dc = (t_req / t_prov) if t_prov > 0 else None
+        return {"found": False, "DC": None, "capacity": {}, "t_required_mm": None,
+                "t_provided_mm": float(t_prov) if t_prov is not None else None,
+                "required_inputs": missing, "missing": missing, "cite": cite,
+                "note": "Base-plate thickness found:false - declared geometry required; never invent thickness."}
+    a = float(a); b = float(b or 0.0); fy = float(fy); t_prov = float(t_prov); w = float(w)
+    t_req = math.sqrt(max(2.5 * w * (a * a - 0.3 * b * b) * gm0 / fy, 0.0))
+    dc = (t_req / t_prov) ** 2 if t_prov > 0 else None
+    ts_gt_tf = None if tf_col_mm is None else (t_prov > float(tf_col_mm))
     return {
-        "found": True,
-        "DC": dc,
-        "t_required_mm": t_req,
-        "t_provided_mm": t_prov,
-        "m_mm": m,
-        "w_MPa": w,
-        "fy_plate_MPa": fy,
-        "gamma_m0": gm0,
-        "capacity": {
-            "t_required_mm": t_req,
-            "t_provided_mm": t_prov,
-            "path": "cantilever_thickness_IS800_LSD",
-        },
-        "capacity_N": None,
-        "cite": cite,
-        "cited": cite,
-        "note": (
-            "t_req = m√(3 w γ_m0/fy) from cantilever plate bending (M=w m²/2). "
-            "m/fy/t/w from RAG or disclosed geometry — thickness not invented."
-        ),
-        "pass": (dc is not None and dc <= 1.0),
+        "found": True, "DC": dc, "t_required_mm": t_req, "t_provided_mm": t_prov, "a_mm": a, "b_mm": b,
+        "m_mm": a, "w_MPa": w, "fy_plate_MPa": fy, "gamma_m0": gm0, "ts_gt_tf": ts_gt_tf,
+        "capacity": {"t_required_mm": t_req, "t_provided_mm": t_prov, "path": "IS800_7.4.3.1"},
+        "capacity_N": None, "cite": cite, "cited": cite,
+        "note": "DC = (t_req/t_prov)^2 per 7.4.3.1; ts > tf also required.",
+        "pass": (dc is not None and dc <= 1.0 and ts_gt_tf is not False),
     }
 
 
@@ -1784,52 +1589,18 @@ def gusset_whitmore_capacity_N(
     capacity_N=None,
     cite=None,
 ):
-    """Gusset Whitmore section yield — IS 800 LSD (RAG width or 30° construction).
-
-    Capacity = bw * t * fy / γ_m0. bw from RAG whitmore_width_mm, or
-    bw = w_brace + 2 L_wt tan(30°) when both disclosed. Direct capacity_N from RAG OK.
-    found:false on miss — no invent.
-    """
-    gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
-    cite = cite or "IS 800:2007 gusset Whitmore yield (LSD); γ_m0 Table 5"
+    """Gusset Whitmore-section yield. The 30-degree Whitmore width is ENGINEERING PRACTICE (not an IS 800 clause);
+    yield per IS 800 6.2 (fy/gamma_m0). Compression buckling: india_connections.whitmore_buckling (12.7.3.4/12.8.3.4)."""
+    import india_connections as _C
     if capacity_N is not None and float(capacity_N) > 0:
-        return {
-            "found": True,
-            "capacity_N": float(capacity_N),
-            "cite": cite,
-            "note": "Whitmore capacity from LIVE RAG — not invented.",
-            "path": "rag_capacity_N",
-        }
-    missing = []
-    bw = whitmore_width_mm
-    if bw is None and L_wt_mm is not None and w_brace_mm is not None:
-        bw = float(w_brace_mm) + 2.0 * float(L_wt_mm) * math.tan(math.radians(30.0))
-    if bw is None:
-        missing.append("whitmore_width_mm from RAG OR (L_wt_mm + w_brace_mm) disclosed")
-    if t_gusset_mm is None:
-        missing.append("t_gusset_mm disclosed / RAG")
-    if fy_MPa is None:
-        missing.append("fy_MPa from RAG / IS 2062")
-    if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "required_inputs": missing,
-            "cite": cite,
-            "note": "Whitmore found:false — do not invent gusset t or Whitmore width.",
-        }
-    cap = float(bw) * float(t_gusset_mm) * float(fy_MPa) / gm0
-    return {
-        "found": True,
-        "capacity_N": cap,
-        "whitmore_width_mm": float(bw),
-        "t_gusset_mm": float(t_gusset_mm),
-        "fy_MPa": float(fy_MPa),
-        "gamma_m0": gm0,
-        "cite": cite,
-        "note": "Whitmore T = bw t fy / γ_m0 — bw/t/fy from RAG or disclosed 30° construction.",
-        "path": "whitmore_yield",
-    }
+        return {"found": True, "capacity_N": float(capacity_N), "cite": cite or _C.WHITMORE_CITE,
+                "path": "supplied_capacity_N"}
+    r = _C.whitmore_section(t_gusset_mm=t_gusset_mm, fy_MPa=fy_MPa, w_start_mm=w_brace_mm, L_conn_mm=L_wt_mm,
+                            whitmore_width_mm=whitmore_width_mm)
+    if r.get("found"):
+        r.update(t_gusset_mm=float(t_gusset_mm), fy_MPa=float(fy_MPa), path="whitmore_yield",
+                 gamma_m0=float(gamma_m0 or GAMMA_M0_DEFAULT))
+    return r
 
 
 def gusset_block_shear_capacity_N(
@@ -1842,57 +1613,22 @@ def gusset_block_shear_capacity_N(
     gamma_m0=None,
     gamma_m1=None,
     cite=None,
+    Avn_mm2=None,
+    Atg_mm2=None,
 ):
-    """Gusset block shear — IS 800:2007 §6.4.1 (RAG capacity or disclosed areas).
-
-    T_db = Avg fy/(√3 γ_m0) + 0.9 Atn fu/γ_m1  (tension rupture + shear yield form).
-    found:false without RAG capacity or full geometry — no invent.
-    """
-    gm0 = float(gamma_m0 if gamma_m0 is not None else GAMMA_M0_DEFAULT)
-    gm1 = float(gamma_m1 if gamma_m1 is not None else 1.25)
-    cite = cite or "IS 800:2007 §6.4.1 block shear"
+    """Gusset block shear - IS 800 6.4.1: the SMALLER of both expressions (HR800-11). All four areas (Avg, Avn,
+    Atg, Atn) are required; with any missing the result is found:false (the first expression alone is +9.5 %
+    unconservative on a typical gusset)."""
     if capacity_N is not None and float(capacity_N) > 0:
-        return {
-            "found": True,
-            "capacity_N": float(capacity_N),
-            "cite": cite,
-            "note": "Block shear capacity from LIVE RAG — not invented.",
-            "path": "rag_capacity_N",
-        }
-    missing = []
-    for name, val in (
-        ("Avg_mm2 (gross shear area)", Avg_mm2),
-        ("Atn_mm2 (net tension area)", Atn_mm2),
-        ("fy_MPa", fy_MPa),
-        ("fu_MPa", fu_MPa),
-    ):
-        if val is None:
-            missing.append(name)
-    if missing:
-        return {
-            "found": False,
-            "capacity_N": None,
-            "required_inputs": missing,
-            "cite": cite,
-            "note": "Block shear found:false — RAG capacity or Avg/Atn/fy/fu required; no invent.",
-        }
-    cap = (
-        float(Avg_mm2) * float(fy_MPa) / (math.sqrt(3.0) * gm0)
-        + 0.9 * float(Atn_mm2) * float(fu_MPa) / gm1
-    )
-    return {
-        "found": True,
-        "capacity_N": cap,
-        "Avg_mm2": float(Avg_mm2),
-        "Atn_mm2": float(Atn_mm2),
-        "fy_MPa": float(fy_MPa),
-        "fu_MPa": float(fu_MPa),
-        "gamma_m0": gm0,
-        "gamma_m1": gm1,
-        "cite": cite,
-        "note": "Block shear T_db per IS 800 §6.4.1 from disclosed areas — not invented.",
-        "path": "section_6_4_1",
-    }
+        return {"found": True, "capacity_N": float(capacity_N), "cite": cite or "IS 800:2007 6.4.1",
+                "path": "supplied_capacity_N"}
+    r = block_shear_6_4_1(Avg_mm2=Avg_mm2, Avn_mm2=Avn_mm2, Atg_mm2=Atg_mm2, Atn_mm2=Atn_mm2, fy_MPa=fy_MPa,
+                          fu_MPa=fu_MPa, gamma_m0=float(gamma_m0 or GAMMA_M0_DEFAULT),
+                          gamma_m1=float(gamma_m1 or 1.25))
+    r["path"] = "section_6_4_1_both_expressions"
+    if r.get("found"):
+        r.update(fy_MPa=float(fy_MPa), fu_MPa=float(fu_MPa))
+    return r
 
 
 def column_base_or_splice_Pn_capacity_N(
@@ -1926,7 +1662,7 @@ def column_base_or_splice_Pn_capacity_N(
     found:false if neither RAG capacity nor (geometry + RAG formula). Optional
     demand_P_N yields DC when capacity present.
     """
-    cite = cite or "IS 800:2007 Ch.11 / §10 column base or splice axial — RAG"
+    cite = cite or "IS 800:2007 §7.4 / §10 column base or splice axial"
     geo_res = resolve_base_or_splice_geometry(cfg, geometry=geometry)
     geo = geo_res.get("geometry") or {}
     if plate_B_mm is None:
@@ -2176,7 +1912,7 @@ def gusset_whitmore_block_shear_status(
 
     Prefer RAG numeric capacity or disclosed geometry helpers. Emit found:false
     when corpus misses — never invent Whitmore width / block-shear areas.
-    ``disclosed`` may carry eor_documented geometry (bw/t/fy or Avg/Atn).
+    ``disclosed`` carries declared geometry (bw/t/fy or Avg/Avn/Atg/Atn).
     """
     disclosed = disclosed or {}
     rag_hit = rag_hit or {}
@@ -2203,7 +1939,7 @@ def gusset_whitmore_block_shear_status(
             b_kwargs["capacity_N"] = rag_hit["block_shear_capacity_N"]
             b_kwargs["cite"] = rag_hit.get("block_shear_cite") or rag_hit.get("cite")
         else:
-            for k in ("Avg_mm2", "Atn_mm2", "fy_MPa", "fu_MPa", "gamma_m0", "gamma_m1",
+            for k in ("Avg_mm2", "Avn_mm2", "Atg_mm2", "Atn_mm2", "fy_MPa", "fu_MPa", "gamma_m0", "gamma_m1",
                       "capacity_N", "cite"):
                 if disclosed.get(k) is not None:
                     b_kwargs[k] = disclosed[k]
@@ -2226,12 +1962,13 @@ def gusset_whitmore_block_shear_status(
             "partial" if (w_found or b_found) else
             "found_false"
         ),
-        "blocks_complete": False,  # non-blocking residual when found:false (Ex6–15 policy)
+        # HR800-11: 12.7.3.2 / 12.8.3.2 make block shear mandatory for brace connections - a missing check blocks
+        "blocks_complete": not (w_found and b_found),
         "note": (
-            "Whitmore + block shear from RAG / disclosed geometry."
+            "Whitmore (engineering practice) + block shear (IS 800 6.4.1, both expressions) evaluated."
             if (w_found and b_found) else
-            "Whitmore/block shear found:false on corpus miss — do not invent bw/t/Avg/Atn; "
-            "bolt/weld D/C may still close. Non-blocking residual toward COMPLETE."
+            "Whitmore/block shear found:false - IS 800 12.7.3.2/12.8.3.2 require block shear for brace "
+            "connections: this BLOCKS COMPLETE until the gusset geometry is declared."
         ),
         "policy": "rag_or_disclosed_else_found_false",
     }
@@ -2239,68 +1976,49 @@ def gusset_whitmore_block_shear_status(
 
 
 def h6_h7_residual_status(cfg=None, pkg=None):
-    """Disclosed non-blocking H6/H7 residual status (Wave D).
+    """H6 / H7 status (WP2.9, HR800-13/14).
 
-    H6 = IS 800 Ch. I composite worksheet stubs (studs/camber/wet/I_LB).
-    H7 = E250B mill/stock procurement process note.
-    Never invent PE stamps or mill availability. Product gates closed; process open.
+    H6 composite floors: composite steel-concrete beams are IS 11384 (not in the corpus) -> found:false. IS 800:2007
+    has no composite chapter. Allowed scopes: bare-steel design (IS 800 8.2 incl. construction stage) or delegation.
+    H7 E250B: IS 800 12.8.2.1 (SCBF braces) / 12.11.1 (SMF) make IS 2062 E250B a DESIGN requirement (checked by
+    india_is800_s12.material_gate) - blocking, not a procurement note.
     """
     cfg = cfg or {}
     pkg = pkg or {}
-    composite_declared = bool(
-        cfg.get("composite") or cfg.get("composite_floor")
-        or (isinstance(pkg.get("composite_design"), dict))
-    )
+    composite_declared = bool(cfg.get("composite") or cfg.get("composite_floor")
+                              or isinstance(pkg.get("composite_design"), dict)
+                              or "composite" in str(cfg.get("floor_system", "")).lower())
+    scope = str(cfg.get("composite_scope") or "").lower()
     h6 = {
         "id": "H6",
-        "title": "IS 800 Ch. I composite worksheet",
+        "title": "Composite floor (IS 11384 - not in corpus)",
         "found": False,
-        "status": "disclose_only_stub",
-        "blocking": False,
+        "status": ("bare_steel_scope" if scope in ("bare_steel", "bare-steel") else
+                   "delegated" if scope == "delegated" else "found_false"),
+        "blocking": bool(composite_declared and scope not in ("bare_steel", "bare-steel", "delegated")),
         "pe_stamp": None,
         "pe_stamp_invented": False,
-        "slots": [
-            "b_eff", "studs", "partial_composite", "camber", "wet_stage", "I_LB_deflection",
-        ],
-        "note": (
-            "H6 Ch. I composite stubs — leave found:false rather than invent stud/"
-            "camber/wet/I_LB. Fill from LIVE IS 800 Ch. I RAG or explicit scope statement."
-        ),
-        "cite": "IS 800:2007 Ch. I — retrieve LIVE; see COMPOSITE_I3.md",
+        "slots": ["IS 11384 composite design (found:false)", "bare-steel IS 800 8.2 check",
+                  "construction-stage (wet concrete) IS 800 8.2.2 check"],
+        "note": ("Composite beams: IS 11384 governs and is not in the corpus (found:false). Declare "
+                 "cfg['composite_scope'] = 'bare_steel' (IS 800 8.2 incl. construction stage) or 'delegated'."),
+        "cite": "IS 11384 (not in corpus); IS 800:2007 8.2 bare-steel scope - see COMPOSITE_INDIA.md",
         "composite_declared": composite_declared,
     }
-    if composite_declared and isinstance(pkg.get("composite_design"), dict):
-        cd = pkg["composite_design"]
-        ws = cd.get("chI_worksheet") if isinstance(cd.get("chI_worksheet"), dict) else {}
-        h6["worksheet_status"] = ws.get("status") or cd.get("status") or "stubs"
-    elif not composite_declared:
-        h6["note"] += " No composite declared — stubs remain available if needed."
-
     h7 = {
         "id": "H7",
-        "title": "E250B mill / stock procurement",
+        "title": "IS 2062 E250B for SCBF braces (12.8.2.1) and SMF members (12.11.1)",
         "found": False,
-        "status": "process_open",
-        "blocking": False,
+        "status": "design_requirement",
+        "blocking": True,
         "pe_stamp": None,
         "pe_stamp_invented": False,
-        "note": (
-            "H7 E250B mill/stock procurement is a process residual — do not invent "
-            "availability or PE stamp. Confirm mill cert before seal when E250B specified."
-        ),
-        "cite": "IS 2062 E250 / project procurement — process note (not a product invent)",
+        "note": ("E250B is a design requirement checked per member by india_is800_s12.material_gate; IS 1161 "
+                 "YSt tubes do not satisfy it."),
+        "cite": "IS 800:2007 12.8.2.1 / 12.11.1",
     }
-    return {
-        "H6": h6,
-        "H7": h7,
-        "blocking": False,
-        "status": "disclose_only_residuals",
-        "note": (
-            "H6/H7 are disclosed non-blocking residuals (Wave D). Product COMPLETE gates "
-            "closed without inventing PE stamps or mill stock."
-        ),
-        "policy": "disclose_only_no_pe_invent",
-    }
+    return {"H6": h6, "H7": h7, "blocking": bool(h6["blocking"] or h7["blocking"]),
+            "status": "residuals", "policy": "no_pe_invent; E250B is a design check"}
 
 
 # =====================================================================================================

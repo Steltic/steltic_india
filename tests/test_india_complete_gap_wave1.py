@@ -119,12 +119,18 @@ def test_connection_component_dc_no_invented_capacity():
     out2 = I8.fill_connection_component_dc(slot, demand_N=1.2e6, capacity_N=2.0e6, cited="IS 800 §10")
     assert out2["found"] is True
     assert abs(out2["DC"] - 0.6) < 1e-9
-    # fy+Ag demand path still needs capacity
+    # fy+Ag demand path is system-aware (WP0.5 / HR800-03): SCBF 1.1 fyAg (12.8.3.1), OCBF 1.2 fyAg (12.7.3.1)
     out3 = I8.fill_connection_component_dc(
-        {"component": "gusset"}, fy_MPa=250, Ag_mm2=4030, capacity_N=None,
+        {"component": "gusset"}, fy_MPa=250, Ag_mm2=4030, capacity_N=None, system="SCBF",
     )
     assert out3["found"] is False
-    assert out3.get("demand_N") == 1.2 * 250 * 4030
+    assert out3.get("demand_N") == 1.1 * 250 * 4030
+    out4 = I8.fill_connection_component_dc(
+        {"component": "gusset"}, fy_MPa=250, Ag_mm2=4030, capacity_N=None, system="OCBF",
+    )
+    assert out4.get("demand_N") == 1.2 * 250 * 4030
+    out5 = I8.fill_connection_component_dc({"component": "gusset"}, fy_MPa=250, Ag_mm2=4030)
+    assert out5.get("demand_N") is None  # no system -> no invented capacity-design demand
 
 
 def test_section12_stubs_have_required_inputs_and_fill_helper():

@@ -17,7 +17,7 @@ import india_is800 as I8
 def test_end_plate_rn_found_false_no_invent():
     miss = I8.end_plate_or_continuity_capacity_N()
     assert miss["found"] is False
-    assert any("eor_documented" in x or "RAG" in x for x in miss["required_inputs"])
+    assert any("IS 800" in x for x in miss["required_inputs"])
 
 
 def test_end_plate_rn_rag_preferred():
@@ -30,25 +30,12 @@ def test_end_plate_rn_rag_preferred():
     assert ok.get("Rn") == 1.5e6
 
 
-def test_end_plate_rn_eor_documented_path():
-    """Corpus often found:false — COMPLETE may use labeled EOR Rn + cite."""
-    miss = I8.end_plate_or_continuity_capacity_N(
-        Rn=900e3, source="eor_documented",  # missing cite
+def test_end_plate_rn_eor_documented_refused_d3():
+    """D3 ruling: no eor_documented capacity bypass."""
+    bad = I8.end_plate_or_continuity_capacity_N(
+        Rn=900e3, cite="EOR calc package §EP-3", source="eor_documented", demand_N=450e3,
     )
-    assert miss["found"] is False
-
-    ok = I8.end_plate_or_continuity_capacity_N(
-        Rn=900e3,
-        cite="EOR calc package §EP-3 / IS 800 §10 basis",
-        source="eor_documented",
-        demand_N=450e3,
-    )
-    assert ok["found"] is True
-    assert ok["capacity_N"] == 900e3
-    assert ok["source"] == "eor_documented"
-    assert ok["resolved_via"] == "eor_documented"
-    assert abs(ok["DC"] - 0.5) < 1e-9
-    assert "eor_documented" in ok["note"].lower() or "EOR" in ok["note"]
+    assert bad["found"] is False and bad["DC"] is None
 
 
 def test_end_plate_rn_refuses_thin_air():
@@ -59,13 +46,12 @@ def test_end_plate_rn_refuses_thin_air():
 
 
 def test_end_plate_rn_from_cfg():
-    cfg = {
-        "end_plate_Rn": 1.1e6,
-        "end_plate_Rn_cite": "EOR note EP-1",
-        "end_plate_Rn_source": "eor_documented",
-    }
+    cfg = {"end_plate_Rn": 1.1e6, "end_plate_Rn_cite": "IS 800 10.3.5 bolt tension x lever arm (computed)",
+           "end_plate_Rn_source": "computed"}
     ok = I8.end_plate_or_continuity_capacity_N(cfg=cfg)
     assert ok["found"] and ok["Rn"] == 1.1e6
+    cfg["end_plate_Rn_source"] = "eor_documented"
+    assert I8.end_plate_or_continuity_capacity_N(cfg=cfg)["found"] is False
 
 
 # ---- cfg geometry + RAG formulas for base/splice -----------------------------
@@ -101,12 +87,12 @@ def test_bearing_capacity_geometry_x_rag_stress():
     assert abs(ok["capacity_N"] - 400 * 400 * 11.25) < 1.0
 
 
-def test_bearing_capacity_fck_times_rag_factor():
-    ok = I8.base_plate_bearing_capacity_N(
-        plate_B_mm=500, plate_L_mm=500, fck_MPa=25, bearing_factor=0.45,
-        cite="IS 456 §34 RAG factor 0.45",
-    )
-    assert ok["found"] and abs(ok["capacity_N"] - 500 * 500 * 0.45 * 25) < 1.0
+def test_bearing_capacity_is800_0p6_fck():
+    """WP0.5: IS 800 7.4.1 bearing strength 0.6 fck (not 0.45 fck 'IS 456')."""
+    ok = I8.base_plate_bearing_capacity_N(plate_B_mm=500, plate_L_mm=500, fck_MPa=25)
+    assert ok["found"] and abs(ok["capacity_N"] - 500 * 500 * 0.6 * 25) < 1.0
+    assert abs(ok["capacity_N"] - 3750e3) < 1.0
+    assert "7.4.1" in ok["cite"]
 
 
 def test_anchor_group_needs_rag_one():
@@ -130,9 +116,8 @@ def test_worksheet_wires_cfg_geometry_and_rag_formulas():
     bp = I8.base_plate_worksheet(
         P_N=800e3,
         cfg=cfg,
-        bearing_factor=0.45,  # RAG
-        capacity_one_anchor_N=250e3,  # RAG
-        cited="IS 800 Ch.11 / IS 456 RAG",
+        capacity_one_anchor_N=250e3,
+        cited="IS 800:2007 7.4",
     )
     assert bp["geometry"]["cfg_geometry_found"] is True
     bend = next(s for s in bp["slots"] if s["component"] == "base_plate_bending")
@@ -160,7 +145,7 @@ def test_column_base_splice_pn_from_geometry_rag():
         plate_B_mm=400, plate_L_mm=400,
         bearing_stress_MPa=12.0,
         anchor_n=4, capacity_one_anchor_N=200e3,
-        cite="IS 800 Ch.11 RAG",
+        cite="IS 800:2007 7.4",
     )
     assert ok["found"] is True
     # bearing = 400*400*12 = 1.92e6; anchors = 800e3 → gov = anchors
@@ -178,7 +163,7 @@ def test_column_base_splice_pn_cfg_geometry():
     }
     ok = I8.column_base_or_splice_Pn_capacity_N(
         cfg=cfg, demand_P_N=600e3,
-        bearing_factor=0.45, fck_MPa=30,
+        fck_MPa=30,
         capacity_one_anchor_N=180e3,
     )
     assert ok["found"] is True

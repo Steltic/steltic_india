@@ -84,7 +84,7 @@ def test_whitmore_block_shear_status_found_false_on_miss():
     s = I8.gusset_whitmore_block_shear_status()
     assert s["found"] is False
     assert s["status"] == "found_false"
-    assert s["blocks_complete"] is False
+    assert s["blocks_complete"] is True  # WP2.5: 12.7.3.2/12.8.3.2 make block shear mandatory
     assert s["whitmore"]["found"] is False
     assert s["block_shear"]["found"] is False
 
@@ -108,6 +108,8 @@ def test_whitmore_disclosed_geometry_path():
             "t_gusset_mm": 12,
             "fy_MPa": 250,
             "Avg_mm2": 2400,
+            "Avn_mm2": 1800,
+            "Atg_mm2": 1400,
             "Atn_mm2": 1200,
             "fu_MPa": 410,
         }
@@ -118,14 +120,15 @@ def test_whitmore_disclosed_geometry_path():
 
 # ---- H6 / H7 ----------------------------------------------------------------
 
-def test_h6_h7_residual_status_disclose_only_no_pe():
+def test_h6_h7_residual_status_wp29():
+    """WP2.9: composite = IS 11384 (found:false, blocking unless bare-steel/delegated); E250B is a design check."""
     r = I8.h6_h7_residual_status({"composite": True})
-    assert r["blocking"] is False
-    assert r["H6"]["pe_stamp"] is None
-    assert r["H6"]["pe_stamp_invented"] is False
-    assert r["H7"]["status"] == "process_open"
-    assert r["H7"]["pe_stamp_invented"] is False
-    assert "disclose" in r["status"] or "disclose" in r["policy"]
+    assert r["blocking"] is True
+    assert r["H6"]["found"] is False and "11384" in r["H6"]["cite"]
+    assert r["H6"]["pe_stamp"] is None and r["H6"]["pe_stamp_invented"] is False
+    assert r["H7"]["status"] == "design_requirement" and r["H7"]["blocking"] is True
+    ok = I8.h6_h7_residual_status({"composite": True, "composite_scope": "bare_steel"})
+    assert ok["H6"]["blocking"] is False
 
 
 # ---- Site proxy -------------------------------------------------------------

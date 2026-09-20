@@ -135,10 +135,15 @@ def test_block_shear_found_false_no_invent():
 
 
 def test_block_shear_from_areas():
+    """WP0.5 / HR800-11: both 6.4.1 expressions; min governs; missing Avn/Atg -> found:false."""
+    half = I8.gusset_block_shear_capacity_N(Avg_mm2=2000, Atn_mm2=800, fy_MPa=250, fu_MPa=410)
+    assert half["found"] is False
     ok = I8.gusset_block_shear_capacity_N(
-        Avg_mm2=2000, Atn_mm2=800, fy_MPa=250, fu_MPa=410
+        Avg_mm2=1920, Avn_mm2=1260, Atg_mm2=480, Atn_mm2=348, fy_MPa=250, fu_MPa=410
     )
-    assert ok["found"] is True and ok["capacity_N"] > 0
+    assert ok["found"] is True
+    assert abs(ok["Tdb1_N"] / 1e3 - 354.7) < 0.2 and abs(ok["Tdb2_N"] / 1e3 - 323.8) < 0.2
+    assert ok["capacity_N"] == min(ok["Tdb1_N"], ok["Tdb2_N"])
 
 
 # ---- end-plate / column Pn / PZ / SCWB --------------------------------------
