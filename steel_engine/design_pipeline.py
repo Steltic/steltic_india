@@ -1086,6 +1086,9 @@ def design_india(name, cfg, outdir):
         s12 = {"checks": []}
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},
                                   "error": "section12_checks failed: %s" % ex}
+    if cfg.get("delegated_design"):
+        # the delegated-design register (consistency B8): items handed off with their criteria and interface forces
+        pkg["capacity_design"]["delegated_design"] = _jsonable(cfg["delegated_design"])
     s12_by_member = {}
     for c in s12.get("checks") or []:
         s12_by_member.setdefault(c.get("member"), []).append(c)

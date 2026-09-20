@@ -74,3 +74,15 @@ def test_7112_gate_accepts_a_model_with_no_non_sfrs_columns():
     pkg["deformation_compatibility"].pop("no_non_sfrs_columns")
     r2 = G.design_status(cfg, pkg)["reasons"]
     assert any("7.11.2" in x for x in r2)
+
+
+def test_roof_deflection_key_selects_the_table6_rafter_row():
+    """WP6-fix: cfg['deflection_key_roof'] picks the IS 800 Table 6 row for the roof beams (portal rafter with profiled
+    sheeting: span/180); floors keep the default row; an unknown key is refused."""
+    import india_loads as IL
+    import pytest
+    cfg = {"deflection_key_roof": "rafter_profiled_sheeting"}
+    assert IL.floor_deflection_limit(cfg, roof=True)[0] == 180.0
+    assert IL.floor_deflection_limit(cfg)[0] == 360.0
+    with pytest.raises(IL.LoadPlanError):
+        IL.floor_deflection_limit({"deflection_key_roof": "no_such_row"}, roof=True)

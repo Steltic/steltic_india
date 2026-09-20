@@ -176,7 +176,7 @@ EXAMPLE_BRIEFS = {
     # India briefs (WP2.10): the only examples offered in the UI
     "in1": "IN_Ex1_SCBF_5levels_Delhi.txt",
     "in2": "IN_Ex2_SMF_office_Mumbai.txt",
-    "in3": "IN_Ex3_Industrial_portal_Chennai_wind.txt",
+    "in3": "IN_Ex3_SMF_portal_Chennai_wind.txt",
     "in4": "IN_Ex4_Dual_SMF_SCBF_hospital_Kolkata.txt",
     "in5": "IN_Ex5_OMRF_warehouse_mezzanine_Hyderabad.txt",
     "in6": "IN_Ex6_EBF_8levels_Lplan_Pune.txt",

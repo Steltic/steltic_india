@@ -994,10 +994,17 @@ IS800_TABLE6 = {
 IS800_TABLE6_CITE = "IS 800:2007 Table 6 (5.6.1), serviceability loads at gamma_f = 1.0"
 
 
-def floor_deflection_limit(cfg) -> tuple:
-    """(span divisor, cite) for floor/roof live-load deflection per IS 800 Table 6."""
+def floor_deflection_limit(cfg, roof=False) -> tuple:
+    """(span divisor, cite) for floor/roof live-load deflection per IS 800 Table 6.  A declared Table 6 row for the
+    roof members (cfg['deflection_key_roof'], e.g. 'rafter_profiled_sheeting' = span/180 for a portal rafter carrying
+    profiled metal sheeting) is used for the roof beams when `roof` is true (WP6-fix)."""
     ind = str(cfg.get("building_type") or "").lower().startswith("industrial")
     crack = bool(cfg.get("finishes_susceptible_to_cracking", True))
+    rk = cfg.get("deflection_key_roof")
+    if roof and rk:
+        if rk not in IS800_TABLE6:
+            raise LoadPlanError("deflection_key_roof %r is not an IS 800 Table 6 row (%s)" % (rk, ", ".join(sorted(IS800_TABLE6))))
+        return IS800_TABLE6[rk], "%s: %s -> span/%d" % (IS800_TABLE6_CITE, rk, IS800_TABLE6[rk])
     if ind:
         key = "industrial_simple_span_live_brittle" if crack else "industrial_simple_span_live_elastic"
     else:
