@@ -6,6 +6,86 @@ missing items are explicit TODO with found:false.
 """
 from __future__ import annotations
 
+import re as _re
+
+# D1: one constant for the edition (a future switch is a one-line change).
+IS1893_EDITION = "IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020)"
+IS1893_STEM = "IS_1893_Part_1_2016"
+
+
+# ---------------------------------------------------------------------------
+# WP1.4 -- IS 1893 Table 8 importance factor (Amd 2: 'educational buildings' for 'schools')
+# ---------------------------------------------------------------------------
+_T8_ROW_I = (
+    "hospital", "school", "educational", "education", "college", "university",
+    "critical governance", "governance", "signature", "monument", "lifeline", "emergency",
+    "telephone exchange", "television", "radio station", "bus station", "metro", "railway station",
+    "airport", "food storage", "fuel station", "power station", "fire station", "community hall",
+    "cinema", "shopping mall", "mall", "assembly", "subway",
+)
+_T8_ROW_II = ("residential", "apartment", "housing", "hostel", "dormitory", "hotel", "office",
+              "commercial", "retail", "shop", "business", "mercantile")
+
+
+def importance_factor(occupancy) -> dict:
+    """IS 1893 Table 8 (with Amd 2) importance factor from an occupancy record.
+
+    occupancy = {use | uses, persons | area_m2 + occupant_load_m2_per_person, food_storage,
+                 educational, hospital, important}  (a list of such records = mixed occupancy,
+    Note 4 takes the larger I).  Returns {found, I, row, cite, note}.
+    Clinic: owner ruling D8 -> 1.2; warehouses are general storage (1.0) unless food_storage
+    is true (Table 8 (i) 'food storage buildings (such as warehouses)' -> 1.5).
+    Commercial/residential without a person count: D8 rule -- > 2,000 m2 -> 1.2.
+    """
+    cite = IS1893_EDITION + " Table 8"
+    if isinstance(occupancy, (list, tuple)):
+        rs = [importance_factor(o) for o in occupancy]
+        if not rs or not all(r.get("found") for r in rs):
+            bad = [r.get("note") for r in rs if not r.get("found")] or ["empty list"]
+            return {"found": False, "I": None, "cite": cite, "note": "; ".join(map(str, bad))}
+        best = max(rs, key=lambda r: r["I"])
+        return dict(best, note="mixed occupancy, Table 8 Note 4: larger I governs; " + str(best.get("note") or ""))
+    if not isinstance(occupancy, dict) or not occupancy:
+        return {"found": False, "I": None, "cite": cite,
+                "note": "occupancy{use, persons | area_m2 + occupant_load_m2_per_person, food_storage, "
+                        "educational, hospital} missing from the brief/cfg (D8)"}
+    use = " ".join(str(u) for u in ([occupancy.get("use")] + list(occupancy.get("uses") or [])) if u).lower()
+    flags = {k: bool(occupancy.get(k)) for k in ("food_storage", "educational", "hospital", "important")}
+    if flags["food_storage"] or flags["educational"] or flags["hospital"] or flags["important"] \
+            or any(k in use for k in _T8_ROW_I):
+        if "warehouse" in use and not flags["food_storage"] and not any(k in use for k in _T8_ROW_I if k != "food storage"):
+            pass
+        else:
+            why = [k for k, v in flags.items() if v] or [k for k in _T8_ROW_I if k in use][:2]
+            return {"found": True, "I": 1.5, "row": "Table 8 (i)", "cite": cite,
+                    "note": "important service / community / educational / hospital / food storage (%s)" % ", ".join(why)}
+    if "clinic" in use:
+        return {"found": True, "I": 1.2, "row": "Table 8 (ii) (owner ruling D8: clinic)", "cite": cite,
+                "note": "clinic: owner ruling D8 fixes I = 1.2 (not a Table 8 (i) hospital building)"}
+    persons = occupancy.get("persons")
+    if persons is None and occupancy.get("area_m2") and occupancy.get("occupant_load_m2_per_person"):
+        persons = float(occupancy["area_m2"]) / float(occupancy["occupant_load_m2_per_person"])
+    res_com = any(k in use for k in _T8_ROW_II)
+    if res_com:
+        if persons is not None:
+            if float(persons) > 200:
+                return {"found": True, "I": 1.2, "row": "Table 8 (ii)", "cite": cite, "persons": float(persons),
+                        "note": "residential/commercial, occupancy %.0f > 200 persons (per independent unit, Note 3)"
+                                % float(persons)}
+            return {"found": True, "I": 1.0, "row": "Table 8 (iii)", "cite": cite, "persons": float(persons),
+                    "note": "residential/commercial with %.0f <= 200 persons" % float(persons)}
+        if occupancy.get("area_m2") is not None:
+            A = float(occupancy["area_m2"])
+            I = 1.2 if A > 2000.0 else 1.0
+            return {"found": True, "I": I, "row": "Table 8 (%s)" % ("ii" if I > 1 else "iii"), "cite": cite,
+                    "note": "persons not stated: owner ruling D8 (> 2,000 m2 -> 1.2); area %.0f m2" % A}
+        return {"found": False, "I": None, "cite": cite,
+                "note": "residential/commercial occupancy needs persons or area_m2 (+ occupant load) (D8)"}
+    if use:
+        return {"found": True, "I": 1.0, "row": "Table 8 (iii)", "cite": cite,
+                "note": "all other buildings (use %r)" % use}
+    return {"found": False, "I": None, "cite": cite, "note": "occupancy.use missing"}
+
 # --- authoritative clause anchors (found:true) ---------------------------------
 CLAUSES = {
     "storey_drift_limit": {

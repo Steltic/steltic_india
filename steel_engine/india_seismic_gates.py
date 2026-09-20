@@ -1,37 +1,99 @@
-"""India HR seismic provenance gates (complete-gap wave2 + HR polish Wave D).
+"""India HR seismic gates -- the SINGLE COMPLETE authority for steltic_india (WP0.2).
 
-Dual SMF+SCBF (IN_Ex4) and Ex6–15 steel SFRS where IS 1893 Table 9 lacks an
-exact row (BRBF / SPSW / EBF / IMF / dual+BRBF): require explicit R + R_source
-+ R_cite (CFS-style eor_documented). Never silently invent R or ASCE-style Ω0.
+``design_status(cfg, pkg)`` is the only function that may label a job COMPLETE. It returns
+``status`` in {"complete", "partial", "example_only"} plus the list of reasons. Everything
+else (the agent completion gate, consistency.check, the report banner, STATUS.md writers)
+must call it rather than re-implementing a subset of the rules.
 
-COMPLETE gate refuses proxy / silent invent / is800_omrf. Honest found:false
-for missing Table 9 rows or Ω0 does NOT alone block COMPLETE when EOR
-provenance (or disclosed Table 9 mapping with cite) is present.
+Basis (verified against the licensed PDFs, see IMPL_BRIEF):
+  * IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020): Table 8 (I), Table 9 (R) and
+    Note 1 as amended ("Structures in Seismic Zones III, IV and V shall be designed to be
+    ductile. Hence, this system is not allowed in these seismic zones"), 7.7.1 (dynamic
+    analysis), Tables 5/6 (irregularity consequences).
+  * IS 800:2007 12.2.3 (+-2.5 EL), 12.7.1.1 (OCBF), 12.10.1.1 (OMF).
+  * Owner decisions D3 (no foreign design basis, no eor_documented bypass) and D4 (Table 9
+    Note 1 bans steel OMRF and OBF in Zones III-V).
 
-EXAMPLE EOR fixtures are OK when labeled not-for-construction.
+A check record anywhere in a package is expected to look like
+``{value, limit, dc, ok, clause, cite, source}`` (demand, capacity, demand/capacity ...).
+``dc`` is always recomputed here from value/limit; a stored DC is never trusted.
 """
 from __future__ import annotations
 
-# --- response reduction R -------------------------------------------------
+import hashlib
+import json
+import math
+import os
+import re
+
+# ---------------------------------------------------------------------------
+# Table 9 (with Amd 2) -- steel rows only.  R values read from the PDF p.20.
+# ---------------------------------------------------------------------------
+TABLE9_STEEL = {
+    "steel_omrf": {
+        "R": 3.0, "row": "IS 1893 Table 9 (i)(c)", "name": "Steel OMRF (IS 800 OMF, 12.10)",
+        "note1_banned_zones": ("III", "IV", "V"), "is800": "12.10",
+        "is800_ban": "IS 800 12.10.1.1: OMF shall not be used in zones IV and V, nor in zone III with I > 1.0",
+    },
+    "steel_smrf": {
+        "R": 5.0, "row": "IS 1893 Table 9 (i)(d)", "name": "Steel SMRF (IS 800 SMF, 12.11)",
+        "note1_banned_zones": (), "is800": "12.11", "is800_ban": None,
+    },
+    "obf": {
+        "R": 4.0, "row": "IS 1893 Table 9 (ii)(a) [Amd 2: 'see Note 1']",
+        "name": "OBF, concentric braces (IS 800 OCBF, 12.7)",
+        "note1_banned_zones": ("III", "IV", "V"), "is800": "12.7",
+        "is800_ban": "IS 800 12.7.1.1: OCBF shall not be used in zones IV and V, nor in zone III with I > 1.0",
+    },
+    "sbf_concentric": {
+        "R": 4.5, "row": "IS 1893 Table 9 (ii)(b)", "name": "SBF, concentric braces (IS 800 SCBF, 12.8)",
+        "note1_banned_zones": (), "is800": "12.8", "is800_ban": None,
+    },
+    "sbf_eccentric": {
+        "R": 5.0, "row": "IS 1893 Table 9 (ii)(c)",
+        "name": "SBF, eccentric braces (IS 800 12.9 -> IS 18168 links)",
+        "note1_banned_zones": (), "is800": "12.9", "is800_ban": None,
+    },
+}
+TABLE9_NOTE1_CITE = ("IS 1893 (Part 1):2016 Table 9 Note 1 as amended by Amd 2 (2020): "
+                     "'Structures in Seismic Zones III, IV and V shall be designed to be ductile'")
+
+# Systems with no IS 1893 Table 9 / IS 800 Section 12 / IS 18168 basis (owner ruling D3).
+NO_IS_BASIS = {
+    "brbf": "BRBF (buckling-restrained braces) has no IS 1893 Table 9 row and no IS 800 Section 12 rules",
+    "spsw": "SPSW (steel plate shear wall) has no IS 1893 Table 9 row and no IS 800 Section 12 rules",
+    "dual": ("IS 1893 Table 9 has no steel dual system; declare the governing Table 9 system "
+             "(e.g. SBF concentric R 4.5 or SMRF R 5) without a dual claim"),
+    "cfs_wall": "cold-formed sheathed / strap walls are not an IS 1893 Table 9 steel SFRS",
+    "stmf": "STMF has no IS 1893 Table 9 row",
+    "cpsw": "composite plate shear walls have no IS 1893 Table 9 row",
+}
+
+_TOKEN_MAP = (
+    # (regex on normalised text, canonical)
+    (r"\bdual\b", "nobasis:dual"),
+    (r"\bbrbf\b|\bbrb\b|buckling[ _]restrained", "nobasis:brbf"),
+    (r"\bspsw\b|plate[ _]shear[ _]wall", "nobasis:spsw"),
+    (r"\bstmf\b|truss[ _]moment", "nobasis:stmf"),
+    (r"c[ _-]?psw|speedcore", "nobasis:cpsw"),
+    (r"shear[ _]wall|\bwsp\b|strap[ _]brac|sheathed", "nobasis:cfs_wall"),
+    (r"\bebf\b|eccentric", "sbf_eccentric"),
+    (r"\bscbf\b|\bsbf\b|special[ _]concentric|special[ _]brac", "sbf_concentric"),
+    (r"\bocbf\b|\bobf\b|ordinary[ _]concentric|ordinary[ _]brac|tension[ _]only|\bcbf\b", "obf"),
+    (r"\bsmrf\b|\bsmf\b|special[ _]moment", "steel_smrf"),
+    (r"\bomrf\b|\bomf\b|ordinary[ _]moment", "steel_omrf"),
+    (r"\bimf\b|\bimrf\b|intermediate[ _]moment", "imf"),
+)
+
 R_PROXY_SOURCES = frozenset({
-    "proxy", "silent_proxy", "silent", "invented", "assumed", "assumption",
-    "guess", "placeholder", "todo", "tbd",
-    # Using SBF/SMRF Table 9 row as a silent stand-in for a missing steel dual
-    # row without eor_documented disclosure is a proxy path:
-    "sbf_proxy", "smrf_proxy", "table9_proxy", "silent_sbf", "silent_smrf",
-    # Wave D — refuse COMPLETE when R is invented from IS 800 OMRF / silent
-    # system mapping without Table 9 row or eor_documented cite (Ex6–15):
-    "is800_omrf", "is_800_omrf", "omrf_proxy", "silent_omrf",
-    "imf_proxy", "brbf_proxy", "spsw_proxy", "ebf_proxy",
-    "is800_proxy", "is_800_proxy",
+    "proxy", "silent_proxy", "silent", "invented", "assumed", "assumption", "guess",
+    "placeholder", "todo", "tbd", "sbf_proxy", "smrf_proxy", "table9_proxy", "silent_sbf",
+    "silent_smrf", "is800_omrf", "is_800_omrf", "omrf_proxy", "silent_omrf", "imf_proxy",
+    "brbf_proxy", "spsw_proxy", "ebf_proxy", "is800_proxy", "is_800_proxy",
+    "is800_table23", "is_800_table23",
 })
-R_OK_SOURCES = frozenset({
-    "is1893_table9", "is_1893_table9", "table9", "is1893", "rag",
-    "explicit", "eor_explicit", "documented", "eor_documented", "eor",
-    # Disclosed use of concentric SBF R for a dual when steel dual row absent —
-    # only with R_steel_dual_table9_found=false + R_cite (not silent).
-    "sbf_concentric_for_dual", "table9_sbf_for_dual",
-})
+# D3: there is no EOR-adopted foreign R any more.  Table 9 is the only source.
+R_OK_SOURCES = frozenset({"is1893_table9", "is_1893_table9", "table9", "is1893", "rag", "explicit"})
 
 OMEGA0_OK_SOURCES = frozenset({
     "eor_documented", "eor", "documented", "explicit", "eor_explicit",
@@ -74,26 +136,194 @@ def _omega0_policy() -> dict:
     """Return a fresh Ω0 policy/disclosure object for public result payloads."""
     return dict(OMEGA0_POLICY)
 
-# Wave D — Table 9 system miss flags (Ex6–15). When found:false, COMPLETE
-# requires non-proxy R_source + R_cite (eor_documented or disclosed Table 9 map).
-# EXAMPLE fixtures OK when labeled not-for-construction.
+EXAMPLE_RE = re.compile(r"example|acme|not.for.construction|placeholder|synthetic", re.I)
+# report / screen strings that mean the configuration itself is not acceptable
+REVISE_RE = re.compile(r"revise configuration|revise the (structural )?configuration|prohibited|"
+                       r"not permitted|shall not be permitted|shall be revised", re.I)
+
+ZONE_BY_Z = {0.10: "II", 0.16: "III", 0.24: "IV", 0.36: "V"}
+Z_BY_ZONE = {v: k for k, v in ZONE_BY_Z.items()}
+
+
+# ---------------------------------------------------------------------------
+# small helpers
+# ---------------------------------------------------------------------------
+def _norm(s) -> str:
+    return str(s or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _summary(cfg):
+    plan = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
+    ss = plan.get("seismic_summary") if isinstance(plan.get("seismic_summary"), dict) else {}
+    return plan, ss
+
+
+def _seis(cfg):
+    return cfg.get("seis") if isinstance(cfg.get("seis"), dict) else {}
+
+
+def _f(x):
+    try:
+        if x is None or isinstance(x, bool):
+            return None
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _roman(z):
+    s = str(z or "").strip().upper().replace("ZONE", "").strip()
+    return s if s in ("II", "III", "IV", "V") else None
+
+
+def zone_of(cfg) -> str | None:
+    """Seismic zone (II..V) from seismic_summary.zone / cfg zone keys, else from Z."""
+    cfg = cfg or {}
+    _, ss = _summary(cfg)
+    for src in (ss.get("zone"), _seis(cfg).get("zone"), cfg.get("zone"), cfg.get("seismic_zone")):
+        z = _roman(src)
+        if z:
+            return z
+    for src in (ss.get("Z"), _seis(cfg).get("Z"), cfg.get("Z")):
+        Z = _f(src)
+        if Z is not None:
+            for k, v in ZONE_BY_Z.items():
+                if abs(Z - k) < 1e-3:
+                    return v
+    return None
+
+
+def system_text(cfg) -> str:
+    cfg = cfg or {}
+    _, ss = _summary(cfg)
+    parts = [cfg.get("system"), cfg.get("system_x"), cfg.get("system_y")]
+    if not any(parts):
+        parts.append(ss.get("system"))
+    return " + ".join(str(p) for p in parts if p)
+
+
+def parse_systems(text, *, imf_as_smrf=False) -> list:
+    """Canonical Table 9 keys (or 'nobasis:<x>') named in a system string."""
+    t = " " + re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()) + " "
+    found = []
+    for rx, canon in _TOKEN_MAP:
+        if re.search(rx, t):
+            if canon == "imf":
+                canon = "steel_smrf" if imf_as_smrf else "steel_omrf"
+            if canon == "obf" and "sbf_concentric" in found and not re.search(r"\bocbf\b|\bobf\b|ordinary", t):
+                continue                                   # 'SCBF' also matched the bare \bcbf\b rule
+            if canon not in found:
+                found.append(canon)
+    return found
+
+
+def resolve_system_R(cfg) -> dict:
+    """Table 9 R for the declared system(s); R = min over components unless R_x/R_y given."""
+    cfg = cfg or {}
+    txt = system_text(cfg)
+    comps = parse_systems(txt, imf_as_smrf=bool(cfg.get("imf_as_smrf")))
+    rows = [TABLE9_STEEL[c] for c in comps if c in TABLE9_STEEL]
+    nob = [c.split(":", 1)[1] for c in comps if c.startswith("nobasis:")]
+    R = min((r["R"] for r in rows), default=None)
+    return {"system_text": txt, "components": comps, "table9_rows": [r["row"] for r in rows],
+            "R_table9": R, "no_basis": nob,
+            "cite": "; ".join("%s R = %.1f" % (r["row"], r["R"]) for r in rows) or None}
+
+
+def declared_R(cfg):
+    cfg = cfg or {}
+    _, ss = _summary(cfg)
+    for src in (cfg.get("R"), _seis(cfg).get("R"), ss.get("R")):
+        v = _f(src)
+        if v is not None:
+            return v
+    return None
+
+
+# ---------------------------------------------------------------------------
+# legacy provenance API (kept; semantics tightened per D3)
+# ---------------------------------------------------------------------------
 TABLE9_SYSTEM_FLAGS = (
-    # (cfg_keys_tuple, system_name_substrings, out_key)
-    (("R_steel_dual_table9_found", "steel_dual_table9_found"),
-     ("dual",), "steel_dual_table9_found"),
+    (("R_steel_dual_table9_found", "steel_dual_table9_found"), ("dual",), "steel_dual_table9_found"),
     (("R_steel_brbf_table9_found", "steel_brbf_table9_found", "R_steel_brb_table9_found"),
      ("brbf", "brb", "buckling_restrained"), "steel_brbf_table9_found"),
     (("R_steel_spsw_table9_found", "steel_spsw_table9_found"),
      ("spsw", "steel_plate_shear", "plate_shear_wall"), "steel_spsw_table9_found"),
-    (("R_steel_ebf_table9_found", "steel_ebf_table9_found"),
-     ("ebf", "eccentric"), "steel_ebf_table9_found"),
-    (("R_steel_imf_table9_found", "steel_imf_table9_found"),
-     ("imf", "intermediate_moment"), "steel_imf_table9_found"),
+    # EBF is NOT a Table 9 miss: Table 9 (ii)(c) SBF eccentric R = 5.0 (HRLOAD-22).
+    (("R_steel_imf_table9_found", "steel_imf_table9_found"), ("imf", "intermediate_moment"),
+     "steel_imf_table9_found"),
 )
 
 
-def _norm(s) -> str:
-    return str(s or "").strip().lower().replace(" ", "_").replace("-", "_")
+def table9_system_flags(cfg) -> dict:
+    cfg = cfg or {}
+    _, ss = _summary(cfg)
+    out = {}
+    for keys, _subs, out_key in TABLE9_SYSTEM_FLAGS:
+        val = None
+        for k in keys:
+            for src in (cfg, _seis(cfg), ss):
+                if src.get(k) is not None:
+                    val = src.get(k)
+                    break
+            if val is not None:
+                break
+        out[out_key] = val
+    return out
+
+
+def needs_table9_miss_gate(cfg) -> bool:
+    return bool(resolve_system_R(cfg or {})["no_basis"]) or any(
+        v is False for v in table9_system_flags(cfg or {}).values())
+
+
+def resolve_R(cfg) -> dict:
+    cfg = cfg or {}
+    _, ss = _summary(cfg)
+    seis = _seis(cfg)
+    src = (cfg.get("R_source") or seis.get("R_source") or ss.get("R_source")
+           or cfg.get("r_source") or ss.get("response_reduction_source"))
+    cite = cfg.get("R_cite") or seis.get("R_cite") or ss.get("R_cite")
+    flags = table9_system_flags(cfg)
+    sysr = resolve_system_R(cfg)
+    return {"R": declared_R(cfg), "source": src, "cite": cite, "raw_source": _norm(src),
+            "R_table9": sysr["R_table9"], "components": sysr["components"],
+            "table9_misses": [k for k, v in flags.items() if v is False] + sysr["no_basis"],
+            **flags}
+
+
+def validate_R(cfg) -> list:
+    """(sev, msg): declared R must be the Table 9 value of the declared system (D3)."""
+    out = []
+    if not isinstance(cfg, dict):
+        return [("ERROR", "cfg is not a dict")]
+    info = resolve_R(cfg)
+    R, src = info["R"], info["raw_source"]
+    if src in R_PROXY_SOURCES or "proxy" in src or "silent" in src or "invent" in src:
+        out.append(("ERROR", "R_source=%r is a proxy/silent path (incl. is800_omrf / IS 800 Table 23); "
+                             "R must come from IS 1893 Table 9 for the declared system" % info["source"]))
+    if src in ("eor_documented", "eor", "documented", "eor_explicit", "sbf_concentric_for_dual",
+               "table9_sbf_for_dual"):
+        out.append(("ERROR", "R_source=%r: owner ruling D3 removed the EOR-adopted R path -- R comes "
+                             "from IS 1893 Table 9 only" % info["source"]))
+    Rt = info["R_table9"]
+    if R is None:
+        out.append(("ERROR", "R not declared (cfg['R'] / seis.R / seismic_summary.R)"))
+    elif Rt is not None:
+        if R > Rt + 1e-9:
+            out.append(("ERROR", "R = %.2f exceeds the IS 1893 Table 9 value %.2f for %s" %
+                        (R, Rt, "/".join(info["components"]))))
+        elif R < Rt - 1e-9:
+            out.append(("WARN", "R = %.2f is below the Table 9 value %.2f (conservative)" % (R, Rt)))
+    return out
+
+
+def R_is_proxy(cfg, pkg=None) -> bool:
+    info = resolve_R(cfg or {})
+    src = info["raw_source"]
+    return bool(src in R_PROXY_SOURCES or "proxy" in src or "silent" in src or "invent" in src
+                or info["table9_misses"])
 
 
 def _is_concrete_omega_source(src) -> bool:
@@ -136,99 +366,6 @@ def _concrete_omega_refuse(src, *, via="refused") -> dict:
         "is1893_omega0_present": False,
         "omega0_policy": policy,
         "disclosure": policy,
-    }
-
-
-def _pull_flag(cfg, seis, summ, keys):
-    for k in keys:
-        if cfg.get(k) is not None:
-            return cfg.get(k)
-        if seis.get(k) is not None:
-            return seis.get(k)
-        if summ.get(k) is not None:
-            return summ.get(k)
-    return None
-
-
-def table9_system_flags(cfg) -> dict:
-    """Collect IS 1893 Table 9 found flags for dual/BRBF/SPSW/EBF/IMF."""
-    cfg = cfg or {}
-    seis = cfg.get("seis") if isinstance(cfg.get("seis"), dict) else {}
-    plan = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
-    summ = plan.get("seismic_summary") if isinstance(plan.get("seismic_summary"), dict) else {}
-    out = {}
-    for keys, _subs, out_key in TABLE9_SYSTEM_FLAGS:
-        out[out_key] = _pull_flag(cfg, seis, summ, keys)
-    return out
-
-
-def table9_miss_systems(cfg) -> list:
-    """Systems whose Table 9 row is explicitly found:false (or name implies miss gate)."""
-    cfg = cfg or {}
-    sysname = _norm(cfg.get("system") or "")
-    flags = table9_system_flags(cfg)
-    misses = []
-    for keys, subs, out_key in TABLE9_SYSTEM_FLAGS:
-        val = flags.get(out_key)
-        name_hit = any(s in sysname for s in subs)
-        if val is False or (name_hit and val is False):
-            if out_key not in misses and val is False:
-                misses.append(out_key)
-        elif name_hit and val is False:
-            misses.append(out_key)
-    # Name-implied systems with no flag set still need provenance when R present
-    # only if an explicit found:false was set — name alone without flag does not
-    # force miss (Ex8 OCBF Table 9 found:true stays clean).
-    return misses
-
-
-def needs_table9_miss_gate(cfg) -> bool:
-    """True when dual/BRBF/SPSW/EBF/IMF Table 9 row is found:false (or dual by name)."""
-    cfg = cfg or {}
-    sysname = _norm(cfg.get("system") or "")
-    flags = table9_system_flags(cfg)
-    if "dual" in sysname:
-        return True
-    if any(v is False for v in flags.values()):
-        return True
-    return False
-
-
-def resolve_R(cfg) -> dict:
-    """Normalize R + provenance from cfg / seis / load_plan.seismic_summary.
-
-    Prefer corpus Table 9 when the system row is found:true. When BRBF / SPSW /
-    EBF / IMF / dual Table 9 is found:false, accept R only via allowlisted
-    eor_documented / explicit / disclosed Table 9 mapping with R_cite —
-    never invent silently (Wave D).
-    """
-    cfg = cfg or {}
-    seis = cfg.get("seis") if isinstance(cfg.get("seis"), dict) else {}
-    plan = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
-    summ = plan.get("seismic_summary") if isinstance(plan.get("seismic_summary"), dict) else {}
-
-    R = cfg.get("R")
-    if R is None:
-        R = seis.get("R")
-    if R is None:
-        R = summ.get("R")
-
-    source = (cfg.get("R_source") or seis.get("R_source") or summ.get("R_source")
-              or cfg.get("r_source") or summ.get("response_reduction_source"))
-    cite = cfg.get("R_cite") or seis.get("R_cite") or summ.get("R_cite") or summ.get("cite")
-
-    flags = table9_system_flags(cfg)
-    return {
-        "R": R,
-        "source": source,
-        "cite": cite,
-        "steel_dual_table9_found": flags.get("steel_dual_table9_found"),
-        "steel_brbf_table9_found": flags.get("steel_brbf_table9_found"),
-        "steel_spsw_table9_found": flags.get("steel_spsw_table9_found"),
-        "steel_ebf_table9_found": flags.get("steel_ebf_table9_found"),
-        "steel_imf_table9_found": flags.get("steel_imf_table9_found"),
-        "table9_misses": [k for k, v in flags.items() if v is False],
-        "raw_source": _norm(source),
     }
 
 
@@ -305,6 +442,18 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
         or (isinstance(corpus_hit, dict) and corpus_hit.get("found") is False)
     )
 
+    if om is not None and src in OMEGA0_OK_SOURCES and cite and src not in {"is18168", "is_18168"}:
+        # Owner ruling D3: no EOR-adopted Omega0.  IS 800 12.2.3 (2.5 EL) is the India
+        # capacity-design load; an Omega is accepted only from a found:true IS 18168 corpus hit.
+        policy = _omega0_policy()
+        return {
+            "found": False, "Omega0": None, "source": src, "resolved_via": "refused",
+            "cite": "IS 1893 has no Omega0 -- refuse an EOR literal (D3); use IS 800 12.2.3 (2.5EL)",
+            "note": "Refused Omega0 source=%r: owner ruling D3 removed the EOR-adopted Omega path; "
+                    "use IS 800 12.2.3 (1.2DL+0.5LL+-2.5EL / 0.9DL+-2.5EL) or an IS 18168 corpus hit." % (src,),
+            "required_inputs": ["corpus_hit={found:true, source:is18168, cite, Omega}"],
+            "omega0_policy": policy, "disclosure": policy,
+        }
     if om is not None and src in OMEGA0_OK_SOURCES and cite:
         # IS 18168 values are not an EOR alias and may not be supplied as an
         # unexplained literal. They must come from the found:true corpus
@@ -376,11 +525,10 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
         "corpus_found": False,
         "source": src or None,
         "resolved_via": "found_false",
-        "cite": "IS 1893 (Part 1):2016 — no ASCE-style Ω0; capacity design via IS 800 §12",
+        "cite": "IS 1893 (Part 1):2016 — no ASCE-style Ω0; use IS 800 §12.2.3 (2.5EL) combinations",
         "note": (
-            "Ω0 found:false (honest). Do not invent ASCE 7 Ω0. Optional: set "
-            "Omega0 + Omega0_source='eor_documented' + Omega0_cite for project EOR value; "
-            "otherwise use IS 800 §12 capacity-design factors (1.2 fy Ag, §12.2.3, …)."
+            "Ω0 found:false (honest). Do not invent ASCE 7 Ω0: use IS 800 12.2.3 (2.5EL) "
+            "combinations and the Section 12 capacity rules (1.2 fy Ag, 1.1 fy Ag, 1.2 Mp ...)."
         ),
         "required_inputs": refused or [
             "leave Omega0_found=false",
@@ -393,212 +541,496 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
     }
 
 
-def validate_R(cfg) -> list:
-    """(severity, message) findings for dual/BRBF/SPSW/EBF/IMF/HR R provenance (Wave D)."""
+def omega0_blocks_complete(cfg=None, pkg=None) -> bool:
+    """Omega0 itself never blocks (IS 800 12.2.3 replaces it); missing 12.2.3 cases do."""
+    return False
+
+
+# ---------------------------------------------------------------------------
+# WP1.5 -- zone / system gate
+# ---------------------------------------------------------------------------
+def importance_of(cfg):
+    _, ss = _summary(cfg or {})
+    for src in ((cfg or {}).get("I"), _seis(cfg or {}).get("I"), _seis(cfg or {}).get("Ie"), ss.get("I")):
+        v = _f(src)
+        if v is not None:
+            return v
+    return None
+
+
+def system_zone_findings(cfg) -> list:
+    """ERROR for banned / non-IS systems (IS 1893 Table 9 Note 1 with Amd 2 = D4; IS 800 12.7.1.1,
+    12.10.1.1; D3 no foreign basis).  Returns [(sev, msg), ...]."""
     out = []
-    if not isinstance(cfg, dict):
-        return [("ERROR", "cfg is not a dict")]
-
-    info = resolve_R(cfg)
-    R, src = info["R"], info["raw_source"]
-    needs_gate = needs_table9_miss_gate(cfg)
-    misses = info.get("table9_misses") or []
-
-    if R is None or R == "":
-        if needs_gate:
-            out.append(("ERROR",
-                        "cfg['R'] missing for steel-SFRS job with Table 9 miss / dual. "
-                        "Set R from IS 1893 Table 9 RAG, or R_source='eor_documented' + "
-                        "R_cite when the system Table 9 row is found:false. Never invent R "
-                        "silently (incl. is800_omrf)."))
-        return out
-
-    try:
-        float(R)
-    except (TypeError, ValueError):
-        out.append(("ERROR", "R=%r is not numeric" % (R,)))
-        return out
-
-    if needs_gate and not src:
-        out.append(("ERROR",
-                    "R_source missing while IS 1893 Table 9 system row is found:false "
-                    "(or system is dual). Silent invent (incl. is800_omrf / silent SBF/"
-                    "SMRF/OMRF mapping) is forbidden. Set the matching "
-                    "R_steel_*_table9_found=false and R_source='eor_documented'|'explicit'|"
-                    "'is1893_table9' (disclosed mapping) |'sbf_concentric_for_dual' with R_cite. "
-                    "Misses=%s" % (misses or ["dual_by_name"],)))
-        return out
-
-    if src in R_PROXY_SOURCES or "proxy" in src or "silent" in src or "invent" in src:
-        out.append(("WARN",
-                    "R_source=%r is a proxy/silent-invent path (Wave D includes is800_omrf). "
-                    "Job MUST stay PARTIAL — complete_allowed=false. Prefer "
-                    "R_source='eor_documented' with R_steel_*_table9_found=false + R_cite "
-                    "(EXAMPLE fixtures OK when labeled not-for-construction)."
-                    % (info["source"],)))
-
-    if src and src not in R_OK_SOURCES and src not in ("user", "brief"):
-        out.append(("WARN",
-                    "R_source=%r unusual — prefer is1893_table9 / eor_documented / "
-                    "sbf_concentric_for_dual / explicit" % (info["source"],)))
-
-    if misses:
-        if not (info["cite"] or "").strip():
-            out.append(("ERROR",
-                        "Table 9 found:false for %s but R_cite missing — disclose EOR or "
-                        "the Table 9 mapping basis (never silent is800_omrf invent)."
-                        % (", ".join(misses),)))
-        else:
-            out.append(("WARN",
-                        "IS 1893 Table 9 row found:false for %s. R_source must stay "
-                        "non-proxy (eor_documented/explicit/is1893_table9 disclosed map/"
-                        "sbf_concentric_for_dual). COMPLETE gate refuses proxy/is800_omrf."
-                        % (", ".join(misses),)))
-
+    cfg = cfg or {}
+    sysr = resolve_system_R(cfg)
+    if not sysr["system_text"]:
+        return [("ERROR", "cfg['system'] not declared -- name the IS 1893 Table 9 system (e.g. 'SCBF', 'SMRF')")]
+    if not sysr["components"]:
+        out.append(("ERROR", "system %r is not recognised as an IS 1893 Table 9 steel system" % sysr["system_text"]))
+    for nb in sysr["no_basis"]:
+        out.append(("ERROR", "no Indian design basis: %s (owner ruling D3)" % NO_IS_BASIS.get(nb, nb)))
+    if re.search(r"\bimf\b|\bimrf\b|intermediate", " " + re.sub(r"[^a-z0-9]+", " ", sysr["system_text"].lower()) + " "):
+        out.append(("WARN", "IMF is not an IS 1893 Table 9 system: treated as %s" %
+                    ("SMRF (full IS 800 12.11 compliance required)" if cfg.get("imf_as_smrf") else
+                     "OMRF (Table 9 (i)(c), R 3, banned in Zones III-V)")))
+    z = zone_of(cfg)
+    if z is None:
+        out.append(("ERROR", "seismic zone not resolvable (seismic_summary.zone or Z)"))
+    I = importance_of(cfg)
+    for c in sysr["components"]:
+        row = TABLE9_STEEL.get(c)
+        if not row or z is None:
+            continue
+        if z in row["note1_banned_zones"]:
+            msg = "%s is not allowed in Seismic Zone %s -- %s" % (row["name"], z, TABLE9_NOTE1_CITE)
+            if row.get("is800_ban"):
+                msg += "; " + row["is800_ban"]
+            out.append(("ERROR", msg))
+        elif z == "III" and row.get("is800_ban") and I is not None and I > 1.0:
+            out.append(("ERROR", "%s with I = %.1f in Zone III -- %s" % (row["name"], I, row["is800_ban"])))
+    for sev, msg in validate_R(cfg):
+        out.append((sev, msg))
     return out
 
 
-def R_is_proxy(cfg, pkg=None) -> bool:
-    """True if R provenance is proxy / silent invent (Wave D: is800_omrf + Table 9 miss)."""
-    info = resolve_R(cfg or {})
-    src = info["raw_source"]
-    if src in R_PROXY_SOURCES or "proxy" in src or "silent" in src or "invent" in src:
-        return True
-    # Silent invent when Table 9 miss / dual and R present without source
-    if needs_table9_miss_gate(cfg or {}) and not src and info["R"] is not None:
-        return True
+# ---------------------------------------------------------------------------
+# package walkers
+# ---------------------------------------------------------------------------
+_PAIR_KEYS = (("value", "limit"), ("demand", "capacity"), ("demand_N", "capacity_N"),
+              ("demand_Nmm", "capacity_Nmm"), ("demand_kN", "capacity_kN"),
+              ("demand_kNm", "capacity_kNm"), ("demand_MPa", "capacity_MPa"),
+              ("demand_mm", "capacity_mm"))
+
+
+def _pair(d):
+    if not isinstance(d, dict):
+        return None, None
+    for a, b in _PAIR_KEYS:
+        if a in d or b in d:
+            return _f(d.get(a)), _f(d.get(b))
+    return None, None
+
+
+def _checks_of(entry):
+    """All check-like dicts of a member / connection entry (top-level + checks list/dict + component_checks)."""
+    out = []
+    if not isinstance(entry, dict):
+        return out
+    ch = entry.get("checks")
+    if isinstance(ch, list):
+        out += [c for c in ch if isinstance(c, dict)]
+    elif isinstance(ch, dict):
+        out += [dict(v, name=k) for k, v in ch.items() if isinstance(v, dict)]
+    cc = entry.get("component_checks")
+    if isinstance(cc, dict):
+        out += [dict(v, name=k) for k, v in cc.items() if isinstance(v, dict)]
+    v, l = _pair(entry)
+    if v is not None or l is not None:
+        out.append(dict(entry, name=entry.get("limit_state") or "headline"))
+    return out
+
+
+def _dc_stored(c):
+    for k in ("dc", "DC", "D/C"):
+        if k in c:
+            return c.get(k), True
+    return None, False
+
+
+def entry_findings(kind, entry) -> list:
+    """Numeric demand/capacity rules of 0.2 for one package entry."""
+    out = []
+    eid = entry.get("id") or entry.get("name") or "?"
+    waived = entry.get("waived")
+    checks = _checks_of(entry)
+    if waived:
+        numeric = [c for c in checks if _pair(c)[0] is not None and _pair(c)[1] not in (None, 0.0)]
+        if not (numeric and entry.get("waiver_approved_by")):
+            out.append("%s '%s' is waived without a numeric replacement check + waiver_approved_by" % (kind, eid))
+    if not checks:
+        out.append("%s '%s' has no check with numeric demand and capacity" % (kind, eid))
+        return out
+    for c in checks:
+        nm = c.get("name") or c.get("limit_state") or c.get("clause") or "check"
+        val, lim = _pair(c)
+        stored, has = _dc_stored(c)
+        if val is None or lim is None:
+            if c.get("ok") is True or (_f(stored) is not None):
+                out.append("%s '%s' / %s: D/C or ok without numeric demand AND capacity" % (kind, eid, nm))
+            elif c.get("found") is False or stored is None:
+                out.append("%s '%s' / %s: not evaluated (found:false / DC None)" % (kind, eid, nm))
+            continue
+        if lim <= 0:
+            out.append("%s '%s' / %s: capacity %.4g is not positive" % (kind, eid, nm, lim))
+            continue
+        dc = abs(val) / lim
+        if dc > 1.0 + 1e-6:
+            out.append("%s '%s' / %s: D/C = %.3f > 1.0 (demand %.4g / capacity %.4g)" % (kind, eid, nm, dc, val, lim))
+        s = _f(stored)
+        if s is not None and abs(s - dc) > 0.02 * max(dc, 1e-3) + 1e-4:
+            out.append("%s '%s' / %s: stored D/C %.3f != recomputed demand/capacity %.3f" % (kind, eid, nm, s, dc))
+        if val == 0.0 and entry.get("inputs", {}).get("V_N") is None and kind == "connection":
+            out.append("%s '%s' / %s: zero demand with no shear demand recorded" % (kind, eid, nm))
+        if c.get("ok") is False:
+            out.append("%s '%s' / %s: ok:false" % (kind, eid, nm))
+    return out
+
+
+def _walk_strings(o, path="", acc=None):
+    acc = [] if acc is None else acc
+    if isinstance(o, dict):
+        for k, v in o.items():
+            _walk_strings(v, path + "." + str(k), acc)
+    elif isinstance(o, list):
+        for i, v in enumerate(o):
+            _walk_strings(v, path + "[%d]" % i, acc)
+    elif isinstance(o, str):
+        acc.append((path, o))
+    return acc
+
+
+def example_label_hits(*objs) -> list:
+    """(path, text) of cite/_label/source strings matching the EXAMPLE regex."""
+    hits = []
+    for o in objs:
+        for p, s in _walk_strings(o):
+            leaf = p.rsplit(".", 1)[-1].lower()
+            if any(t in leaf for t in ("cite", "cited", "_label", "label", "source", "basis", "note")) \
+                    and EXAMPLE_RE.search(s):
+                # "found:false ... example" free notes are allowed only when not a cite/label/source
+                if leaf in ("note",) and "cite" not in p.lower():
+                    continue
+                hits.append((p, s[:120]))
+    return hits
+
+
+def _load_pkg(pkg, job_dir):
+    if isinstance(pkg, dict):
+        return pkg
+    for cand in ([pkg] if isinstance(pkg, str) else []) + (
+            [os.path.join(job_dir, "design", "calc_package.json")] if job_dir else []):
+        try:
+            if cand and os.path.exists(cand):
+                return json.load(open(cand, encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _sha(path):
+    try:
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()
+    except Exception:
+        return None
+
+
+def provenance_findings(pkg, job_dir) -> list:
+    """0.2 last bullet: the hash of the fill script + cfg recorded in the package matches the shipped files."""
+    out = []
+    prov = (pkg or {}).get("provenance") if isinstance(pkg, dict) else None
+    if not isinstance(prov, dict) or not prov.get("files"):
+        return ["package has no provenance.files hash record (fill script + cfg) -- regenerate via design_pipeline"]
+    for rel, h in dict(prov["files"]).items():
+        p = os.path.join(job_dir, rel) if job_dir else rel
+        if not os.path.exists(p):
+            out.append("provenance file %s is not shipped" % rel)
+        elif _sha(p) != h:
+            out.append("provenance hash mismatch for %s (package is stale relative to the shipped script/cfg)" % rel)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# method / combination / irregularity / occupancy rules
+# ---------------------------------------------------------------------------
+def building_height_m(cfg):
+    H = cfg.get("heights") or []
+    try:
+        tot = float(sum(float(h) for h in H))
+    except Exception:
+        return None
+    try:
+        from india_units import is_si
+        si = is_si(cfg)
+    except Exception:
+        si = True
+    if si:
+        return tot / 1000.0 if tot > 200 else tot
+    return tot * 0.0254
+
+
+def esm_permitted(cfg, pkg=None) -> tuple:
+    """IS 1893 7.6 / 7.7.1: ESM alone only for regular buildings < 15 m in Zone II."""
+    z = zone_of(cfg)
+    h = building_height_m(cfg)
+    irr = irregularity_reasons(cfg, pkg)
+    ok = (z == "II" and h is not None and h < 15.0 and not irr and cfg.get("regular") is not False)
+    why = []
+    if z != "II":
+        why.append("Zone %s" % z)
+    if h is None or h >= 15.0:
+        why.append("height %s m >= 15 m" % (round(h, 2) if h is not None else "?"))
+    if irr:
+        why.append("irregular (%s)" % "; ".join(irr[:3]))
+    return ok, why
+
+
+def irregularity_reasons(cfg, pkg=None) -> list:
+    out = []
+    scr = {}
+    if isinstance(pkg, dict):
+        scr = pkg.get("irregularity") or {}
+    for k in ("torsion", "soft_storey", "mass", "vertical_geometric", "reentrant", "in_plane_discontinuity",
+              "strength", "floating_columns", "modes", "out_of_plane_offset", "diaphragm_openings",
+              "nonparallel"):
+        v = scr.get(k) if isinstance(scr, dict) else None
+        if isinstance(v, dict) and v.get("irregular"):
+            out.append(k)
+    for k in ("reentrant", "setback", "nonparallel"):
+        if (pkg or {}).get("framework_screen", {}).get("plan", {}).get(k) if isinstance(pkg, dict) else False:
+            if k not in out:
+                out.append(k)
+    if cfg.get("irregular") is True:
+        out.append("declared irregular")
+    return out
+
+
+def analysis_findings(cfg, pkg) -> list:
+    out = []
+    ok_esm, why = esm_permitted(cfg, pkg)
+    an = (pkg or {}).get("seismic_analysis") if isinstance(pkg, dict) else None
+    an = an if isinstance(an, dict) else {}
+    rsa = bool(an.get("rsa_used_in_demands"))
+    if not ok_esm and not rsa:
+        out.append("IS 1893 7.7.1: linear dynamic analysis required (%s) but scaled RSA forces were not "
+                   "used in the member demands" % ", ".join(why))
+    if rsa:
+        for d in ("X", "Y"):
+            s = (an.get("scale") or {}).get(d) if isinstance(an.get("scale"), dict) else None
+            if not isinstance(s, dict) or _f(s.get("VB_scaled_kN")) is None:
+                out.append("RSA %s: 7.7.3.1 scaling record missing" % d)
+            elif _f(s.get("VBbar_kN")) and _f(s["VB_scaled_kN"]) < _f(s["VBbar_kN"]) * 0.999:
+                out.append("RSA %s: scaled base shear %.1f kN < VB(Ta) %.1f kN (7.7.3.1)"
+                           % (d, _f(s["VB_scaled_kN"]), _f(s["VBbar_kN"])))
+            if isinstance(s, dict) and _f(s.get("mass_participation")) is not None and _f(s["mass_participation"]) < 0.90:
+                out.append("RSA %s: modal mass %.1f %% < 90 %% (7.7.5.2)" % (d, 100 * _f(s["mass_participation"])))
+    if an.get("reentrant_flexible_required") and not an.get("flexible_diaphragm_run"):
+        out.append("Amd 2 Table 5(ii): re-entrant plan requires a flexible-diaphragm 3D dynamic analysis in "
+                   "addition to the rigid case -- not performed")
+    return out
+
+
+def section12_system(cfg) -> bool:
+    """IS 800 12.1: Section 12 applies to frames resisting EQ in all zones (incl. OMF/OBF)."""
+    comps = resolve_system_R(cfg)["components"]
+    return any(c in TABLE9_STEEL for c in comps)
+
+
+def combination_findings(cfg, pkg) -> list:
+    out = []
+    combos = (pkg or {}).get("load_combinations") if isinstance(pkg, dict) else None
+    if not isinstance(combos, list) or not combos:
+        return ["package has no load_combinations record (expanded case list)"]
+    labels = [str(c.get("label", "")) for c in combos if isinstance(c, dict)]
+    seismic = [c for c in combos if isinstance(c, dict) and str(c.get("lateral_kind") or "").upper() == "EQ"]
+    if not seismic and not cfg.get("no_seismic"):
+        out.append("no earthquake combinations in the package")
+        return out
+    if section12_system(cfg):
+        has = [c for c in combos if isinstance(c, dict) and ("col_only" in (c.get("tags") or [])
+               or "conn_only" in (c.get("tags") or [])) and abs(abs(float(c.get("fE") or 0)) - 2.5) < 1e-6]
+        if not has:
+            out.append("IS 800 12.2.3 (1.2DL+0.5LL+-2.5EL / 0.9DL+-2.5EL) cases absent for a Section 12 system")
+    signs = {(c.get("direction"), 1 if float(c.get("fE") or 0) * float(c.get("sign") or 1) > 0 else -1)
+             for c in seismic}
+    for d in ("X", "Y"):
+        if (d, 1) not in signs or (d, -1) not in signs:
+            out.append("EQ %s: both +/- load reversal cases are required" % d)
+    if not any(c.get("torsion") for c in seismic):
+        out.append("IS 1893 7.8.2 design-eccentricity (torsion) cases absent")
+    return out
+
+
+def occupancy_findings(cfg) -> list:
+    try:
+        from india_seismic import importance_factor
+    except Exception as ex:
+        return ["importance-factor resolver unavailable: %s" % ex]
+    occ = (cfg or {}).get("occupancy")
+    if occ is None:
+        _, ss = _summary(cfg or {})
+        occ = ss.get("occupancy")
+    r = importance_factor(occ)
+    if not r.get("found"):
+        return ["I not resolved from occupancy (IS 1893 Table 8): %s" % r.get("note")]
+    I = importance_of(cfg)
+    if I is None:
+        return ["I not declared"]
+    if I + 1e-9 < r["I"]:
+        return ["I = %.2f is below the Table 8 value %.2f (%s)" % (I, r["I"], r.get("row"))]
+    return []
+
+
+def _R_system_agreement(cfg, pkg) -> list:
+    out = []
+    Rs = {}
+    R0 = declared_R(cfg)
+    if R0 is not None:
+        Rs["cfg"] = R0
+    if isinstance(pkg, dict):
+        for key in ("seismic_calc", "capacity_design"):
+            blk = pkg.get(key)
+            if isinstance(blk, dict) and _f(blk.get("R")) is not None:
+                Rs[key] = _f(blk.get("R"))
+        lp = pkg.get("load_plan") or {}
+        ss = lp.get("seismic_summary") if isinstance(lp, dict) else None
+        if isinstance(ss, dict) and _f(ss.get("R")) is not None:
+            Rs["load_plan"] = _f(ss.get("R"))
+    vals = set(round(v, 3) for v in Rs.values())
+    if len(vals) > 1:
+        out.append("R disagrees between %s" % ", ".join("%s=%s" % kv for kv in Rs.items()))
+    comps0 = set(resolve_system_R(cfg)["components"])
+    if isinstance(pkg, dict):
+        cd = pkg.get("capacity_design")
+        if isinstance(cd, dict) and cd.get("system"):
+            c2 = set(parse_systems(cd.get("system"), imf_as_smrf=bool(cfg.get("imf_as_smrf"))))
+            if c2 and comps0 and c2 != comps0:
+                out.append("capacity_design.system %r does not match cfg system %r" % (cd.get("system"), cfg.get("system")))
+    return out
+
+
+def _grounding_findings(pkg, job_dir) -> list:
+    g = (pkg or {}).get("grounding") if isinstance(pkg, dict) else None
+    if isinstance(g, dict) and g.get("rows"):
+        miss = [r.get("topic") for r in g["rows"] if isinstance(r, dict) and str(r.get("status")).upper() == "MISSING"]
+        return ["report grounding table has MISSING row(s): %s" % ", ".join(map(str, miss))] if miss else []
+    if job_dir:
+        rp = os.path.join(job_dir, "report.html")
+        if os.path.exists(rp):
+            try:
+                txt = open(rp, encoding="utf-8", errors="replace").read()
+                if re.search(r">\s*MISSING\s*<", txt):
+                    return ["report grounding table has a MISSING row"]
+                return []
+            except Exception:
+                pass
+    return ["grounding record not available (report not built)"]
+
+
+def _screen_findings(pkg) -> list:
+    out = []
     if not isinstance(pkg, dict):
-        return False
-    notes = pkg.get("design_basis_notes") or {}
-    blob = _norm(notes.get("R_basis") or notes.get("R_source") or "")
-    if "proxy" in blob or "silent" in blob or "invent" in blob:
-        return True
-    summ = ((pkg.get("load_plan") or {}).get("seismic_summary")
-            if isinstance(pkg.get("load_plan"), dict) else None) or {}
-    if "proxy" in _norm(summ.get("R_source") or summ.get("note") or ""):
-        return True
-    return False
+        return out
+    cd = pkg.get("capacity_design") or {}
+    chk = cd.get("checks") if isinstance(cd, dict) else None
+    if isinstance(chk, dict):
+        for k, v in chk.items():
+            if isinstance(v, dict) and (v.get("pass") is False or v.get("ok") is False):
+                out.append("capacity_design.checks.%s fails (pass/ok false)" % k)
+            elif isinstance(v, dict) and (v.get("found") is False or v.get("ok") is None and v.get("pass") is None):
+                out.append("capacity_design.checks.%s not evaluated" % k)
+    for row in (pkg.get("drift_table") or []):
+        if isinstance(row, dict) and row.get("ok") is False:
+            out.append("drift_table storey %s fails" % row.get("storey"))
+    for blk in ("irregularity", "framework_screen"):
+        for p, s in _walk_strings(pkg.get(blk) or {}):
+            if REVISE_RE.search(s):
+                out.append("%s%s: %s" % (blk, p, s[:100]))
+    return out
 
 
-def omega0_blocks_complete(cfg=None, pkg=None) -> bool:
-    """Ω0 found:false alone must NOT block COMPLETE (honest IS gap)."""
-    return False
-
-
-def complete_allowed(cfg, pkg=None) -> tuple:
-    """Refuse COMPLETE if R is proxy/silent invent / is800_omrf.
-
-    Ω0 found:false and Table 9 found:false alone do NOT block when R_source is
-    allowlisted eor_documented (or disclosed Table 9 mapping) with cite.
-    EXAMPLE EOR fixtures OK when labeled not-for-construction.
-    """
+# ---------------------------------------------------------------------------
+# THE authority
+# ---------------------------------------------------------------------------
+def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
+    """Single COMPLETE authority (spec 0.2).  Returns
+    {status: complete|partial|example_only, complete_allowed, reasons, example_hits, ...}."""
+    cfg = cfg or {}
     reasons = []
-    if R_is_proxy(cfg, pkg):
-        reasons.append(
-            "R source is proxy / silent invent / is800_omrf — IS 1893 Table 9 row or "
-            "R_source='eor_documented' (non-proxy) + R_cite required for COMPLETE"
-        )
-    for sev, msg in validate_R(cfg or {}):
-        if sev == "ERROR":
-            reasons.append(msg)
-    seen = set()
-    uniq = []
+    pk = _load_pkg(pkg, job_dir)
+    if job_dir is None and isinstance(pkg, str) and os.path.exists(pkg):
+        job_dir = os.path.dirname(os.path.dirname(os.path.abspath(pkg)))
+    # --- system / zone / R / I ---
+    reasons += [m for s, m in system_zone_findings(cfg) if s == "ERROR"]
+    reasons += occupancy_findings(cfg)
+    ex_hits = example_label_hits(cfg, pk or {})
+    if pk is None:
+        reasons.append("no calc_package -- nothing designed yet")
+    else:
+        mem = pk.get("members") or []
+        con = pk.get("connections") or []
+        if not mem:
+            reasons.append("calc_package has no members")
+        if not con:
+            reasons.append("calc_package has no connections")
+        for m in mem:
+            if isinstance(m, dict):
+                reasons += entry_findings("member", m)
+        for c in con:
+            if isinstance(c, dict):
+                reasons += entry_findings("connection", c)
+        for key in ("anchorages", "hold_downs", "collectors", "schedule"):
+            for e in (pk.get(key) or []):
+                if isinstance(e, dict):
+                    reasons += entry_findings(key.rstrip("s"), e)
+        reasons += _screen_findings(pk)
+        reasons += analysis_findings(cfg, pk)
+        reasons += combination_findings(cfg, pk)
+        reasons += _R_system_agreement(cfg, pk)
+        reasons += _grounding_findings(pk, job_dir)
+        reasons += provenance_findings(pk, job_dir) if job_dir else [
+            "job folder unknown -- provenance hashes not verified"]
+        if job_dir:
+            try:
+                import consistency as _CC
+                reasons += ["consistency: " + s for s in _CC.script_grep_issues(job_dir)]
+            except Exception:
+                pass
+        if report_html is None and job_dir and os.path.exists(os.path.join(job_dir, "report.html")):
+            report_html = os.path.join(job_dir, "report.html")
+    if report_html:
+        try:
+            from india_contract_residue import residue_hits
+            txt = open(report_html, encoding="utf-8", errors="replace").read()
+            h = residue_hits(txt)
+            if h:
+                reasons.append("report has %d US-residue hit(s), e.g. %r" % (len(h), h[0]))
+        except Exception:
+            pass
+    reasons += ["example/placeholder label at %s: %r" % hp for hp in ex_hits]
+    seen, uniq = set(), []
     for r in reasons:
         if r not in seen:
             seen.add(r)
             uniq.append(r)
-    return (len(uniq) == 0, uniq)
+    status = "example_only" if ex_hits else ("complete" if not uniq else "partial")
+    return {"status": status, "complete_allowed": status == "complete", "reasons": uniq,
+            "example_hits": ex_hits, "zone": zone_of(cfg), "R": resolve_R(cfg),
+            "system": resolve_system_R(cfg),
+            "authority": "india_seismic_gates.design_status (spec WP0.2)"}
 
 
-def design_status(cfg, pkg=None) -> dict:
-    """COMPLETE vs PARTIAL label + Wave D disclosure (Ω0 / Table 9 / R)."""
-    ok, reasons = complete_allowed(cfg, pkg)
-    info = resolve_R(cfg or {})
+def complete_allowed(cfg, pkg=None, **kw) -> tuple:
+    st = design_status(cfg, pkg, **kw)
+    return st["complete_allowed"], st["reasons"]
+
+
+def complete_gate_disclosure(cfg, pkg=None, **kw) -> dict:
+    st = design_status(cfg, pkg, **kw)
     om = resolve_Omega0(cfg)
-    misses = info.get("table9_misses") or []
-    return {
-        "status": "complete" if ok else "partial",
-        "complete_allowed": ok,
-        "reasons": reasons,
-        "R": info,
-        "Omega0": {
-            "found": om.get("found"),
-            "Omega0": om.get("Omega0"),
-            "resolved_via": om.get("resolved_via"),
-            "cite": om.get("cite"),
-            "note": om.get("note"),
-            "eor_documented": bool(om.get("found") and "eor" in _norm(om.get("resolved_via"))),
-            "blocks_complete": False,  # honest IS gap never alone blocks
-            "omega0_policy": _omega0_policy(),
-            "disclosure": {
-                "blocks_complete": False,
-                "preferred_source_when_available": "is18168",
-                "honest_is1893_found_false_blocks_complete": False,
-            },
-        },
-        "omega0_policy": _omega0_policy(),
-        "table9": {
-            "misses": misses,
-            "flags": {
-                "steel_dual_table9_found": info.get("steel_dual_table9_found"),
-                "steel_brbf_table9_found": info.get("steel_brbf_table9_found"),
-                "steel_spsw_table9_found": info.get("steel_spsw_table9_found"),
-                "steel_ebf_table9_found": info.get("steel_ebf_table9_found"),
-                "steel_imf_table9_found": info.get("steel_imf_table9_found"),
-            },
-            "needs_miss_gate": needs_table9_miss_gate(cfg or {}),
-            "example_fixtures_ok_when_labeled": True,
-        },
-        "note": (
-            "COMPLETE allowed when R provenance is non-proxy (eor_documented / "
-            "disclosed Table 9 map OK). Ω0 found:false does not alone block. "
-            "proxy/is800_omrf refused."
-            if ok else
-            "PARTIAL — fix R_source/R_cite (eor_documented or disclosed Table 9 map); "
-            "refuse proxy/is800_omrf before COMPLETE."
-        ),
-    }
+    return {"complete_allowed": st["complete_allowed"], "status": st["status"], "reasons": st["reasons"],
+            "Omega0": om, "table9": {"misses": st["R"]["table9_misses"], "flags": table9_system_flags(cfg)},
+            "R_source": st["R"]["source"], "R_cite": st["R"]["cite"],
+            "policy": "India path never invents Omega0 or R: R from IS 1893 Table 9 only (D3); "
+                      "capacity design via IS 800 12.2.3 and Section 12."}
 
 
-def complete_gate_disclosure(cfg, pkg=None) -> dict:
-    """Wave D COMPLETE-gate disclosure object (Ω0 + Table 9 + R) for calc packages."""
-    st = design_status(cfg, pkg)
-    om = st["Omega0"]
-    return {
-        "complete_allowed": st["complete_allowed"],
-        "status": st["status"],
-        "reasons": st["reasons"],
-        "Omega0": om,
-        "omega0_policy": _omega0_policy(),
-        "disclosure": {
-            "Omega0": om,
-            "blocks_complete": False,
-            "preferred_source_when_available": "is18168",
-            "honest_is1893_found_false_blocks_complete": False,
-        },
-        "table9": st["table9"],
-        "R_source": (st["R"] or {}).get("source"),
-        "R_cite": (st["R"] or {}).get("cite"),
-        "policy": (
-            "India path never invents Ω0 or Table 9 R. found:false / eor_documented "
-            "consistent; EXAMPLE fixtures OK labeled not-for-construction; "
-            "proxy/is800_omrf refuse COMPLETE."
-        ),
-    }
-
-
-# --- IS 18168 live Ω corpus helper (re-export) ---------------------------------
+# --- IS 18168 live Omega corpus helper (re-export) ------------------------------
 try:
-    from india_omega_is18168 import (  # noqa: E402
-        fetch_is18168_omega,
-        fetch_is18168_section_55,
-        resolve_Omega0_with_is18168,
-        normalize_sfrs as normalize_omega_sfrs,
-        parse_omega_table_from_hit_text,
-        corpus_available as is18168_corpus_available,
-        IS18168_CITE,
-        IS18168_DOC,
-        IS18168_SECTION,
+    from india_omega_is18168 import (  # noqa: E402,F401
+        fetch_is18168_omega, fetch_is18168_section_55, resolve_Omega0_with_is18168,
+        normalize_sfrs as normalize_omega_sfrs, parse_omega_table_from_hit_text,
+        corpus_available as is18168_corpus_available, IS18168_CITE, IS18168_DOC, IS18168_SECTION,
     )
 except ImportError:  # pragma: no cover
     pass
