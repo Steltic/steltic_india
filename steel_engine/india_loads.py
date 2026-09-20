@@ -616,7 +616,8 @@ def case_from_combination(c, plan) -> Case:
                 service=bool(c.get("service")), crane=c.get("crane"), fC=float(c.get("fC", 0.0) or 0.0),
                 crane_pattern=(tuple(c["crane_pattern"]) if c.get("crane_pattern") else None),
                 fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c,
-                member_wind=c.get("member_wind"), fWM=float(c.get("fWM", 0.0) or 0.0))
+                member_wind=c.get("member_wind"), fWM=float(c.get("fWM", 0.0) or 0.0),
+                snow_pattern=(tuple(c["snow_pattern"]) if c.get("snow_pattern") else None))
 
 
 def render_findings(findings) -> str:

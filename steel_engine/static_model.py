@@ -645,7 +645,8 @@ def _beam_floor_width(model, b, cfg):
     return nb, nb * other / 2.0
 
 
-def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True, crane_pattern=None):
+def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True, crane_pattern=None,
+                        snow_pattern=None):
     """SI gravity for one gravity state; returns {level: total vertical load N}.
 
     * floor pressure p = fD D + fL L + fLr Lr + fS S + fEv (D + Table-10 share of L)   [kN/m2]
@@ -658,12 +659,21 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
     ds = _deck_span(cfg)
     lev = {k: 0.0 for k in range(1, NF + 1)}
     fdead = fD + fEv
+    # IS 875 (Part 4):2021 4.3 partial snow: snow_pattern = (axis, 'lo'|'hi') keeps the roof snow on the half of the
+    # plan below / above the mid-line normal to `axis` (zero snow on the other half; WP6-fix)
+    sp_axis, sp_side, sp_mid = None, None, None
+    if snow_pattern:
+        sp_axis = 0 if str(snow_pattern[0]).upper() == "X" else 1
+        sp_side = str(snow_pattern[1]).lower()
+        crd_all = [ops.nodeCoord(n) for n in ops.getNodeTags()]
+        sp_mid = 0.5 * (min(c[sp_axis] for c in crd_all) + max(c[sp_axis] for c in crd_all))
     for b in model["beams"]:
         i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
         if not (1 <= k <= NF):
             continue
         D, Lf, Lr, S = floor_pressures(cfg, k)
         p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+        p_nosnow = p - fS * S
         nb, trib1 = _beam_floor_width(model, b, cfg)
         other = cfg["SY"] if dirn == "X" else cfg["SX"]
         wcap = other / 2.0
@@ -686,7 +696,14 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
                 width_mm = 0.0                       # beam parallel to the deck span carries no deck load
             else:
                 width_mm = trib1
-            w = p * (width_mm / 1000.0) + wclad + wsw
+            pp = p
+            if sp_axis is not None and k == NF and S:
+                ca_, cb_ = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
+                xm = ca_[sp_axis] + (cb_[sp_axis] - ca_[sp_axis]) * (smid / L)
+                loaded = (xm <= sp_mid + 1e-6) if sp_side == "lo" else (xm >= sp_mid - 1e-6)
+                if not loaded:
+                    pp = p_nosnow
+            w = pp * (width_mm / 1000.0) + wclad + wsw
             ops.eleLoad("-ele", tag, "-type", "-beamUniform", 0.0, -w, 0.0)
             lev[k] += w * (s1 - s0)
     for c in model["cols"]:
@@ -735,6 +752,19 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
         kk = nl.get("level")
         if kk in lev:
             lev[kk] += -fdead * Fz
+    # declared snow point loads (WP6-fix): reactions of an attached lower roof (lean-to drift, IS 875-4 5.2.4) on the
+    # main columns -- cfg['nodal_snow_loads'] = [{node, Fz_N (down < 0), Mx_Nmm, My_Nmm, level}], factored with fS
+    if fS:
+        for nl in (cfg.get("nodal_snow_loads") or []):
+            try:
+                nd = int(nl["node"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            Fz = float(nl.get("Fz_N") or 0.0)
+            ops.load(nd, 0.0, 0.0, fS * Fz, fS * float(nl.get("Mx_Nmm") or 0.0), fS * float(nl.get("My_Nmm") or 0.0), 0.0)
+            kk = nl.get("level")
+            if kk in lev:
+                lev[kk] += -fS * Fz
     if fC:
         apply_crane_loads(cfg, model, fC, crane_pattern)
     return lev
@@ -880,7 +910,8 @@ def _grav_state_key(c):
     m = getattr(c, "meta", {}) or {}
     return (round(float(c[1]), 6), round(float(c[2]), 6), round(float(c[3]), 6),
             round(float(m.get("fS") or 0.0), 6), round(float(m.get("fC") or 0.0), 6),
-            round(float(m.get("fEv") or 0.0), 9), tuple(m.get("crane_pattern") or ()))
+            round(float(m.get("fEv") or 0.0), 9), tuple(m.get("crane_pattern") or ()),
+            tuple(m.get("snow_pattern") or ()))
 
 
 def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
@@ -1033,7 +1064,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
     kinds = None
     llr = column_imposed_load_reduction_factors(cfg)          # IS 875-2 3.2.1 (opt-in), {column tag: r}
     for gk, cs in groups.items():
-        fD, fL, fLr, fS, fC, fEv, cpat = gk
+        fD, fL, fLr, fS, fC, fEv, cpat, spat = gk
         model = build_static(cfg, "PDelta", nseg)
         if kinds is None:
             kinds = _member_kinds(model)
@@ -1052,7 +1083,8 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             model = build_static(cfg, "PDelta", nseg)
         ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
         lev = apply_gravity_state(cfg, model, fD, fL, fLr, fS, fC, fEv,
-                                  self_weight=cfg.get("self_weight", True), crane_pattern=cpat or None)
+                                  self_weight=cfg.get("self_weight", True), crane_pattern=cpat or None,
+                                  snow_pattern=spat or None)
         ok = _solve_newton()
         if ok != 0:
             raise RuntimeError("gravity state %s did not converge (P-Delta)" % (gk,))

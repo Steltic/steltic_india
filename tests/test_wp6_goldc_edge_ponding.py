@@ -89,3 +89,41 @@ def test_nodal_dead_loads_and_column_wall_wind():
     tot = SM.member_wind_loads(cfg, model, pat, 1.0)
     H = sum(cfg["heights"]); Ly = cfg["NY"] * cfg["SY"]
     assert tot["wall_N"] == pytest.approx((1.0 + 0.5) * Ly * H / 1000.0, rel=1e-6)
+
+
+def test_partial_snow_rows_and_half_plan_pattern():
+    """IS 875-4 4.3: cfg['snow_partial'] adds two half-loaded snow rows; the static state loads only that half."""
+    import engine3d as E
+    import static_model as SM
+    import india_combos as IC
+    import openseespy.opensees as ops
+    cfg, _ = ex1_cfg_is()
+    cfg["snow"] = 1.0; cfg["snow_partial"] = {"axis": "X"}
+    cs = IC.expand_combinations(cfg["load_plan"], cfg)
+    sp = [c for c in cs if c.get("snow_pattern")]
+    assert len(sp) == 2 and {tuple(c["snow_pattern"]) for c in sp} == {("X", "lo"), ("X", "hi")}
+    model = SM.build_static(cfg, "Linear", 2)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    full = SM.apply_gravity_state(cfg, model, 0.0, 0.0, 0.0, fS=1.0, self_weight=False)
+    ops.wipe(); model = SM.build_static(cfg, "Linear", 2)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    half = SM.apply_gravity_state(cfg, model, 0.0, 0.0, 0.0, fS=1.0, self_weight=False, snow_pattern=("X", "lo"))
+    NF = len(cfg["heights"])
+    assert half[NF] == pytest.approx(0.5 * full[NF], rel=0.02)          # symmetric plan: half the roof snow
+    # nodal snow loads reach the state with fS
+    cfg["nodal_snow_loads"] = [{"node": E.ntag(0, 0, 1), "Fz_N": -10000.0, "level": 1}]
+    ops.wipe(); model = SM.build_static(cfg, "Linear", 2)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    lev = SM.apply_gravity_state(cfg, model, 0.0, 0.0, 0.0, fS=1.5, self_weight=False)
+    assert lev[1] == pytest.approx(15000.0, rel=1e-6)
+
+
+def test_is18168_mixed_system_components():
+    import india_is18168 as I18
+    assert I18.components("SMF+SCBF") == ["SMRF", "SCBF"]
+    assert I18.omega("SMF+SCBF")["Omega"] == 3.0
+    m = I18.overstrength_members("SMF+SCBF")
+    assert m["column"] and m["beam"] and not m["brace"]
+    assert I18.applies("SMF+SCBF", "IV")["applies"] is True
+    assert I18.system_gate("SMF+SCBF", "V")["ok"] is False
+    assert I18.system_gate("SMF+SCBF", "IV", height_m=11.0)["ok"] is True
