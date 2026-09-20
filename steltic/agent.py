@@ -201,63 +201,44 @@ def _r21_gate(ws, code):
 
 
 
-# ---------------- hardening #2: blocking completion gate (app-side, engine-free) ----------------
+# ---------------- hardening #2 / WP0.2+0.4: blocking completion gate (app-side, engine-free) ----------------
+def _gate_modules():
+    """Import the engine's pure-python gate module (stdlib only) from steel_engine/."""
+    import sys as _sys
+    se = str(config.STEEL_ENGINE)
+    if se not in _sys.path:
+        _sys.path.insert(0, se)
+    import india_seismic_gates as _G
+    return _G
+
+
 def _completion_gate(ws):
-    """Lightweight JSON checks on jobs/<building>/design/calc_package.json before a final answer
-    is accepted. Returns a list of problems ([] = clean). A member/connection may carry
-    {'waived': '<engineering justification>'} instead of capacities to pass explicitly."""
+    """The package problems that block a final answer, from the SINGLE COMPLETE authority
+    (india_seismic_gates.design_status).  Data only: reads design/calc_package.json and the
+    JSON cfg snapshot the pipeline writes (design/cfg_snapshot.json) -- agent code is never
+    executed app-side.  Returns (problems, status)."""
     import pathlib
-    probs = []
     try:
         jd = ws._job_dir() if hasattr(ws, "_job_dir") else None
         if not jd:
-            return []
-        cp = pathlib.Path(jd) / "design" / "calc_package.json"
+            return [], "partial"
+        jd = pathlib.Path(jd)
+        cp = jd / "design" / "calc_package.json"
         if not cp.exists():
-            return ["design/calc_package.json does not exist -- run pipeline.design_and_report first"]
+            return ["design/calc_package.json does not exist -- run pipeline.design_and_report first"], "partial"
         pkg = json.loads(cp.read_text(errors="replace"))
-        mem = pkg.get("members") or []
-        con = pkg.get("connections") or []
-        if not con:
-            probs.append("connections list is EMPTY -- connections are a required deliverable")
-        for x in mem + con:
-            if not isinstance(x, dict):
-                continue
-            if x.get("waived"):
-                continue
-            checks = [c for c in (x.get("checks") or []) if isinstance(c, dict)]
-            dcs = [d for d in [x.get("DC")] + [c.get("DC") for c in checks]
-                   if isinstance(d, (int, float))]
-            if not dcs:
-                probs.append("'%s' has no D/C (top-level or in checks) and no waiver" % x.get("id"))
-            elif max(dcs) > 1.001:
-                probs.append("'%s' has D/C = %.3f > 1.0 -- resize/redesign (or waive with justification)"
-                             % (x.get("id"), max(dcs)))
-            if not x.get("cited") and not any(c.get("cited") for c in checks):
-                probs.append("'%s' has no cited IS clause" % x.get("id"))
-        # seeded collector slot must be filled (hardening #3 pairs with this)
-        for c in con:
-            if isinstance(c, dict) and "SEEDED" in str(c.get("type", "")) and c.get("DC") is None \
-                    and not c.get("waived") and not (c.get("checks") or []):
-                probs.append("seeded collector slot '%s' was never designed -- collectors on "
-                             "irregularity lines are REQUIRED (fill it or waive with justification)"
-                             % c.get("id"))
-        # deleting/renaming the seeded slot is NOT an escape: if the framework screen says the plan
-        # is irregular, SOME designed collector connection must exist (a prose note does not count)
-        plan = ((pkg.get("framework_screen") or {}).get("plan") or {})
-        if (plan.get("reentrant") or plan.get("setback")):
-            has_coll = any(isinstance(c, dict) and "collector" in
-                           (str(c.get("id", "")) + str(c.get("type", ""))).lower() and
-                           (c.get("DC") is not None or c.get("checks") or c.get("waived"))
-                           for c in con)
-            if not has_coll:
-                probs.append("framework screen: plan is re-entrant/setback but NO designed collector "
-                             "connection exists in the package -- a note is not a design: add a "
-                             "collector entry with demand (Om0 x Fpx share), components and D/C "
-                             "(or a waiver with justification)")
+        snap = jd / "design" / "cfg_snapshot.json"
+        cfg = json.loads(snap.read_text(errors="replace")) if snap.exists() else {}
+        if not cfg:
+            return ["design/cfg_snapshot.json missing -- re-run pipeline.design_and_report"], "partial"
+        G = _gate_modules()
+        st = G.design_status(cfg, pkg, job_dir=str(jd))
+        return list(st.get("reasons") or []), st.get("status", "partial")
     except Exception as e:
-        return ["completion gate could not read calc_package.json: %s" % e]
-    return probs[:12]
+        return ["completion gate could not evaluate the package: %s" % e], "partial"
+
+
+GATE_MAX_FORCED = int(os.environ.get("GATE_MAX_FORCED", "4"))
 
 
 
@@ -704,28 +685,35 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
                        "detail": "The run did not finish (no report yet). Click Continue to resume it; if it keeps "
                                  "stalling, raise max tokens or try a different model."}
                 return
-            _gate_probs = _completion_gate(ws)
+            _gate_probs, _gate_status = _completion_gate(ws)
             _gate_forced = getattr(ws, "_gate_forced", 0)
-            if _gate_probs and _gate_forced < 2:
+            if _gate_probs and _gate_forced < GATE_MAX_FORCED:
                 ws._gate_forced = _gate_forced + 1
                 ws.log("completion_gate", "final answer refused", "%d problem(s)" % len(_gate_probs))
                 yield {"type": "milestone", "text": "completion gate: %d problem(s) -- run continues"
                        % len(_gate_probs)}
                 messages.append({"role": "user", "content":
-                    "COMPLETION GATE (enforced): the design is NOT done -- calc_package.json has "
-                    "unresolved problems:\n- " + "\n- ".join(_gate_probs) +
-                    "\nFix each one (resize the member and re-run the pipeline, design the missing "
-                    "connection/collector, or add {'waived': '<engineering justification>'} to the entry "
-                    "if it genuinely does not apply), re-run consistency.check, then finish."})
+                    "COMPLETION GATE (enforced, india_seismic_gates.design_status): the design is NOT "
+                    "complete -- %d unresolved problem(s):\n- " % len(_gate_probs) + "\n- ".join(_gate_probs[:25]) +
+                    "\nFix each one (resize and re-run the pipeline, design the missing connection/collector/"
+                    "base, add the missing load cases). A waiver needs a numeric replacement check and "
+                    "waiver_approved_by. Then re-run consistency.check and finish."})
                 continue
             if _gate_probs:
-                final_text += ("\n\n[completion gate] NOTE: finishing with %d unresolved package "
-                               "problem(s) after 2 forced continuations:\n- " % len(_gate_probs)
-                               + "\n- ".join(_gate_probs))
+                # WP0.4: never 'finish' over unresolved problems -- the run ENDS AS PARTIAL.
+                ws.log("completion_gate", "run ends PARTIAL", "%d problem(s)" % len(_gate_probs))
+                final_text = ("STATUS: %s -- the design is NOT complete (%d unresolved problem(s) per "
+                              "india_seismic_gates.design_status):\n- " % (_gate_status.upper(), len(_gate_probs))
+                              + "\n- ".join(_gate_probs[:40]) + "\n\n" + final_text)
+                yield {"type": "assistant", "text": final_text}
+                _save_conv(conv_path, messages)
+                yield {"type": "done", "building": ws.building, "status": _gate_status or "partial",
+                       "problems": len(_gate_probs)}
+                return
             yield {"type": "assistant", "text": final_text}
             _evict_all_rag(messages)                  # design complete -> drop raw spec-RAG chunks to file pointers before saving
             _save_conv(conv_path, messages)
-            yield {"type": "done", "building": ws.building}
+            yield {"type": "done", "building": ws.building, "status": "complete"}
             return
         stuck = 0
         pending_nudges = []           # user-message nudges injected AFTER the batch (keeps every tool_call valid)
