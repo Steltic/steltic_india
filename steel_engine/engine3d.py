@@ -902,10 +902,11 @@ def modal_props(cfg):
             "m": masses, "J": Jm, "Mtot": Mt, "NF": NF, "cm": info.get("cm") or {}}
 
 
-def india_story_forces(cfg, direction):
-    """Unfactored ESM story forces {k: (fx, fy, mz)} in N from load_plan.story_forces['EQ_<d>']."""
+def india_story_forces(cfg, direction, kind="EQ"):
+    """Unfactored story forces {k: (fx, fy, mz)} in N from load_plan.story_forces['<kind>_<d>']
+    (kind 'EQ' = ESM seismic, 'W' = IS 875-3 wind)."""
     plan = cfg.get("load_plan") or {}
-    raw = (plan.get("story_forces") or {}).get("EQ_" + direction)
+    raw = (plan.get("story_forces") or {}).get(kind + "_" + direction)
     if not raw:
         return {}
     import india_loads as _IL
@@ -1126,6 +1127,109 @@ def india_drift(cfg, eccentricity=None, gravity=(1.0, 1.0)):
     return out
 
 
+def _wind_limits(cfg):
+    """IS 800:2007 Table 6 lateral-deflection divisors for wind at gamma_f = 1.0:
+    (storey divisor, building/column-top divisor, basis key)."""
+    import india_loads as IL
+    T6 = IL.IS800_TABLE6
+    bt = str(cfg.get("building_type") or "").lower()
+    brittle = bool(cfg.get("cladding_brittle", False))
+    crane = cfg.get("crane") or (cfg.get("load_plan") or {}).get("crane")
+    if bt.startswith("industrial") or crane:
+        if crane:
+            cab = str((crane or {}).get("operation") if isinstance(crane, dict) else "").lower() == "cab"
+            key = "frame_crane_cab_brittle" if cab else "frame_crane_pendant_elastic"
+        else:
+            key = "column_no_crane_brittle" if brittle else "column_no_crane_elastic"
+        return None, T6[key], key
+    key = "building_wind_brittle" if brittle else "building_wind_elastic"
+    return T6["storey_wind"], T6[key], key
+
+
+def india_wind_serviceability(cfg):
+    """IS 800 Table 6 wind serviceability: storey drift <= h/300 (other buildings) and total
+    lateral deflection <= H/500 (brittle cladding) or H/300 (elastic); industrial columns H/150 or
+    H/240, crane frames H/200 / H/400 -- under the unfactored W story forces (gamma_f = 1.0) with
+    1.0 DL + 1.0 LL (P-Delta).  Returns {} when the job has no wind story forces."""
+    import india_loads as IL
+    div_st, div_H, key = _wind_limits(cfg)
+    out = {}
+    for d in ("X", "Y"):
+        F = india_story_forces(cfg, d, kind="W")
+        if not F:
+            continue
+        info = build(cfg, "PDelta"); NF = info["NF"]
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        _apply_nodal_gravity(cfg, info, 1.0, 1.0)
+        for k in range(1, NF + 1):
+            fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
+            ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
+        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
+        ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+        if ops.analyze(1) != 0:
+            raise RuntimeError("wind serviceability analysis (%s) did not converge" % d)
+        di = 0 if d == "X" else 1
+        disp = {(i, j, k): ops.nodeDisp(ntag(i, j, k), di + 1)
+                for k in range(0, NF + 1) for (i, j) in info["present"][k]}
+        drift = []
+        for k in range(1, NF + 1):
+            lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
+            drift.append(max([abs(disp[(i, j, k)] - disp[(i, j, k - 1)]) / cfg["heights"][k - 1]
+                              for (i, j) in lines] or [0.0]))
+        H = float(sum(cfg["heights"]))
+        top = max(abs(disp[(i, j, NF)]) for (i, j) in info["present"][NF])
+        rec = {"storey_drift": drift, "top_mm": top, "H_mm": H, "limit_top_mm": H / div_H,
+               "ratio_top": top / (H / div_H), "basis": key,
+               "cite": "%s: %s -> H/%d%s" % (IL.IS800_TABLE6_CITE, key, div_H,
+                                           ("; storey drift h/%d" % div_st) if div_st else "")}
+        if div_st:
+            rec["limit_storey"] = 1.0 / div_st
+            rec["ratio_storey"] = max(drift) * div_st
+        out[d] = rec
+    return out
+
+
+def india_dynamic_wind_gate(cfg, f1_hz):
+    """IS 875-3 9.1: h/b > 5 or f1 < 1 Hz -> the applied along-wind story forces must come from the
+    10.2 gust factor (wind_summary.gust_factor with its inputs) and the across-wind response
+    (10.3) must be declared.  Returns (ok, reasons, required)."""
+    import india_wind_tables as WT
+    plan = cfg.get("load_plan") or {}
+    ws = plan.get("wind_summary") or {}
+    if plan.get("no_wind") or not ws:
+        return True, [], False
+    H_m = float(sum(cfg["heights"])) / 1000.0
+    try:
+        xs = [_xy_in(cfg, i, j) for (i, j) in grid(cfg, 1)]
+        bx = (max(c[0] for c in xs) - min(c[0] for c in xs)) / 1000.0
+        by = (max(c[1] for c in xs) - min(c[1] for c in xs)) / 1000.0
+        bmin = min(v for v in (bx, by) if v > 0)
+    except Exception:
+        bmin = None
+    req, why = WT.dynamic_wind_required(H_m, bmin, f1_hz)
+    if not req:
+        return True, [], False
+    bad = []
+    gf = ws.get("gust_factor")
+    if not isinstance(gf, dict) or gf.get("G") is None:
+        bad.append("dynamic wind required (%s): wind_summary.gust_factor {G, fa_hz, beta, ...} per IS 875-3 "
+                   "10.2 is missing" % "; ".join(why))
+    else:
+        for d in ("X", "Y"):
+            Wf = india_story_forces(cfg, d, kind="W")
+            want = gf.get("VB_%s_kN" % d.lower())
+            if Wf and want is not None:
+                have = abs(sum(f[0 if d == "X" else 1] for f in Wf.values())) / 1000.0
+                if have < float(want) * (1 - 0.02):
+                    bad.append("W_%s story forces sum %.1f kN < 10.2 gust-factor along-wind base shear %.1f kN"
+                               % (d, have, float(want)))
+    if not ws.get("across_wind"):
+        bad.append("dynamic wind required (%s): the across-wind response (IS 875-3 10.3) must be declared "
+                   "in wind_summary.across_wind {method, result, cite}" % "; ".join(why))
+    return not bad, bad, True
+
+
 def beam_deflection_si(cfg):
     """IS 800 Table 6 live-load deflection of every beam group (SI), simply supported w L^4 check
     on the actual section.  Returns (worst ratio to limit, n evaluated, rows).  n == 0 -> the gate
@@ -1218,6 +1322,16 @@ def _run_india(cfg, name=None):
         lims = lim
         chk["drift_" + d] = all(x <= l + 1e-12 for x, l in zip(dr[d]["drift"], lim)) and max(dr[d]["drift"]) > 0
         extra["torsion_ratio_" + d] = max(dr[d]["ratio"])
+    wsv = india_wind_serviceability(cfg)
+    for d, r in wsv.items():
+        chk["wind_defl_" + d] = r["ratio_top"] <= 1.0 and r.get("ratio_storey", 0.0) <= 1.0
+        extra["wind_defl_ratio_" + d] = max(r["ratio_top"], r.get("ratio_storey", 0.0))
+    f1 = (1.0 / max(T)) if T and max(T) > 0 else None
+    dw_ok, dw_why, dw_req = india_dynamic_wind_gate(cfg, f1)
+    if dw_req:
+        chk["dynamic_wind"] = dw_ok
+        if dw_why:
+            extra["dynamic_wind"] = dw_why
     rLL, nLL, rows = beam_deflection_si(cfg)
     chk["beam_deflection"] = (nLL > 0 and rLL <= 1.0)
     extra["beam_defl_LL_ratio"] = rLL; extra["beam_defl_groups"] = nLL
@@ -1239,7 +1353,8 @@ def _run_india(cfg, name=None):
                 Vx=V, Vy=VBbar(cfg, "Y"), gov=cfg.get("governing", "seismic"), chk=chk, extra=extra,
                 allp=all(chk.values()), drift=dr, drift_limits=lims, rsa=rsa, esm_permitted=esm_ok,
                 modes=mp["modes"], irregularity=irr,
-                esm_reasons=why, eccentricity=ecc, beam_deflection_rows=rows, method="RSA" if want_rsa else "ESM")
+                esm_reasons=why, eccentricity=ecc, beam_deflection_rows=rows, method="RSA" if want_rsa else "ESM",
+                wind_serviceability=wsv, dynamic_wind={"required": dw_req, "ok": dw_ok, "reasons": dw_why})
 
 
 def design_eccentricities(cfg, F=1.0e5, T=1.0e8):

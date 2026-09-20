@@ -705,6 +705,59 @@ def apply_crane_loads(cfg, model, fC):
         ops.load(int(nd), fC * fx, fC * fy, fC * fz, fC * mx, fC * my, fC * mz)
 
 
+def member_wind_loads(cfg, model, pat, f):
+    """IS 875-3 7.3.1 member wind for one pattern x factor f, applied inside the current load pattern.
+
+    Roof: (Cpe - Cpi) pd on the roof beams (+ = downward), windward / leeward halves split at the
+    plan mid-line normal to pat['wind_axis'], width = the same one-way/two-way tributary as gravity.
+    Walls: windward / leeward wall pressure x (tributary storey height x wall length) as nodal
+    forces shared equally by the column nodes on that wall line (+ = inward).  Returns
+    {'roof_N': total vertical, 'wall_N': total horizontal} for the record."""
+    NF = model["NF"]; ax = 0 if pat["wind_axis"] == "X" else 1
+    ds = _deck_span(cfg)
+    nodes = [ops.nodeCoord(n) for n in ops.getNodeTags()]
+    mid = 0.5 * (min(c[ax] for c in nodes) + max(c[ax] for c in nodes))
+    tot = {"roof_N": 0.0, "wall_N": 0.0}
+    pw, pl = pat.get("roof_windward_kNm2"), pat.get("roof_leeward_kNm2")
+    if pw is not None and pl is not None:
+        for b in model["beams"]:
+            if b["k"] != NF:
+                continue
+            nb, trib1 = _beam_floor_width(model, b, cfg)
+            if ds is not None and b["dir"] == ds:
+                continue
+            width = trib1 if ds is not None else nb * (cfg["SY"] if b["dir"] == "X" else cfg["SX"]) / 4.0
+            ca, cb = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
+            pp = pw if 0.5 * (ca[ax] + cb[ax]) <= mid else pl
+            w = f * float(pp) * width / 1000.0                      # N/mm, + downward
+            for t in b["segs"]:
+                ops.eleLoad("-ele", t, "-type", "-beamUniform", 0.0, -w, 0.0)
+            tot["roof_N"] += w * b["L"]
+    qw, ql = pat.get("wall_windward_kNm2"), pat.get("wall_leeward_kNm2")
+    if qw is not None and ql is not None:
+        oth = 1 - ax
+        for k in range(1, NF + 1):
+            h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
+            alln = set(ops.getNodeTags())
+            lvl = [ntag(i, j, k) for (i, j) in (model.get("present") or {}).get(k, ())]
+            crd = {n: ops.nodeCoord(n) for n in lvl if n in alln}
+            if not crd:
+                continue
+            for edge, q, sgn in ((min(c[ax] for c in crd.values()), qw, 1.0),
+                                 (max(c[ax] for c in crd.values()), ql, -1.0)):
+                on = [n for n, c in crd.items() if abs(c[ax] - edge) < 1e-6]
+                if len(on) < 1:
+                    continue
+                ys = [crd[n][oth] for n in on]
+                Lw = (max(ys) - min(ys)) or (cfg["SY"] if ax == 0 else cfg["SX"])
+                Ftot = f * float(q) * Lw * h_t / 1000.0 * sgn          # N along +axis
+                for n in on:
+                    v = [0.0] * 6; v[ax] = Ftot / len(on)
+                    ops.load(n, *v)
+                tot["wall_N"] += Ftot
+    return tot
+
+
 def _responses(model):
     """{tag: np.array} -- localForce (12) for beam-columns, [N] for trusses."""
     R = {}
@@ -874,11 +927,14 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             for nd, v in notional_loads(lev, m.get("notional"), model).items():
                 a = loads.get(nd, (0.0,) * 6)
                 loads[nd] = tuple(x + y for x, y in zip(a, v))
-            if loads:
+            mw = m.get("member_wind")
+            if loads or mw:
                 ptag += 1
                 ops.pattern("Plain", ptag, 77)
                 for nd, v in loads.items():
                     ops.load(int(nd), *v)
+                if mw:
+                    member_wind_loads(cfg, model, mw, float(m.get("fWM") or 0.0))
                 ops.analyze(1)
                 R1 = _responses(model)
                 ops.remove("loadPattern", ptag)

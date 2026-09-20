@@ -443,3 +443,219 @@ def resolve_k4(corpus_hit=None, *, eor_k4=None, eor_cite=None, eor_source=None,
             "k4_source='eor_documented' with k4_cite (CFS-style provenance)."
         ),
     }
+
+
+# =====================================================================================
+# WP1.11 -- IS 875 (Part 3):2015 wind rules in code (values read from the licensed PDF)
+# =====================================================================================
+K4_BY_CLASS = {"post_cyclone": 1.30, "industrial": 1.15, "other": 1.00}          # 6.3.4 (p.9)
+K4_CITE = ("IS 875 (Part 3):2015 6.3.4: 60 km coastal belt (east coast and Gujarat): post-cyclone "
+           "importance 1.30, industrial 1.15, all other 1.00")
+KD_CITE = "IS 875 (Part 3):2015 7.2.1: 'For the cyclone affected regions also the factor Kd shall be taken as 1.0'"
+Z0 = {1: 0.002, 2: 0.02, 3: 0.2, 4: 2.0}                                            # 6.3.2.1 roughness heights (m)
+DAMPING_TABLE36 = {"welded_steel": 0.010, "bolted_steel": 0.020, "rcc": 0.020, "prestressed": 0.016}
+
+# Table 6 (7.3.3.2) pitched roofs, overall coefficients: {h/w band: {alpha: (EF, GH, EG, FH)}}
+# read from the PDF p.16 scan (400 dpi); mid band row 45/60 and bottom band row 40 are low-contrast
+# in the scan -- TODO(verify) against a clean copy.
+TABLE_6_CPE_PITCHED = {
+    "le_0.5": {0: (-0.8, -0.4, -0.8, -0.4), 5: (-0.9, -0.4, -0.8, -0.4), 10: (-1.2, -0.4, -0.8, -0.6),
+               20: (-0.4, -0.4, -0.7, -0.6), 30: (0.0, -0.4, -0.7, -0.6), 45: (0.3, -0.5, -0.7, -0.6),
+               60: (0.7, -0.6, -0.7, -0.6)},
+    "0.5_1.5": {0: (-0.8, -0.6, -1.0, -0.6), 5: (-0.9, -0.6, -0.9, -0.6), 10: (-1.1, -0.6, -0.8, -0.6),
+                20: (-0.7, -0.5, -0.8, -0.6), 30: (-0.2, -0.5, -0.8, -0.6), 45: (0.2, -0.5, -0.8, -0.8),
+                60: (0.6, -0.5, -0.8, -0.6)},
+    "1.5_6": {0: (-0.7, -0.6, -0.9, -0.7), 5: (-0.7, -0.6, -0.8, -0.8), 10: (-0.7, -0.6, -0.8, -0.8),
+              20: (-0.8, -0.6, -0.8, -0.8), 30: (-1.0, -0.5, -0.8, -0.7), 40: (-0.2, -0.5, -0.8, -0.7),
+              50: (0.2, -0.5, -0.8, -0.7), 60: (0.5, -0.5, -0.8, -0.7)},
+}
+
+
+def k4_required(cyclone_belt, structure_class="other"):
+    """6.3.4 + decision D10: k4 and Kd come from the same cyclone_belt flag."""
+    if not cyclone_belt:
+        return {"k4": 1.0, "Kd": None, "cite": K4_CITE + " (outside the belt: k4 = 1.0)"}
+    cls = str(structure_class or "other").lower()
+    cls = "post_cyclone" if any(t in cls for t in ("post", "shelter", "hospital", "school", "tower", "emergency")) \
+        else ("industrial" if "industr" in cls else "other")
+    return {"k4": K4_BY_CLASS[cls], "Kd": 1.0, "class": cls, "cite": K4_CITE + "; " + KD_CITE}
+
+
+def roof_cpe_pitched(h_over_w, alpha_deg):
+    """Table 6 overall Cpe (EF, GH at theta 0; EG, FH at theta 90), linear in roof angle."""
+    band = "le_0.5" if h_over_w <= 0.5 else ("0.5_1.5" if h_over_w <= 1.5 else "1.5_6")
+    if h_over_w >= 6:
+        return {"found": False, "note": "h/w >= 6 outside Table 6"}
+    tab = TABLE_6_CPE_PITCHED[band]
+    ks = sorted(tab)
+    a = max(min(float(alpha_deg), ks[-1]), ks[0])
+    lo = max(k for k in ks if k <= a); hi = min(k for k in ks if k >= a)
+    t = 0.0 if hi == lo else (a - lo) / (hi - lo)
+    vals = tuple(tab[lo][i] + t * (tab[hi][i] - tab[lo][i]) for i in range(4))
+    return {"found": True, "band": band, "alpha_deg": a, "EF": vals[0], "GH": vals[1], "EG": vals[2], "FH": vals[3],
+            "cite": "IS 875 (Part 3):2015 Table 6 (7.3.3.2), linear interpolation on roof angle"}
+
+
+def cpi_from_openings(opening_ratio):
+    """7.3.2.1 / 7.3.2.2: <= 5 % -> +-0.2; 5-20 % -> +-0.5; > 20 % -> +-0.7."""
+    r = float(opening_ratio)
+    v = 0.2 if r <= 0.05 else (0.5 if r <= 0.20 else 0.7)
+    return {"Cpi": v, "cite": "IS 875 (Part 3):2015 7.3.2.%s" % ("1" if r <= 0.05 else "2"),
+            "opening_ratio": r}
+
+
+def k2_hourly(z_m, terrain):
+    """6.4: k2,i = 0.1423 ln(z/z0,i) (z0,i)^0.0706."""
+    import math
+    z0 = Z0[int(terrain)]
+    return 0.1423 * math.log(max(float(z_m), z0 * 1.0001) / z0) * z0 ** 0.0706
+
+
+def turbulence_intensity(z_m, terrain):
+    """6.5: Iz,1 = 0.3507 - 0.0535 log10(z/z0,1); Iz,4 = 0.466 - 0.1358 log10(z/z0,4);
+    Iz,2 = Iz,1 + (Iz,4 - Iz,1)/7; Iz,3 = Iz,1 + 3(Iz,4 - Iz,1)/7."""
+    import math
+    I1 = 0.3507 - 0.0535 * math.log10(float(z_m) / Z0[1])
+    I4 = 0.466 - 0.1358 * math.log10(float(z_m) / Z0[4])
+    return {1: I1, 2: I1 + (I4 - I1) / 7.0, 3: I1 + 3.0 * (I4 - I1) / 7.0, 4: I4}[int(terrain)]
+
+
+def gust_factor_10_2(h_m, b_m, fa_hz, terrain, Vb, k1=1.0, k3=1.0, k4=1.0, beta=0.020, s_m=0.0, b0h_m=None):
+    """IS 875 (Part 3):2015 10.2 along-wind Gust Factor (PDF pp.47-48):
+    G = 1 + r sqrt( gv^2 Bs (1+phi)^2 + Hs gR^2 S E / beta ),  r = 2 Ih,i,
+    Bs = 1/(1 + sqrt(0.26 (h-s)^2 + 0.46 bsh^2)/Lh), Lh = 85 (h/10)^0.25 (cat 1-3) / 70 (cat 4),
+    phi = gv Ih,i sqrt(Bs)/2, Hs = 1 + (s/h)^2, S = 1/((1 + 3.5 fa h/Vh,d)(1 + 4 fa b0h/Vh,d)),
+    E = pi N/(1 + 70.8 N^2)^(5/6), N = fa Lh/Vh,d, gR = sqrt(2 ln(3600 fa)), gv 3.0 (cat 1-2) / 4.0."""
+    import math
+    t = int(terrain)
+    h, b = float(h_m), float(b_m)
+    b0h = float(b0h_m if b0h_m is not None else b)
+    Ih = turbulence_intensity(h, t)
+    r = 2.0 * Ih
+    gv = 3.0 if t in (1, 2) else 4.0
+    Lh = (85.0 if t in (1, 2, 3) else 70.0) * (h / 10.0) ** 0.25
+    Bs = 1.0 / (1.0 + math.sqrt(0.26 * (h - s_m) ** 2 + 0.46 * b ** 2) / Lh)
+    phi = gv * Ih * math.sqrt(Bs) / 2.0
+    Hs = 1.0 + (float(s_m) / h) ** 2
+    Vhd = float(Vb) * k1 * k2_hourly(h, t) * k3 * k4
+    S = 1.0 / ((1.0 + 3.5 * fa_hz * h / Vhd) * (1.0 + 4.0 * fa_hz * b0h / Vhd))
+    N = fa_hz * Lh / Vhd
+    E = math.pi * N / (1.0 + 70.8 * N * N) ** (5.0 / 6.0)
+    gR = math.sqrt(2.0 * math.log(3600.0 * fa_hz))
+    G = 1.0 + r * math.sqrt(gv ** 2 * Bs * (1.0 + phi) ** 2 + Hs * gR ** 2 * S * E / float(beta))
+    return {"G": G, "r": r, "Ih": Ih, "gv": gv, "Lh": Lh, "Bs": Bs, "phi": phi, "Hs": Hs, "Vh_d": Vhd,
+            "S": S, "N": N, "E": E, "gR": gR, "beta": beta,
+            "cite": "IS 875 (Part 3):2015 10.2 (Gust Factor method), hourly mean speed 6.4, turbulence 6.5, Table 36"}
+
+
+def along_wind_story_forces(heights_m, b_m, Cf, fa_hz, terrain, Vb, k1=1.0, k3=1.0, k4=1.0, beta=0.020):
+    """Fz = Cf Az pd(hourly) G per level (10.2), N; pd = 0.6 Vz,d^2 with Vz,d = Vb k1 k2,i k3 k4."""
+    z = 0.0; zs = []
+    for h in heights_m:
+        z += float(h); zs.append(z)
+    H = zs[-1]
+    g = gust_factor_10_2(H, b_m, fa_hz, terrain, Vb, k1, k3, k4, beta)
+    F = []
+    for i, zi in enumerate(zs):
+        trib = (float(heights_m[i]) / 2.0 + (float(heights_m[i + 1]) / 2.0 if i + 1 < len(zs) else 0.0))
+        Vzd = float(Vb) * k1 * k2_hourly(zi, terrain) * k3 * k4
+        F.append(Cf * b_m * trib * 0.6 * Vzd ** 2 * g["G"])
+    return {"F_N": F, "VB_N": sum(F), "gust": g}
+
+
+def dynamic_wind_required(h_m, b_min_m, f1_hz):
+    """9.1: h / min lateral dimension > about 5.0, or first-mode frequency < 1.0 Hz."""
+    why = []
+    if b_min_m and float(h_m) / float(b_min_m) > 5.0:
+        why.append("h/b = %.2f > 5 (9.1(a))" % (float(h_m) / float(b_min_m)))
+    if f1_hz is not None and f1_hz < 1.0:
+        why.append("f1 = %.2f Hz < 1.0 Hz (9.1(b))" % f1_hz)
+    return bool(why), why
+
+
+def wind_findings(cfg) -> list:
+    """Preflight wind rules (WP1.11 items 1, 2, 3, 7, 8)."""
+    out = []
+    plan = cfg.get("load_plan") or {}
+    ws = plan.get("wind_summary") or {}
+    if plan.get("no_wind") or not ws:
+        return out
+    say = lambda s, m: out.append((s, m))
+    cb = ws.get("cyclone_belt", cfg.get("cyclone_belt"))
+    if cb is None:
+        say("ERROR", "wind_summary.cyclone_belt (true/false, with cite) must be declared -- it sets Kd = 1.0 "
+                     "(7.2.1) and k4 (6.3.4) together (decision D10)")
+    k4 = ws.get("k4"); Kd = ws.get("Kd")
+    if k4 is not None and float(k4) not in (1.0, 1.15, 1.30):
+        say("ERROR", "k4 = %s not in {1.0, 1.15, 1.30} (IS 875-3 6.3.4)" % k4)
+    if cb is True:
+        req = k4_required(True, ws.get("structure_class") or cfg.get("wind_structure_class"))
+        if Kd is not None and abs(float(Kd) - 1.0) > 1e-9:
+            say("ERROR", "cyclone_belt: Kd = %s but %s" % (Kd, KD_CITE))
+        if k4 is not None and abs(float(k4) - req["k4"]) > 1e-9:
+            say("ERROR", "cyclone_belt, class %s: k4 = %s but 6.3.4 gives %.2f" % (req["class"], k4, req["k4"]))
+    elif cb is False and k4 is not None and float(k4) != 1.0:
+        say("ERROR", "k4 = %s > 1.0 but cyclone_belt is false (k4 applies only in the 60 km belt, 6.3.4)" % k4)
+    pz, pd = ws.get("pz_kNm2"), ws.get("pd_kNm2")
+    if pz is not None and pd is not None and float(pd) < 0.70 * float(pz) - 1e-9:
+        say("ERROR", "pd = %.4f < 0.70 pz = %.4f (IS 875-3 7.2: pd shall not be less than 0.70 pz)" % (pd, 0.7 * pz))
+    if ws.get("Ka") is not None and ws.get("Ka_basis") not in ("frame_tributary", "element_tributary"):
+        say("ERROR", "wind_summary.Ka_basis must state the 7.2.2.1 tributary area ('frame_tributary' = frame "
+                     "spacing x panel dimension for frames, 'element_tributary' for purlins/girts)")
+    if ws.get("Ka") is not None and ws.get("Ka_area_m2") is not None:
+        ka = ka_for_area_m2(float(ws["Ka_area_m2"])).get("Ka")
+        if ka is not None and abs(float(ws["Ka"]) - ka) > 0.005:
+            say("ERROR", "Ka = %s but Table 4 gives %.3f for A = %s m2" % (ws["Ka"], ka, ws["Ka_area_m2"]))
+    src = str(ws.get("Vb_source") or "").lower()
+    if "proxy" in src or "nearest" in src:
+        say("ERROR", "Vb from a proxy city is not permitted: read IS 875-3 Fig. 1 at the site coordinates and "
+                     "record Vb_source='derived_from_map' with lat/long (WP1.11-8)")
+    if src == "derived_from_map" and not (ws.get("lat") and ws.get("long")):
+        say("ERROR", "Vb_source derived_from_map needs the site lat/long")
+    slope = cfg.get("terrain_upwind_slope_deg") or ws.get("upwind_slope_deg")
+    if slope is not None and float(slope) > 3.0 and not ws.get("k3_basis"):
+        say("ERROR", "upwind slope %.1f deg > 3 deg: k3 per 6.3.3 / Annex C required (k3_basis) (WP1.11-7)" % float(slope))
+    if (cfg.get("roof_pitch_deg") is not None or len(cfg.get("heights") or []) == 1) and not plan.get("member_wind") \
+            and not cfg.get("member_wind_not_required"):
+        say("ERROR", "low-rise / portal building: member-level wind cases (Table 5 walls, Table 6 roof by pitch, "
+                     "Cpi by opening ratio, uplift with 0.9DL) are required -- india_wind_tables.lowrise_member_wind")
+    return out
+
+
+def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_ratio, *, theta_cases=(0, 90),
+                        ridge_axis=None):
+    """Member-level wind pressure sets for low-rise / portal buildings (7.3.1 F = (Cpe - Cpi) A pd):
+    walls from Table 5, roof from Table 6 by pitch, Cpi +- from the opening ratio.  Returns a list of
+    patterns {name, roof_windward_kNm2, roof_leeward_kNm2, wall_windward_kNm2, wall_leeward_kNm2,
+    direction} (+ = towards the surface, i.e. roof downward / wall inward)."""
+    cpi = cpi_from_openings(opening_ratio)["Cpi"]
+    hw = float(h_eave_m) / float(w_m)
+    lw = float(l_m) / float(w_m)
+    walls = resolve_cpe_walls(hw, lw, 0.0, corpus_hit=None)
+    roof = roof_cpe_pitched(hw, roof_pitch_deg)
+    if not roof.get("found"):
+        return {"found": False, "note": roof.get("note")}
+    wc = (walls.get("Cpe") or {}) if isinstance(walls, dict) and walls.get("found") else {}
+    Aw, Bw = wc.get("A"), wc.get("B")
+    if Aw is None or Bw is None:
+        return {"found": False, "note": "IS 875-3 Table 5 wall Cpe not resolved for h/w=%.3f l/w=%.3f; "
+                                        "no default coefficients are substituted" % (hw, lw)}
+    pats = []
+    for s_cpi in (+cpi, -cpi):
+        # theta = 0: wind normal to the ridge (E/F windward slope, G/H leeward)
+        pats.append({"name": "WM0%s" % ("+" if s_cpi > 0 else "-"), "direction": "across_ridge",
+                     "roof_windward_kNm2": (roof["EF"] - s_cpi) * pd_kNm2,
+                     "roof_leeward_kNm2": (roof["GH"] - s_cpi) * pd_kNm2,
+                     "wall_windward_kNm2": (Aw - s_cpi) * pd_kNm2,
+                     "wall_leeward_kNm2": (Bw - s_cpi) * pd_kNm2,
+                     "Cpi": s_cpi, "roof": roof, "walls_source": walls.get("resolved_via") if isinstance(walls, dict) else None})
+        pats.append({"name": "WM90%s" % ("+" if s_cpi > 0 else "-"), "direction": "along_ridge",
+                     "roof_windward_kNm2": (roof["EG"] - s_cpi) * pd_kNm2,
+                     "roof_leeward_kNm2": (roof["FH"] - s_cpi) * pd_kNm2,
+                     "Cpi": s_cpi, "roof": roof})
+    if ridge_axis in ("X", "Y"):
+        across = "Y" if ridge_axis == "X" else "X"
+        for p in pats:
+            p["wind_axis"] = across if p["direction"] == "across_ridge" else ridge_axis
+    return {"found": True, "patterns": pats, "Cpi": cpi, "h_over_w": hw,
+            "cite": "IS 875 (Part 3):2015 7.3.1, 7.3.2, Table 5, Table 6"}

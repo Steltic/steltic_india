@@ -203,6 +203,29 @@ def _rsa_required(cfg, plan):
         return True
 
 
+def member_wind_patterns(plan) -> list:
+    """load_plan['member_wind'] -> list of patterns (india_wind_tables.lowrise_member_wind output, or a
+    list of pattern dicts).  Each pattern needs name + pressures in kN/m2 (+ = towards the surface)."""
+    mw = (plan or {}).get("member_wind")
+    if not mw:
+        return []
+    pats = mw.get("patterns") if isinstance(mw, dict) else mw
+    out = []
+    for p in pats or []:
+        if not isinstance(p, dict) or not p.get("name"):
+            raise CombinationError("member_wind pattern without a name: %r" % (p,))
+        if p.get("roof_windward_kNm2") is None and p.get("wall_windward_kNm2") is None:
+            raise CombinationError("member_wind pattern %s has no pressures" % p["name"])
+        q = dict(p)
+        axis = str(q.get("wind_axis") or "").upper()
+        if axis not in ("X", "Y"):
+            raise CombinationError("member_wind pattern %s: wind_axis 'X' or 'Y' (direction of the wind) is "
+                                   "required" % q["name"])
+        q["wind_axis"] = axis
+        out.append(q)
+    return out
+
+
 def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
     """Generate every required IS 800 Table 4 / IS 1893 / IS 800 12.2.3 combination."""
     plan = plan or {}
@@ -328,6 +351,19 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                                 c["rsa"] = d
                             else:
                                 c["lateral_ref"] = ref
+    # ---- member-level wind (low-rise / portal: IS 875-3 7.3.1 (Cpe - Cpi) pd patterns) ----
+    for pat in member_wind_patterns(plan):
+        for (fD, fL, fl, fam) in ((1.5, 0.0, 1.5, "T4 DL+WL (member wind)"),
+                                  (0.9, 0.0, 1.5, "T4 0.9DL+WL (member wind, uplift)"),
+                                  (1.2, 1.2, 1.2, "T4 DL+LL+WL (member wind)"),
+                                  (1.2, 1.2, 0.6, "T4 DL+LL+0.6WL (member wind)")):
+            c = add(_grav_label(fD, fL, fL) + "+%s%s" % (_fmt(fl), pat["name"]), fD, fL, fL, family=fam,
+                    cite=IS800_T4 + " + IS 875 (Part 3):2015 7.3.1, Table 5, Table 6",
+                    lateral_kind="W", direction=pat.get("wind_axis"), sign=1, tags=["member_wind"])
+            c["fWM"] = fl
+            c["member_wind"] = {k: pat.get(k) for k in ("name", "direction", "wind_axis", "roof_windward_kNm2",
+                                                        "roof_leeward_kNm2", "wall_windward_kNm2",
+                                                        "wall_leeward_kNm2", "Cpi")}
     # ---- serviceability (Table 4 cols 7-10): tagged, excluded from the strength envelope ----
     add("SLS:1.0DL+1.0LL", 1.0, 1.0, 1.0, family="T4 SLS DL+LL", cite=IS800_T4 + " serviceability", service=True,
         tags=["service"])

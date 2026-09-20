@@ -59,4 +59,6 @@ def ex1_cfg_is():
         sf["EQ_" + d] = r["story_forces"]["EQ_" + d]
     plan["story_forces_units"] = "N"
     plan["combinations"] = "auto"
+    plan["wind_summary"].update(cyclone_belt=False, cyclone_belt_cite="New Delhi: inland, outside the 60 km "
+                                "east-coast/Gujarat belt of IS 875-3 6.3.4", Ka_basis="frame_tributary")
     return cfg, r

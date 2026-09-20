@@ -1710,14 +1710,33 @@ def _drift_from_forces(cfg, Fdict, direction):
         d = ops.nodeDisp(E.mtag(k), di+1); drift.append((d-prev)/cfg["heights"][k-1]); prev = d
     return drift
 
+def _india_wind_serviceability_html(cfg):
+    """IS 800 Table 6 wind serviceability from the engine run (unfactored W story forces, 1.0DL+1.0LL)."""
+    try:
+        wsv = E.india_run_cached(cfg).get("wind_serviceability") or {}
+    except Exception as ex:
+        return "<p class='note'><b>Wind serviceability NOT evaluated:</b> %s</p>" % ex
+    if not wsv:
+        return "<p class='cnote'>Wind serviceability: no W story forces in the load plan.</p>"
+    rows = []
+    for d, r in sorted(wsv.items()):
+        rows.append([d, "%.2f" % r["top_mm"], "%.2f" % r["limit_top_mm"], "%.3f" % r["ratio_top"],
+                     ("%.5f / %.5f" % (max(r["storey_drift"]), r["limit_storey"])) if r.get("limit_storey") else "-",
+                     "OK" if r["ratio_top"] <= 1.0 and r.get("ratio_storey", 0.0) <= 1.0 else "NG"])
+    cite = next(iter(wsv.values()))["cite"]
+    return ("<h3>Wind serviceability (IS 800 Table 6)</h3>"
+            "<p>Lateral deflection under the unfactored IS 875 (Part 3) wind story forces "
+            "(&gamma;<sub>f</sub> = 1.0) with 1.0 DL + 1.0 LL, P-&Delta;. %s.</p>" % cite
+            + _table(["Dir", "top defl. (mm)", "limit (mm)", "ratio", "max storey drift / limit", "status"], rows))
+
 def _wind_drift_section(cfg):
     ws, sf = _load_plan_wind(cfg)
     if not cfg.get("wind") and not (ws or sf.get("W_X") or sf.get("W_Y")):
         return "<p class='cnote'>Wind drift not evaluated (no wind parameters defined).</p>"
+    if E._india_job(cfg):
+        return _india_wind_serviceability_html(cfg)
     if not cfg.get("wind") and (ws or sf.get("W_X") or sf.get("W_Y")):
-        return ("<p class='cnote'>Wind drift: India load_plan wind laterals are applied for strength "
-                "combinations; serviceability wind-drift re-analysis via engine wind_forces() is "
-                "not run when legacy <code>cfg['wind']</code> is absent (see Ch.3 wind_summary).</p>")
+        return "<p class='cnote'>Wind drift not evaluated (no wind story forces).</p>"
     NF = len(cfg["heights"]); lim = cfg.get("wind_drift_limit", 1.0/400.0)
     try:
         dX = _drift_from_forces(cfg, E.wind_forces(cfg, "X"), "X")

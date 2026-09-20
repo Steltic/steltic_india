@@ -598,7 +598,8 @@ def case_from_combination(c, plan) -> Case:
                 sign=(1 if (f or 0) >= 0 else -1), torsion=c.get("torsion"), fEv=float(c.get("fEv", 0.0) or 0.0),
                 rsa=rsa, tags=tags, family=c.get("family"), cite=c.get("cite"),
                 service=bool(c.get("service")), crane=c.get("crane"), fC=float(c.get("fC", 0.0) or 0.0),
-                fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c)
+                fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c,
+                member_wind=c.get("member_wind"), fWM=float(c.get("fWM", 0.0) or 0.0))
 
 
 def render_findings(findings) -> str:
