@@ -27,7 +27,7 @@ WPB800X300X317.36, fy 240, KL = 5400 mm: Pdy = 5955 kN.
   lambda_LT <= 0.4 -> no LTB reduction.
 * LLT is the PHYSICAL unbraced length of the compression flange for each moment sign: a deck restrains the
   top flange (sagging), uplift / hogging needs the fly-brace spacing. Declare it per member group
-  (`LLT_sag`, `LLT_hog` in the cfg member inputs); the framework does not guess it.
+  (`cfg['LLT_sag_mm']`, `cfg['LLT_hog_mm']`, a number or `{role: mm}`); the framework does not guess it.
 
 Hand values: MB450, LLT = 3 m: Md = 271.3 kNm. NPB400X180X57.38, LLT = 3040 mm: Md = 217.0 kNm
 (lambda_LT <= 0.4 needs LLT <= 1611 mm). CHS168.3x8 simply supported: Md cap = 42.04 kNm.

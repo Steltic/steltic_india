@@ -159,8 +159,9 @@ concurrent forces (`india_is800.member_check_is800`); Section 12 checks (`india_
 drift, deformation compatibility, serviceability, irregularity screens; `design_status`.
 
 You:
-1. Get the inputs right: loads from the RAG, system, grades, unbraced lengths (`LLT_sag`, `LLT_hog`),
-   effective-length factors with their basis, connection geometry.
+1. Get the inputs right: loads from the RAG, system, grades, beam unbraced lengths per moment sign
+   (`cfg['LLT_sag_mm']`, `cfg['LLT_hog_mm']`: a number or `{role: mm}`), effective-length factors
+   (`cfg['K_factors'] = {role: {'Kz': .., 'Ky': ..}}`) with their basis, connection geometry.
 2. Verify every governing check against the RAG (clause id queries) and correct any input the framework
    could not know.
 3. Design every connection TYPE with `india_connections` (bearing bolts 10.3, HSFG slip 10.4, fillet

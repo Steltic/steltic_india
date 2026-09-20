@@ -667,8 +667,9 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
     if kk:
         m["Kz"], m["Ky"] = kk.get("Kz"), kk.get("Ky")
     if kind == "beam":
-        m["LLT_sag_mm"] = cfg.get("LLT_sag_mm")
-        m["LLT_hog_mm"] = cfg.get("LLT_hog_mm")
+        for key in ("LLT_sag_mm", "LLT_hog_mm"):        # a number, or {role: mm} per member group
+            v = cfg.get(key)
+            m[key] = (v.get(role) if isinstance(v, dict) else v)
     if kind == "col":
         m["sway"] = bool(cfg.get("sway_frame"))
     return m
