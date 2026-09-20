@@ -1,0 +1,26 @@
+IN_Ex4 — 8-storey hospital, special concentrically braced frames (SCBF), Kolkata (higher importance) (India)
+
+Site: Kolkata. Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3), importance
+factor for a hospital (Table 8 (i) lifeline / emergency building — cite), R for the special concentrically braced frame
+(Table 9 SBF concentric; no steel dual row: the SCBF is the sole designated system, no dual claim, D3). Soil: medium (II).
+Occupancy: hospital (8 floors x 1,125 m2).
+
+Geometry (metres; the engine works in N-mm):
+- 8 storeys @ 3.6 m (28.8 m); plan 5 bays x 4 bays @ 7.5 m (37.5 m x 30 m)
+- Lateral system: SCBF (X-bracing) IS 800:2007 12.8 with IS 18168:2023 (mandatory in Zone III): braced bays on the
+  perimeter lines (X: three mid bays of y = 0 / 30 m; Y: all bays of x = 0 / 37.5 m) so the building is regular in
+  torsion (Table 5(i) Amd 2); all beam connections simple (pinned); interior gravity columns pinned at the base
+- Roof + floors: composite metal deck spanning X (model one-way, bare-steel scope); cladding 0.5 kN/m2
+
+Gravity (RETRIEVE from IS 875 (Part 1) dead / (Part 2) imposed — do not invent):
+- Hospital imposed loads (IS 875-2 Table 1 iii): corridors / passages 4.0 kN/m2 applied to every bay (layout not
+  zoned), partition allowance (3.1.2), floor finishes, roof imposed load (Table 2, maintenance access only)
+
+Wind (RETRIEVE IS 875 (Part 3):2015 — Annex A Vb, terrain category 3, Table 5 Cpe, Table 4 Ka on the frame panel):
+- Kolkata is outside the 60 km east-coast cyclone belt (6.3.4, D10): k4 = 1.0, Kd = 0.9
+
+Design: IS 800:2007 LSD; IS 2062 E250 B0 (braces E250 B0 per 12.8.2.1); sections IS 808; brace connections per
+IS 800 12.8.3 / IS 18168 10.4.1 (CJP, gussets); bases IS 800 12.12 + IS 18168 9.3.
+Analysis: response spectrum (IS 1893 7.7.1, h > 15 m in Zone III) scaled to V-bar_B (7.7.3.1); generated combinations
+incl. IS 800 12.2.3 / IS 18168 5.5 (Omega 2.5) rows.
+Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.
