@@ -391,14 +391,9 @@ def fig_story_shear_otm(cfg, Fx):
 
 # ============================================================ per-load-case forces
 def load_cases(cfg):
-    """IS 875/1893 LSD combinations considered (label, fD, fL, fLr, lat, col_only)."""
-    if HAVE_PIPE:
-        try: return PIPE.combos(cfg)
-        except Exception: pass
-    # minimal fallback if design_pipeline unavailable (companion 0.3S when snow governs the roof, else 0.5Lr)
-    if float(cfg.get("snow", 0) or 0) > 0:
-        return [("1.4D", 1.4, 0, 0, {}, False), ("1.2D+1.6L+0.3S", 1.2, 1.6, 0.3, {}, False)]
-    return [("1.4D", 1.4, 0, 0, {}, False), ("1.2D+1.6L+0.5Lr", 1.2, 1.6, 0.5, {}, False)]
+    """The combination list actually analysed (design_pipeline.combos -> india_loads).
+    India: FAIL CLOSED -- an invalid load_plan raises; no ASCE fallback list (HRLOAD-13)."""
+    return PIPE.combos(cfg)
 
 def case_forces(cfg, fD, fL, fLr, lat):
     """Run one combination through P-Delta; return (out dict, registry). Leaves model live."""
@@ -780,9 +775,9 @@ def _horizontal_distribution(cfg, Fx, VwX, VwY):
         gov = "seismic" if Vseis >= (Vw or 0) else "wind"; g = max(Vseis, Vw or 0)
         return [lbl, (f"{_F(Vw,0)}" if Vw is not None else "—"), f"{_F(Vseis,0)}", gov, f"{_F(g/nframe,0)}"]
     rows = [row("E-W — two moment frames", VwX), row("N-S — two braced frames", VwY)]
-    h = ["<p>The story shear in each direction is shared by the two parallel lateral frames. The "
-         "governing base shear (greater of wind and seismic) is split about 50/50 to each frame, plus "
-         "±5% accidental torsion (IS 875/1893 §12.8.4.2) which biases demand toward the leading frame.</p>",
+    h = ["<p>The storey shear in each direction is distributed to the vertical elements by the 3D model "
+         "(IS 1893 7.6.3(b), rigid diaphragm in proportion to stiffness), with the 7.8.2 design eccentricity "
+         "cases of Chapter 4.</p>",
          _table(["Direction / frames", f"Wind base ({_ul('F')})", f"Seismic base ({_ul('F')})", "Governs", f"Per frame ({_ul('F')})"], rows)]
     return "".join(h)
 
@@ -1368,9 +1363,8 @@ def _seismic_loads_section(cfg, T, eX, eY, Cs, V, Tu, Ta, Fx, W):
         mrows.append([m+1, f"{T[m]:.3f}", f"{eX[m]*100:.1f}", f"{cumX*100:.1f}", f"{eY[m]*100:.1f}", f"{cumY*100:.1f}"])
     mtab = ("<h4>Modal periods &amp; mass participation (&ge; 90% per &sect;12.9.1)</h4>"
             + _table(["Mode", "T (s)", "mX %", "&Sigma;mX %", "mY %", "&Sigma;mY %"], mrows)
-            + "<p class='cnote'>Mode-shape figures are in Chapter 5. Vertical seismic E<sub>v</sub> = 0.2&middot;S<sub>DS</sub>D, "
-            "redundancy &rho;, the 100/30 directional combination and &plusmn;5% accidental torsion are applied in the "
-            "load combinations (Chapter 4); torsional amplification is screened in Chapter 2.</p>")
+            + "<p class='cnote'>Mode-shape figures are in Chapter 5. The load combinations actually analysed "
+            "(design eccentricity, vertical earthquake, IS 800 12.2.3) are listed in Chapter 4.</p>")
     return intro + cstab + base + vtab + mtab
 
 def _governing_lateral(cfg, V, VwX, VwY):
@@ -1417,25 +1411,16 @@ def _combo_table(cases):
                    "Lateral", "Other terms", "Applies to"], rows)
 
 def _combo_legend(cfg):
-    rho = cfg.get("rho", 1.3)
-    s = cfg.get("seis") or {}
-    try:
-        _sdc_txt = " (SDC %s)" % _sdc(s.get("SDS", 0), s.get("SD1", 0), s.get("S1", 0), s.get("Ie", 1.0))
-    except Exception:
-        _sdc_txt = ""
-    items = [("D", "dead load"),
-             ("L", "floor live load (reducible per IS 875/1893 &sect;4.7)"),
-             ("L<sub>r</sub> / S", "roof live load / snow"),
-             ("E<sub>X</sub>, E<sub>Y</sub>", "horizontal seismic effect Q<sub>E</sub> (ELF) in the X (E-W) / Y (N-S) direction; the vertical term E<sub>v</sub>=0.2S<sub>DS</sub>D is folded into the D factor"),
-             ("W<sub>X</sub>, W<sub>Y</sub>", "wind load in the X / Y direction"),
-             ("&rho;", f"redundancy factor multiplying Q<sub>E</sub> (&sect;12.3.4); &rho;={rho} here{_sdc_txt}"),
-             ("&Omega;<sub>0</sub>", "overstrength factor; the &ldquo;[col]&rdquo; cases apply &Omega;<sub>0</sub>Q<sub>E</sub> to capacity-protected columns only (&sect;12.4.3)"),
-             ("t+ / t&minus;", "&plusmn;5% accidental torsion M<sub>t</sub> = &plusmn;0.05B&middot;F<sub>x</sub> (&sect;12.8.4.2)"),
-             ("+ / &minus;", "sign (direction) of the applied lateral load"),
-             ("[col]", "combination applied to columns only"),
-             ("0.5L/1.0L, 0.3S/0.5Lr, 0.15S, 0.9D", "companion / counteracting load factors (IS 875/1893 &sect;2.3.1/&sect;2.3.6: "
-              "companion L = 1.0 where L<sub>o</sub> &gt; 100 psf or garage/public assembly, else 0.5; companion snow "
-              "0.3S (gravity/wind) and 0.15S (seismic); principal snow 1.0S)")]
+    items = [("DL", "dead load incl. member self-weight and cladding"),
+             ("LL", "imposed load (IS 875 Part 2), incl. the 3.1.2 partition allowance where applicable"),
+             ("LLr / SL", "roof imposed load / snow (IS 875 Parts 2 and 4)"),
+             ("EQ_X, EQ_Y", "design earthquake load EL in X / Y (IS 1893 6.3; ESM or scaled RSA)"),
+             ("EQ_Z", "vertical earthquake load (IS 1893 6.3.3 / 6.4.6)"),
+             ("W_X, W_Y", "wind load WL in X / Y (IS 875 Part 3)"),
+             ("[ea] / [eb]", "IS 1893 7.8.2 design eccentricity 1.5e<sub>si</sub>+0.05b<sub>i</sub> / e<sub>si</sub>&minus;0.05b<sub>i</sub>"),
+             ("[col]", "IS 800 12.2.3 case: columns (12.5.1.1) and connection forces only"),
+             ("N_X / N_Y", "IS 800 4.3.6 notional horizontal load"),
+             ("SLS:", "serviceability combination (IS 800 Table 4, &gamma;<sub>f</sub> 1.0 / 0.8)")]
     return "<h4>Notation used in the combination labels</h4>" + _table(["Symbol", "Meaning"], [[a, b] for a, b in items])
 
 def _joint_figure(cfg):
@@ -1526,23 +1511,52 @@ def _floor_serviceability(pkg):
             "dead-load deflection is offset by shop camber.</p>"
             + _table(["Member", "Section", "Live &delta;", "Limit", "Total &delta;", "Limit", "Camber", "&le; limit"], rows))
 
-def _combo_notes(cfg):
-    s = cfg["seis"]; SDS = s["SDS"]; rho = cfg.get("rho", 1.3); Om0 = s.get("Om0")
-    return ("<p>The analysed set is the IS 875/1893 &sect;2.3 LSD strength combinations:</p><ul>"
-            f"<li><b>Vertical seismic E<sub>v</sub></b> = 0.2&middot;S<sub>DS</sub>D = {0.2*SDS:.2f}D is folded into the "
-            f"D factor: seismic combinations use (1.2+0.2S<sub>DS</sub>)D = {1.2+0.2*SDS:.2f}D and "
-            f"(0.9&minus;0.2S<sub>DS</sub>)D = {0.9-0.2*SDS:.2f}D.</li>"
-            f"<li><b>Redundancy &rho;</b> = {rho} multiplies the horizontal seismic effect Q<sub>E</sub> (&sect;12.3.4).</li>"
-            f"<li><b>Overstrength &Omega;<sub>0</sub></b> = {Om0}: the <i>columns-only</i> cases apply "
-            "E<sub>m</sub> = &Omega;<sub>0</sub>Q<sub>E</sub> to the capacity-protected columns (&sect;12.4.3) and are "
-            "not applied to other members.</li>"
-            "<li><b>Directional 100/30</b>: each seismic case carries 100% of F<sub>x</sub> in the loaded direction "
-            "plus 30% in the orthogonal direction (&sect;12.5.3/12.5.4).</li>"
-            "<li><b>Accidental torsion</b> &plusmn;M<sub>t</sub> = &plusmn;0.05B&middot;F<sub>x</sub> (&sect;12.8.4.2) "
-            "is applied in both signs.</li>"
-            "<li><b>Net uplift / overturning</b> is checked by the 0.9D combinations (minimum gravity with lateral).</li>"
-            "<li><b>Second order</b>: every combination is solved independently through a P-&Delta; analysis; "
-            "factored second-order results are never superposed.</li></ul>")
+def _combo_notes(cfg, cases=None):
+    """Chapter 4 notes generated FROM THE CASE LIST (WP1.2) -- no boilerplate claims."""
+    cases = list(cases or [])
+    meta = [getattr(c, "meta", {}) or {} for c in cases]
+    n_eq = sum(1 for m in meta if m.get("kind") == "EQ" and not m.get("service"))
+    n_w = sum(1 for m in meta if m.get("kind") == "W" and not m.get("service"))
+    n_t = sum(1 for m in meta if m.get("torsion"))
+    n_v = sum(1 for m in meta if m.get("fEv"))
+    n_1223 = sum(1 for m in meta if "is800_12_2_3" in (m.get("tags") or []))
+    n_rsa = sum(1 for m in meta if m.get("rsa"))
+    n_not = sum(1 for m in meta if m.get("notional"))
+    n_svc = sum(1 for m in meta if m.get("service"))
+    signs = sorted({(m.get("direction"), m.get("sign")) for m in meta if m.get("kind") == "EQ"}, key=str)
+    try:
+        import india_combos as _IC
+        vmeta = _IC.last_expansion_meta().get("vertical") or {}
+    except Exception:
+        vmeta = {}
+    li = ["<li><b>%d</b> combinations in total (strength %d, serviceability %d), generated by "
+          "<code>india_combos.expand_combinations</code> from IS 800:2007 Table 4 and IS 1893 (Part 1) 6.3.</li>"
+          % (len(cases), len(cases) - n_svc, n_svc)]
+    if n_eq:
+        li.append("<li><b>Earthquake</b>: %d cases; directions/signs present: %s (6.3.2.1: one horizontal "
+                  "direction at a time for orthogonal systems).</li>" % (n_eq, ", ".join("%s%s" % (d, "+" if s_ and s_ > 0 else "&minus;") for d, s_ in signs)))
+    if n_rsa:
+        li.append("<li><b>Response spectrum</b>: %d earthquake cases use the scaled RSA member forces (IS 1893 7.7.5, "
+                  "CQC 7.7.5.3, scaled to V&#772;<sub>B</sub> per 7.7.3.1).</li>" % n_rsa)
+    if n_t:
+        li.append("<li><b>Design eccentricity</b> (IS 1893 7.8.2): %d cases with e<sub>di</sub> = 1.5e<sub>si</sub> + "
+                  "0.05b<sub>i</sub> or e<sub>si</sub> &minus; 0.05b<sub>i</sub>; e<sub>si</sub> from centre-of-rigidity "
+                  "unit-load analyses.</li>" % n_t)
+    if n_v:
+        li.append("<li><b>Vertical earthquake</b> (IS 1893 6.3.3.1 as amended by Amd 2; %s): %d cases, "
+                  "A<sub>v</sub> = %.4f per 6.4.6, combined per 6.3.4.1.</li>"
+                  % ("; ".join(vmeta.get("why") or []) or "required", n_v, float(vmeta.get("Av") or 0.0)))
+    if n_1223:
+        li.append("<li><b>IS 800 12.2.3</b>: %d cases 1.2DL+0.5LL&plusmn;2.5EL and 0.9DL&plusmn;2.5EL, applied to "
+                  "columns (12.5.1.1) and recorded for connections (12.7.3.1, 12.11.2.2) only.</li>" % n_1223)
+    if n_w:
+        li.append("<li><b>Wind</b>: %d cases (Table 4 rows with 1.5, 1.2 and 0.6 WL, both signs).</li>" % n_w)
+    if n_not:
+        li.append("<li><b>Notional horizontal loads</b> (IS 800 4.3.6): 0.5&nbsp;%% of the factored gravity at each "
+                  "level with the gravity-only combinations, %d cases, never with EL/WL.</li>" % n_not)
+    li.append("<li><b>Second order</b>: each gravity state is solved with P-&Delta;; lateral, torsion and notional "
+              "patterns are superposed on that gravity-stiffened state.</li>")
+    return "<ul>" + "".join(li) + "</ul>"
 
 def _modal_mass_check(eX, eY):
     cx = sum(eX); cy = sum(eY)
@@ -2296,7 +2310,7 @@ def build_report(name, root=None):
     case_detail_parts = []
     try:
         cases = load_cases(cfg)
-        parts.append(_combo_notes(cfg))
+        parts.append(_combo_notes(cfg, cases))
         parts.append("<h3>Combinations analysed (load factors)</h3>")
         parts.append(_combo_table(cases))
         parts.append(_combo_legend(cfg))

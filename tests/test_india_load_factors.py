@@ -17,7 +17,9 @@ def _sum_rx(cfg, label):
     import openseespy.opensees as ops
     import engine3d as E
     import static_model as SM
-    case = [c for c in IL.cases_from_load_plan(cfg) if c[0] == label][0]
+    plan = cfg["load_plan"]
+    combo = [c for c in plan["combinations"] if c["label"] == label][0]
+    case = IL.case_from_combination(combo, plan)
     model = SM.build_static(cfg, "PDelta", 2)
     ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
     SM.apply_lateral(case[4]); SM._solve(); ops.reactions()
@@ -40,6 +42,9 @@ def test_missing_factor_raises():
     assert any("no lateral load factor" in m for m in errs)
     with pytest.raises(IL.LoadPlanError):
         IL.cases_from_load_plan(cfg)
+    with pytest.raises(IL.LoadPlanError):
+        IL.case_from_combination([c for c in cfg["load_plan"]["combinations"] if c.get("lateral_ref")][0],
+                                 cfg["load_plan"])
 
 
 def test_label_disagreement_and_units_required():

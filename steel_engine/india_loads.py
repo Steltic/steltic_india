@@ -399,6 +399,11 @@ def validate_load_plan(cfg) -> list:
                             % (i, c.get("label", "?"))))
             out.extend(validate_lateral_factor(c, i, plan))
         out.extend(validate_table4(combos, cfg))
+        try:
+            from india_combos import validate_combinations
+            out.extend(validate_combinations(combos, cfg, plan))
+        except ImportError as ex:
+            out.append(("ERROR", "india_combos unavailable: %s" % ex))
     sf = plan.get("story_forces")
     if isinstance(sf, dict) and sf:
         u = str(plan.get("story_forces_units") or "").strip().lower()
@@ -426,7 +431,7 @@ def validate_load_plan(cfg) -> list:
 def validate_lateral_factor(c, i=0, plan=None) -> list:
     """WP1.1: a combination with a lateral pattern needs an explicit fE/fW that matches its label."""
     out = []
-    has_lat = bool(c.get("lateral") or c.get("lateral_ref") or c.get("rsa"))
+    has_lat = bool(c.get("lateral") or c.get("lateral_ref") or c.get("rsa") or c.get("terms"))
     f, key = combo_lateral_factor(c)
     terms = label_lateral_terms(c.get("label"))
     lab = c.get("label", "?")
@@ -500,12 +505,30 @@ def cases_from_load_plan(cfg) -> list:
     plan = cfg["load_plan"]
     combos = plan["combinations"]
     if combos == "auto" or (isinstance(combos, dict) and combos.get("generate")):
-        from india_combos import expand_combinations
-        combos = expand_combinations(plan, cfg)
+        combos = expanded_combinations(cfg)
     cases = []
     for c in combos:
         cases.append(case_from_combination(c, plan))
     return cases
+
+
+def expanded_combinations(cfg, eccentricity=None, method=None) -> list:
+    """india_combos.expand_combinations with the 7.8.2 eccentricities from the engine
+    (centre-of-rigidity unit-load analyses) -- validated; raises LoadPlanError on ERRORs."""
+    from india_combos import expand_combinations, validate_combinations
+    plan = cfg["load_plan"]
+    if eccentricity is None and (plan.get("story_forces") or {}).get("EQ_X") is not None:
+        try:
+            import engine3d as _E
+            eccentricity = _E.design_eccentricities(cfg)
+        except Exception as ex:                                 # engine unavailable (unit tests)
+            eccentricity = None
+            plan.setdefault("_notes", []).append("7.8.2 esi not computed (%s): esi = 0 used" % ex)
+    combos = expand_combinations(plan, cfg, eccentricity=eccentricity, method=method)
+    errs = [m for s, m in validate_combinations(combos, cfg, plan) if s == "ERROR"]
+    if errs:
+        raise LoadPlanError("generated combinations incomplete:\n- " + "\n- ".join(errs))
+    return combos
 
 
 def case_from_combination(c, plan) -> Case:
@@ -536,13 +559,33 @@ def case_from_combination(c, plan) -> Case:
         for k, mz in tor.items():
             fx, fy, m0 = lateral.get(k, (0.0, 0.0, 0.0))
             lateral[k] = (fx, fy, m0 + mz)
+    for t in (c.get("terms") or []):                     # extra static terms (e.g. 6.3.2.2 0.3 ELY)
+        if t.get("ref") and not t.get("rsa"):
+            raw2 = (plan.get("story_forces") or {}).get(t["ref"])
+            if raw2 is None:
+                raise LoadPlanError("combination %r term ref %r not in story_forces" % (label, t["ref"]))
+            sc2 = _story_force_scale(plan, c) * float(t["f"])
+            lateral = dict(lateral)
+            for k, (fx, fy, mz) in _as_lateral(raw2).items():
+                a = lateral.get(k, (0.0, 0.0, 0.0))
+                lateral[k] = (a[0] + fx * sc2, a[1] + fy * sc2, a[2] + mz * sc2)
+    rsa = c.get("rsa")
+    if isinstance(rsa, str):
+        rsa = {rsa: float(f if f is not None else 1.0)}
+    elif isinstance(rsa, dict):
+        rsa = {str(k): float(v) for k, v in rsa.items()}
+    else:
+        rsa = {}
+    for t in (c.get("terms") or []):
+        if t.get("rsa"):
+            rsa[str(t["rsa"])] = rsa.get(str(t["rsa"]), 0.0) + float(t["f"])
     tags = list(c.get("tags") or [])
     col_only = bool(c.get("col_only", False)) or "col_only" in tags
     kind = {"fE": "EQ", "fW": "W"}.get(key) or (lateral_kind(ref) if ref else None)
     return Case(label, fD, fL, fLr, lateral, col_only,
                 fLat=f, kind=kind, direction=c.get("direction") or (str(ref)[-1] if ref else None),
                 sign=(1 if (f or 0) >= 0 else -1), torsion=c.get("torsion"), fEv=float(c.get("fEv", 0.0) or 0.0),
-                rsa=c.get("rsa"), tags=tags, family=c.get("family"), cite=c.get("cite"),
+                rsa=rsa, tags=tags, family=c.get("family"), cite=c.get("cite"),
                 service=bool(c.get("service")), crane=c.get("crane"), fC=float(c.get("fC", 0.0) or 0.0),
                 fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c)
 

@@ -37,9 +37,13 @@ def test_rag_backed_plan_builds_cases():
         },
     }
     findings = IL.validate_load_plan(cfg)
-    assert not any(s == "ERROR" for s, _ in findings), findings
-    cases = IL.cases_from_load_plan(cfg)
-    assert len(cases) == 2
+    errs = [m for s, m in findings if s == "ERROR"]
+    # WP1.2: an explicit seismic list must carry every family (+/-, 7.8.2 torsion, 12.2.3 ...)
+    assert any("both signs" in m for m in errs) and any("7.8.2" in m for m in errs), errs
+    with pytest.raises(IL.LoadPlanError):
+        IL.cases_from_load_plan(cfg)
+    plan = cfg["load_plan"]
+    cases = [IL.case_from_combination(c, plan) for c in plan["combinations"]]
     assert cases[0][0] == "1.5DL+1.5LL"
     assert cases[1][4][1][0] == 12.0          # 1.2 x 10 N (WP1.1: the factor is applied)
 

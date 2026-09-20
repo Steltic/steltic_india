@@ -754,6 +754,38 @@ def rs_baseshear(cfg,T,eX,eY,Mtot,direction):
             V2+=rho*Vi[i]*Vi[j]
     return math.sqrt(max(V2,0))
 
+def design_eccentricities(cfg, F=1.0e5, T=1.0e8):
+    """IS 1893 7.8.2 static eccentricity esi = CM - CR per floor, from unit-load analyses on the
+    linear dynamic model (floor-by-floor: a force at the floor's CM and a torque at the same
+    floor; esi = rotation(force) / rotation(torque) x T/F).  Returns
+    {"X": {k: esi_y}, "Y": {k: esi_x}, "cm": {k: (x, y)}} in engine length units."""
+    info = build(cfg, "Linear"); NF = info["NF"]
+    out = {"X": {}, "Y": {}, "cm": dict(info.get("cm") or {})}
+    ops.timeSeries("Linear", 901)
+    def _rz(k, vec, tag):
+        ops.pattern("Plain", tag, 901)
+        ops.load(mtag(k), *vec)
+        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        ops.test("NormDispIncr", 1e-9, 20); ops.algorithm("Linear"); ops.integrator("LoadControl", 1.0)
+        ops.analysis("Static"); ops.analyze(1)
+        r = ops.nodeDisp(mtag(k), 6)
+        ops.remove("loadPattern", tag); ops.reset(); ops.wipeAnalysis()
+        return r
+    tag = 9100
+    for k in range(1, NF + 1):
+        tag += 3
+        rT = _rz(k, (0, 0, 0, 0, 0, T), tag)
+        rX = _rz(k, (F, 0, 0, 0, 0, 0), tag + 1)
+        rY = _rz(k, (0, F, 0, 0, 0, 0), tag + 2)
+        if abs(rT) < 1e-30:
+            out["X"][k] = out["Y"][k] = 0.0
+            continue
+        kT = T / rT
+        out["X"][k] = -(rX * kT) / F        # esi measured along Y for X-direction forces
+        out["Y"][k] = (rY * kT) / F         # esi measured along X for Y-direction forces
+    return out
+
+
 def static_lateral(cfg,Fx,direction,accidental=False):
     info=build(cfg,"PDelta"); NF=info["NF"]; di=0 if direction=="X" else 1
     ops.timeSeries("Linear",1); ops.pattern("Plain",1,1)

@@ -220,7 +220,7 @@ def build_static(cfg, transf="PDelta", nseg=10):
             for k in range(NF):
                 if (i, j) in present[k] and (i, j) in present[k+1]:
                     ops.element("elasticBeamColumn", et, ntag(i, j, k), ntag(i, j, k+1),
-                                cA, EMOD, GMOD, cJ, cIy, cIx, tt)
+                                cA, eng.E, eng.Gmod, cJ, cIy, cIx, tt)
                     cols.append({"tag": et, "sec": cfg["col"], "n1": ntag(i, j, k), "n2": ntag(i, j, k+1),
                                  "i": i, "j": j, "k": k, "axis": "col"})
                     et += 1
@@ -251,7 +251,7 @@ def build_static(cfg, transf="PDelta", nseg=10):
                 ra2 = eng.release_args(rj_z, rj_y)
                 ra = ra + ra2
             tag = sub_ele; sub_ele += 1
-            ops.element("elasticBeamColumn", tag, n1, n2, bA, EMOD, GMOD, bJ, bIx, bIy, 3, *ra)
+            ops.element("elasticBeamColumn", tag, n1, n2, bA, eng.E, eng.Gmod, bJ, bIx, bIy, 3, *ra)
             seg_tags.append(tag)
         beams.append({"sec": cfg["beam"], "i": i, "j": j, "k": k, "dir": dirn, "L": L,
                       "A": A, "B": B, "nodes": chain, "segs": seg_tags})
@@ -271,7 +271,8 @@ def build_static(cfg, transf="PDelta", nseg=10):
     # braces (single truss elements)
     braces = []
     if cfg.get("braces"):
-        ops.uniaxialMaterial("Elastic", 1, EMOD); brA = eng.HSS[cfg["brace"]]
+        ops.uniaxialMaterial("Elastic", 1, eng.E)
+        brA = eng.Ipack(cfg["brace"])[0] if eng.unit_system() == "N-mm" else eng.HSS[cfg["brace"]]
         for k in range(1, NF+1):
             for (dirn, i, j) in cfg["braces"](k, NX, NY):
                 a = (i, j); b = (i+1, j) if dirn == "X" else (i, j+1)
@@ -311,12 +312,9 @@ def apply_gravity(cfg, model, fD, fL, fLr):
     kip-in: line load in kip/in, pressures psf; returns total kip.
     N-mm: line load in N/mm, pressures kN/m²; returns total N.
     """
-    try:
-        import engine3d as eng
-        if eng.unit_system() == "N-mm":
-            return _apply_gravity_si(cfg, model, fD, fL, fLr)
-    except Exception:
-        pass
+    if eng.unit_system() == "N-mm":
+        return sum(apply_gravity_state(cfg, model, fD, fL, fLr,
+                                       self_weight=cfg.get("self_weight", True)).values())
     NF = model["NF"]; SX, SY = cfg["SX"], cfg["SY"]
     heights = cfg["heights"]; clad = cfg.get("clad", 0.0)
     extra = cfg.get("extra_mass_floors", {})
@@ -413,6 +411,9 @@ import hashlib as _hashlib, json as _json, os as _os
 def _one_way_grav(cfg, b, fD, fL, fLr):
     """One-way girder gravity moment/shear (w*L^2/8, w*L/2) over the full perpendicular-bay tributary
     -- the realistic design moment for a one-way composite floor (deck -> filler beams -> girder)."""
+    if eng.unit_system() == "N-mm":
+        # WP2.1: kN/m2 x trib[mm] / 1000 = N/mm (the old /1000/144 was a psf->ksi factor: 144x low)
+        return one_way_gravity(cfg, b, fD, fL, fLr)
     k = b["k"]; NF = len(cfg["heights"]); roof = (k >= NF); L = b["L"]
     trib = cfg["SY"] if b["dir"] == "X" else cfg["SX"]
     Dp = cfg["D_roof"] if roof else cfg["D_floor"]; Lp = 0.0 if roof else cfg["L_floor"]
@@ -514,6 +515,9 @@ def demand_envelope(cfg, cases, nseg=6, floor_system=None, determinate=True,
     """Per-member DEMAND envelope from the SINGLE distributed static model, with the two-key disk
     cache. Returns (env, kinds): env[fset] = {comp,tens,Mz,My,V,combo}; kinds[fset] = (kind, sec).
     fset = frozenset of the member's two corner-grid nodes (matches engine3d.build element nodes)."""
+    if eng.unit_system() == "N-mm":
+        return demand_envelope_si(cfg, cases, nseg, floor_system, cache_dir=cache_dir,
+                                  rsa=(cfg.get("_rsa_element_forces") or None))
     floor_system = (floor_system or cfg.get("floor_system") or "one-way")
     grav = [c for c in cases if not c[4]]            # lateral dict empty -> pure gravity
     seis = [c for c in cases if c[4]]
@@ -545,4 +549,388 @@ def demand_envelope(cfg, cases, nseg=6, floor_system=None, determinate=True,
             d = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0))
             for q in ("comp", "tens", "Mz", "My", "V"): d[q] = max(d[q], e[q])
             if e.get("score", -1.0) > d["score"]: d["score"] = e["score"]; d["combo"] = e["combo"]
+    return env, kinds
+
+
+# ====================================================================================
+# India SI demand engine (WP1.1-1.3, WP2.1, WP2.7): gravity states solved once with P-Delta,
+# lateral / torsion / notional patterns superposed on the gravity-stiffened tangent (linear
+# '-factorOnce' steps), RSA member forces (CQC, scaled per 7.7.3.1) combined +- per case.
+# Every combination keeps a per-member record (N, Mz, My, V, end moments) so the IS 800
+# interaction is evaluated with CONCURRENT forces per combination (WP2.3 hand-off).
+# ====================================================================================
+import numpy as _np
+
+STEEL_UNIT_WEIGHT_N_PER_MM3 = 7850.0 * 9.81 * 1e-9     # 7850 kg/m3 x g -> N/mm3 (IS 875 Part 1: steel 78.5 kN/m3)
+
+
+def _E_G():
+    return eng.E, eng.Gmod
+
+
+def _table10_fraction(p_imposed):
+    """IS 1893 Table 10: 25 % of imposed load up to and including 3.0 kN/m2, 50 % above."""
+    return 0.25 if float(p_imposed or 0.0) <= 3.0 else 0.50
+
+
+def _roof_live(cfg):
+    """Roof imposed load in kN/m2 from cfg['Lr'] (IS 875-2 Table 2); never a placeholder (WP2.1)."""
+    v = cfg.get("Lr")
+    if v is None:
+        raise ValueError("cfg['Lr'] (roof imposed load, kN/m2, IS 875 (Part 2) Table 2) is required")
+    return float(v)
+
+
+def partition_design_load(cfg):
+    """IS 875-2 3.1.2 partition allowance carried as IMPOSED gravity for member design (kN/m2)."""
+    return float(cfg.get("partition_load_kNm2") or 0.0)
+
+
+def floor_pressures(cfg, k):
+    """(D, L_floor_incl_partitions, Lr, S) in kN/m2 at level k (roof = top level)."""
+    NF = len(cfg["heights"]); roof = (k >= NF)
+    by = cfg.get("D_by_level") or {}
+    D = float(by.get(k, by.get(str(k), cfg["D_roof"] if roof else cfg["D_floor"])))
+    D += float((cfg.get("extra_mass_floors") or {}).get(k, 0.0) or 0.0)
+    lb = cfg.get("L_by_level") or {}
+    L = 0.0 if roof else float(lb.get(k, lb.get(str(k), cfg["L_floor"]))) + partition_design_load(cfg)
+    Lr = _roof_live(cfg) if roof else 0.0
+    S = float(cfg.get("snow") or 0.0) if roof else 0.0
+    return D, L, Lr, S
+
+
+def _deck_span(cfg):
+    d = str(cfg.get("deck_span") or "").upper()
+    return d if d in ("X", "Y") else None
+
+
+def _beam_floor_width(model, b, cfg):
+    """(two_way, one_way_trib_mm) for a beam: the bays on either side."""
+    SX, SY = cfg["SX"], cfg["SY"]
+    nb = _bays_adjacent(model["present"].get(b["k"], set()), b["i"], b["j"], b["dir"])
+    other = SY if b["dir"] == "X" else SX
+    return nb, nb * other / 2.0
+
+
+def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True):
+    """SI gravity for one gravity state; returns {level: total vertical load N}.
+
+    * floor pressure p = fD D + fL L + fLr Lr + fS S + fEv (D + Table-10 share of L)   [kN/m2]
+      (fEv = +-factor x Av, IS 1893 6.4.6 vertical shaking on the seismic weight)
+    * distribution: two-way 45-deg tributary, or one-way onto the beams perpendicular to
+      cfg['deck_span'] ('X'|'Y') when declared (WP2.7: explicit span direction)
+    * cladding line load on perimeter beams, member self-weight as element loads (WP1.6)
+    """
+    NF = model["NF"]; heights = cfg["heights"]; clad = float(cfg.get("clad") or 0.0)
+    ds = _deck_span(cfg)
+    lev = {k: 0.0 for k in range(1, NF + 1)}
+    fdead = fD + fEv
+    for b in model["beams"]:
+        i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
+        if not (1 <= k <= NF):
+            continue
+        D, Lf, Lr, S = floor_pressures(cfg, k)
+        p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+        nb, trib1 = _beam_floor_width(model, b, cfg)
+        other = cfg["SY"] if dirn == "X" else cfg["SX"]
+        wcap = other / 2.0
+        th = heights[k - 1] / 2.0 if k == NF else heights[k - 1]
+        wclad = (fdead * clad * th / 1000.0) if (clad and nb == 1) else 0.0
+        segs = b["segs"]
+        A_sw = b.get("_A")
+        if A_sw is None:
+            try:
+                A_sw = eng.Ipack(b["sec"])[0] if b.get("sec") else 0.0
+            except Exception:
+                A_sw = 0.0
+            b["_A"] = A_sw
+        wsw = fdead * A_sw * STEEL_UNIT_WEIGHT_N_PER_MM3 if self_weight else 0.0
+        for s_, tag in enumerate(segs):
+            s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+            if ds is None:
+                width_mm = nb * min(smid, L - smid, wcap)
+            elif dirn == ds:
+                width_mm = 0.0                       # beam parallel to the deck span carries no deck load
+            else:
+                width_mm = trib1
+            w = p * (width_mm / 1000.0) + wclad + wsw
+            ops.eleLoad("-ele", tag, "-type", "-beamUniform", 0.0, -w, 0.0)
+            lev[k] += w * (s1 - s0)
+    for c in model["cols"]:
+        if not self_weight:
+            break
+        try:
+            A = c.get("_A") or eng.Ipack(c["sec"])[0]
+        except Exception:
+            continue
+        c["_A"] = A
+        L = abs(ops.nodeCoord(c["n2"])[2] - ops.nodeCoord(c["n1"])[2])
+        w = fdead * A * STEEL_UNIT_WEIGHT_N_PER_MM3
+        ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", 0.0, 0.0, -w)     # axial (local x up)
+        ktop = c["n2"] // 100000
+        if 1 <= ktop <= NF:
+            lev[ktop] += 0.5 * w * L
+        kb = c["n1"] // 100000
+        if 1 <= kb <= NF:
+            lev[kb] += 0.5 * w * L
+    for br in model["braces"]:
+        if not self_weight:
+            break
+        try:
+            A = br.get("_A") or eng.Ipack(br["sec"])[0]
+        except Exception:
+            continue
+        br["_A"] = A
+        c1, c2 = ops.nodeCoord(br["n1"]), ops.nodeCoord(br["n2"])
+        L = math.dist(c1, c2)
+        W = fdead * A * STEEL_UNIT_WEIGHT_N_PER_MM3 * L
+        for nd in (br["n1"], br["n2"]):
+            if nd // 100000 >= 1:
+                ops.load(nd, 0.0, 0.0, -0.5 * W, 0.0, 0.0, 0.0)
+                kk = nd // 100000
+                if kk in lev:
+                    lev[kk] += 0.5 * W
+    if fC:
+        apply_crane_loads(cfg, model, fC)
+    return lev
+
+
+def apply_crane_loads(cfg, model, fC):
+    """Crane wheel reactions / surge / traction (WP2.7) -- see india_loads.crane_frame_loads."""
+    try:
+        from india_loads import crane_frame_loads
+    except Exception as ex:
+        raise RuntimeError("crane loads requested but india_loads.crane_frame_loads unavailable: %s" % ex)
+    for nd, (fx, fy, fz, mx, my, mz) in crane_frame_loads(cfg).items():
+        ops.load(int(nd), fC * fx, fC * fy, fC * fz, fC * mx, fC * my, fC * mz)
+
+
+def _responses(model):
+    """{tag: np.array} -- localForce (12) for beam-columns, [N] for trusses."""
+    R = {}
+    for c in model["cols"]:
+        R[c["tag"]] = _np.array(ops.eleResponse(c["tag"], "localForce"), dtype=float)
+    for b in model["braces"]:
+        R[b["tag"]] = _np.array([ops.basicForce(b["tag"])[0]], dtype=float)
+    for bm in model["beams"]:
+        for t in bm["segs"]:
+            R[t] = _np.array(ops.eleResponse(t, "localForce"), dtype=float)
+    return R
+
+
+def _solve_newton():
+    ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+    ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
+    ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+    return ops.analyze(1)
+
+
+def _to_linear_increments():
+    ops.loadConst("-time", 0.0)
+    ops.wipeAnalysis()
+    ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+    ops.test("NormDispIncr", 1e-7, 10)
+    ops.algorithm("Linear", "-factorOnce")
+    ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+    try:
+        ops.timeSeries("Constant", 77)
+    except Exception:
+        pass
+
+
+def notional_loads(lev, notional, model):
+    """IS 800 4.3.6: 0.5 % of the factored gravity at each level, at the diaphragm master."""
+    if not notional:
+        return {}
+    d = notional.get("dir"); s = float(notional.get("sign", 1)); r = float(notional.get("ratio", 0.005))
+    out = {}
+    for k, W in lev.items():
+        f = s * r * W
+        out[mtag(k)] = (f, 0.0, 0.0, 0.0, 0.0, 0.0) if d == "X" else (0.0, f, 0.0, 0.0, 0.0, 0.0)
+    return out
+
+
+def _grav_state_key(c):
+    m = getattr(c, "meta", {}) or {}
+    return (round(float(c[1]), 6), round(float(c[2]), 6), round(float(c[3]), 6),
+            round(float(m.get("fS") or 0.0), 6), round(float(m.get("fC") or 0.0), 6),
+            round(float(m.get("fEv") or 0.0), 9))
+
+
+def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
+    """One-way girder gravity (Mg = w L^2/8, Vg = w L/2) in N-mm (WP2.1: kN/m2 x mm / 1000 = N/mm).
+    With cfg['deck_span'] declared, beams parallel to the deck span get no deck load."""
+    k = b["k"]; L = b["L"]
+    D, Lf, Lr, S = floor_pressures(cfg, k)
+    p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+    ds = _deck_span(cfg)
+    if ds is not None and b["dir"] == ds:
+        trib = 0.0
+    else:
+        trib = cfg["SY"] if b["dir"] == "X" else cfg["SX"]
+    w = p * trib / 1000.0
+    A = b.get("_A") or 0.0
+    w += (fD + fEv) * A * STEEL_UNIT_WEIGHT_N_PER_MM3
+    return w * L * L / 8.0, w * L / 2.0
+
+
+def member_records(model, R, cfg, case_grav, floor_system):
+    """Per parent member {fset: (N, Mz, My, V, Mzi, Mzj, Myi, Myj)} from element responses.
+    Columns: strong axis = local z; beams: strong axis = local y (engine convention).
+    End moments are INTERNAL moments (i end: -force, j end: +force) for Cm (9.3.2.2)."""
+    out = {}
+    for c in model["cols"]:
+        lf = R[c["tag"]]
+        N = lf[6]
+        Mzi, Mzj = -lf[5], lf[11]
+        Myi, Myj = -lf[4], lf[10]
+        V = max(abs(lf[1]), abs(lf[2]))
+        out[frozenset((c["n1"], c["n2"]))] = (N, max(abs(Mzi), abs(Mzj)), max(abs(Myi), abs(Myj)), V,
+                                             Mzi, Mzj, Myi, Myj)
+    for b in model["braces"]:
+        out[frozenset((b["n1"], b["n2"]))] = (float(R[b["tag"]][0]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    fD, fL, fLr, fS, fC, fEv = case_grav
+    for b in model["beams"]:
+        segs = b["segs"]
+        Nb = R[segs[0]][6]
+        Mmaj = Mmin = V = 0.0
+        for t in segs:
+            lf = R[t]
+            Mmaj = max(Mmaj, abs(lf[4]), abs(lf[10]))
+            Mmin = max(Mmin, abs(lf[5]), abs(lf[11]))
+            V = max(V, abs(lf[2]), abs(lf[8]), abs(lf[1]), abs(lf[7]))
+        Myi, Myj = -R[segs[0]][4], R[segs[-1]][10]
+        Mzi, Mzj = -R[segs[0]][5], R[segs[-1]][11]
+        if floor_system != "two-way":
+            Mg, Vg = one_way_gravity(cfg, b, fD, fL, fLr, fS, fEv)
+            if _deck_span(cfg) is None:
+                Mmaj = max(Mmaj, Mg)
+            V = max(V, Vg)
+        out[frozenset((b["A"], b["B"]))] = (Nb, Mmaj, Mmin, V, Myi, Myj, Mzi, Mzj)
+    return out
+
+
+def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_responses=False):
+    """Run every strength case.  Returns ({label: {fset: rec}}, kinds, info).
+
+    rsa = {"X": {tag: |E| array}, "Y": ...} scaled RSA element responses (engine3d.rsa_analysis)."""
+    per_case = {}
+    info = {"gravity_states": 0, "levels": {}}
+    groups = {}
+    for c in cases:
+        m = getattr(c, "meta", {}) or {}
+        if m.get("service"):
+            continue
+        groups.setdefault(_grav_state_key(c), []).append(c)
+    kinds = None
+    for gk, cs in groups.items():
+        fD, fL, fLr, fS, fC, fEv = gk
+        model = build_static(cfg, "PDelta", nseg)
+        if kinds is None:
+            kinds = _member_kinds(model)
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        lev = apply_gravity_state(cfg, model, fD, fL, fLr, fS, fC, fEv,
+                                  self_weight=cfg.get("self_weight", True))
+        ok = _solve_newton()
+        if ok != 0:
+            raise RuntimeError("gravity state %s did not converge (P-Delta)" % (gk,))
+        info["gravity_states"] += 1
+        info["levels"][gk] = lev
+        RG = _responses(model)
+        _to_linear_increments()
+        ptag = 1000
+        for c in cs:
+            m = getattr(c, "meta", {}) or {}
+            loads = {}
+            for k, (fx, fy, mz) in (c[4] or {}).items():
+                loads[mtag(int(k))] = (fx, fy, 0.0, 0.0, 0.0, mz)
+            for nd, v in notional_loads(lev, m.get("notional"), model).items():
+                a = loads.get(nd, (0.0,) * 6)
+                loads[nd] = tuple(x + y for x, y in zip(a, v))
+            if loads:
+                ptag += 1
+                ops.pattern("Plain", ptag, 77)
+                for nd, v in loads.items():
+                    ops.load(int(nd), *v)
+                ops.analyze(1)
+                R1 = _responses(model)
+                ops.remove("loadPattern", ptag)
+                ops.analyze(1)                            # linear step back to the gravity state
+                RC = {t: RG[t] + (R1[t] - RG[t]) for t in RG}
+            else:
+                RC = RG
+            rs = m.get("rsa") or {}
+            if rs:
+                if not rsa:
+                    raise RuntimeError("case %r needs RSA forces but no RSA analysis was supplied" % c[0])
+                RC = dict(RC)
+                for d, f in rs.items():
+                    E_ = rsa.get(d)
+                    if E_ is None:
+                        raise RuntimeError("RSA direction %s missing" % d)
+                    for t in RC:
+                        if t in E_:
+                            RC[t] = RC[t] + float(f) * E_[t]
+            per_case[c[0]] = member_records(model, RC, cfg, gk, floor_system)
+    return per_case, kinds or {}, info
+
+
+def envelope_from_records(per_case, kinds, cases):
+    """Envelope + governing combination + per-combination records per member."""
+    env = {}
+    col_only = {c[0]: (bool(c[5]) or "col_only" in ((getattr(c, "meta", {}) or {}).get("tags") or []))
+                for c in cases}
+    conn_only = {c[0]: "conn_only" in ((getattr(c, "meta", {}) or {}).get("tags") or []) for c in cases}
+    for lab, res in per_case.items():
+        for fs, rec in res.items():
+            kind = kinds.get(fs, ("beam", None))[0]
+            e = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0,
+                                        records={}, conn={}))
+            e["records"][lab] = [round(float(x), 3) for x in rec]
+            if col_only.get(lab) and kind != "col":
+                e["conn"][lab] = [round(float(x), 3) for x in rec]     # 12.2.3 forces kept for connections
+                continue
+            N, Mz, My, V = rec[0], rec[1], rec[2], rec[3]
+            e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
+            e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
+            sc = abs(N) if kind in ("col", "brace") else abs(Mz)
+            if sc > e["score"]:
+                e["score"] = sc; e["combo"] = lab
+    return env
+
+
+def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rsa=None):
+    floor_system = (floor_system or cfg.get("floor_system") or "one-way")
+    floor_system = "two-way" if "two" in str(floor_system).lower() else "one-way"
+    key = None
+    if cache_dir:
+        try:
+            info0 = eng.build(cfg, "Linear")
+            sig = repr((sorted((e[1], e[2], e[3], e[4]) for e in info0["ele"]), cfg.get("heights"), cfg.get("SX"),
+                        cfg.get("SY"), cfg.get("D_floor"), cfg.get("D_roof"), cfg.get("L_floor"), cfg.get("Lr"),
+                        cfg.get("snow"), cfg.get("clad"), cfg.get("deck_span"), cfg.get("partition_load_kNm2"),
+                        floor_system, nseg, [(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
+                                              sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
+                                              .__repr__()) for c in cases],
+                        {d: sorted((t, list(v)) for t, v in a.items()) for d, a in (rsa or {}).items()}))
+            key = "SI" + _hashlib.md5(sig.encode()).hexdigest()
+            p = _os.path.join(cache_dir, "_demand_cache_si.json")
+            d = _json.load(open(p))
+            if d.get("key") == key:
+                env = {frozenset(int(x) for x in k.split("|")): v for k, v in d["env"].items()}
+                kinds = {frozenset(int(x) for x in k.split("|")): tuple(v) for k, v in d["kinds"].items()}
+                return env, kinds
+        except Exception:
+            pass
+    per_case, kinds, _info = solve_cases_si(cfg, cases, nseg, floor_system, rsa=rsa)
+    env = envelope_from_records(per_case, kinds, cases)
+    if cache_dir and key:
+        try:
+            _os.makedirs(cache_dir, exist_ok=True)
+            _json.dump({"key": key,
+                        "env": {"|".join(str(n) for n in fs): v for fs, v in env.items()},
+                        "kinds": {"|".join(str(n) for n in fs): list(v) for fs, v in kinds.items()}},
+                       open(_os.path.join(cache_dir, "_demand_cache_si.json"), "w"))
+        except Exception:
+            pass
     return env, kinds
