@@ -1,7 +1,0 @@
-IN_Ex3 — Single-storey industrial portal, Chennai (wind-governed)
-
-Location: Chennai — wind from IS 875 Part 3 governs; still check IS 1893 for seismic.
-Geometry: portal frames @ 6 m centres; span 24 m; eave height 8 m; roof slope 1:10.
-Loads: RETRIEVE dead (P1), imposed/maintenance (P2), wind (P3), crane if any (P5).
-Design: IS 800 LSD for rafters/columns; base plates IS 800; welds IS 816.
-LIVE cfg['load_plan'] from RAG before pipeline.design_and_report.

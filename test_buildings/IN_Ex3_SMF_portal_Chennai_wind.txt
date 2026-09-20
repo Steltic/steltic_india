@@ -1,0 +1,24 @@
+IN_Ex3 — Single-storey industrial portal shed, Chennai (wind-governed), steel SMRF / SMF (India)
+
+Site: Chennai — inside the IS 875 (Part 3) 6.3.4 east-coast cyclone belt: k4 = 1.15 (industrial structure), Kd = 1.0
+(7.2.1). Wind governs; seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3),
+I (Table 8: industrial = all other buildings), R (Table 9). Soil: medium (Type II).
+Lateral system: the ordinary moment frame is NOT permitted in Zone III (IS 1893 Table 9 Note 1, D4) — design the
+portals as a steel special moment resisting frame (SMRF, R 5.0; IS 800:2007 12.11 with IS 18168:2023) in both
+directions (transverse portals + longitudinal eave-beam moment frames); single storey, so IS 18168 8.2.1 applies
+(no SCWB at the roof level) while IS 800 12.11.3.2 is checked at every joint.
+
+Geometry (metres; the engine works in N-mm):
+- portal frames @ 6 m centres, 7 frames (36 m stated design length); span 24 m; eave height 8 m; roof slope 1:10
+  (rise 1.2 m, apex 9.2 m — the rafters are modelled at the eave height, roof Cpe taken at the real pitch)
+- purlins at 1.5 m (roof), girts at 2.0 m (walls) — designed as secondary members; fly braces at 3.0 m
+- fixed column bases (IS 18168 9.3)
+
+Loads (RETRIEVE — do not invent): dead IS 875 (Part 1) (profiled metal sheeting + purlins + services), imposed
+IS 875 (Part 2) Table 2 (sloping roof, maintenance access), wind IS 875 (Part 3):2015 (Annex A Vb, Table 2 terrain
+category 2, Table 4 Ka on the frame tributary area, Table 5 walls, Table 6 roof by pitch, 7.3.2.2 Cpi +-0.5 for
+5-20 % openings: roller-shutter doors), member-level wind cases incl. roof uplift with 0.9 DL; no crane; no snow.
+Design: IS 800:2007 LSD; IS 2062 E250 B0; sections IS 808; knee and eave connections IS 800 12.11.2 (1.2 Mp, CJP);
+base plates IS 800 7.4 / 12.12 + IS 18168 9.3; IS 800 Table 6 deflections (rafter with profiled sheeting span/180,
+purlins span/150, columns H/150).
+Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.
