@@ -2161,8 +2161,10 @@ def section_class_table2(sec, fy_MPa, *, P_N=0.0, welded=False, gamma_m0=GAMMA_M
     P_N > 0 = axial compression (uses the 'generally' web rows with r1, r2 of Note 5); P_N < 0 tension.
     loading='axial' classifies angles/CHS for pure axial compression.
     Web d = D - 2(tf + R1) for rolled I (clear of root fillets, Fig. 2); D - 2tf for welded.
-    Note: the printed web limits read 'but <= 42 eps'; applied as a floor of 42 eps (consistent with the
-    'axial compression 42 eps' row).
+    Note (decision, HR-INTEGRATE): the printed web limits read 'but <= 42 eps' (pdf p. 24); they are applied as a
+    FLOOR of 42 eps -- with r1 = 1 the formulas give exactly 42 eps (= the 'axial compression' row) and a cap would
+    make every web carrying any compression 42 eps, discontinuous with the 84 eps mid-depth row; the floor is the
+    BS 5950 Table 11 lineage of this table.  Tested in tests/test_india_snow_drift_and_table2.py.
     """
     if not fy_MPa or fy_MPa <= 0:
         return {"found": False, "section_class": None, "cite": _T2, "required_inputs": ["fy_MPa"]}
