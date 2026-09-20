@@ -890,8 +890,16 @@ def modal_props(cfg):
     phi = []
     for n in range(1, len(w2) + 1):
         phi.append({k: tuple(ops.nodeEigenvector(mtag(k), n)[i] for i in (0, 1, 5)) for k in range(1, NF + 1)})
-    return {"w2": list(w2), "T": [2 * math.pi / math.sqrt(max(x, 1e-12)) for x in w2], "phi": phi,
-            "m": masses, "J": Jm, "Mtot": sum(masses.values()), "NF": NF, "cm": info.get("cm") or {}}
+    Mt = sum(masses.values())
+    T = [2 * math.pi / math.sqrt(max(x, 1e-12)) for x in w2]
+    modes = []
+    for n, ph in enumerate(phi):
+        Mn = sum(masses[k] * (ph[k][0] ** 2 + ph[k][1] ** 2) + Jm[k] * ph[k][2] ** 2 for k in ph)
+        Lx = sum(masses[k] * ph[k][0] for k in ph); Ly = sum(masses[k] * ph[k][1] for k in ph)
+        modes.append({"mode": n + 1, "T": T[n], "mass_x": Lx * Lx / Mn / Mt, "mass_y": Ly * Ly / Mn / Mt,
+                      "rot": sum(Jm[k] * ph[k][2] ** 2 for k in ph) / Mn})
+    return {"w2": list(w2), "T": T, "phi": phi, "modes": modes,
+            "m": masses, "J": Jm, "Mtot": Mt, "NF": NF, "cm": info.get("cm") or {}}
 
 
 def india_story_forces(cfg, direction):
@@ -1201,6 +1209,7 @@ def _run_india(cfg, name=None):
     chk["stability"] = min(mp["w2"]) > 0
     ecc = design_eccentricities(cfg)
     dr = india_drift(cfg, ecc)
+    irr = IS.irregularity_screens(cfg, {"drift": dr, "rsa": rsa, "modes": mp["modes"]})   # sets soft-storey limits
     lims = []
     for d in ("X", "Y"):
         if d not in dr:
@@ -1229,6 +1238,7 @@ def _run_india(cfg, name=None):
                 mde_x=mdx, mde_y=mdy, Cd=None, mdx=mdx, mdy=mdy, roofX=None, roofY=None,
                 Vx=V, Vy=VBbar(cfg, "Y"), gov=cfg.get("governing", "seismic"), chk=chk, extra=extra,
                 allp=all(chk.values()), drift=dr, drift_limits=lims, rsa=rsa, esm_permitted=esm_ok,
+                modes=mp["modes"], irregularity=irr,
                 esm_reasons=why, eccentricity=ecc, beam_deflection_rows=rows, method="RSA" if want_rsa else "ESM")
 
 

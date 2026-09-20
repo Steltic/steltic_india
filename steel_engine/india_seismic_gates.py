@@ -820,6 +820,10 @@ def analysis_findings(cfg, pkg) -> list:
     return out
 
 
+def G_zone_needs_7112(cfg) -> bool:
+    return zone_of(cfg) in ("III", "IV", "V")
+
+
 def section12_system(cfg) -> bool:
     """IS 800 12.1: Section 12 applies to frames resisting EQ in all zones (incl. OMF/OBF)."""
     comps = resolve_system_R(cfg)["components"]
@@ -969,10 +973,17 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
         for c in con:
             if isinstance(c, dict):
                 reasons += entry_findings("connection", c)
-        for key in ("anchorages", "hold_downs", "collectors", "schedule"):
+        for key in ("anchorages", "hold_downs", "collectors", "schedule", "secondary_members"):
             for e in (pk.get(key) or []):
                 if isinstance(e, dict):
                     reasons += entry_findings(key.rstrip("s"), e)
+        dc_ = pk.get("deformation_compatibility")
+        if isinstance(dc_, dict):
+            for i, c in enumerate((dc_.get("checks") or []) + (dc_.get("separation") or [])):
+                reasons += entry_findings("7.11.2/7.11.3", {"id": c.get("element") or c.get("unit") or i,
+                                                             "checks": [c]})
+            if G_zone_needs_7112(cfg) and not dc_.get("checks"):
+                reasons.append("IS 1893 7.11.2 deformation-compatibility check of the gravity columns missing")
         reasons += _screen_findings(pk)
         reasons += analysis_findings(cfg, pk)
         reasons += combination_findings(cfg, pk)

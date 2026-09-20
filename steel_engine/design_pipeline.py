@@ -1016,11 +1016,10 @@ def design_india(name, cfg, outdir):
             pkg["drift_table"].append({"storey": i + 1, "dir": d, "drift": round(x, 6), "limit": lim,
                                        "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
                                        "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
-    try:
-        import india_seismic as IS
-        pkg["irregularity"] = IS.irregularity_screens(cfg, run)
-    except Exception as ex:
-        pkg["irregularity"] = {"error": "irregularity screens unavailable: %s" % ex}
+    pkg["irregularity"] = run.get("irregularity") or {"error": "irregularity screens not run"}
+    if (pkg["irregularity"].get("reentrant") or {}).get("irregular"):
+        pkg["seismic_analysis"]["reentrant_flexible_required"] = True
+        pkg["seismic_analysis"]["flexible_diaphragm_run"] = bool(cfg.get("_flexible_diaphragm_run"))
     plan = cfg.get("load_plan") or {}
     ss = plan.get("seismic_summary") or {}
     pkg["seismic_calc"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "Z": ss.get("Z"), "I": G.importance_of(cfg),
@@ -1110,9 +1109,69 @@ def secondary_member_demand(cfg, s_):
 
 
 def _deformation_compatibility(cfg, pkg, run, envt, reg):
-    """IS 1893 7.11.2 hook: gravity (non-SFRS) columns under R x storey displacement (Zones III-V)."""
-    try:
+    """IS 1893 7.11.2 (Zones III-V): members that are not part of the SFRS must keep their vertical
+    load capacity under storey deformations equal to R x the 7.11.1 storey displacements.  The ESM
+    story forces x R (gamma 1.0, 1.0 DL + 1.0 LL, P-Delta) impose R x Delta on the whole model; the
+    gravity columns are then checked with india_is800.member_check_is800.  Also 7.11.3 separation."""
+    import static_model as SM
+    import india_loads as IL
+    import india_seismic_gates as G
+    z = G.zone_of(cfg)
+    out = {"clause": "IS 1893 7.11.2", "zone": z, "checks": []}
+    if z not in ("III", "IV", "V"):
+        out["note"] = "Zone %s: 7.11.2 applies in Zones III-V only" % z
+        pkg["deformation_compatibility"] = out
+        return
+    R = G.declared_R(cfg)
+    plan = cfg.get("load_plan") or {}
+    cases = []
+    for d in ("X", "Y"):
+        raw = (plan.get("story_forces") or {}).get("EQ_" + d)
+        if not raw:
+            continue
+        c = {"label": "7.11.2 1.0DL+1.0LL+R.EQ_%s" % d, "fD": 1.0, "fL": 1.0, "fLr": 1.0, "fE": float(R),
+             "lateral_ref": "EQ_" + d}
+        cases.append(IL.case_from_combination(c, plan))
+    per_case, kinds, _ = SM.solve_cases_si(cfg, cases, int(cfg.get("demand_nseg", 6)),
+                                           "two-way" if "two" in str(cfg.get("floor_system")) else "one-way")
+    env = SM.envelope_from_records(per_case, kinds, cases)
+    info0 = E.build(cfg, "Linear")
+    lat_lines = set()
+    for (t, kind, sec, n1, n2) in info0["ele"]:
+        if kind == "brace":
+            for nd in (n1, n2):
+                lat_lines.add(((nd % 100000) // 100, nd % 100))
+    lat_lines |= {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
+    worst = None
+    for t, (kind, sec, n1, n2) in reg.items():
+        if kind != "col" or ((n1 % 100000) // 100, n1 % 100) in lat_lines:
+            continue
+        e = env.get(frozenset((n1, n2)))
+        if not e:
+            continue
+        length = math.dist(ops.nodeCoord(n1), ops.nodeCoord(n2))
+        mem = _member_input_record(cfg, t, kind, sec, n1, n2, length, "gravity_col")
+        res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": e.get("records") or {}})
+        rec = {"element": t, "section": sec, "value": res.get("dc"), "limit": 1.0, "dc": res.get("dc"),
+               "ok": (res.get("dc") <= 1.0) if isinstance(res.get("dc"), (int, float)) else None,
+               "clause": "IS 1893 7.11.2 + IS 800 9.3", "cite": "R x storey displacement imposed (R = %s)" % R,
+               "source": "design_pipeline._deformation_compatibility", "reason": res.get("reason")}
+        if worst is None or (rec["dc"] or 9e9 if rec["dc"] is None else rec["dc"]) > (worst["dc"] or -1):
+            worst = rec
+    if worst:
+        out["checks"].append(worst)
+    sep = cfg.get("adjacent_units") or []
+    if sep:
         import india_seismic as IS
-        pkg["deformation_compatibility"] = IS.deformation_compatibility(cfg, run)
-    except AttributeError:
-        pass
+        dr = run.get("drift") or {}
+        for u in sep:
+            d = u.get("direction", "X")
+            D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
+            r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
+                                        bool(u.get("same_floor_levels")))
+            gap = u.get("gap_mm")
+            out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
+                                                     "dc": (r_["required_mm"] / gap) if gap else None,
+                                                     "ok": (gap is not None and r_["required_mm"] <= gap),
+                                                     "clause": "IS 1893 7.11.3", "cite": r_["cite"]})
+    pkg["deformation_compatibility"] = out

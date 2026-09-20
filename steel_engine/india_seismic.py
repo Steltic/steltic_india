@@ -421,7 +421,9 @@ def drift_allowable(cfg) -> tuple[float, bool]:
     dl = cfg.get("drift_limit")
     if dl is None or dl == "":
         dl = CLAUSES["storey_drift_limit"]["limit_ratio"]
-    return float(dl), False
+    # WP1.9: never above 7.11.1.1 (0.004); a larger cfg value is a preflight ERROR, and the gate
+    # still uses 0.004 (the CFS cap ported to HR, spec 1.10).
+    return min(float(dl), CLAUSES["storey_drift_limit"]["limit_ratio"]), False
 
 
 def design_story_drifts(elastic_drifts, cfg) -> list[float]:
@@ -641,58 +643,55 @@ def _looks_like_mrf_formula(formula: str) -> bool:
 
 
 def approximate_Ta(h_m: float, d_m: float | None = None, system: str | None = None,
-                   formula: str | None = None, material: str | None = None) -> dict:
-    """Compute IS 1893 §7.6.2 Ta (seconds). Heights/base d in metres.
+                   formula: str | None = None, material: str | None = None, *, infills: bool = False,
+                   clamp: bool = True) -> dict:
+    """IS 1893 (Part 1):2016 7.6.2 approximate period (PDF p.21, Amd 2 7.6.2.1).
 
-    If ``formula`` is supplied it must match the system class; non-MRF + MRF
-    formula raises ``TaFormulaError`` (fail closed). When formula is omitted the
-    system selects (a)/(b)/(c) automatically.
-    """
+    (a) bare MRF buildings (without masonry infills): 0.075 h^0.75 RC, 0.080 h^0.75 RC-steel
+        composite, 0.085 h^0.75 steel;  (b) RC structural walls (not produced here);
+    (c) all other buildings (incl. MRF WITH infills): 0.09 h / sqrt(d).
+    7.6.2.1 (Amd 2): Ta shall neither be more than (a) nor less than (c) -- applied when d is given.
+    Non-MRF system + MRF formula -> TaFormulaError (fail closed)."""
     h = float(h_m)
     if h <= 0:
         raise ValueError("h_m must be positive (building height in metres)")
-    sys = system or ""
-    bare_mrf = is_bare_mrf_system(sys)
+    sys_ = system or ""
+    bare_mrf = is_bare_mrf_system(sys_) and not infills
     mat = str(material or "").lower()
-    if bare_mrf and ("steel" in mat or "steel" in str(sys).lower()):
-        kind = "steel_mrf"
-        coeff = 0.085
-        clause = "7.6.2(b)"
-        ta = coeff * (h ** 0.75)
-        used = "0.085 h^0.75"
-    elif bare_mrf:
-        kind = "rc_mrf"
-        coeff = 0.075
+    sl = str(sys_).lower()
+    coef_a = 0.085 if ("steel" in mat or "steel" in sl or not mat) else 0.075
+    if "composite" in mat or "composite" in sl:
+        coef_a = 0.080
+    elif "rc" in mat or "concrete" in mat:
+        coef_a = 0.075
+    Ta_a = coef_a * h ** 0.75
+    Ta_c = 0.09 * h / (float(d_m) ** 0.5) if (d_m is not None and float(d_m) > 0) else None
+    if bare_mrf:
+        kind = {0.085: "steel_mrf", 0.080: "composite_mrf", 0.075: "rc_mrf"}[coef_a]
         clause = "7.6.2(a)"
-        ta = coeff * (h ** 0.75)
-        used = "0.075 h^0.75"
+        ta = Ta_a
+        used = "%.3f h^0.75" % coef_a
     else:
-        kind = "all_other"
+        kind = "all_other" if not infills else "mrf_with_infills"
         clause = "7.6.2(c)"
-        if d_m is None or float(d_m) <= 0:
-            raise ValueError("d_m (base dimension in metres along vibration) required for §7.6.2(c)")
-        ta = 0.09 * h / (float(d_m) ** 0.5)
-        used = "0.09 h/√d"
-
+        if Ta_c is None:
+            raise ValueError("d_m (base dimension in metres along vibration) required for 7.6.2(c)")
+        ta = Ta_c
+        used = "0.09 h/sqrt(d)"
+    clamp_note = None
+    if clamp and Ta_c is not None:
+        t0 = ta
+        ta = max(min(ta, Ta_a), Ta_c) if Ta_c <= Ta_a else Ta_c
+        if abs(ta - t0) > 1e-12:
+            clamp_note = "7.6.2.1 (Amd 2) clamp: %.4f -> %.4f s (<= (a) %.4f, >= (c) %.4f)" % (t0, ta, Ta_a, Ta_c)
     if formula is not None and _looks_like_mrf_formula(formula) and not bare_mrf:
         raise TaFormulaError(
-            "IS 1893 §7.6.2 fail-closed: system %r is not a bare MRF but Ta formula %r "
-            "looks like MRF 0.075/0.085 h^0.75 — use 0.09 h/√d (§7.6.2(c) all other buildings)."
-            % (sys, formula)
-        )
-
-    return {
-        "found": True,
-        "standard": "IS_1893_Part_1_2016",
-        "clause": clause,
-        "kind": kind,
-        "Ta_s": float(ta),
-        "formula": used,
-        "h_m": h,
-        "d_m": None if d_m is None else float(d_m),
-        "system": sys,
-        "bare_mrf": bare_mrf,
-    }
+            "IS 1893 7.6.2 fail-closed: system %r is not a bare MRF but Ta formula %r looks like MRF "
+            "0.075/0.080/0.085 h^0.75 -- use 0.09 h/sqrt(d) (7.6.2(c))." % (sys_, formula))
+    return {"found": True, "standard": IS1893_STEM, "edition": IS1893_EDITION, "clause": clause, "kind": kind,
+            "Ta_s": float(ta), "formula": used, "h_m": h, "d_m": None if d_m is None else float(d_m),
+            "system": sys_, "bare_mrf": bare_mrf, "Ta_a_s": Ta_a, "Ta_c_s": Ta_c, "clamp_note": clamp_note,
+            "cite": "IS 1893 (Part 1):2016 %s%s" % (clause, " + Amd 2 7.6.2.1" if clamp else "")}
 
 
 def validate_Ta_for_system(cfg, plan: dict | None = None) -> list:
@@ -778,13 +777,12 @@ def mass_irregularity_screen_note(W_by_floor_kN=None, *, zone=None, ratio_trigge
         "clause_text": clause.get("text"),
         "zone": zone,
         "note": (
-            "Mass irregularity Table 6(ii): seismic weight of any floor > 150%% of floor below. "
-            "Mezzanine / partial-footprint floors often trigger. Zone %s — document screen; "
-            "dynamic analysis / RS follow-up is a project-policy choice when irregular "
-            "(do not invent a mandatory RS path beyond code). ELF + disclosure OK when "
-            "policy accepts and drift/strength gates pass."
+            "Mass irregularity Table 6(ii): seismic weight of any floor > 150%% of the floor below. "
+            "Amd 2: 'In a building with mass irregularity and located in Seismic Zones III, IV and V, "
+            "the earthquake effects shall be estimated by dynamic analysis (as per 7.7)'. Zone %s."
             % (zone_s or "(undeclared)")
         ),
+        "requires_dynamic_analysis": bool(irregular and zone_s in ("III", "IV", "V")),
         "required_inputs": [] if weights else ["W_by_floor_kN list (seismic weight per floor)"],
     }
 
@@ -810,3 +808,199 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+
+
+
+# ---------------------------------------------------------------------------
+# WP1.8 -- IS 1893 Tables 5 and 6 as substituted by Amendment 2 (PDF pp. 50-54)
+# ---------------------------------------------------------------------------
+def torsion_classification(ratio) -> dict:
+    """Table 5(i) (Amd 2): Delta_max / Delta_ave <= 1.2 regular; 1.2-1.4 irregular (torsional mode
+    period below both translational + 3D dynamic analysis); > 1.4 revise the configuration."""
+    r = float(ratio)
+    if r <= 1.2:
+        return {"ratio": r, "band": "<= 1.2", "irregular": False, "verdict": "regular in torsion"}
+    if r <= 1.4:
+        return {"ratio": r, "band": "1.2-1.4", "irregular": True, "requires_dynamic_analysis": True,
+                "requires_torsional_period_check": True,
+                "verdict": "torsionally irregular: fundamental torsional period must be smaller than the first two "
+                           "translational periods, and 3D dynamic analysis is required (Table 5(i), Amd 2)"}
+    return {"ratio": r, "band": "> 1.4", "irregular": True,
+            "verdict": "revise configuration: Delta_max > 1.4 Delta_ave (Table 5(i)(ii), Amd 2)"}
+
+
+def torsion_ratio_from_edges(d1, d2) -> float:
+    """Delta_max / Delta_ave with Delta_ave = (Delta_max + Delta_min)/2 (Amd 2 Table 5(i))."""
+    a, b = abs(float(d1)), abs(float(d2))
+    mx, mn = max(a, b), min(a, b)
+    return mx / ((mx + mn) / 2.0) if mx > 0 else 1.0
+
+
+def soft_storey_screen(K, exempt=()) -> dict:
+    """Table 6(i) (Amd 2): storey i is soft when K_i < K of the storey above; exempt storeys (declared
+    split-level offsets, services storeys per the Note) are skipped and the comparison is made with
+    the next non-exempt storey above."""
+    n = len(K)
+    ex = set(int(e) - 1 for e in (exempt or ()))
+    idx = [i for i in range(n) if i not in ex]
+    soft = [False] * n
+    ratios = [None] * n
+    for a_, i in enumerate(idx[:-1]):
+        j = idx[a_ + 1]
+        if K[j] and K[j] != float("inf"):
+            ratios[i] = K[i] / K[j]
+            soft[i] = K[i] < K[j]
+    lim = [CLAUSES["storey_drift_limit"]["limit_ratio"]] * n
+    for s_, f in enumerate(soft):
+        if f:
+            for i in range(0, s_ + 1):
+                lim[i] = CLAUSES["soft_storey"]["soft_storey_drift_limit"]
+    return {"soft": soft, "ratio_to_above": ratios, "drift_limit_by_storey": lim, "irregular": any(soft),
+            "requires_dynamic_analysis": any(soft), "soft_storey_indices": [i for i, f in enumerate(soft) if f],
+            "clause": "IS 1893 Table 6(i) (Amd 2)",
+            "verdict": ("soft storey(s) %s: dynamic analysis + drift <= 0.2 %% in that storey and below"
+                        % [i + 1 for i, f in enumerate(soft) if f]) if any(soft) else "no soft storey"}
+
+
+def modes_screen(modes, zone) -> dict:
+    """Table 6(vii) (Amd 2): first three lateral translational modes >= 65 % mass in each direction
+    (all zones); Zones IV/V also fundamental Tx, Ty at least 10 % apart."""
+    trans = [m for m in modes if max(m.get("mass_x", 0), m.get("mass_y", 0)) > m.get("rot", 0)]
+    first3 = trans[:3]
+    mx = sum(m.get("mass_x", 0) for m in first3); my = sum(m.get("mass_y", 0) for m in first3)
+    tx = max((m for m in trans), key=lambda m: m.get("mass_x", 0), default=None)
+    ty = max((m for m in trans), key=lambda m: m.get("mass_y", 0), default=None)
+    sep = None
+    if tx and ty:
+        sep = abs(tx["T"] - ty["T"]) / max(tx["T"], ty["T"])
+    z = str(zone or "").upper()
+    a_ok = mx >= 0.65 and my >= 0.65
+    b_ok = True if z not in ("IV", "V") or sep is None else sep >= 0.10
+    ok = a_ok and b_ok
+    return {"first3_mass_x": mx, "first3_mass_y": my, "Tx": tx and tx["T"], "Ty": ty and ty["T"], "separation": sep,
+            "irregular": not ok, "clause": "IS 1893 Table 6(vii) (Amd 2)",
+            "verdict": "modes regular" if ok else
+            "revise configuration: Table 6(vii) (Amd 2) requires the first three translational modes >= 65 %% mass "
+            "(%.0f %% / %.0f %%)%s" % (100 * mx, 100 * my,
+                                       "" if b_ok else " and Tx, Ty at least 10 %% apart in Zone %s (%.1f %%)" % (z, 100 * (sep or 0)))}
+
+
+def torsional_period_ok(modes) -> dict:
+    tor = max(modes, key=lambda m: m.get("rot", 0), default=None)
+    tx = max(modes, key=lambda m: m.get("mass_x", 0), default=None)
+    ty = max(modes, key=lambda m: m.get("mass_y", 0), default=None)
+    if not (tor and tx and ty):
+        return {"ok": None}
+    ok = tor["T"] < tx["T"] and tor["T"] < ty["T"]
+    return {"ok": ok, "T_torsion": tor["T"], "Tx": tx["T"], "Ty": ty["T"],
+            "verdict": "torsional mode period below both translational periods" if ok else
+            "revise configuration: fundamental torsional period %.3f s is not below Tx %.3f / Ty %.3f "
+            "(Table 5(i), Amd 2)" % (tor["T"], tx["T"], ty["T"])}
+
+
+def irregularity_screens(cfg, run) -> dict:
+    """ONE irregularity record for the package, the report and the gates (WP1.8)."""
+    import india_seismic_gates as G
+    z = G.zone_of(cfg)
+    out = {"edition": IS1893_EDITION}
+    dr = run.get("drift") or {}
+    modes = (run.get("rsa") or {}).get("modes") or run.get("modes") or []
+    rmax = max([max(v["ratio"]) for v in dr.values()] or [1.0])
+    tc = torsion_classification(rmax)
+    tc["clause"] = "IS 1893 Table 5(i) (Amd 2); Delta at the extreme edges incl. 7.8.2 eccentricity"
+    if tc.get("requires_torsional_period_check") and modes:
+        tp = torsional_period_ok(modes)
+        tc["torsional_period"] = tp
+        if tp.get("ok") is False:
+            tc["verdict"] = tp["verdict"]
+    out["torsion"] = tc
+    ss = {}
+    exempt = [int(k) for k in (cfg.get("drift_exempt_stories") or {})] + [int(k) for k in (cfg.get("soft_storey_exempt") or [])]
+    for d, v in dr.items():
+        ss[d] = soft_storey_screen(v.get("stiffness_N_per_mm") or [], exempt)
+    soft = {"irregular": any(v["irregular"] for v in ss.values()), "by_direction": ss,
+            "clause": "IS 1893 Table 6(i) (Amd 2)"}
+    if soft["irregular"]:
+        lim = [min(a, b) for a, b in zip(*(v["drift_limit_by_storey"] for v in ss.values()))] if len(ss) > 1 else \
+            list(ss.values())[0]["drift_limit_by_storey"]
+        cfg["_soft_storey_flags"] = {"drift_limit_by_storey": lim}
+        soft["verdict"] = "; ".join("%s: %s" % (d, v["verdict"]) for d, v in ss.items() if v["irregular"])
+        soft["requires_dynamic_analysis"] = True
+    out["soft_storey"] = soft
+    ssum = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
+    W = ssum.get("W_by_floor_kN") or []
+    mi = mass_irregularity_screen_note(W, zone=z)
+    out["mass"] = {"irregular": bool(mi.get("irregular")), "flagged": mi.get("flagged"), "clause": "IS 1893 Table 6(ii) (Amd 2)",
+                   "requires_dynamic_analysis": mi.get("requires_dynamic_analysis"), "verdict": mi.get("note")}
+    try:
+        import engine3d as E
+        NF = len(cfg["heights"])
+        ext = []
+        for k in range(1, NF + 1):
+            pts = E.grid(cfg, k)
+            xs = [E._xy_in(cfg, i, j)[0] for i, j in pts]; ys = [E._xy_in(cfg, i, j)[1] for i, j in pts]
+            ext.append(max(max(xs) - min(xs), max(ys) - min(ys)))
+        vg = [k + 1 for k in range(1, NF) if ext[k - 1] > 0 and ext[k] > 1.25 * ext[k - 1]]
+        out["vertical_geometric"] = {"irregular": bool(vg), "storeys": vg, "clause": "IS 1893 Table 6(iii) (Amd 2)",
+                                     "requires_dynamic_analysis": bool(vg) and z in ("III", "IV", "V"),
+                                     "verdict": "LFRS plan dimension > 125 %% of the storey below at %s" % vg if vg else "none"}
+        pir = E.plan_irregularities(cfg)
+        out["reentrant"] = {"irregular": bool(pir.get("reentrant")), "clause": "IS 1893 Table 5(ii) (Amd 2)",
+                            "requires_flexible_diaphragm_analysis": bool(pir.get("reentrant")),
+                            "verdict": "re-entrant corners: 3D dynamic analysis with a flexible diaphragm in addition "
+                                       "to the rigid case" if pir.get("reentrant") else "none"}
+        out["nonparallel"] = {"irregular": bool(pir.get("nonparallel")), "clause": "IS 1893 Table 5(v) (Amd 2)",
+                              "verdict": "6.3.2.2 / 6.3.4.1 combinations" if pir.get("nonparallel") else "none"}
+        fl = floating_columns(cfg)
+        out["floating_columns"] = fl
+    except Exception as ex:
+        out["geometry_error"] = str(ex)
+    ipd = cfg.get("in_plane_discontinuity")
+    out["in_plane_discontinuity"] = {"irregular": bool(ipd), "clause": "IS 1893 Table 6(iv) (Amd 2)",
+                                     "verdict": ("not permitted in Seismic Zones III, IV and V" if ipd and z in ("III", "IV", "V")
+                                                 else ("Zone II: building drift <= 0.2 %% of height" if ipd else "none declared"))}
+    ws = cfg.get("weak_storey")
+    out["strength"] = {"irregular": bool(ws), "clause": "IS 1893 Table 6(v) (Amd 2)",
+                       "verdict": "buildings with strength irregularity shall not be permitted" if ws else
+                       "no weak storey declared (storey strengths are the EOR's declaration)"}
+    oo = cfg.get("out_of_plane_offset")
+    out["out_of_plane_offset"] = {"irregular": bool(oo), "clause": "IS 1893 Table 5(iv) (Amd 2)",
+                                  "verdict": ("Zones III-V: forces in connecting elements x 2.5 and drift < 0.2 %% "
+                                              "at and below the offset storey") if oo else "none declared"}
+    if modes:
+        out["modes"] = modes_screen(modes, z)
+    return out
+
+
+def floating_columns(cfg) -> dict:
+    """Table 6(vi) (Amd 2): a column whose lower end rests on a beam (no column / base below)."""
+    import engine3d as E
+    info = E.build(cfg, "Linear")
+    tops = set()
+    bots = []
+    lateral = set(info.get("moment_nodes") or [])
+    brace_nodes = set()
+    for (t, kind, sec, n1, n2) in info["ele"]:
+        if kind == "col":
+            tops.add(n2)
+            bots.append((t, n1, n2))
+        if kind == "brace":
+            brace_nodes |= {n1, n2}
+    fl = [t for (t, n1, n2) in bots if (n1 // 100000) > 0 and n1 not in tops]
+    lat = [t for (t, n1, n2) in bots if t in fl and (n1 in brace_nodes or n2 in brace_nodes or n1 in lateral or n2 in lateral)]
+    return {"irregular": bool(fl), "columns": fl, "in_lateral_system": lat, "clause": "IS 1893 Table 6(vi) (Amd 2)",
+            "verdict": ("not permitted: floating columns part of / supporting the lateral system %s" % lat) if lat else
+            ("floating columns %s (gravity only)" % fl if fl else "none")}
+
+
+def separation_required(R1, D1, R2=None, D2=None, same_floor_levels=False) -> dict:
+    """IS 1893 7.11.3 (+ Amd 1): R x (D1 + D2); (R1 D1 + R2 D2)/2 when floor levels match."""
+    R2 = R1 if R2 is None else R2
+    D2 = 0.0 if D2 is None else D2
+    if same_floor_levels:
+        v = (R1 * D1 + R2 * D2) / 2.0
+        c = "IS 1893 7.11.3 as amended by Amd 1: (R1 D1 + R2 D2)/2"
+    else:
+        v = R1 * D1 + R2 * D2
+        c = "IS 1893 7.11.3: R x (D1 + D2)"
+    return {"required_mm": v, "cite": c}

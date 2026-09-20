@@ -1,0 +1,77 @@
+{
+ "Ex3": {
+  "system": "OMRF steel ordinary moment resisting portal",
+  "R": 3.0,
+  "load_plan": {
+   "seismic_summary": {
+    "zone": "III",
+    "Z": 0.16,
+    "I": 1.0,
+    "R": 3.0,
+    "system": "OMRF steel ordinary moment resisting portal",
+    "soil": "medium / stiff (Type II)"
+   }
+  },
+  "_source": "IN_Ex3_Industrial_portal_Chennai_wind_COMPLETE/IN_Ex3_Industrial_portal_Chennai_wind/load_plan.json"
+ },
+ "Ex15": {
+  "system": "OMRF+OBF gable warehouse (transverse OMRF portals + longitudinal OBF/rod; OCBF Zone IV ban disclosed)",
+  "R": 3.0,
+  "load_plan": {
+   "seismic_summary": {
+    "zone": "IV",
+    "Z": 0.24,
+    "I": 1.0,
+    "R": 3.0,
+    "system": "OMRF+OBF gable warehouse (transverse OMRF portals + longitudinal OBF/rod; OCBF Zone IV ban disclosed)",
+    "soil": "medium / stiff (Type II)"
+   }
+  },
+  "_source": "IN_Ex15_Gable_warehouse_snow_Shimla_COMPLETE/IN_Ex15_Gable_warehouse_snow_Shimla/load_plan.json"
+ },
+ "Ex5": {
+  "system": "OMRF steel ordinary moment resisting frame (multi-bay warehouse + mezzanine)",
+  "R": 3.0,
+  "load_plan": {
+   "seismic_summary": {
+    "zone": "II",
+    "Z": 0.1,
+    "I": 1.0,
+    "R": 3.0,
+    "system": "OMRF steel ordinary moment resisting frame (multi-bay warehouse + mezzanine)",
+    "soil": "medium / stiff (Type II)"
+   }
+  },
+  "_source": "IN_Ex5_OMRF_warehouse_mezzanine_Hyderabad_COMPLETE/IN_Ex5_OMRF_warehouse_mezzanine_Hyderabad/load_plan.json"
+ },
+ "Ex13": {
+  "system": "OCBF / steel OBF concentric perimeter (flexible roof diaphragm)",
+  "R": 4.0,
+  "load_plan": {
+   "seismic_summary": {
+    "zone": "II",
+    "Z": 0.1,
+    "I": 1.0,
+    "R": 4.0,
+    "system": "OCBF / steel OBF concentric perimeter (flexible roof diaphragm)",
+    "soil": "medium / stiff (Type II)"
+   }
+  },
+  "_source": "IN_Ex13_OCBF_bigbox_flexdiaphragm_Indore_COMPLETE/IN_Ex13_OCBF_bigbox_flexdiaphragm_Indore/load_plan.json"
+ },
+ "Ex14": {
+  "system": "OMRF+OCBF crane bay (transverse OMRF portals + longitudinal OCBF)",
+  "R": 3.0,
+  "load_plan": {
+   "seismic_summary": {
+    "zone": "II",
+    "Z": 0.1,
+    "I": 1.0,
+    "R": 3.0,
+    "system": "OMRF+OCBF crane bay (transverse OMRF portals + longitudinal OCBF)",
+    "soil": "medium / stiff (Type II)"
+   }
+  },
+  "_source": "IN_Ex14_Crane_bay_IMF_Vizag_COMPLETE/IN_Ex14_Crane_bay_IMF_Vizag/load_plan.json"
+ }
+}
