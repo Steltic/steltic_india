@@ -168,7 +168,7 @@ def design_compressive_strength(
     fy_MPa: float,
     KL_mm: float,
     r_mm: float,
-    buckling_class: str = "c",
+    buckling_class: Optional[str] = None,
     gamma_m0: float = GAMMA_M0_DEFAULT,
     E_MPa: float = E_DEFAULT_MPA,
     K: float = 1.0,
@@ -197,6 +197,12 @@ def design_compressive_strength(
             "note": "Cannot compute χ-reduced Pd without listed inputs",
         }
 
+    if not buckling_class:
+        return {
+            "found": False, "Pd_N": None, "chi": None, "cite": "IS 800:2007 Table 10",
+            "required_inputs": ["buckling_class from Table 10 (use buckling_class()/buckling_class_for_section())"],
+            "note": "No silent default class (HR800-19)",
+        }
     ares = alpha_for_class(buckling_class)
     if not ares["found"]:
         return {
@@ -235,32 +241,6 @@ def design_compressive_strength(
         "buckling_class": ares["buckling_class"],
         "alpha": ares["alpha"],
         "cite": "IS 800:2007 §7.1.2 / §7.1.2.1; Table 7 α; Pd=Ae·fcd; fcd=χ fy/γm0",
-    }
-
-
-def plastic_moment_Nmm(
-    Zx_mm3: float,
-    fy_MPa: float,
-    gamma_m0: float = GAMMA_M0_DEFAULT,
-    beta_b: float = 1.0,
-) -> Dict[str, Any]:
-    """Md / Mp proxy = βb Zp fy / γm0 — IS 800 §8.2.1 (laterally supported)."""
-    if not Zx_mm3 or Zx_mm3 <= 0 or not fy_MPa or fy_MPa <= 0:
-        return {
-            "found": False,
-            "Mp_Nmm": None,
-            "cite": "IS 800:2007 §8.2.1",
-            "required_inputs": ["Zx_mm3", "fy_MPa"],
-        }
-    Mp = float(beta_b) * float(Zx_mm3) * float(fy_MPa) / float(gamma_m0)
-    return {
-        "found": True,
-        "Mp_Nmm": Mp,
-        "Zx_mm3": float(Zx_mm3),
-        "fy_MPa": float(fy_MPa),
-        "gamma_m0": float(gamma_m0),
-        "beta_b": float(beta_b),
-        "cite": "IS 800:2007 §8.2.1  Md = βb Zp fy / γm0",
     }
 
 
@@ -2321,3 +2301,785 @@ def h6_h7_residual_status(cfg=None, pkg=None):
         ),
         "policy": "disclose_only_no_pe_invent",
     }
+
+
+# =====================================================================================================
+# WP2.3  IS 800:2007 member-capacity layer (N, mm, MPa). Review HR800-08/13/19/20, HREX1-X-02, HREX2-X-01.
+# Every result is a dict with the inputs, the clause, and found:false (never a silent default) when an
+# input is missing. Clause values were read from the IS 800:2007 PDF (Tables 2, 5, 10, 17, 18, 42; 6.2-6.4;
+# 7.1.2; 8.2.1.2; 8.2.2; 8.4; 9.2.2; 9.3; Annex E) and IS 2062 (Part 1):2025 Table 3.
+# =====================================================================================================
+GAMMA_M1_DEFAULT = 1.25          # IS 800 Table 5 (ultimate stress)
+G_DEFAULT_MPA = 0.769e5          # IS 800 2.2.4.1 modulus of rigidity
+POISSON = 0.3                    # IS 800 2.2.4.1
+
+# IS 2062 (Part 1):2025 Table 3 "Mechanical Properties": Rm min (MPa) and ReH min (MPa) for thickness bands
+# <=16, >16-40, >40-100, >100 mm (pdf pp.8-9; qualities A/BR/B0/C).
+IS2062_TABLE3 = {
+    "E235": (360.0, (235.0, 225.0, 215.0, 195.0)),
+    "E250": (410.0, (250.0, 240.0, 230.0, 210.0)),
+    "E275": (430.0, (275.0, 265.0, 255.0, 225.0)),
+    "E300": (440.0, (300.0, 290.0, 280.0, 250.0)),
+    "E350": (490.0, (350.0, 330.0, 320.0, 290.0)),
+    "E410": (540.0, (410.0, 390.0, 380.0, 350.0)),
+    "E450": (570.0, (450.0, 430.0, 420.0, 390.0)),
+    "E500": (580.0, (500.0, 480.0, 470.0, 450.0)),
+    "E550": (650.0, (550.0, 530.0, 520.0, None)),
+    "E600": (700.0, (600.0, 580.0, 570.0, None)),
+    "E650": (750.0, (650.0, 630.0, 620.0, None)),
+}
+IS2062_CITE = "IS 2062 (Part 1):2025 Table 3 (ReH min by thickness band; Rm min)"
+IS2062_QUALITIES = ("A", "BR", "B0", "C", "B")
+
+
+def parse_is2062_grade(grade):
+    """'E250', 'E 250 BR', 'IS 2062 E250B0', 'E250B' -> ('E250', 'BR'|'B0'|'C'|'A'|'B'|None)."""
+    import re as _re
+    if not grade:
+        return None, None
+    s = str(grade).upper().replace("IS2062", "").replace("IS 2062", "").replace(" ", "").replace("-", "")
+    m = _re.search(r"E(\d{3})(BR|B0|BO|C|A|B)?", s)
+    if not m:
+        return None, None
+    q = m.group(2)
+    if q == "BO":
+        q = "B0"
+    return "E" + m.group(1), q
+
+
+def is2062_properties(grade, t_mm):
+    """fy (ReH) and fu (Rm) from IS 2062:2025 Table 3 for the element thickness t (mm)."""
+    key, quality = parse_is2062_grade(grade)
+    if key not in IS2062_TABLE3 or t_mm is None or float(t_mm) <= 0:
+        return {"found": False, "fy_MPa": None, "fu_MPa": None, "grade": grade, "t_mm": t_mm,
+                "cite": IS2062_CITE,
+                "required_inputs": ["IS 2062 grade E235..E650", "governing thickness t_mm"]}
+    fu, bands = IS2062_TABLE3[key]
+    t = float(t_mm)
+    idx = 0 if t <= 16 else 1 if t <= 40 else 2 if t <= 100 else 3
+    fy = bands[idx]
+    if fy is None:
+        return {"found": False, "fy_MPa": None, "fu_MPa": fu, "grade": key, "t_mm": t, "cite": IS2062_CITE,
+                "note": "Table 3 gives no ReH for this grade above 100 mm (mutual agreement, Note 4)"}
+    band = ("<=16", ">16-40", ">40-100", ">100")[idx]
+    return {"found": True, "fy_MPa": fy, "fu_MPa": fu, "grade": key, "quality": quality, "t_mm": t,
+            "thickness_band_mm": band, "cite": IS2062_CITE}
+
+
+def fy_is2062(grade, t_mm):
+    """IS 2062:2025 Table 3 yield stress for grade and thickness (MPa). Raises when unknown (no default 250)."""
+    r = is2062_properties(grade, t_mm)
+    if not r["found"]:
+        raise ValueError("fy_is2062: %s" % (r.get("note") or r.get("required_inputs")))
+    return r["fy_MPa"]
+
+
+def _props(sec):
+    if isinstance(sec, dict):
+        return sec
+    import sections as _S
+    return _S.props(sec)
+
+
+def governing_thickness_mm(p):
+    """IS 2062 thickness for fy: max(tf, tw) for rolled I/channel (review HR800-13); t for angles/CHS."""
+    vals = [v for v in (p.get("tf"), p.get("tw")) if v]
+    return max(vals) if vals else None
+
+
+def material_for_section(sec, grade=None, *, process=None):
+    """fy/fu for a section: IS 1161 grade for CHS, IS 2062 Table 3 with max(tf, tw) otherwise."""
+    p = _props(sec)
+    if p.get("section_type") == "CHS":
+        import sections as _S
+        m = _S.chs_material(grade, process)
+        m["found"] = bool(m.get("material_found"))
+        m["cite"] = m.get("material_cite")
+        return m
+    r = is2062_properties(grade, governing_thickness_mm(p))
+    r["t_governing"] = "max(tf, tw)"
+    return r
+
+
+# ---------------------------------------------------------------- Table 2 classification
+_T2 = "IS 800:2007 Table 2 (Limiting width to thickness ratio), eps = (250/fy)^0.5"
+
+
+def _cls(ratio, limits):
+    p, c, s = limits
+    if p is not None and ratio <= p:
+        return "plastic"
+    if c is not None and ratio <= c:
+        return "compact"
+    if s is not None and ratio <= s:
+        return "semi-compact"
+    return "slender"
+
+
+_ORDER = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
+
+
+def section_class_table2(sec, fy_MPa, *, P_N=0.0, welded=False, gamma_m0=GAMMA_M0_DEFAULT, loading="bending"):
+    """IS 800 Table 2 classification (flange + web) of an IS 808 / IS 1161 section.
+
+    P_N > 0 = axial compression (uses the 'generally' web rows with r1, r2 of Note 5); P_N < 0 tension.
+    loading='axial' classifies angles/CHS for pure axial compression.
+    Web d = D - 2(tf + R1) for rolled I (clear of root fillets, Fig. 2); D - 2tf for welded.
+    Note: the printed web limits read 'but <= 42 eps'; applied as a floor of 42 eps (consistent with the
+    'axial compression 42 eps' row).
+    """
+    if not fy_MPa or fy_MPa <= 0:
+        return {"found": False, "section_class": None, "cite": _T2, "required_inputs": ["fy_MPa"]}
+    p = _props(sec)
+    eps = math.sqrt(250.0 / float(fy_MPa))
+    st = p.get("section_type")
+    el = []
+    if st == "CHS":
+        Dt = p["d"] / p["tw"]
+        if loading == "axial":
+            el.append(dict(element="CHS wall, axial compression", ratio=Dt,
+                           limits=(None, None, 88 * eps ** 2)))
+        else:
+            el.append(dict(element="CHS wall, moment", ratio=Dt, limits=(42 * eps ** 2, 52 * eps ** 2, 146 * eps ** 2)))
+    elif st == "angle":
+        b, d, t = p["bf"], p["d"], p["tw"]
+        if loading == "axial":
+            el += [dict(element="angle leg b/t (axial)", ratio=b / t, limits=(None, None, 15.7 * eps)),
+                   dict(element="angle leg d/t (axial)", ratio=d / t, limits=(None, None, 15.7 * eps)),
+                   dict(element="angle (b+d)/t (axial)", ratio=(b + d) / t, limits=(None, None, 25 * eps))]
+        else:
+            el += [dict(element="angle b/t (bending)", ratio=b / t, limits=(9.4 * eps, 10.5 * eps, 15.7 * eps)),
+                   dict(element="angle d/t (bending)", ratio=d / t, limits=(9.4 * eps, 10.5 * eps, 15.7 * eps))]
+    else:
+        D, B, tw, tf = p["d"], p["bf"], p["tw"], p["tf"]
+        R1 = p.get("R1") or 0.0
+        b_out = B / 2.0 if st == "I" else B      # channel: full flange width (Fig. 2)
+        fl = (8.4 * eps, 9.4 * eps, 13.6 * eps) if welded else (9.4 * eps, 10.5 * eps, 15.7 * eps)
+        el.append(dict(element="flange outstand b/tf (%s)" % ("welded" if welded else "rolled"),
+                       ratio=b_out / tf, limits=fl))
+        d = D - 2.0 * tf - (0.0 if welded else 2.0 * R1)
+        if st == "channel":
+            el.append(dict(element="web of a channel d/tw", ratio=d / tw, limits=(42 * eps, 42 * eps, 42 * eps)))
+        else:
+            P = float(P_N or 0.0)
+            if abs(P) < 1e-9:
+                el.append(dict(element="web d/tw (neutral axis at mid-depth)", ratio=d / tw,
+                               limits=(84 * eps, 105 * eps, 126 * eps)))
+            else:
+                fcd = float(fy_MPa) / float(gamma_m0)
+                r1 = (P / (d * tw)) / fcd
+                r2 = (P / p["A"]) / fcd
+                lp = max(84 * eps / (1 + r1), 42 * eps)
+                lc = max((105 * eps / (1 + r1)) if r1 < 0 else (105 * eps / (1 + 1.5 * r1)), 42 * eps)
+                ls = max(126 * eps / (1 + 2 * r2), 42 * eps)
+                el.append(dict(element="web d/tw (generally, r1=%.3f, r2=%.3f)" % (r1, r2), ratio=d / tw,
+                               limits=(lp, lc, ls), r1=r1, r2=r2))
+    for e in el:
+        e["class"] = _cls(e["ratio"], e["limits"])
+    worst = max(el, key=lambda e: _ORDER[e["class"]])
+    return {"found": True, "section_class": worst["class"], "eps": eps, "elements": el,
+            "governing_element": worst["element"], "cite": _T2 + "; Note 4 least favourable element governs"}
+
+
+# ---------------------------------------------------------------- Table 10 buckling class
+_T10 = "IS 800:2007 Table 10 (Buckling class of cross-sections)"
+
+
+def buckling_class(section_type, h=None, b=None, tf=None, axis="z", process=None, *, welded=False, tw=None,
+                   thick_welds=False):
+    """Full IS 800 Table 10. axis 'z' (major) or 'y' (minor). No silent default: unknown -> found:false."""
+    st = (section_type or "").lower()
+    ax = "z" if str(axis).lower() in ("z", "zz", "z-z", "major", "x", "xx") else "y"
+    out = {"found": False, "buckling_class": None, "cite": _T10, "section_type": section_type, "axis": ax}
+    if st in ("chs", "rhs", "shs", "hollow", "tube"):
+        pr = (process or "").upper()
+        if pr in ("HFS", "HOT", "HOT_ROLLED", "HOT ROLLED", "HOT FINISHED"):
+            cls = "a"
+        elif pr in ("ERW", "HFIW", "CDS", "COLD", "COLD_FORMED", "COLD FORMED", "HFW"):
+            cls = "b"
+        else:
+            out["required_inputs"] = ["process (HFS -> hot rolled 'a'; ERW/HFIW/CDS -> cold formed 'b')"]
+            return out
+        out.update(found=True, buckling_class=cls, basis="hollow section, %s" % pr)
+        return out
+    if st in ("channel", "angle", "tee", "t", "solid", "built-up", "builtup"):
+        out.update(found=True, buckling_class="c", basis="channel/angle/T/solid/built-up: any axis c")
+        return out
+    if st in ("welded_box", "box"):
+        cls = "b"
+        if thick_welds and ax == "z" and h and tf and h / tf < 30:
+            cls = "c"
+        if thick_welds and ax == "y" and h and tw and h / tw < 30:
+            cls = "c"
+        out.update(found=True, buckling_class=cls)
+        return out
+    if st in ("i", "rolled_i", "h", "i_rolled", "welded_i", "i_welded"):
+        if tf is None or (not welded and (h is None or b is None)):
+            out["required_inputs"] = ["h", "b", "tf"]
+            return out
+        tf = float(tf)
+        if welded or st in ("welded_i", "i_welded"):
+            cls = ("b" if ax == "z" else "c") if tf <= 40 else ("c" if ax == "z" else "d")
+            out.update(found=True, buckling_class=cls, basis="welded I, tf %s 40" % ("<=" if tf <= 40 else ">"))
+            return out
+        hb = float(h) / float(b)
+        if hb > 1.2:
+            if tf <= 40:
+                cls = "a" if ax == "z" else "b"
+            elif tf <= 100:
+                cls = "b" if ax == "z" else "c"
+            else:
+                out["note"] = "Table 10 has no rolled-I row for h/b > 1.2 with tf > 100 mm"
+                return out
+        else:
+            cls = ("b" if ax == "z" else "c") if tf <= 100 else "d"
+        out.update(found=True, buckling_class=cls, h_over_b=hb, basis="rolled I, h/b %.2f, tf %.1f" % (hb, tf))
+        return out
+    out["required_inputs"] = ["section_type in {I, welded_I, CHS(+process), channel, angle, tee, box}"]
+    return out
+
+
+def buckling_class_for_section(sec, axis, *, process=None, welded=False):
+    p = _props(sec)
+    st = p.get("section_type")
+    if st == "CHS":
+        return buckling_class("CHS", axis=axis, process=process or p.get("process"))
+    if st == "angle":
+        return buckling_class("angle", axis=axis)
+    if st == "channel":
+        return buckling_class("channel", axis=axis)
+    return buckling_class("welded_I" if welded else "I", h=p["d"], b=p["bf"], tf=p["tf"], axis=axis, welded=welded)
+
+
+# ---------------------------------------------------------------- 8.2.1.2 / Mp
+def plastic_moment_Mp(Zp_mm3, fy_MPa):
+    """Full plastic moment Mp = Zp fy (no gamma, no 1.2Ze cap) - for IS 800 Section 12 capacity design only."""
+    if not Zp_mm3 or not fy_MPa:
+        return {"found": False, "Mp_Nmm": None, "required_inputs": ["Zp_mm3", "fy_MPa"],
+                "cite": "IS 800:2007 12.11 / 12.12 'full plastic moment'"}
+    return {"found": True, "Mp_Nmm": float(Zp_mm3) * float(fy_MPa), "Zp_mm3": float(Zp_mm3),
+            "fy_MPa": float(fy_MPa), "cite": "IS 800:2007 Section 12: Mp = Zp fy (characteristic, uncapped)"}
+
+
+def design_moment_8_2_1(Zp_mm3, Ze_mm3, fy_MPa, section_class, *, support="simple", gamma_m0=GAMMA_M0_DEFAULT,
+                        V_N=None, Vd_N=None, Mfd_Nmm=None):
+    """IS 800 8.2.1.2 laterally supported Md = beta_b Zp fy / gamma_m0 <= 1.2 (1.5 cantilever) Ze fy / gamma_m0.
+
+    High shear (V > 0.6 Vd): 9.2.2 Mdv = Md - beta (Md - Mfd) (plastic/compact; needs Mfd) or Ze fy/gamma_m0
+    (semi-compact). Slender sections: found:false (effective section per specialist method not coded).
+    """
+    cite = "IS 800:2007 8.2.1.2 Md = beta_b Zp fy/gamma_m0; cap 1.2 Ze fy/gamma_m0 (1.5 cantilever)"
+    if not (Zp_mm3 and Ze_mm3 and fy_MPa and section_class):
+        return {"found": False, "Md_Nmm": None, "cite": cite,
+                "required_inputs": ["Zp_mm3", "Ze_mm3", "fy_MPa", "section_class"]}
+    if section_class == "slender":
+        return {"found": False, "Md_Nmm": None, "cite": cite, "section_class": "slender",
+                "note": "slender section: Table 2 Note 1; effective section not coded (found:false)"}
+    bb = 1.0 if section_class in ("plastic", "compact") else float(Ze_mm3) / float(Zp_mm3)
+    Md = bb * float(Zp_mm3) * float(fy_MPa) / gamma_m0
+    capf = 1.5 if str(support).lower().startswith("cant") else 1.2
+    cap = capf * float(Ze_mm3) * float(fy_MPa) / gamma_m0
+    out = {"found": True, "beta_b": bb, "Md_uncapped_Nmm": Md, "cap_Nmm": cap, "cap_factor": capf,
+           "Md_Nmm": min(Md, cap), "cap_governs": cap < Md, "section_class": section_class, "cite": cite}
+    if V_N is not None and Vd_N:
+        if abs(V_N) > 0.6 * Vd_N:
+            if section_class == "semi-compact":
+                out.update(Md_Nmm=float(Ze_mm3) * float(fy_MPa) / gamma_m0, high_shear=True,
+                           cite_high_shear="IS 800:2007 9.2.2(b) Mdv = Ze fy/gamma_m0")
+            elif Mfd_Nmm is None:
+                out.update(found=False, Md_Nmm=None, high_shear=True,
+                           required_inputs=["Mfd_Nmm (flange-only plastic strength) for 9.2.2(a)"])
+            else:
+                beta = (2.0 * abs(V_N) / Vd_N - 1.0) ** 2
+                Mdv = min(out["Md_Nmm"] - beta * (out["Md_Nmm"] - Mfd_Nmm), 1.2 * float(Ze_mm3) * float(fy_MPa) / gamma_m0)
+                out.update(Md_Nmm=Mdv, high_shear=True, beta_high_shear=beta,
+                           cite_high_shear="IS 800:2007 9.2.2(a) Mdv = Md - beta(Md - Mfd)")
+        else:
+            out["high_shear"] = False
+    return out
+
+
+def plastic_moment_Nmm(
+    Zx_mm3: float,
+    fy_MPa: float,
+    gamma_m0: float = GAMMA_M0_DEFAULT,
+    beta_b: float = 1.0,
+) -> Dict[str, Any]:
+    """Legacy helper = beta_b Zp fy / gamma_m0 (UNCAPPED). Do not use as Md (use design_moment_8_2_1 /
+    ltb_moment_capacity) and do not use as Mp for Section 12 (use plastic_moment_Mp) - HR800-20."""
+    if not Zx_mm3 or Zx_mm3 <= 0 or not fy_MPa or fy_MPa <= 0:
+        return {"found": False, "Mp_Nmm": None, "cite": "IS 800:2007 8.2.1.2",
+                "required_inputs": ["Zx_mm3", "fy_MPa"]}
+    Mp = float(beta_b) * float(Zx_mm3) * float(fy_MPa) / float(gamma_m0)
+    return {"found": True, "Mp_Nmm": Mp, "Zx_mm3": float(Zx_mm3), "fy_MPa": float(fy_MPa),
+            "gamma_m0": float(gamma_m0), "beta_b": float(beta_b),
+            "cite": "IS 800:2007 8.2.1.2 beta_b Zp fy/gamma_m0 (uncapped; see design_moment_8_2_1 for the 1.2Ze cap)"}
+
+
+# ---------------------------------------------------------------- 8.2.2 LTB (Annex E)
+TABLE42_END_MOMENT_C1_K1 = [  # IS 800:2007 Table 42, end moments M and psi*M, K = 1.0: (psi, c1, c3)
+    (1.0, 1.000, 1.000), (0.75, 1.141, 0.998), (0.5, 1.323, 0.992), (0.25, 1.563, 0.977), (0.0, 1.879, 0.939),
+    (-0.25, 2.281, 0.855), (-0.5, 2.704, 0.676), (-0.75, 2.927, 0.366), (-1.0, 2.752, 0.000)]
+TABLE42_TRANSVERSE_K1 = {  # IS 800:2007 Table 42 (concluded), K = 1.0: (c1, c2, c3)
+    "udl_simply_supported": (1.132, 0.459, 0.525),
+    "udl_fixed_ends": (1.285, 1.562, 0.753),
+    "point_mid_simply_supported": (1.365, 0.553, 1.780),
+    "point_mid_fixed_ends": (1.565, 1.257, 2.640),
+    "two_points_quarter_simply_supported": (1.046, 0.430, 1.120),
+}
+
+
+def c1_from_end_moments(psi):
+    """IS 800 Table 42 c1 (K = 1.0) for end moments M and psi*M, linear interpolation between tabulated psi."""
+    psi = max(-1.0, min(1.0, float(psi)))
+    rows = TABLE42_END_MOMENT_C1_K1
+    for (p1, c1a, _), (p2, c1b, _) in zip(rows, rows[1:]):
+        if p2 <= psi <= p1:
+            return c1a + (c1b - c1a) * (psi - p1) / (p2 - p1)
+    return 1.0
+
+
+def elastic_critical_moment(sec, LLT_mm, *, c1=1.0, c2=0.0, yg_mm=0.0, K=1.0, Kw=1.0,
+                            E_MPa=E_DEFAULT_MPA, G_MPa=G_DEFAULT_MPA):
+    """Mcr per IS 800 Annex E-1.2 (y_j = 0 for doubly symmetric I). c1 = 1.0, yg = 0 reduce to 8.2.2.1."""
+    p = _props(sec)
+    Iy, It, Iw = p.get("Iy"), p.get("J"), p.get("Cw")
+    cite = "IS 800:2007 Annex E-1.2 (Mcr) with Table 42 c1/c2"
+    if not (LLT_mm and Iy and It) or Iw is None:
+        return {"found": False, "Mcr_Nmm": None, "cite": cite,
+                "required_inputs": ["LLT_mm", "Iy", "It", "Iw (IS 808 column; blank => found:false)"]}
+    L = float(LLT_mm)
+    a = math.pi ** 2 * E_MPa * Iy / L ** 2
+    term = (K / Kw) ** 2 * Iw / Iy + G_MPa * It * L ** 2 / (math.pi ** 2 * E_MPa * Iy) + (c2 * yg_mm) ** 2
+    Mcr = c1 * a * (math.sqrt(term) - c2 * yg_mm)
+    return {"found": True, "Mcr_Nmm": Mcr, "c1": c1, "c2": c2, "yg_mm": yg_mm, "K": K, "Kw": Kw,
+            "LLT_mm": L, "cite": cite}
+
+
+def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None, c1=1.0, c2=0.0, yg_mm=0.0,
+                        K=1.0, Kw=1.0, support="simple", gamma_m0=GAMMA_M0_DEFAULT, E_MPa=E_DEFAULT_MPA,
+                        G_MPa=G_DEFAULT_MPA, axis="z"):
+    """IS 800 8.2.2 major-axis design moment of a laterally unsupported beam.
+
+    LLT_mm = physical unbraced length of the COMPRESSION flange for the moment sign considered (deck braces the top
+    flange for sagging only; hogging/uplift needs the fly-brace spacing) times the 8.3 effective-length factor.
+    alpha_LT = 0.21 rolled / 0.49 welded; lambda_LT = min(sqrt(beta_b Zp fy/Mcr), sqrt(1.2 Ze fy/Mcr));
+    lambda_LT <= 0.4 => 8.2.2(c) no LTB check (Md per 8.2.1.2). Minor axis / hollow => 8.2.2(a)/(b).
+    """
+    cite = "IS 800:2007 8.2.2 (chi_LT, alpha_LT 0.21/0.49, lambda_LT <= sqrt(1.2 Ze fy/Mcr)); Annex E Mcr"
+    p = _props(sec)
+    if section_class is None:
+        sc = section_class_table2(p, fy_MPa, welded=welded)
+        section_class = sc.get("section_class")
+    Zp = p["Zx"] if axis == "z" else p["Zy"]
+    Ze = p["Sx"] if axis == "z" else p["Sy"]
+    base = design_moment_8_2_1(Zp, Ze, fy_MPa, section_class, support=support, gamma_m0=gamma_m0)
+    st = p.get("section_type")
+    if axis != "z" or st == "CHS":
+        base.update(ltb="not applicable (8.2.2 a/b: minor-axis bending or hollow section)", lambda_LT=None,
+                    chi_LT=1.0, cite=cite)
+        return base
+    if st in ("angle", "channel"):
+        return {"found": False, "Md_Nmm": None, "cite": cite,
+                "note": "%s major-axis LTB: Annex E-1.2 covers sections symmetric about the minor axis only; "
+                        "not coded (found:false)" % st}
+    if not LLT_mm:
+        return {"found": False, "Md_Nmm": None, "cite": cite,
+                "required_inputs": ["LLT_mm (unbraced compression-flange length for this moment sign)"]}
+    if not base.get("found"):
+        return base
+    mcr = elastic_critical_moment(p, LLT_mm, c1=c1, c2=c2, yg_mm=yg_mm, K=K, Kw=Kw, E_MPa=E_MPa, G_MPa=G_MPa)
+    if not mcr["found"]:
+        mcr["Md_Nmm"] = None
+        return mcr
+    Mcr = mcr["Mcr_Nmm"]
+    bb = base["beta_b"]
+    lam = min(math.sqrt(bb * Zp * fy_MPa / Mcr), math.sqrt(1.2 * Ze * fy_MPa / Mcr))
+    aLT = 0.49 if welded else 0.21
+    out = {"found": True, "Mcr_Nmm": Mcr, "lambda_LT": lam, "alpha_LT": aLT, "beta_b": bb, "LLT_mm": float(LLT_mm),
+           "section_class": section_class, "c1": c1, "welded": welded, "cite": cite,
+           "Md_8_2_1_Nmm": base["Md_Nmm"]}
+    if lam <= 0.4:
+        out.update(chi_LT=1.0, phi_LT=None, Md_Nmm=base["Md_Nmm"], ltb="lambda_LT <= 0.4: 8.2.2(c) no LTB reduction")
+        return out
+    phi = 0.5 * (1 + aLT * (lam - 0.2) + lam ** 2)
+    chi = min(1.0, 1.0 / (phi + math.sqrt(max(phi ** 2 - lam ** 2, 0.0))))
+    fbd = chi * fy_MPa / gamma_m0
+    Md = bb * Zp * fbd
+    out.update(chi_LT=chi, phi_LT=phi, fbd_MPa=fbd, Md_Nmm=min(Md, base["Md_Nmm"]), ltb="8.2.2 chi_LT applied")
+    return out
+
+
+# ---------------------------------------------------------------- 8.4 shear
+def shear_capacity(sec, fy_MPa, *, axis="z", welded=False, stiffener_spacing_mm=None, V_N=None,
+                   gamma_m0=GAMMA_M0_DEFAULT, E_MPa=E_DEFAULT_MPA):
+    """IS 800 8.4: Vd = Vn/gamma_m0; Vn = Vp = Av fyw/sqrt(3) or Vcr (8.4.2.2(a) simple post-critical) when
+    d/tw > 67 eps (unstiffened) / 67 eps sqrt(Kv/5.35) (stiffened). Av per 8.4.1.1."""
+    p = _props(sec)
+    st = p.get("section_type")
+    cite = "IS 800:2007 8.4.1 / 8.4.1.1 (Av) / 8.4.2.2(a) (tau_b)"
+    if not fy_MPa:
+        return {"found": False, "Vd_N": None, "cite": cite, "required_inputs": ["fy_MPa"]}
+    eps = math.sqrt(250.0 / fy_MPa)
+    if st == "CHS":
+        Av = 2.0 * p["A"] / math.pi
+        basis = "circular hollow tube: 2A/pi"
+    elif axis == "z":
+        tf = p["tf"]
+        Av = (p["d"] * p["tw"]) if not welded else (p["d"] - 2 * tf) * p["tw"]
+        basis = "major axis: %s" % ("h tw (hot rolled)" if not welded else "d tw (welded)")
+    else:
+        Av = 2.0 * p["bf"] * p["tf"]
+        basis = "minor axis: 2 b tf"
+    Vp = Av * fy_MPa / math.sqrt(3.0)
+    out = {"found": True, "Av_mm2": Av, "Av_basis": basis, "Vp_N": Vp, "eps": eps, "cite": cite}
+    Vn = Vp
+    if st not in ("CHS",) and axis == "z":
+        R1 = p.get("R1") or 0.0
+        d = p["d"] - 2 * p["tf"] - (0.0 if welded else 2 * R1)
+        dtw = d / p["tw"]
+        if stiffener_spacing_mm:
+            cd = float(stiffener_spacing_mm) / d
+            Kv = (4.0 + 5.35 / cd ** 2) if cd < 1.0 else (5.35 + 4.0 / cd ** 2)
+        else:
+            Kv = 5.35
+        limit = 67 * eps * (math.sqrt(Kv / 5.35) if stiffener_spacing_mm else 1.0)
+        out.update(d_over_tw=dtw, shear_buckling_limit=limit, Kv=Kv)
+        if dtw > limit:
+            tcr = Kv * math.pi ** 2 * E_MPa / (12 * (1 - POISSON ** 2) * dtw ** 2)
+            lw = math.sqrt(fy_MPa / (math.sqrt(3.0) * tcr))
+            if lw <= 0.8:
+                tb = fy_MPa / math.sqrt(3.0)
+            elif lw < 1.2:
+                tb = (1 - 0.8 * (lw - 0.8)) * fy_MPa / math.sqrt(3.0)
+            else:
+                tb = fy_MPa / (math.sqrt(3.0) * lw ** 2)
+            Vcr = d * p["tw"] * tb
+            Vn = min(Vp, Vcr)
+            out.update(shear_buckling=True, tau_cr_e_MPa=tcr, lambda_w=lw, tau_b_MPa=tb, Vcr_N=Vcr)
+        else:
+            out["shear_buckling"] = False
+    Vd = Vn / gamma_m0
+    out.update(Vn_N=Vn, Vd_N=Vd)
+    if V_N is not None:
+        out.update(V_N=float(V_N), dc=abs(float(V_N)) / Vd, high_shear=abs(float(V_N)) > 0.6 * Vd,
+                   ok=abs(float(V_N)) <= Vd)
+    return out
+
+
+# ---------------------------------------------------------------- Section 6 tension
+def block_shear_6_4_1(Avg_mm2=None, Avn_mm2=None, Atg_mm2=None, Atn_mm2=None, fy_MPa=None, fu_MPa=None,
+                      gamma_m0=GAMMA_M0_DEFAULT, gamma_m1=GAMMA_M1_DEFAULT):
+    """IS 800 6.4.1: Tdb = smaller of [Avg fy/(sqrt3 gm0) + 0.9 Atn fu/gm1] and [0.9 Avn fu/(sqrt3 gm1) + Atg fy/gm0].
+    All four areas are required (found:false otherwise; never one expression only)."""
+    cite = "IS 800:2007 6.4.1 (block shear, smaller of the two expressions)"
+    miss = [n for n, v in (("Avg_mm2", Avg_mm2), ("Avn_mm2", Avn_mm2), ("Atg_mm2", Atg_mm2), ("Atn_mm2", Atn_mm2),
+                           ("fy_MPa", fy_MPa), ("fu_MPa", fu_MPa)) if v is None]
+    if miss:
+        return {"found": False, "Tdb_N": None, "capacity_N": None, "cite": cite, "required_inputs": miss}
+    t1 = Avg_mm2 * fy_MPa / (math.sqrt(3.0) * gamma_m0) + 0.9 * Atn_mm2 * fu_MPa / gamma_m1
+    t2 = 0.9 * Avn_mm2 * fu_MPa / (math.sqrt(3.0) * gamma_m1) + Atg_mm2 * fy_MPa / gamma_m0
+    return {"found": True, "Tdb1_N": t1, "Tdb2_N": t2, "Tdb_N": min(t1, t2), "capacity_N": min(t1, t2),
+            "governing": "Tdb1 (shear yield + tension rupture)" if t1 <= t2 else "Tdb2 (shear rupture + tension yield)",
+            "Avg_mm2": Avg_mm2, "Avn_mm2": Avn_mm2, "Atg_mm2": Atg_mm2, "Atn_mm2": Atn_mm2, "cite": cite}
+
+
+def tension_capacity(Ag_mm2, fy_MPa, fu_MPa=None, *, An_mm2=None, member="plate", alpha_bolts=None,
+                     Anc_mm2=None, Ago_mm2=None, w_mm=None, t_mm=None, bs_mm=None, Lc_mm=None,
+                     block=None, gamma_m0=GAMMA_M0_DEFAULT, gamma_m1=GAMMA_M1_DEFAULT, T_N=None):
+    """IS 800 6.1: Td = min(Tdg 6.2, Tdn 6.3, Tdb 6.4). Missing rupture/block-shear inputs => that limit state is
+    found:false and the result is incomplete (ok=None), never silently skipped.
+
+    member: 'plate' (6.3.1 Tdn = 0.9 An fu/gm1), 'rod' (6.3.2), 'angle' (6.3.3 with beta shear-lag),
+    'other' (6.3.4 via 6.3.3 beta). alpha_bolts (6.3.3 preliminary alpha 0.6/0.7/0.8) is accepted for sizing only.
+    block = dict(Avg_mm2, Avn_mm2, Atg_mm2, Atn_mm2) for 6.4.1.
+    """
+    out = {"cite": "IS 800:2007 6.1-6.4", "limit_states": {}}
+    if not Ag_mm2 or not fy_MPa:
+        return {"found": False, "Td_N": None, "required_inputs": ["Ag_mm2", "fy_MPa"], "cite": out["cite"]}
+    ls = out["limit_states"]
+    ls["6.2 yield"] = {"found": True, "T_N": Ag_mm2 * fy_MPa / gamma_m0, "cite": "IS 800:2007 6.2 Tdg = Ag fy/gm0"}
+    if member in ("plate", "rod"):
+        if An_mm2 and fu_MPa:
+            ls["6.3 rupture"] = {"found": True, "T_N": 0.9 * An_mm2 * fu_MPa / gamma_m1,
+                                 "cite": "IS 800:2007 6.3.%d Tdn = 0.9 An fu/gm1" % (1 if member == "plate" else 2)}
+        else:
+            ls["6.3 rupture"] = {"found": False, "T_N": None, "required_inputs": ["An_mm2", "fu_MPa"]}
+    else:
+        if all(v is not None for v in (Anc_mm2, Ago_mm2, w_mm, t_mm, bs_mm, Lc_mm, fu_MPa)):
+            beta = 1.4 - 0.076 * (w_mm / t_mm) * (fy_MPa / fu_MPa) * (bs_mm / Lc_mm)
+            beta = max(0.7, min(beta, fu_MPa * gamma_m0 / (fy_MPa * gamma_m1)))
+            ls["6.3.3 rupture"] = {"found": True, "beta": beta,
+                                   "T_N": 0.9 * Anc_mm2 * fu_MPa / gamma_m1 + beta * Ago_mm2 * fy_MPa / gamma_m0,
+                                   "cite": "IS 800:2007 6.3.3 Tdn = 0.9 Anc fu/gm1 + beta Ago fy/gm0"}
+        elif alpha_bolts and An_mm2 and fu_MPa:
+            ls["6.3.3 rupture (preliminary alpha)"] = {
+                "found": True, "T_N": alpha_bolts * An_mm2 * fu_MPa / gamma_m1, "preliminary": True,
+                "cite": "IS 800:2007 6.3.3 preliminary Tdn = alpha An fu/gm1"}
+        else:
+            ls["6.3.3 rupture"] = {"found": False, "T_N": None,
+                                   "required_inputs": ["Anc_mm2", "Ago_mm2", "w_mm", "t_mm", "bs_mm", "Lc_mm", "fu_MPa"]}
+    b = block_shear_6_4_1(fy_MPa=fy_MPa, fu_MPa=fu_MPa, gamma_m0=gamma_m0, gamma_m1=gamma_m1, **(block or {}))
+    ls["6.4 block shear"] = {"found": b["found"], "T_N": b.get("Tdb_N"), "detail": b}
+    vals = [v["T_N"] for v in ls.values() if v.get("found")]
+    complete = all(v.get("found") for v in ls.values())
+    out.update(found=True, Td_N=min(vals), complete=complete,
+               governing=min(((k, v["T_N"]) for k, v in ls.items() if v.get("found")), key=lambda x: x[1])[0])
+    if T_N is not None:
+        dc = abs(T_N) / out["Td_N"]
+        out.update(T_N=T_N, dc=dc, ok=(dc <= 1.0) if complete else (False if dc > 1.0 else None))
+    return out
+
+
+# ---------------------------------------------------------------- 7.1.2 member compression
+def compression_capacity(sec, fy_MPa, *, KLz_mm, KLy_mm, process=None, welded=False, gamma_m0=GAMMA_M0_DEFAULT,
+                         E_MPa=E_DEFAULT_MPA, KLv_mm=None):
+    """Pdz / Pdy per 7.1.2 with the element's own K*L about each axis and the full Table 10 class.
+    Angles: minimum axis v-v with class c (7.5 single-angle eccentric connection factors not applied: flagged)."""
+    p = _props(sec)
+    st = p.get("section_type")
+    sc = section_class_table2(p, fy_MPa, P_N=1.0, welded=welded, loading="axial")
+    out = {"cite": "IS 800:2007 7.1.2 / 7.1.2.1, Table 10 class, Table 7 alpha", "section_class_axial": sc.get("section_class")}
+    if sc.get("section_class") == "slender":
+        out.update(found=False, Pd_N=None, note="slender cross-section in compression (Table 2 Note 1): 7.3.2 "
+                                                  "effective area not coded (found:false)")
+        return out
+    axes = {"z": (KLz_mm, p["rx"]), "y": (KLy_mm, p["ry"])}
+    if st == "angle":
+        axes = {"v": (KLv_mm or max(KLz_mm, KLy_mm), p.get("rv") or p["r_min"])}
+        out["note"] = "single/double angle: 7.5 eccentric-connection equivalent slenderness not applied (flag)"
+    res = {}
+    for ax, (KL, r) in axes.items():
+        bc = buckling_class_for_section(p, "z" if ax == "z" else "y", process=process, welded=welded)
+        if not bc["found"]:
+            res[ax] = {"found": False, "Pd_N": None, "buckling_class": bc}
+            continue
+        r_ = design_compressive_strength(p["A"], fy_MPa, KL, r, buckling_class=bc["buckling_class"],
+                                         gamma_m0=gamma_m0, E_MPa=E_MPa)
+        r_["buckling_class_basis"] = bc.get("basis")
+        res[ax] = r_
+    out["axes"] = res
+    if not all(v.get("found") for v in res.values()):
+        out.update(found=False, Pd_N=None)
+        return out
+    out.update(found=True, Pd_N=min(v["Pd_N"] for v in res.values()),
+               Pdz_N=res.get("z", {}).get("Pd_N"), Pdy_N=res.get("y", res.get("v", {})).get("Pd_N"),
+               KL_over_r_max=max(v["KL_over_r"] for v in res.values()))
+    return out
+
+
+# ---------------------------------------------------------------- 9.3 interaction
+def cm_factor(M_end1, M_end2, *, sway=False):
+    """IS 800 Table 18 linear gradient: Cm = 0.6 + 0.4 psi >= 0.4, psi = M_small/M_large with the sign of the
+    BENDING-MOMENT DIAGRAM values (psi > 0 single curvature). Sway buckling mode: Cm = 0.9."""
+    if sway:
+        return {"Cm": 0.9, "psi": None, "cite": "IS 800:2007 Table 18 (sway buckling mode Cm = 0.9)"}
+    a, b = float(M_end1 or 0.0), float(M_end2 or 0.0)
+    big, small = (a, b) if abs(a) >= abs(b) else (b, a)
+    if abs(big) < 1e-9:
+        return {"Cm": 1.0, "psi": None, "cite": "IS 800:2007 Table 18", "note": "no end moments; Cm = 1.0"}
+    psi = small / big
+    return {"Cm": max(0.6 + 0.4 * psi, 0.4), "psi": psi, "cite": "IS 800:2007 Table 18: 0.6 + 0.4 psi >= 0.4"}
+
+
+def interaction_9_3(*, P_N=0.0, Mz_Nmm=0.0, My_Nmm=0.0, Nd_N=None, Pdz_N=None, Pdy_N=None, Mdz_Nmm=None,
+                    Mdy_Nmm=None, Mdz_sec_Nmm=None, Mdy_sec_Nmm=None, lambda_z=None, lambda_y=None, lambda_LT=None,
+                    Cmz=1.0, Cmy=1.0, CmLT=1.0, section_class="plastic", section_type="I", Ag_mm2=None,
+                    Zec_mm3=None, Td_N=None, psi_tension=0.8):
+    """IS 800 9.3: section strength 9.3.1 and member buckling 9.3.2 (both 9.3.2.2 equations for compression,
+    9.3.2.1 M_eff for tension). P_N > 0 compression, < 0 tension. Mdz_Nmm = LTB design moment (8.2.2);
+    Mdz_sec_Nmm / Mdy_sec_Nmm = laterally supported (8.2.1.2) capacities used in 9.3.1."""
+    P, Mz, My = float(P_N or 0.0), abs(float(Mz_Nmm or 0.0)), abs(float(My_Nmm or 0.0))
+    out = {"cite": "IS 800:2007 9.3.1 (section) + 9.3.2.2 (member, both equations)", "P_N": P, "Mz_Nmm": Mz,
+           "My_Nmm": My}
+    Mdzs = Mdz_sec_Nmm or Mdz_Nmm
+    Mdys = Mdy_sec_Nmm or Mdy_Nmm
+    if not (Nd_N and Mdzs and Mdys):
+        out.update(found=False, dc=None, required_inputs=["Nd_N", "Mdz", "Mdy"])
+        return out
+    n = abs(P) / Nd_N
+    # 9.3.1
+    if section_class in ("plastic", "compact"):
+        if section_type == "CHS":
+            Mndz = min(1.04 * Mdzs * (1 - n ** 1.7), Mdzs)
+            Mndy = min(1.04 * Mdys * (1 - n ** 1.7), Mdys)
+            a1 = a2 = 2.0
+        else:
+            Mndz = min(1.11 * Mdzs * (1 - n), Mdzs)
+            Mndy = Mdys if n <= 0.2 else 1.56 * Mdys * (1 - n) * (n + 0.6)
+            a1, a2 = max(5.0 * n, 1.0), 2.0
+        if Mndz <= 0 or Mndy <= 0:
+            sec = float("inf")
+        else:
+            sec = (My / Mndy) ** a1 + (Mz / Mndz) ** a2
+        out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.1 (Mndy/Mndz per 9.3.1.2, alpha per Table 17)",
+                                "n": n, "Mndz_Nmm": Mndz, "Mndy_Nmm": Mndy, "alpha1": a1, "alpha2": a2}
+    else:
+        sec = abs(P) / Nd_N + My / Mdys + Mz / Mdzs
+        out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.3 semi-compact linear", "n": n}
+    dcs = [sec]
+    if P > 0:
+        if not (Pdz_N and Pdy_N and Mdz_Nmm and Mdy_Nmm and lambda_z is not None and lambda_y is not None):
+            out.update(found=False, dc=None, required_inputs=["Pdz_N", "Pdy_N", "Mdz (LTB)", "Mdy", "lambda_z", "lambda_y"])
+            return out
+        ny, nz = P / Pdy_N, P / Pdz_N
+        Ky = min(1 + (lambda_y - 0.2) * ny, 1 + 0.8 * ny)
+        Kz = min(1 + (lambda_z - 0.2) * nz, 1 + 0.8 * nz)
+        lamLT = lambda_LT or 0.0
+        KLT = max(1 - 0.1 * lamLT * ny / (CmLT - 0.25), 1 - 0.1 * ny / (CmLT - 0.25))
+        e1 = P / Pdy_N + Ky * Cmy * My / Mdy_Nmm + KLT * Mz / Mdz_Nmm
+        e2 = P / Pdz_N + 0.6 * Ky * Cmy * My / Mdy_Nmm + Kz * Cmz * Mz / Mdz_Nmm
+        out["member_9_3_2_2"] = {"eq1": e1, "eq2": e2, "Ky": Ky, "Kz": Kz, "KLT": KLT, "ny": ny, "nz": nz,
+                                 "Cmy": Cmy, "Cmz": Cmz, "CmLT": CmLT}
+        dcs += [e1, e2]
+    elif P < 0:
+        if Ag_mm2 and Zec_mm3 and Mdz_Nmm:
+            Meff = max(Mz - psi_tension * abs(P) * Zec_mm3 / Ag_mm2, 0.0)
+            out["member_9_3_2_1"] = {"Meff_Nmm": Meff, "dc": Meff / Mdz_Nmm, "psi": psi_tension}
+            dcs.append(Meff / Mdz_Nmm)
+        if Td_N:
+            out["tension_Td"] = {"dc": abs(P) / Td_N}
+            dcs.append(abs(P) / Td_N)
+    else:
+        dcs.append(Mz / Mdz_Nmm if Mdz_Nmm else float("inf"))
+        dcs.append(My / Mdy_Nmm if Mdy_Nmm else 0.0)
+    out.update(found=True, dc=max(dcs), ok=max(dcs) <= 1.0)
+    return out
+
+
+# ---------------------------------------------------------------- Table 3 slenderness
+TABLE3_LIMITS = {
+    "compression_DL_LL": 180, "tension_reversal_non_WL_EL": 180, "compression_WL_EL_only": 250,
+    "beam_compression_flange_LTB": 300, "tie_reversal_WL_EL": 350, "tension_only": 400}
+
+
+# ---------------------------------------------------------------- member check per combination
+def member_check_is800(member, combo_forces, *, cfg=None):
+    """IS 800 member check evaluated PER COMBINATION with concurrent P, Mz, My (HREX1-X-02, HREX2-X-01).
+
+    member = {id, section, grade (IS 2062 'E250'...; IS 1161 'YSt 240' for CHS), process (CHS), role
+              ('column'|'beam'|'brace'), L_mm (element length), Kz, Ky (Table 11 / Annex D; default 1.0 with a
+              flag), Lz_mm/Ly_mm (optional member lengths if different from L_mm), LLT_sag_mm, LLT_hog_mm (unbraced
+              compression-flange lengths for sagging / hogging), welded, support, sway (bool), fy_MPa (override)}
+    combo_forces = [{combo, P_N (+compression), Mz_i_Nmm, Mz_j_Nmm, My_i_Nmm, My_j_Nmm (bending-moment-diagram
+              values at the two ends, sagging +), Mz_mid_Nmm (optional span moment), Vy_N, Vz_N}]
+    Returns {governing_combo, dc, ok, per_combo[...], capacities{...}, clause}.
+    """
+    import sections as _S
+    sec = member["section"]
+    p = _S.props(sec, grade=member.get("grade"), process=member.get("process")) if str(sec).upper().startswith(("CHS", "NB")) else _S.props(sec)
+    mat = material_for_section(p, member.get("grade"), process=member.get("process"))
+    fy = member.get("fy_MPa") or mat.get("fy_MPa")
+    fu = member.get("fu_MPa") or mat.get("fu_MPa")
+    res = {"id": member.get("id"), "section": sec, "role": member.get("role"), "material": mat, "fy_MPa": fy,
+           "clause": "IS 800:2007 7.1.2, 8.2, 8.4, 9.3; Table 2/3/10", "flags": []}
+    if not fy:
+        res.update(found=False, ok=None, dc=None, reason="material grade not resolved (no default fy)")
+        return res
+    L = float(member.get("L_mm") or 0.0)
+    if L <= 0:
+        res.update(found=False, ok=None, dc=None, reason="element length L_mm missing")
+        return res
+    Kz, Ky = member.get("Kz"), member.get("Ky")
+    if Kz is None or Ky is None:
+        res["flags"].append("K not supplied: K = 1.0 used (Table 11 / Annex D basis must be declared)")
+        Kz = 1.0 if Kz is None else Kz
+        Ky = 1.0 if Ky is None else Ky
+    KLz = Kz * float(member.get("Lz_mm") or L)
+    KLy = Ky * float(member.get("Ly_mm") or L)
+    welded = bool(member.get("welded"))
+    comp = compression_capacity(p, fy, KLz_mm=KLz, KLy_mm=KLy, process=member.get("process"), welded=welded)
+    shz = shear_capacity(p, fy, axis="z", welded=welded)
+    shy = shear_capacity(p, fy, axis="y", welded=welded)
+    sc0 = section_class_table2(p, fy, welded=welded)
+    Md_y = design_moment_8_2_1(p["Zy"], p["Sy"], fy, sc0["section_class"], support=member.get("support", "simple"))
+    Md_z_sec = design_moment_8_2_1(p["Zx"], p["Sx"], fy, sc0["section_class"], support=member.get("support", "simple"))
+    ltb_cache = {}
+
+    def _mdz(LLT, psi=None):
+        key = (LLT, None if psi is None else round(psi, 3))
+        if key not in ltb_cache:
+            c1 = c1_from_end_moments(psi) if psi is not None and member.get("use_c1", True) else 1.0
+            ltb_cache[key] = ltb_moment_capacity(p, LLT, fy, welded=welded, section_class=sc0["section_class"], c1=c1,
+                                                 support=member.get("support", "simple"))
+        return ltb_cache[key]
+
+    Td = tension_capacity(p["A"], fy, fu, **(member.get("tension_inputs") or {}))
+    res["capacities"] = {"compression": comp, "shear_z": shz, "shear_y": shy, "Mdy": Md_y, "Mdz_section": Md_z_sec,
+                         "section_class": sc0, "tension": Td}
+    klr = comp.get("KL_over_r_max")
+    if klr is not None:
+        lim = TABLE3_LIMITS["compression_WL_EL_only"] if member.get("compression_only_from_WL_EL") else TABLE3_LIMITS["compression_DL_LL"]
+        res["table3_slenderness"] = {"value": klr, "limit": lim, "dc": klr / lim, "ok": klr <= lim,
+                                     "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 maximum KL/r"}
+    per = []
+    for cf in combo_forces or []:
+        P = float(cf.get("P_N") or 0.0)
+        Mzi, Mzj = float(cf.get("Mz_i_Nmm") or 0.0), float(cf.get("Mz_j_Nmm") or 0.0)
+        Myi, Myj = float(cf.get("My_i_Nmm") or 0.0), float(cf.get("My_j_Nmm") or 0.0)
+        Mzm = cf.get("Mz_mid_Nmm")
+        zs = [Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else [])
+        Mz_sag = max([m for m in zs if m > 0] or [0.0])
+        Mz_hog = -min([m for m in zs if m < 0] or [0.0])
+        My = max(abs(Myi), abs(Myj))
+        sway = bool(member.get("sway"))
+        cmz = cm_factor(Mzi, Mzj, sway=sway) if Mzm is None else {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
+        cmy = cm_factor(Myi, Myj, sway=sway)
+        psi = cmz.get("psi")
+        rec = {"combo": cf.get("combo"), "P_N": P, "Mz_sag_Nmm": Mz_sag, "Mz_hog_Nmm": Mz_hog, "My_Nmm": My,
+               "Cmz": cmz["Cm"], "Cmy": cmy["Cm"]}
+        checks = []
+        signs = []
+        if Mz_sag > 0 or Mz_hog <= 0:
+            signs.append(("sagging", Mz_sag, member.get("LLT_sag_mm")))
+        if Mz_hog > 0:
+            signs.append(("hogging", Mz_hog, member.get("LLT_hog_mm")))
+        for sign, Mz, LLT in signs:
+            if LLT is None:
+                LLT = L if member.get("LLT_default_to_L", True) else None
+                if LLT is not None:
+                    res["flags"].append("LLT_%s not declared: element length used" % sign[:3])
+            ltb = _mdz(LLT, psi)
+            if not ltb.get("found"):
+                checks.append({"moment_sign": sign, "found": False, "ltb": ltb})
+                continue
+            ia = interaction_9_3(P_N=P, Mz_Nmm=Mz, My_Nmm=My, Nd_N=p["A"] * fy / GAMMA_M0_DEFAULT,
+                                 Pdz_N=comp.get("Pdz_N"), Pdy_N=comp.get("Pdy_N"), Mdz_Nmm=ltb["Md_Nmm"],
+                                 Mdy_Nmm=Md_y.get("Md_Nmm"), Mdz_sec_Nmm=Md_z_sec.get("Md_Nmm"),
+                                 Mdy_sec_Nmm=Md_y.get("Md_Nmm"),
+                                 lambda_z=(comp.get("axes", {}).get("z") or {}).get("lambda"),
+                                 lambda_y=(comp.get("axes", {}).get("y") or comp.get("axes", {}).get("v") or {}).get("lambda"),
+                                 lambda_LT=ltb.get("lambda_LT"), Cmz=cmz["Cm"], Cmy=cmy["Cm"], CmLT=cmz["Cm"],
+                                 section_class=sc0["section_class"], section_type="CHS" if p.get("section_type") == "CHS" else "I",
+                                 Ag_mm2=p["A"], Zec_mm3=p["Sx"], Td_N=Td.get("Td_N"))
+            ia.update(moment_sign=sign, LLT_mm=LLT, Mdz_LTB_Nmm=ltb["Md_Nmm"], chi_LT=ltb.get("chi_LT"),
+                      lambda_LT=ltb.get("lambda_LT"))
+            checks.append(ia)
+        V = max(abs(float(cf.get("Vy_N") or 0.0)), 0.0)
+        if V and shz.get("Vd_N"):
+            checks.append({"shear_z": True, "dc": V / shz["Vd_N"], "found": True, "high_shear": V > 0.6 * shz["Vd_N"]})
+        Vz = abs(float(cf.get("Vz_N") or 0.0))
+        if Vz and shy.get("Vd_N"):
+            checks.append({"shear_y": True, "dc": Vz / shy["Vd_N"], "found": True})
+        if any(not c.get("found") for c in checks) or not checks:
+            rec.update(dc=None, ok=None, checks=checks)
+        else:
+            rec.update(dc=max(c["dc"] for c in checks), checks=checks)
+            rec["ok"] = rec["dc"] <= 1.0
+        per.append(rec)
+    res["per_combo"] = per
+    if not per:
+        res.update(found=False, ok=None, dc=None, reason="no combination forces")
+        return res
+    if any(r["dc"] is None for r in per):
+        res.update(found=False, ok=None, dc=None, reason="one or more combinations not evaluable (missing capacity input)")
+        worst = max((r for r in per if r["dc"] is not None), key=lambda r: r["dc"], default=None)
+        res["governing_combo"] = worst and worst["combo"]
+        return res
+    worst = max(per, key=lambda r: r["dc"])
+    dc = worst["dc"]
+    if res.get("table3_slenderness") and not res["table3_slenderness"]["ok"]:
+        dc = max(dc, res["table3_slenderness"]["dc"])
+    res.update(found=True, governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0,
+               value=dc, limit=1.0, cite="IS 800:2007 9.3.2.2 / 9.3.1 per combination (concurrent P, Mz, My)")
+    return res
