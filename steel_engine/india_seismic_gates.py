@@ -977,6 +977,23 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
             for e in (pk.get(key) or []):
                 if isinstance(e, dict):
                     reasons += entry_findings(key.rstrip("s"), e)
+        for g, ok in (pk.get("gates") or {}).items():
+            if ok is False:
+                reasons.append("analysis gate %s FAILS (engine3d.run_india)" % g)
+        col_ = pk.get("collectors")
+        if isinstance(col_, dict) and col_.get("error"):
+            reasons.append("collector / chord forces not computed: %s (WP2.6)" % col_["error"])
+        elif isinstance(col_, dict) and any("error" in r for r in (col_.get("rows") or []) if isinstance(r, dict)):
+            reasons.append("collector / chord forces not computed: %s (WP2.6)"
+                           % next(r["error"] for r in col_["rows"] if isinstance(r, dict) and "error" in r))
+        if cfg.get("crane") or cfg.get("cranes"):
+            gg = pk.get("gantry_girder")
+            if not isinstance(gg, dict):
+                reasons.append("crane present but no gantry girder design (WP2.7)")
+            else:
+                reasons += entry_findings("gantry girder", dict(gg, id="gantry"))
+            if not isinstance(pk.get("crane_sway"), dict):
+                reasons.append("crane present but the IS 800 Table 6 crane sway was not evaluated (WP2.7)")
         dc_ = pk.get("deformation_compatibility")
         if isinstance(dc_, dict):
             for i, c in enumerate((dc_.get("checks") or []) + (dc_.get("separation") or [])):

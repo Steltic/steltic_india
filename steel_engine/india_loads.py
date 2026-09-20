@@ -598,6 +598,7 @@ def case_from_combination(c, plan) -> Case:
                 sign=(1 if (f or 0) >= 0 else -1), torsion=c.get("torsion"), fEv=float(c.get("fEv", 0.0) or 0.0),
                 rsa=rsa, tags=tags, family=c.get("family"), cite=c.get("cite"),
                 service=bool(c.get("service")), crane=c.get("crane"), fC=float(c.get("fC", 0.0) or 0.0),
+                crane_pattern=(tuple(c["crane_pattern"]) if c.get("crane_pattern") else None),
                 fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c,
                 member_wind=c.get("member_wind"), fWM=float(c.get("fWM", 0.0) or 0.0))
 
@@ -997,3 +998,172 @@ def floor_deflection_limit(cfg) -> tuple:
     else:
         key = "floor_roof_live_cracking" if crack else "floor_roof_live_not_cracking"
     return IS800_TABLE6[key], "%s: %s -> span/%d" % (IS800_TABLE6_CITE, key, IS800_TABLE6[key])
+
+
+# ---------------------------------------------------------------------------------------------
+# WP2.7 crane loads (IS 875 (Part 2):1987 6.3 / 6.4, read from the PDF pp.15-16)
+# ---------------------------------------------------------------------------------------------
+CRANE_CITE = ("IS 875 (Part 2):1987 6.3: vertical impact 25 % of max static loads for crane girders (all "
+              "classes), 25 % for columns supporting Class III/IV and 10 % for Class I/II cranes, none for "
+              "foundations; hand-operated 10 % for girders only; transverse surge 10 % (rigid mast) or 5 % "
+              "(other) of crab + lifted weight on one rail, one side of the frame at a time, either "
+              "direction; traction 5 % of static wheel loads along the rails; (c) and (d) at rail level, "
+              "not simultaneous (6.4.3 Note)")
+CRANE_PATTERNS = (("L", "S+"), ("L", "S-"), ("R", "S+"), ("R", "S-"), ("L", "T+"), ("L", "T-"))
+
+
+class CraneError(LoadPlanError):
+    pass
+
+
+def _crane_def(cfg):
+    cr = cfg.get("crane") or cfg.get("cranes")
+    if isinstance(cr, list):
+        if len(cr) != 1:
+            raise CraneError("multi-crane aisles (IS 875-2 6.4.1/6.4.2) need explicit per-crane load patterns; "
+                             "only one crane per job is supported by crane_frame_loads")
+        cr = cr[0]
+    if not isinstance(cr, dict):
+        raise CraneError("cfg['crane'] must be a dict (see india_loads.crane_reactions)")
+    return cr
+
+
+def crane_reactions(cr):
+    """Static wheel/column reactions for one crane (N, mm).
+
+    cr keys: capacity_kN (Q), crab_kN (Pt), bridge_kN (Ph), span_mm (S, rail centres),
+    hook_approach_mm (a, minimum hook approach), wheels_per_side (default 2), wheel_base_mm,
+    gantry_span_mm (column spacing along the rail), class ('I'..'IV'), type ('electric'|'hand'),
+    rigid_mast (bool).
+    Rmax (per rail) = Ph/2 + (Pt + Q)(S - a)/S ; Rmin = Ph/2 + (Pt + Q) a / S."""
+    need = ("capacity_kN", "crab_kN", "bridge_kN", "span_mm", "hook_approach_mm", "wheel_base_mm",
+            "gantry_span_mm", "class")
+    miss = [k for k in need if cr.get(k) is None]
+    if miss:
+        raise CraneError("cfg['crane'] missing %s (IS 875-2 6.3 / manufacturer data)" % ", ".join(miss))
+    Q, Pt, Ph = (float(cr[k]) * 1000.0 for k in ("capacity_kN", "crab_kN", "bridge_kN"))
+    S, a = float(cr["span_mm"]), float(cr["hook_approach_mm"])
+    n = int(cr.get("wheels_per_side") or 2)
+    c = float(cr["wheel_base_mm"]); Lg = float(cr["gantry_span_mm"])
+    Rmax = Ph / 2.0 + (Pt + Q) * (S - a) / S
+    Rmin = Ph / 2.0 + (Pt + Q) * a / S
+    # column reaction: wheel group with one wheel over the column, simply supported girders both sides
+    xs = [i * c for i in range(n)] if n > 1 else [0.0]
+    best = 0.0
+    for shift in xs:
+        infl = sum(max(0.0, 1.0 - abs(x - shift) / Lg) for x in xs)
+        best = max(best, infl)
+    col_factor = best                                     # sum of influence ordinates (wheel loads)
+    cls = str(cr["class"]).upper().replace("CLASS", "").strip()
+    typ = str(cr.get("type") or "electric").lower()
+    if typ.startswith("hand"):
+        imp_girder, imp_col = 0.10, 0.0
+    else:
+        imp_girder = 0.25
+        imp_col = 0.25 if cls in ("III", "IV", "3", "4") else 0.10
+    surge_pct = 0.10 if cr.get("rigid_mast") else 0.05
+    H_total = surge_pct * (Pt + Q)                         # on one rail, shared by that rail's wheels
+    return {"Rmax_N": Rmax, "Rmin_N": Rmin, "wheel_max_N": Rmax / n, "wheel_min_N": Rmin / n,
+            "col_factor": col_factor, "col_Rmax_N": Rmax / n * col_factor, "col_Rmin_N": Rmin / n * col_factor,
+            "impact_girder": imp_girder, "impact_column": imp_col, "surge_pct": surge_pct,
+            "surge_rail_N": H_total, "col_surge_N": H_total / n * col_factor,
+            "traction_rail_N": 0.05 * Rmax, "col_traction_N": 0.05 * Rmax,   # 5 % of the static wheel loads on that rail
+            "cite": CRANE_CITE}
+
+
+def crane_frame_loads(cfg, pattern=("L", "S+")):
+    """Nodal loads {node: (Fx, Fy, Fz, Mx, My, Mz)} in N / N-mm for ONE crane pattern at fC = 1.
+
+    pattern = (side with Rmax 'L'|'R', 'S+'|'S-' surge | 'T+'|'T-' traction | None vertical only).
+    cr['bracket_nodes'] = {'L': node, 'R': node} (model nodes at rail/bracket level of the loaded frame),
+    cr['span_axis'] 'X'|'Y' (direction of the crane bridge span), cr['bracket_eccentricity_mm'] (e,
+    positive towards the crane).  Vertical loads include the column impact allowance (6.3(a)), with
+    the moment R e; surge on the Rmax-side rail transverse to the rails, traction along the rails."""
+    cr = _crane_def(cfg)
+    R = crane_reactions(cr)
+    bn = cr.get("bracket_nodes") or {}
+    if not (bn.get("L") and bn.get("R")):
+        raise CraneError("cfg['crane']['bracket_nodes'] = {'L': node, 'R': node} (bracket/rail-level nodes) required")
+    ax = str(cr.get("span_axis") or "").upper()
+    if ax not in ("X", "Y"):
+        raise CraneError("cfg['crane']['span_axis'] ('X' or 'Y', direction of the crane bridge span) required")
+    e = float(cr.get("bracket_eccentricity_mm") or 0.0)
+    side, hz = (pattern or ("L", None))[0], (pattern or ("L", None))[1] if pattern else None
+    fimp = 1.0 + R["impact_column"]
+    out = {}
+    for s_, sgn_in in (("L", 1.0), ("R", -1.0)):
+        V = (R["col_Rmax_N"] if s_ == side else R["col_Rmin_N"]) * fimp
+        f = [0.0] * 6
+        f[2] = -V
+        # moment of the eccentric reaction: bracket offset e towards the crane (inward)
+        if ax == "X":
+            f[4] = sgn_in * e * V              # r = (+-e, 0, 0), F = (0, 0, -V) -> My = +-e V
+        else:
+            f[3] = -sgn_in * e * V             # r = (0, +-e, 0) -> Mx = -(+-e) V
+        out[int(bn[s_])] = f
+    if hz:
+        kind, sg = hz[0], (1.0 if hz[1] == "+" else -1.0)
+        nd = int(bn[side])
+        f = out[nd]
+        if kind == "S":
+            f[0 if ax == "X" else 1] += sg * R["col_surge_N"]
+        elif kind == "T":
+            f[1 if ax == "X" else 0] += sg * R["col_traction_N"]
+    return {n: tuple(v) for n, v in out.items()}
+
+
+def crane_findings(cfg) -> list:
+    """Preflight: crane declared completely (WP2.7)."""
+    if not (cfg.get("crane") or cfg.get("cranes")):
+        return []
+    out = []
+    try:
+        cr = _crane_def(cfg)
+        crane_reactions(cr)
+        if not (cr.get("bracket_nodes") or {}).get("L"):
+            out.append(("ERROR", "crane: bracket_nodes {'L','R'} (rail-level nodes of the crane frame) required"))
+        if str(cr.get("span_axis") or "").upper() not in ("X", "Y"):
+            out.append(("ERROR", "crane: span_axis 'X'|'Y' required"))
+        if str(cr.get("operation") or "").lower() not in ("pendant", "cab"):
+            out.append(("ERROR", "crane: operation 'pendant' or 'cab' must be declared (IS 800 Table 6 crane "
+                                 "sway H/200 pendant, H/400 cab)"))
+        if cr.get("rail_height_mm") is None:
+            out.append(("ERROR", "crane: rail_height_mm (for the IS 800 Table 6 crane sway limit) required"))
+    except CraneError as ex:
+        out.append(("ERROR", str(ex)))
+    return out
+
+
+def gantry_girder_demands(cfg):
+    """Gantry girder demand set for the member module (HR-MEMBERS capacity checks):
+    max sagging moment under the moving wheel group (simply supported, absolute-max position by
+    scanning), with the 25 % girder impact (6.3(a)); surge moment on the top flange (lateral,
+    same influence), shear, and the IS 800 Table 6 limits span/750 (vertical, static wheel loads,
+    electric <= 50 t) or span/500 (manual) / span/1000 (> 50 t), and 10 mm relative lateral."""
+    cr = _crane_def(cfg)
+    R = crane_reactions(cr)
+    L = float(cr["gantry_span_mm"]); c = float(cr["wheel_base_mm"]); n = int(cr.get("wheels_per_side") or 2)
+    W = R["wheel_max_N"]; H = R["surge_rail_N"] / n
+    xs0 = [i * c for i in range(n)]
+    Mmax, Vmax = 0.0, 0.0
+    steps = 400
+    for s in range(steps + 1):
+        off = -xs0[-1] + (L + xs0[-1]) * s / steps
+        pos = [x + off for x in xs0 if 0.0 <= x + off <= L]
+        if not pos:
+            continue
+        Rb = sum(W * p / L for p in pos); Ra = W * len(pos) - Rb
+        Vmax = max(Vmax, Ra, Rb)
+        for p in pos:
+            M = Ra * p - sum(W * (p - q) for q in pos if q < p)
+            Mmax = max(Mmax, M)
+    cap = float(cr["capacity_kN"])
+    typ = str(cr.get("type") or "electric").lower()
+    div = 500.0 if typ.startswith("hand") else (750.0 if cap <= 500.0 else 1000.0)
+    return {"M_static_Nmm": Mmax, "M_vertical_Nmm": Mmax * (1.0 + R["impact_girder"]),
+            "V_vertical_N": Vmax * (1.0 + R["impact_girder"]), "M_surge_Nmm": Mmax * H / W,
+            "wheel_load_N": W, "wheel_load_with_impact_N": W * (1.0 + R["impact_girder"]),
+            "defl_limit_vertical_mm": L / div, "defl_limit_basis": "IS 800 Table 6 gantry span/%d (static wheel loads)" % div,
+            "lateral_limit_mm": L / 400.0, "lateral_relative_rails_limit_mm": 10.0,
+            "note": "Checks (HR-MEMBERS): biaxial bending with top-flange surge, LTB with the actual restraint, web "
+                    "bearing/buckling under the wheel, Section 13 fatigue by crane class", "cite": CRANE_CITE}

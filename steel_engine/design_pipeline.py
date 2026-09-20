@@ -957,6 +957,16 @@ def design_india(name, cfg, outdir):
     pkg["zero_demand_elements"] = zero
     pkg["beam_deflection"] = run.get("beam_deflection_rows")
     pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
+    if cfg.get("crane") or cfg.get("cranes"):
+        try:
+            gd = IL.gantry_girder_demands(cfg)
+            pkg["gantry_girder"] = {"demands": _jsonable(gd), "checks": [], "DC": None,
+                                    "section": (IL._crane_def(cfg).get("gantry_section")),
+                                    "note": "capacity checks (biaxial + surge, LTB with actual restraint, web "
+                                            "bearing/buckling, Section 13 fatigue) by HR-MEMBERS"}
+        except Exception as ex:
+            pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
+        pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):

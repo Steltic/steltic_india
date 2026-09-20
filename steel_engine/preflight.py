@@ -263,6 +263,8 @@ def india_checks(cfg):
             say(sev, msg)
     except ImportError:
         pass
+    for sev, msg in _IL.crane_findings(cfg):
+        say(sev, msg)
     return out
 
 

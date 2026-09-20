@@ -266,10 +266,12 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                     notional={"dir": d, "sign": s, "ratio": 0.005})
     # ---- crane rows (LL leading / crane leading) ----
     if crane:
-        add(_grav_label(1.5, 1.5, 1.5, 0, 1.05), 1.5, 1.5, 1.5, fC=1.05, family="T4 DL+LL+CL (LL leading)",
-            cite=IS800_T4 + " DL+LL+CL", crane=True)
-        add(_grav_label(1.5, 1.05, 1.05, 0, 1.5), 1.5, 1.05, 1.05, fC=1.5, family="T4 DL+LL+CL (CL leading)",
-            cite=IS800_T4 + " DL+LL+CL", crane=True)
+        from india_loads import CRANE_PATTERNS, CRANE_CITE
+        for (fD_, fL_, fC_, fam_) in ((1.5, 1.5, 1.05, "T4 DL+LL+CL (LL leading)"),
+                                      (1.5, 1.05, 1.5, "T4 DL+LL+CL (CL leading)")):
+            for pat in CRANE_PATTERNS:
+                add(_grav_label(fD_, fL_, fL_, 0, fC_) + "[CL:%s%s]" % pat, fD_, fL_, fL_, fC=fC_, family=fam_,
+                    cite=IS800_T4 + " DL+LL+CL; " + CRANE_CITE, crane=True, crane_pattern=list(pat))
     # ---- lateral families ----
     kinds = (["EQ"] if has_eq else []) + (["W"] if has_w else [])
     for kind in kinds:
@@ -314,24 +316,29 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                                 tags = ["col_only", "conn_only", "is800_12_2_3"]
                                 extra += "[col]"
                             lab = _grav_label(fD, fL, fLr, 0, fC) + _lat_label(f, kind, d, extra)
-                            c = add(lab, fD, fL, fLr, family=fam, cite=(IS800_T4 if not is1223 else
-                                    "IS 800:2007 12.2.3") + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015"),
-                                    lateral_kind=kind, direction=d, sign=s, tags=tags, fC=fC)
-                            c[key] = f
-                            if kind == "EQ" and rsa:
-                                c["rsa"] = d
-                            else:
-                                c["lateral_ref"] = ref
-                            if tv:
-                                c["torsion"] = tv
-                                c["torsion_mz"] = {str(k): v for k, v in tors[d][tv].items()}
-                            if zv is not None:
-                                c["fEv"] = fl * zv * Av
-                                c["vertical"] = {"Av": Av, "coef": zv}
-                            if kind == "EQ" and nonpar:
-                                o = "Y" if d == "X" else "X"
-                                c.setdefault("terms", []).append({"ref": "EQ_" + o, "f": 0.3 * f, "rsa": o if rsa else None})
-                                c["label"] += "%s0.3EQ_%s" % ("+" if f >= 0 else "-", o)
+                            cpats = [("L", None), ("R", None)] if fC else [None]
+                            for cp in cpats:
+                                c = add(lab + ("[CL:%s]" % cp[0] if cp else ""), fD, fL, fLr, family=fam, cite=(IS800_T4 if not is1223 else
+                                        "IS 800:2007 12.2.3") + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015"),
+                                        lateral_kind=kind, direction=d, sign=s, tags=tags, fC=fC)
+                                if cp:
+                                    c["crane"] = True
+                                    c["crane_pattern"] = list(cp)
+                                c[key] = f
+                                if kind == "EQ" and rsa:
+                                    c["rsa"] = d
+                                else:
+                                    c["lateral_ref"] = ref
+                                if tv:
+                                    c["torsion"] = tv
+                                    c["torsion_mz"] = {str(k): v for k, v in tors[d][tv].items()}
+                                if zv is not None:
+                                    c["fEv"] = fl * zv * Av
+                                    c["vertical"] = {"Av": Av, "coef": zv}
+                                if kind == "EQ" and nonpar:
+                                    o = "Y" if d == "X" else "X"
+                                    c.setdefault("terms", []).append({"ref": "EQ_" + o, "f": 0.3 * f, "rsa": o if rsa else None})
+                                    c["label"] += "%s0.3EQ_%s" % ("+" if f >= 0 else "-", o)
             # vertical-dominant combos +-ELZ +-0.3EL (6.3.4.1(c)) for the Table 4 EQ rows
             if kind == "EQ" and vreq:
                 for (fD, fL, fl, fam) in [(1.2, 1.2, 1.2, "T4 DL+LL+EL (ELZ leading)"),

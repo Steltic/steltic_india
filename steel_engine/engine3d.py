@@ -1190,6 +1190,38 @@ def india_wind_serviceability(cfg):
     return out
 
 
+def india_crane_sway(cfg):
+    """IS 800 Table 6 crane frame sway at rail level under the crane surge (gamma_f = 1.0):
+    H/200 (pendant-operated, elastic cladding) or H/400 (cab-operated, brittle), H = rail height.
+    Returns None when the job has no crane."""
+    if not (cfg.get("crane") or cfg.get("cranes")):
+        return None
+    import india_loads as IL
+    cr = IL._crane_def(cfg)
+    op = str(cr.get("operation") or "").lower()
+    if op not in ("pendant", "cab"):
+        raise IL.CraneError("crane operation ('pendant'|'cab') must be declared for the Table 6 sway limit")
+    div = IL.IS800_TABLE6["frame_crane_cab_brittle" if op == "cab" else "frame_crane_pendant_elastic"]
+    Hr = float(cr["rail_height_mm"])
+    ax = 0 if str(cr["span_axis"]).upper() == "X" else 1
+    worst = 0.0
+    for side in ("L", "R"):
+        info = build(cfg, "Linear")
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        for nd, v in IL.crane_frame_loads(cfg, (side, "S+")).items():
+            h = [0.0] * 6; h[ax] = v[ax]
+            ops.load(int(nd), *h)
+        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        ops.test("NormDispIncr", 1e-8, 50); ops.algorithm("Linear")
+        ops.integrator("LoadControl", 1.0); ops.analysis("Static"); ops.analyze(1)
+        for nd in (cr["bracket_nodes"]["L"], cr["bracket_nodes"]["R"]):
+            worst = max(worst, abs(ops.nodeDisp(int(nd), ax + 1)))
+    lim = Hr / div
+    return {"sway_mm": worst, "limit_mm": lim, "ratio": worst / lim, "operation": op,
+            "cite": "IS 800:2007 Table 6: crane frame sway at rail level H/%d (%s), crane surge at gamma 1.0"
+                    % (div, op)}
+
+
 def india_dynamic_wind_gate(cfg, f1_hz):
     """IS 875-3 9.1: h/b > 5 or f1 < 1 Hz -> the applied along-wind story forces must come from the
     10.2 gust factor (wind_summary.gust_factor with its inputs) and the across-wind response
@@ -1332,6 +1364,10 @@ def _run_india(cfg, name=None):
         chk["dynamic_wind"] = dw_ok
         if dw_why:
             extra["dynamic_wind"] = dw_why
+    csw = india_crane_sway(cfg)
+    if csw is not None:
+        chk["crane_sway"] = csw["ratio"] <= 1.0
+        extra["crane_sway_ratio"] = csw["ratio"]
     rLL, nLL, rows = beam_deflection_si(cfg)
     chk["beam_deflection"] = (nLL > 0 and rLL <= 1.0)
     extra["beam_defl_LL_ratio"] = rLL; extra["beam_defl_groups"] = nLL
@@ -1354,7 +1390,8 @@ def _run_india(cfg, name=None):
                 allp=all(chk.values()), drift=dr, drift_limits=lims, rsa=rsa, esm_permitted=esm_ok,
                 modes=mp["modes"], irregularity=irr,
                 esm_reasons=why, eccentricity=ecc, beam_deflection_rows=rows, method="RSA" if want_rsa else "ESM",
-                wind_serviceability=wsv, dynamic_wind={"required": dw_req, "ok": dw_ok, "reasons": dw_why})
+                wind_serviceability=wsv, dynamic_wind={"required": dw_req, "ok": dw_ok, "reasons": dw_why},
+                crane_sway=csw)
 
 
 def design_eccentricities(cfg, F=1.0e5, T=1.0e8):

@@ -612,7 +612,7 @@ def _beam_floor_width(model, b, cfg):
     return nb, nb * other / 2.0
 
 
-def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True):
+def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True, crane_pattern=None):
     """SI gravity for one gravity state; returns {level: total vertical load N}.
 
     * floor pressure p = fD D + fL L + fLr Lr + fS S + fEv (D + Table-10 share of L)   [kN/m2]
@@ -691,17 +691,14 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
                 if kk in lev:
                     lev[kk] += 0.5 * W
     if fC:
-        apply_crane_loads(cfg, model, fC)
+        apply_crane_loads(cfg, model, fC, crane_pattern)
     return lev
 
 
-def apply_crane_loads(cfg, model, fC):
-    """Crane wheel reactions / surge / traction (WP2.7) -- see india_loads.crane_frame_loads."""
-    try:
-        from india_loads import crane_frame_loads
-    except Exception as ex:
-        raise RuntimeError("crane loads requested but india_loads.crane_frame_loads unavailable: %s" % ex)
-    for nd, (fx, fy, fz, mx, my, mz) in crane_frame_loads(cfg).items():
+def apply_crane_loads(cfg, model, fC, pattern=None):
+    """Crane wheel reactions (+ impact, R e), surge or traction (WP2.7) -- india_loads.crane_frame_loads."""
+    from india_loads import crane_frame_loads
+    for nd, (fx, fy, fz, mx, my, mz) in crane_frame_loads(cfg, pattern or ("L", None)).items():
         ops.load(int(nd), fC * fx, fC * fy, fC * fz, fC * mx, fC * my, fC * mz)
 
 
@@ -807,7 +804,7 @@ def _grav_state_key(c):
     m = getattr(c, "meta", {}) or {}
     return (round(float(c[1]), 6), round(float(c[2]), 6), round(float(c[3]), 6),
             round(float(m.get("fS") or 0.0), 6), round(float(m.get("fC") or 0.0), 6),
-            round(float(m.get("fEv") or 0.0), 9))
+            round(float(m.get("fEv") or 0.0), 9), tuple(m.get("crane_pattern") or ()))
 
 
 def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
@@ -849,7 +846,7 @@ def member_records(model, R, cfg, case_grav, floor_system):
                                              max(Vmaj, Vmin), Mzi, Mzj, Myi, Myj, 0.0, Vmaj, Vmin)
     for b in model["braces"]:
         out[frozenset((b["n1"], b["n2"]))] = (float(R[b["tag"]][0]),) + (0.0,) * 10
-    fD, fL, fLr, fS, fC, fEv = case_grav
+    fD, fL, fLr, fS, fC, fEv = case_grav[:6]
     for b in model["beams"]:
         segs = b["segs"]
         Nb = R[segs[0]][6]
@@ -904,13 +901,13 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
         groups.setdefault(_grav_state_key(c), []).append(c)
     kinds = None
     for gk, cs in groups.items():
-        fD, fL, fLr, fS, fC, fEv = gk
+        fD, fL, fLr, fS, fC, fEv, cpat = gk
         model = build_static(cfg, "PDelta", nseg)
         if kinds is None:
             kinds = _member_kinds(model)
         ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
         lev = apply_gravity_state(cfg, model, fD, fL, fLr, fS, fC, fEv,
-                                  self_weight=cfg.get("self_weight", True))
+                                  self_weight=cfg.get("self_weight", True), crane_pattern=cpat or None)
         ok = _solve_newton()
         if ok != 0:
             raise RuntimeError("gravity state %s did not converge (P-Delta)" % (gk,))
