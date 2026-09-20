@@ -36,11 +36,33 @@ R_OK_SOURCES = frozenset({
 OMEGA0_OK_SOURCES = frozenset({
     "eor_documented", "eor", "documented", "explicit", "eor_explicit",
     "is1893", "rag",  # only if corpus actually has Ω0 (it does not today)
+    # IS 18168 is the preferred India steel-SFRS corpus source for Ω. Keep
+    # both spellings because retrieval metadata uses both forms.
+    "is18168", "is_18168",
 })
 OMEGA0_REFUSED = frozenset({
     "assumed", "assumption", "silent", "silent_default", "invented",
     "asce7", "asce_7", "asce722", "proxy", "placeholder", "todo", "tbd", "guess",
 })
+
+# India policy: IS 1893 does not tabulate an ASCE-style Ω0. For steel SFRS,
+# prefer the IS 18168 Ω/ELm=Ω·EL corpus path when it is actually ingested; do
+# not manufacture the familiar SCBF/EBF/SMRF values from memory.
+OMEGA0_POLICY = {
+    "blocks_complete": False,
+    "preferred_source_when_available": "is18168",
+    "honest_is1893_found_false_blocks_complete": False,
+    "is18168_values_require_corpus_hit": True,
+    "note": (
+        "IS 1893 has no ASCE-style Ω0. Prefer corpus IS 18168 Ω for steel "
+        "SFRS (ELm=Ω·EL); never invent Ω values without a found:true corpus hit."
+    ),
+}
+
+
+def _omega0_policy() -> dict:
+    """Return a fresh Ω0 policy/disclosure object for public result payloads."""
+    return dict(OMEGA0_POLICY)
 
 # Wave D — Table 9 system miss flags (Ex6–15). When found:false, COMPLETE
 # requires non-proxy R_source + R_cite (eor_documented or disclosed Table 9 map).
@@ -159,28 +181,47 @@ def resolve_R(cfg) -> dict:
 
 def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
                    corpus_hit=None) -> dict:
-    """Resolve ASCE-style Ω0 for India jobs.
+    """Resolve India steel overstrength without inventing ASCE-style Ω0.
 
-    IS 1893 has no Ω0 — default found:false. Optional eor_documented hook when
-    the EOR supplies a project Ω0 + cite (never invent from ASCE 7 silently).
-    Honest found:false does not invent IS-native Ω0.
+    IS 1893 has no Ω0 — default found:false. The preferred path, when the
+    corpus is available, is IS 18168 Ω for steel SFRS (ELm=Ω·EL), not an ASCE
+    Ω0 term. An ``is18168`` value is accepted only from a found:true corpus
+    hit; do not hardcode the familiar 2.5/3.0 values. The optional
+    eor_documented hook remains valid for a project EOR value + cite.
+    Honest found:false does not block COMPLETE and does not invent IS-native Ω.
     """
     cfg = cfg or {}
     seis = cfg.get("seis") if isinstance(cfg.get("seis"), dict) else {}
     plan = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
     summ = plan.get("seismic_summary") if isinstance(plan.get("seismic_summary"), dict) else {}
 
-    # Corpus path (almost always miss for IS 1893)
+    # Corpus path (almost always miss for IS 1893). IS 18168 calls this Ω;
+    # accept common Ω/Ω0 key spellings but preserve the public Omega0 field for
+    # compatibility with existing India disclosures.
     if isinstance(corpus_hit, dict) and corpus_hit.get("found") is True:
-        om = corpus_hit.get("Omega0") or corpus_hit.get("Om0") or corpus_hit.get("omega0")
-        if om is not None:
+        corpus_source = _norm(corpus_hit.get("source"))
+        om = (corpus_hit.get("Omega") or corpus_hit.get("omega")
+              or corpus_hit.get("Omega0") or corpus_hit.get("Om0")
+              or corpus_hit.get("omega0"))
+        # ASCE-labeled corpus material is never an India Ω source.
+        if (om is not None and corpus_source not in OMEGA0_REFUSED
+                and "asce" not in corpus_source):
+            policy = _omega0_policy()
             return {
                 "found": True,
                 "Omega0": float(om),
-                "source": corpus_hit.get("source") or "corpus",
+                "source": corpus_source or "corpus",
                 "resolved_via": "corpus",
+                # In particular, an IS 18168 result must disclose the cite
+                # returned by that hit rather than a made-up/default cite.
                 "cite": corpus_hit.get("cite") or "IS 1893 (corpus)",
-                "note": "Ω0 from corpus hit — rare for IS 1893; confirm clause.",
+                "note": (
+                    "Ω from corpus IS 18168 hit (ELm=Ω·EL); use the hit cite."
+                    if corpus_source in {"is18168", "is_18168"}
+                    else "Ω0 from corpus hit — rare for IS 1893; confirm clause."
+                ),
+                "omega0_policy": policy,
+                "disclosure": policy,
             }
 
     om = eor_Omega0
@@ -202,7 +243,30 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
     )
 
     if om is not None and src in OMEGA0_OK_SOURCES and cite:
+        # IS 18168 values are not an EOR alias and may not be supplied as an
+        # unexplained literal. They must come from the found:true corpus
+        # branch above; this prevents inventing 2.5/3.0 without the PDF hit.
+        if src in {"is18168", "is_18168"}:
+            policy = _omega0_policy()
+            return {
+                "found": False,
+                "Omega0": None,
+                "corpus_found": False,
+                "source": src,
+                "resolved_via": "found_false",
+                "cite": "IS 18168 Ω requires a found:true corpus hit",
+                "note": (
+                    "Refused literal IS 18168 Ω without a found:true corpus hit; "
+                    "do not hardcode SCBF/EBF/SMRF values."
+                ),
+                "required_inputs": ["corpus_hit={found:true, source:is18168, cite, Ω}"],
+                "is1893_omega0_present": False,
+                "flagged_false": bool(flagged_false) or True,
+                "omega0_policy": policy,
+                "disclosure": policy,
+            }
         if src in OMEGA0_REFUSED or "asce" in src:
+            policy = _omega0_policy()
             return {
                 "found": False,
                 "Omega0": None,
@@ -216,7 +280,10 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
                     % (src,)
                 ),
                 "required_inputs": ["Omega0_source in eor_documented/explicit", "Omega0_cite"],
+                "omega0_policy": policy,
+                "disclosure": policy,
             }
+        policy = _omega0_policy()
         return {
             "found": True,
             "Omega0": float(om),
@@ -229,6 +296,8 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
                 "Not invented silently. Prefer IS 800 §12 factors for capacity design."
             ),
             "policy": "eor_documented_ok_when_is1893_miss",
+            "omega0_policy": policy,
+            "disclosure": policy,
         }
 
     # Default honest miss
@@ -237,6 +306,7 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
         refused.append("Omega0_source must be eor_documented/explicit (not asce/assumed/silent)")
     if om is not None and not cite:
         refused.append("Omega0_cite")
+    policy = _omega0_policy()
     return {
         "found": False,
         "Omega0": None,
@@ -255,6 +325,8 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
         ],
         "is1893_omega0_present": False,
         "flagged_false": bool(flagged_false) or True,
+        "omega0_policy": policy,
+        "disclosure": policy,
     }
 
 
@@ -394,7 +466,14 @@ def design_status(cfg, pkg=None) -> dict:
             "note": om.get("note"),
             "eor_documented": bool(om.get("found") and "eor" in _norm(om.get("resolved_via"))),
             "blocks_complete": False,  # honest IS gap never alone blocks
+            "omega0_policy": _omega0_policy(),
+            "disclosure": {
+                "blocks_complete": False,
+                "preferred_source_when_available": "is18168",
+                "honest_is1893_found_false_blocks_complete": False,
+            },
         },
+        "omega0_policy": _omega0_policy(),
         "table9": {
             "misses": misses,
             "flags": {
@@ -427,6 +506,13 @@ def complete_gate_disclosure(cfg, pkg=None) -> dict:
         "status": st["status"],
         "reasons": st["reasons"],
         "Omega0": om,
+        "omega0_policy": _omega0_policy(),
+        "disclosure": {
+            "Omega0": om,
+            "blocks_complete": False,
+            "preferred_source_when_available": "is18168",
+            "honest_is1893_found_false_blocks_complete": False,
+        },
         "table9": st["table9"],
         "R_source": (st["R"] or {}).get("source"),
         "R_cite": (st["R"] or {}).get("cite"),
