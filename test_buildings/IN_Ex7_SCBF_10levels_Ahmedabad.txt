@@ -1,0 +1,23 @@
+IN_Ex7 — 10-storey laboratory / office building, special concentrically braced frames (SCBF), Ahmedabad
+
+Location: Ahmedabad — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone III, Z 0.16; soil medium (Type II).
+Occupancy: office and laboratories, 17,340 m2 (> 2,000 m2) -> importance factor I = 1.2 (Table 8 (ii)).
+Lateral system: special concentrically braced frames (IS 1893 Table 9 (ii)(b), R = 4.5), IS 800 12.8 with
+  IS 18168:2023 (mandatory in Zone III, cl. 1.2); X-bracing (12.8.1.2) in distributed bays both directions,
+  IS 808 WPB braces of IS 2062 E250 B0; braced-bay beams pinned; interior gravity framing pinned (IS 18168 1.4).
+Geometry (m): 6 x 4 bays @ 8.5 m; 10 storeys, storey 1 = 4.5 m, typical 3.6 m (H = 36.9 m); rectangular plan.
+  Composite metal deck floors, one-way (deck spans 2.83 m between secondary beams spanning X onto the Y girders);
+  cladding 0.5 kN/m2.
+Gravity (IS 875 Part 1 / Part 2): floor dead 3.0 kN/m2, roof dead 2.8 kN/m2; imposed 4.0 kN/m2 (Part 2 Table 1
+  office without separate storage; laboratories 3.0 kN/m2 enveloped) + 1.0 kN/m2 partition allowance (3.1.2);
+  roof imposed 0.75 kN/m2 (Table 2); IS 875-2 3.2.1 imposed-load reduction for columns.
+Seismic weight: full dead + self-weight + partitions (7.3.6) + 50 % of the imposed load (Table 10).
+Wind (IS 875 Part 3:2015): Ahmedabad Vb = 39 m/s (Annex A); terrain category 3; k1 1.0, k3 1.0; outside the
+  60 km cyclone belt -> k4 = 1.0, Kd = 0.9; Ka per Table 4 (7.2.2.1 frame tributary area); Table 5 Cpe;
+  gust factor (10.2) where the first-mode frequency is below 1 Hz (9.1).
+Analysis: response spectrum (7.7.1), CQC, scaled to V-bar_B (7.7.3.1), 7.8.2 design eccentricity; storey drift
+  0.004 h (7.11.1.1); IS 800 Table 4 + 12.2.3 (= IS 18168 5.5) combinations.
+Design: IS 800:2007 LSD; IS 808 sections (built-up welded box columns from IS 2062 plates where stated), IS 2062
+  E250 B0 / E350 B0; connections IS 800 Section 10 / 12 (CJP welds 12.4.2, HSFG 12.4.1), IS 18168 10.4 brace
+  connections, 9.3 bases.
+Deliverable: report.html + viewer_3d.html; cfg['load_plan'] from the corpus retrievals stored in rag/.
