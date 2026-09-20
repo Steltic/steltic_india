@@ -940,15 +940,17 @@ def design_india(name, cfg, outdir):
     import india_connection_design as CD
     ts_rec, ts_labels = {}, {}
     if any(reg[t][0] == "brace" for t in reg):
-        # signed static +/-EQ_X / +/-EQ_Y (ESM story forces, gamma 1.0) for the brace tension-share test
+        # signed static +/-EQ_X / +/-EQ_Y (ESM story forces, gamma 1.0, LATERAL LOAD ONLY - no gravity) for the
+        # 12.7.2.3 / 12.8.2.4 tension-share test: the clause shares "the total lateral load" between the tension
+        # braces, so gravity compression in the braces must not enter the split (WP6-fix, CFS finding).
         try:
             plan_ = cfg.get("load_plan") or {}
             tcs = []
             for d in ("X", "Y"):
                 if (plan_.get("story_forces") or {}).get("EQ_" + d):
                     for sg, f in (("+", 1.0), ("-", -1.0)):
-                        lab = "TS:1.0DL%s1.0EQ_%s" % (sg, d)
-                        tcs.append(IL.case_from_combination({"label": lab, "fD": 1.0, "fL": 0.0, "fLr": 0.0, "fE": f,
+                        lab = "TS:%s1.0EQ_%s" % (sg, d)
+                        tcs.append(IL.case_from_combination({"label": lab, "fD": 0.0, "fL": 0.0, "fLr": 0.0, "fE": f,
                                                              "lateral_ref": "EQ_" + d, "direction": d}, plan_))
                         ts_labels.setdefault(d, {})[sg] = lab
             per_ts, _kk, _ii = SM.solve_cases_si(cfg, tcs, 2, fs_)
