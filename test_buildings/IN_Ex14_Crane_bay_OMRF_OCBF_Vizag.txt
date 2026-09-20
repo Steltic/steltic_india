@@ -1,0 +1,33 @@
+IN_Ex14 — single-storey crane-bay industrial building, OMRF portals + OCBF end bays, 200 kN EOT crane, Visakhapatnam
+
+Location: Visakhapatnam — IS 1893 (Part 1):2016 (+ Amd 1, 2) Annex E Zone II, Z = 0.10; soil Type II; industrial
+  building → I = 1.0 (Table 8 (iii)). Lateral system (SYSTEM_TABLE / D3): transverse steel ordinary moment resisting
+  frame portals (OMRF, IS 800:2007 12.10), R = 3.0 (Table 9 i)(a)); longitudinal ordinary concentrically braced end
+  bays (OCBF, IS 800 12.7), R = 4.0 (Table 9 ii)(a)); both permitted in Zone II (Table 9 Note 1). The engine applies
+  one R: R = 3.0 in both directions (conservative for EQ_Y). "IMF" has no Indian basis (D3). IS 18168:2023 optional in
+  Zone II (1.2) — not applied (OMRF / OCBF are not IS 18168 systems).
+Geometry (SI): 21 m clear-span portals @ 9.0 m, 8 bays (72 m), eave 11.5 m, roof 1:10 (apex 12.55 m), crane rail
+  8.5 m on column brackets (600 mm eccentricity); rigid knees, pinned eave struts, X-braced end bays on both
+  longitudinal walls (braces connected at the crossing), fixed bases; purlins at 1.5 m, girts at 2.3 m; roof plan
+  bracing in the braced end bays (7.6.4 rigid roof declaration). Rafters modelled at the eave height (flat grid);
+  Table 6 roof coefficients at the real pitch.
+Crane (IS 875 (Part 2):1987 6.3 / 6.4, IS 800 3.5.3; nominal 200 kN class data declared by the EOR): capacity 200 kN,
+  crab 40 kN, bridge 180 kN, span 19.5 m, hook approach 1.0 m, 2 wheels per side at 3.5 m, Class II electric,
+  pendant-operated; Rmax = Ph/2 + (Pt + Q)(S − a)/S with the crab at the hook approach; vertical impact 25 % (girder) /
+  10 % (columns), surge 5 % of crab + lifted load, traction 5 % of the static wheel loads; loads on the loaded frame's
+  bracket nodes at rail level; gantry girder NPB750X270X202.49 with an MC300 cap channel (9 m simple spans).
+Loads: IS 875 (Part 2):1987 Table 2 roof 0.75 kN/m²; IS 875 (Part 1):2026 dead loads: roof assembly 0.55 kN/m²
+  (sheeting, purlins, insulation, services), wall cladding + girts 0.30 kN/m²; gantry girder + rail + cap 25.4 kN per
+  bracket; crane bridge + crab and gantries as permanent weight in W. IS 875 (Part 3):2015 wind: Vb 50 m/s (Annex A),
+  terrain category 2, k1 1.0, k3 1.0, east-coast cyclone belt (6.3.4: k4 1.15 industrial; 7.2.1: Kd 1.0; D10), Ka 0.8
+  on the frame tributary (103.5 m²) / 0.98 on the purlins; Table 5 walls (h/w 0.55, l/w 3.43), Table 6 roof at 5.7°
+  with Cpi ±0.5 (roller-shutter doors, 5–20 % openings) as member-level cases incl. 0.9 DL uplift; wall wind as a
+  distributed load on the portal columns. IS 875 (Part 4) snow: not applicable.
+Design: IS 800:2007 LSD (Table 4 incl. DL+LL+CL crane rows 1.5/1.5/1.05, 1.5/1.05/1.5, 1.2/1.2/1.05/0.6 WL,
+  1.2/1.2/0.53/1.2 WL); OMRF joints per 12.10.2 (1.2 Mp, shear, continuity plates), OCBF braces per 12.7 (KL/r ≤ 120,
+  P ≤ 0.8 Pd, not slender, 12.7.3.1 connection force), 12.2.3 rows, 12.12 fixed bases (1.2 Mp, 1.2 Vd); gantry girder
+  per 8.2.2 (LTB with mid-span lateral restraint), top-flange surge (cap channel), 8.7.3.1 / 8.7.4 web, Table 6
+  span/750 and 10 mm lateral, Section 13 fatigue (detail category 92, 2 × 10⁶ cycles, γmft 1.35); Table 6 crane-frame
+  sway H/200 (pendant) under crane surge (single portal) and wind; ESM Ta 0.085 h^0.75 (X) / 0.09 h/√d (Y), Sa/g 2.5,
+  RSA scaled per 7.7.3.1; 7.8.2; drift 0.004 h. Connections IS 800 Section 10 (HSFG IS 4000, CJP welds 12.4.2);
+  sections IS 808, steel IS 2062 E250 B0.

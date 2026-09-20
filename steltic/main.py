@@ -187,7 +187,7 @@ EXAMPLE_BRIEFS = {
     "in11": "IN_Ex11_SMF_3levels_Zplan_school_Chandigarh.txt",
     "in12": "IN_Ex12_SMF_podium_11levels_Kochi.txt",
     "in13": "IN_Ex13_SCBF_bigbox_flexdiaphragm_Indore.txt",
-    "in14": "IN_Ex14_Crane_bay_IMF_Vizag.txt",
+    "in14": "IN_Ex14_Crane_bay_OMRF_OCBF_Vizag.txt",
     "in15": "IN_Ex15_Gable_warehouse_snow_Shimla.txt",
     # USA reference briefs (not offered in the UI; kept for regression runs)
     "ex1": "usa_reference/Ex1_SCBF_5levels.txt",
