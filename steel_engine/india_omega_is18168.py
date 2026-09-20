@@ -1,14 +1,17 @@
-"""Live IS 18168:2023 Ω retrieval for India steel SFRS (no invent).
+"""IS 18168:2023 overstrength factor Ω for India steel SFRS (decision D2).
 
-Queries the India corpus for IS_18168_2023 §5.5 (exact_section preferred) and
-returns a corpus_hit dict suitable for ``india_seismic_gates.resolve_Omega0``.
+Source of the values: IS 18168:2023 "Earthquake Resistant Design and Detailing of Steel Buildings", clause 5.5
+(printed p. 5 / pdf p. 7), read from the BIS PDF (WP2.4):
+    "Ω = Overstrength factor = 2.5 for SCBFs and EBFs = 3.0 for SMRFs"
+    ELm = Ω EL; combinations (1) 1.2 DL + γLL LL ± 1.0 ELm and (2) 0.9 DL ± 1.0 ELm,
+    γLL = 0.25 for live load class <= 3.0 kN/m², 0.50 for > 3.0 kN/m²;
+    used for (a) columns in SMRFs, SCBFs and EBFs, (b) beams in SCBFs and EBFs, (c) braces in EBFs and
+    (d) all connections which are part of the structural system.
+IS 18168 gives no Ω for OCBF/OMF/BRBF/SPSW/dual (not covered, cl. 1.3) -> found:false.
 
-Policy:
-  * found:true ONLY when the corpus HIT is present and Ω digits are parsed
-    from that HIT text (or verified structured fields derived from it).
-  * Do NOT hardcode 2.5 / 3.0 as resolve defaults — numbers must come from
-    the HIT. On miss / unmapped SFRS: found:false (honest).
-  * §5.5 tabulates Ω for SCBF / EBF / SMRF only (ELm = Ω · EL).
+The corpus path (exact_section 5.5 on IS_18168_2023) is still queried first when the India corpus is mounted; the
+clause values above are the verified fallback (resolved_via='pdf_clause'), and a corpus HIT whose digits disagree
+with the PDF values is rejected. IS 800:2007 12.2.3 (±2.5 EL) remains the IS 800 overstrength mechanism.
 """
 from __future__ import annotations
 
@@ -17,10 +20,20 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-# Document / section constants (ids only — not Ω numeric defaults)
+# Document / section constants
 IS18168_DOC = "IS_18168_2023"
 IS18168_SECTION = "5.5"
 IS18168_CITE = "IS 18168:2023 §5.5"
+IS18168_PDF_CITE = ("IS 18168:2023 cl. 5.5 (printed p. 5 / pdf p. 7): 'Ω = Overstrength factor = 2.5 for SCBFs and "
+                    "EBFs = 3.0 for SMRFs'")
+# Values read from the IS 18168:2023 PDF, clause 5.5 (see module docstring). Verified text, not a default.
+IS18168_5_5 = {
+    "omega": {"SCBF": 2.5, "EBF": 2.5, "SMRF": 3.0},
+    "gamma_LL": ((3.0, 0.25), (float("inf"), 0.50)),   # (LL class upper bound kN/m2, γLL)
+    "combinations": ("1.2 DL + γLL LL ± 1.0 ELm", "0.9 DL ± 1.0 ELm"),
+    "applies_to": ("columns in SMRFs, SCBFs and EBFs", "beams in SCBFs and EBFs", "braces in EBFs",
+                   "all connections which are part of structural system"),
+}
 IS18168_ELM_RULE = "ELm=Ω·EL"
 DEFAULT_CORPUS_ROOT = "/workspace/engineering_rag_india"
 
@@ -58,7 +71,7 @@ def _norm_key(s) -> str:
 def normalize_sfrs(sfrs_type) -> Optional[str]:
     """Map job system strings to SCBF / EBF / SMRF, or None if unmapped.
 
-    Dual / OCBF / BRBF / SPSW / IMF / OMRF → None (honest miss). Do not treat
+    Dual / OCBF / BRBF / SPSW / IMF / OMRF → None (not covered by IS 18168, cl. 1.3). Do not treat
     bare "concentric" as SCBF (OCBF labels also say concentric).
     """
     raw = _norm_key(sfrs_type)
@@ -182,30 +195,42 @@ def _query_exact_section_55(root: Path) -> dict:
     )
 
 
-def fetch_is18168_section_55(*, root: Optional[str] = None) -> dict:
-    """Fetch raw §5.5 HIT (or found:false). Does not select an SFRS Ω."""
+def pdf_clause_section_55() -> dict:
+    """IS 18168:2023 cl. 5.5 values read from the PDF (verified), in the same shape as a corpus section HIT."""
+    om = IS18168_5_5["omega"]
+    text = "Ω = Overstrength factor = %.1f for SCBFs and EBFs = %.1f for SMRFs" % (om["SCBF"], om["SMRF"])
+    return {"found": True, "source": "is18168", "cite": IS18168_PDF_CITE, "Elm_rule": IS18168_ELM_RULE,
+            "section_id": IS18168_SECTION, "pdf_page": 7, "doc": IS18168_DOC, "text": text,
+            "omega_by_sfrs": dict(om), "resolved_via": "pdf_clause",
+            "note": "IS 18168:2023 cl. 5.5 read from the BIS PDF (WP2.4)"}
+
+
+def fetch_is18168_section_55(*, root: Optional[str] = None, allow_pdf_clause: bool = True) -> dict:
+    """Fetch §5.5 from the corpus; fall back to the PDF-read clause values when the corpus is unavailable or misses.
+    A corpus HIT whose parsed Ω disagrees with the PDF clause is rejected (found:false)."""
     r = corpus_root(root)
     if not corpus_available(r):
-        return _miss(note="India corpus unavailable", reason="corpus_unavailable")
+        return pdf_clause_section_55() if allow_pdf_clause else _miss(note="India corpus unavailable",
+                                                                      reason="corpus_unavailable")
     try:
         result = _query_exact_section_55(r)
     except Exception as ex:  # pragma: no cover - IO / import failures
-        return _miss(note="IS 18168 §5.5 query failed: %s" % ex, reason="query_error")
+        return pdf_clause_section_55() if allow_pdf_clause else _miss(
+            note="IS 18168 §5.5 query failed: %s" % ex, reason="query_error")
     if not result or not result.get("found"):
-        return _miss(note="IS 18168 §5.5 exact_section miss", reason="section_miss",
-                     raw_found=bool(result and result.get("found")))
+        return pdf_clause_section_55() if allow_pdf_clause else _miss(
+            note="IS 18168 §5.5 exact_section miss", reason="section_miss")
     hits = result.get("hits") or []
     hit = hits[0] if hits else {}
     text = hit.get("text") or ""
     parsed = parse_omega_table_from_hit_text(text)
     if not parsed:
-        return _miss(
-            note="§5.5 HIT present but Ω digits not parseable from HIT text",
-            reason="parse_miss",
-            section_id=hit.get("section_id") or IS18168_SECTION,
-            hit_id=hit.get("id"),
-            pdf_page=hit.get("pdf_page"),
-        )
+        return pdf_clause_section_55() if allow_pdf_clause else _miss(
+            note="§5.5 HIT present but Ω digits not parseable from HIT text", reason="parse_miss",
+            section_id=hit.get("section_id") or IS18168_SECTION, hit_id=hit.get("id"), pdf_page=hit.get("pdf_page"))
+    if any(abs(parsed[k] - IS18168_5_5["omega"][k]) > 1e-9 for k in ("SCBF", "EBF", "SMRF")):
+        return _miss(note="corpus §5.5 digits disagree with the IS 18168:2023 PDF clause - rejected",
+                     reason="pdf_mismatch", parsed=parsed)
     return {
         "found": True,
         "source": "is18168",
@@ -223,8 +248,29 @@ def fetch_is18168_section_55(*, root: Optional[str] = None) -> dict:
             "SMRF": parsed["SMRF"],
         },
         "raw_match": parsed.get("raw_match"),
-        "note": "IS 18168 §5.5 HIT — Ω table parsed from corpus text",
+        "resolved_via": "corpus",
+        "note": "IS 18168 §5.5 HIT — Ω table parsed from corpus text (matches the PDF clause)",
     }
+
+
+def resolve_omega(system, *, LL_class_kNm2=None) -> dict:
+    """IS 18168:2023 cl. 5.5 Ω, γLL and the two overstrength combinations for SCBF / EBF / SMRF.
+    Structured {value, clause, cite, found}; other systems -> found:false (not covered by IS 18168 cl. 1.3)."""
+    sfrs = normalize_sfrs(system)
+    if sfrs is None:
+        return {"found": False, "value": None, "Omega": None, "system": system, "clause": "IS 18168:2023 1.3 / 5.5",
+                "cite": IS18168_PDF_CITE, "reason": "system not covered by IS 18168 (SMRF, SCBF, EBF only)"}
+    gLL = None
+    if LL_class_kNm2 is not None:
+        gLL = next(g for ub, g in IS18168_5_5["gamma_LL"] if float(LL_class_kNm2) <= ub)
+    om = IS18168_5_5["omega"][sfrs]
+    return {"found": True, "value": om, "Omega": om, "system": sfrs, "gamma_LL": gLL,
+            "combinations": [c.replace("γLL", "%.2f" % gLL) if gLL is not None else c
+                             for c in IS18168_5_5["combinations"]],
+            "applies_to": list(IS18168_5_5["applies_to"]), "Elm_rule": IS18168_ELM_RULE,
+            "clause": "IS 18168:2023 5.5", "cite": IS18168_PDF_CITE, "source": "is18168",
+            "note": "IS 800:2007 12.2.3 (±2.5 EL) remains the IS 800 overstrength rule; IS 18168 governs over IS 800 "
+                    "Section 12 where it applies (foreword) - EOR/lead decision."}
 
 
 def fetch_is18168_omega(sfrs_type, *, root: Optional[str] = None,

@@ -168,3 +168,15 @@ def test_smf_joint_connection_1p2mp_and_panel_zone():
     pz = out["12.11.2.3_panel_zone:Jn1_2-X"]
     assert pz["detail"]["V_design_N"] > 0 and pz["ok"] in (True, False)
     assert out["12.11.3.2_SCWB:Jn1_2-X"]["value"] == pytest.approx(1.34, abs=0.01)
+
+
+def test_is18168_omega_from_pdf_clause():
+    import india_omega_is18168 as IO
+    r = IO.resolve_omega("SCBF", LL_class_kNm2=2.5)
+    assert r["found"] and r["Omega"] == 2.5 and r["gamma_LL"] == 0.25 and "5.5" in r["clause"]
+    assert IO.resolve_omega("SMRF", LL_class_kNm2=4.0)["Omega"] == 3.0
+    assert IO.resolve_omega("EBF")["Omega"] == 2.5
+    assert IO.resolve_omega("OCBF")["found"] is False
+    assert IO.resolve_omega("BRBF")["found"] is False
+    sec = IO.fetch_is18168_section_55(root="/nonexistent")
+    assert sec["found"] and sec["resolved_via"] == "pdf_clause"

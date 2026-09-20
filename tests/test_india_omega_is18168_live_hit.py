@@ -15,7 +15,8 @@ import india_seismic_gates as ISG
 import india_omega_is18168 as IO
 
 
-# Verbatim-shaped fixture text matching the live §5.5 HIT (digits live in the text)
+# Fixture text for the §5.5 HIT. Digits VERIFIED against the IS 18168:2023 PDF cl. 5.5 (pdf p. 7) in WP2.4:
+# 'Ω = Overstrength factor = 2.5 for SCBFs and EBFs = 3.0 for SMRFs'.
 _FIXTURE_SEC55_TEXT = """## 5.5 Loads and Load Combinations
 
 Design earthquake loads ( EL ) shall be estimated and combined as per IS 1893 (Part 1).
