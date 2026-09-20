@@ -622,7 +622,7 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
     grade = cfg.get("brace_grade") if kind == "brace" else cfg.get("steel_grade")
     grade = (cfg.get("grade_by_section") or {}).get(sec) or grade      # per-section IS 2062 grade (e.g. E350 columns)
     m = {"id": "e%d" % t, "tag": t, "section": sec, "grade": grade, "role": _ROLE_TO_I8.get(kind, kind),
-         "L_mm": length, "node_i": n1, "node_j": n2}
+         "role_group": role, "L_mm": length, "node_i": n1, "node_j": n2}
     if kind == "brace":
         m["process"] = cfg.get("brace_process")
     K = cfg.get("K_factors") or {}
@@ -1098,7 +1098,7 @@ def design_india(name, cfg, outdir):
             r["reason"] = c["reason"]
         if c.get("ok") is None:
             r["found"] = False
-        elif r["value"] is None and r["limit"] is None:
+        elif (r["value"] is None and r["limit"] is None) or c.get("gate") is True:
             r["gate"] = True                     # boolean detailing gate (weld type / bolt type / load sharing)
         r.update(extra)
         return r

@@ -939,6 +939,40 @@ def combo_forces_for_member_check(records, kind):
     return out
 
 
+# IS 875 (Part 2):1987 3.2.1 (corpus: spec:IS_875_Part_2_1987:standard:3.2.1, pdf p. 14) -- reduction in the total
+# distributed imposed load on all floors carried by a column, by the number of floors (including the roof) carried:
+IS875_2_321_REDUCTION = ((1, 0.0), (2, 0.10), (3, 0.20), (4, 0.30), (10, 0.40), (10 ** 6, 0.50))
+IS875_2_321_CITE = ("IS 875 (Part 2):1987 3.2.1: reduction in total distributed imposed load on all floors carried by "
+                    "a column: 1 floor 0 %, 2 10 %, 3 20 %, 4 30 %, 5-10 40 %, over 10 50 % (not for storage / "
+                    "warehouses / garages, 3.2.1.1; not for partitions, plant or machinery)")
+
+
+def imposed_load_reduction_321(n_floors):
+    n = int(n_floors)
+    for lim, r in IS875_2_321_REDUCTION:
+        if n <= lim:
+            return r
+    return 0.50
+
+
+def column_imposed_load_reduction_factors(cfg):
+    """{column element tag: r} for cfg['column_imposed_load_reduction'] (opt-in, IS 875-2 3.2.1): a column between
+    levels k-1 and k carries the floors k .. NF (the roof counts as a floor).  Storage buildings are refused
+    (3.2.1.1)."""
+    if not cfg.get("column_imposed_load_reduction"):
+        return {}
+    if cfg.get("storage") or cfg.get("storage_levels"):
+        raise ValueError("IS 875-2 3.2.1.1: no imposed-load reduction for storage buildings / warehouses")
+    NF = len(cfg["heights"])
+    out = {}
+    info = eng.build(cfg, "Linear")
+    for (t, kind, sec, n1, n2) in info["ele"]:
+        if kind == "col":
+            k_top = max(n1, n2) // 100000
+            out[t] = imposed_load_reduction_321(NF - k_top + 1)
+    return out
+
+
 def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_responses=False, service=False):
     """Run every strength case (service=False) or every serviceability case (service=True; used for the IS 800
     10.4.3 service-load slip check of HSFG connections).  Returns ({label: {fset: rec}}, kinds, info).
@@ -953,11 +987,25 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             continue
         groups.setdefault(_grav_state_key(c), []).append(c)
     kinds = None
+    llr = column_imposed_load_reduction_factors(cfg)          # IS 875-2 3.2.1 (opt-in), {column tag: r}
     for gk, cs in groups.items():
         fD, fL, fLr, fS, fC, fEv, cpat = gk
         model = build_static(cfg, "PDelta", nseg)
         if kinds is None:
             kinds = _member_kinds(model)
+        N_LL = {}
+        if llr and fL:
+            # imposed FLOOR load alone (no partitions, cladding, self-weight, roof imposed): the part of the column
+            # axial force that IS 875-2 3.2.1 lets the designer reduce by the number of floors carried
+            c2 = dict(cfg, partition_load_kNm2=0.0, clad=0.0)
+            ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+            apply_gravity_state(c2, model, 0.0, fL, 0.0, 0.0, 0.0, 0.0, self_weight=False)
+            if _solve_newton() != 0:
+                raise RuntimeError("imposed-load state %s did not converge" % (gk,))
+            RLL = _responses(model)
+            N_LL = {c["tag"]: float(RLL[c["tag"]][6]) for c in model["cols"]}
+            ops.wipe()
+            model = build_static(cfg, "PDelta", nseg)
         ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
         lev = apply_gravity_state(cfg, model, fD, fL, fLr, fS, fC, fEv,
                                   self_weight=cfg.get("self_weight", True), crane_pattern=cpat or None)
@@ -1008,6 +1056,13 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             if RC is not RG:
                 lat = _lateral_axial_shear(model, {t: RC[t] - RG[t] for t in RG})
                 recs = {fs: tuple(r) + lat.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
+            if N_LL:
+                # IS 875-2 3.2.1: column axial = N - r x N_imposed (tension-positive records; only the axial force)
+                for col in model["cols"]:
+                    r_ = llr.get(col["tag"], 0.0)
+                    fs = frozenset((col["n1"], col["n2"]))
+                    if r_ and fs in recs:
+                        rec = list(recs[fs]); rec[0] = rec[0] - r_ * N_LL[col["tag"]]; recs[fs] = tuple(rec)
             per_case[c[0]] = recs
     return per_case, kinds or {}, info
 

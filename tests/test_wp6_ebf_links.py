@@ -99,3 +99,18 @@ def test_section12_ebf_branch():
     # a pinned brace connection satisfies 12.3.4.6; the beam-column joint develops the beam (CJP)
     assert by["brace_conn_pinned_12.3.4.6"]["ok"] is True
     assert by["12.3.4.4_connection_moment"]["ok"] is True
+
+
+def test_is875_2_321_column_reduction_table():
+    # IS 875 (Part 2):1987 3.2.1 (pdf p. 14): 1 floor 0 %, 2 10 %, 3 20 %, 4 30 %, 5-10 40 %, over 10 50 %
+    assert [SM.imposed_load_reduction_321(n) for n in (1, 2, 3, 4, 5, 10, 11)] == [0.0, 0.10, 0.20, 0.30, 0.40, 0.40, 0.50]
+
+
+def test_spec_for_role_group_key():
+    import india_connection_design as CD
+    cfg = {"connections": {"column_base": {"WPB800X300X317.36": {"fixed": True, "B_mm": 1},
+                                           "gravity_col:WPB800X300X317.36": {"fixed": False, "B_mm": 2}}}}
+    assert CD.spec_for(cfg, "column_base", "WPB800X300X317.36", "gravity_col")["B_mm"] == 2
+    assert CD.spec_for(cfg, "column_base", "WPB800X300X317.36", "lateral_col")["B_mm"] == 1
+    b = CD.base_entry(cfg, {"id": "e1", "section": "WPB800X300X317.36", "role_group": "gravity_col"}, {})
+    assert b["fixed"] is False

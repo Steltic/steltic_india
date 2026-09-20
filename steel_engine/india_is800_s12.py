@@ -467,7 +467,7 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
     # fully restrained connection only where the brace resists part of the link end moment)
     if fy and sysn == "EBF":
         out.append(_chk("brace_conn_pinned_12.3.4.6", bool(conn.get("resists_link_end_moment")), False,
-                        clause="IS 18168:2023 12.3.4.6", member=m["id"], dc=None,
+                        clause="IS 18168:2023 12.3.4.6", member=m["id"], dc=None, gate=True,
                         ok=not conn.get("resists_link_end_moment"),
                         cite="brace connection declared pinned (no share of the link end moment); a moment-sharing "
                              "brace connection must be fully restrained"))
@@ -1099,8 +1099,8 @@ def ebf_beam_column_checks(links, model_data, cfg):
     connection assembly resists the beam moment 1.1 Ry fyb Zpb (a fully restrained CJP-welded connection, whose
     welds are parent metal per IS 800 10.5.7.1.2, develops the beam at its expected strength) and the sum of the
     expected column flexural strengths at the joint exceeds 1.1 Ry fyb Zpb.  Joints are read from model_data
-    ['joints'] (joints_from_model) for the beams outside the links; the expected column strength is taken as
-    Ry Zpc fyc (1 - Pu/Py) with Pu from the Table 4 EQ combinations (axial reduction as in 8.2, stated)."""
+    ['joints'] (joints_from_model) for the beams outside the links; the expected column flexural strength is
+    Ry Zpc fyc (the clause names no axial reduction; Pu/Py of the columns is recorded for information)."""
     out = []
     beam_ids = set()
     for ln in links:
@@ -1134,6 +1134,7 @@ def ebf_beam_column_checks(links, model_data, cfg):
             out.append(_na("12.3.4.4_connection_moment", clause="IS 18168:2023 12.3.4.4", member=j.get("id"),
                            cite="1.1 Ry fyb Zpb", reason="no beam_column connection declared for %s" % mb["section"]))
         Ssum = 0.0
+        pupy = []
         for c in j.get("columns") or []:
             mc = _member(model_data, c["member_id"])
             if not mc:
@@ -1141,11 +1142,13 @@ def ebf_beam_column_checks(links, model_data, cfg):
             pc = _props(mc); fyc, _ = _fy(mc, pc); ryc, _ = _ry(mc, pc)
             Pu = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, mc["id"]) if f.get("family") == "table4"] + [0.0])
             Py = fyc * pc["A"]
+            pupy.append(round(Pu / Py, 3))
             Zpc = pc["Zx"] if (mc.get("major_axis_plane") in (None, j.get("frame_dir"))) else pc["Zy"]
-            Ssum += ryc * fyc * Zpc * max(1.0 - Pu / Py, 0.0)
+            Ssum += ryc * fyc * Zpc
         out.append(_chk("12.3.4.4_column_strength", Mdem, Ssum, clause="IS 18168:2023 12.3.4.4", member=j.get("id"),
-                        cite="sum of expected column flexural strengths Ry fyc Zpc (1 - Pu/Py) > 1.1 Ry fyb Zpb "
-                             "(axial reduction as 8.2, engineering practice)") if Ssum > 0 else
+                        Pu_over_Py=pupy,
+                        cite="sum of the expected column flexural strengths Ry fyc Zpc (about the frame axis) exceeds "
+                             "1.1 Ry fyb Zpb of the beam outside the link (no axial reduction in the clause; Pu/Py recorded)") if Ssum > 0 else
                    _na("12.3.4.4_column_strength", clause="IS 18168:2023 12.3.4.4", member=j.get("id"),
                        cite="expected column strengths", reason="no columns at the joint"))
     return out

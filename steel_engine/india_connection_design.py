@@ -31,7 +31,7 @@ def spec_for(cfg, kind, section, role=None):
     specs = ((cfg or {}).get("connections") or {}).get(kind) or {}
     if not isinstance(specs, dict):
         return None
-    for key in ((role, section), section, role, "default"):
+    for key in ((role, section), "%s:%s" % (role, section), section, role, "default"):
         if key in specs and isinstance(specs[key], dict):
             return dict(specs[key])
     return None
@@ -131,7 +131,9 @@ def beam_shear_connection_checks(cfg, beam_member, V_N, *, sfrs=False):
 # ------------------------------------------------------------------------------------------ column bases / splices
 def base_entry(cfg, col_member, load_cases):
     """model_data 'bases' entry with the declared base geometry and the per-combination (P, M, V) of the column."""
-    sp = spec_for(cfg, "column_base", col_member["section"], "column")
+    # keyed by 'lateral_col:<section>' / 'gravity_col:<section>' (role group) before the bare section (WP6: one rolled
+    # section can serve both an SFRS column with a fixed base and a gravity column with a pinned base)
+    sp = spec_for(cfg, "column_base", col_member["section"], col_member.get("role_group") or "column")
     if not sp:
         return None
     b = {"id": "base-%s" % col_member["id"], "column_member_id": col_member["id"], "fixed": bool(sp.get("fixed", True)),
@@ -157,7 +159,7 @@ def base_load_cases(records, *, kind="col", major_plane_is_frame=True):
 
 
 def column_splice(cfg, col_member, p, fy, records, *, sfrs):
-    sp = spec_for(cfg, "column_splice", col_member["section"], "column")
+    sp = spec_for(cfg, "column_splice", col_member["section"], col_member.get("role_group") or "column")
     if not sp:
         return None
     if sp.get("none"):
