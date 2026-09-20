@@ -117,3 +117,15 @@ def test_construction_stage_skips_deck_parallel_beams():
     rec2 = CD.composite_design_record(cfg, mem, beam_dirs={"NPB300X165X45.76": {"Y"}, "NPB600X220X154.47": {"Y"}})
     cs2 = next(s for s in rec2["slots"] if s["component"] == "construction_stage")
     assert cs2["detail"]["section"] == "NPB300X165X45.76" and cs2["DC"] > 1.0
+
+
+def test_table5_square_plan_first_band():
+    """WP6-fix: IS 875-3 Table 5 for a square plan (l/w = 1.0) resolves to the '1 <= l/w <= 3/2' band in every
+    height band (the 17 x 17 m gym was refused with h/w 0.47, l/w 1.0)."""
+    import india_wind_tables as WT
+    for hw in (0.47, 1.0, 2.0):
+        r = WT.cpe_walls(hw, 1.0, 0.0)
+        assert r["found"], r
+        assert r["Cpe"]["A"] in (0.7, 0.8)
+    mw = WT.lowrise_member_wind(1.0, 8.0, 17.0, 17.0, 0.0, 0.05, ridge_axis="X")
+    assert mw["found"] and len(mw["patterns"]) == 4
