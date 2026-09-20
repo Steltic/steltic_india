@@ -1319,6 +1319,18 @@ def design_india(name, cfg, outdir):
         pkg["diaphragm_7_6_4"] = rec764
     except Exception as ex:
         pkg["diaphragm_7_6_4"] = {"clause": "IS 1893 (Part 1):2016 7.6.4", "ok": None, "error": str(ex)}
+    # IS 875 (Part 4):2021 4.4 ponding screen for long-span flat roofs (WP6-fix): the job declares the roof slope,
+    # the governing span and the mid-span deflection under the impounded rain / snow load (transparent formula
+    # in cfg['ponding']); india_loads.ponding_screen_4_4 records the engineering-practice screen and its verdict
+    if cfg.get("ponding"):
+        try:
+            pin = dict(cfg["ponding"])
+            rec_p = IL.ponding_screen_4_4(span_mm=float(pin["span_mm"]), delta_snow_mm=float(pin["delta_mm"]),
+                                          roof_slope=pin.get("roof_slope"), end_drainage=bool(pin.get("end_drainage", True)))
+            rec_p["inputs"] = _jsonable(pin)
+            pkg["ponding"] = rec_p
+        except Exception as ex:
+            pkg["ponding"] = {"clause": "IS 875 (Part 4):2021 4.4", "ok": None, "error": str(ex)}
     if (pkg["irregularity"].get("reentrant") or {}).get("irregular"):
         pkg["seismic_analysis"]["reentrant_flexible_required"] = True
         pkg["seismic_analysis"]["flexible_diaphragm_run"] = bool(cfg.get("_flexible_diaphragm_run"))

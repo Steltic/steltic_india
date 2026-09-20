@@ -1,8 +1,27 @@
-IN_Ex8 — 4-storey OCBF split-level (vertical irregularity), Jaipur
+IN_Ex8 — 4-storey office wing and 2-storey light-manufacturing workshop wing, ordinary concentrically braced frames
+(OCBF), split-level plan, Jaipur
 
-Location: Jaipur — RETRIEVE IS 1893 Zone, Z, soil, I (office/workshop); R for OCBF / concentric SBF.
-Geometry (SI N-mm): L-plan — office wing 4 storeys (L1=4.2 m, L2–4=3.6 m); workshop wing 2 tall
-  storeys (L1=6.0 m, L2=4.8 m). Shared grid line columns; floor elevations do NOT align
-  (vertical irregularity). OCBF chevron/single-diagonal on perimeter of each wing.
-Loads: RETRIEVE IS 875 P1/P2 (office + light manufacturing mezzanine); P3 wind — check both.
-Design: IS 800 LSD OCBF; connections IS 816/4000. LIVE load_plan RAG mandatory.
+Location: Jaipur — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone II, Z 0.10; soil medium (Type II).
+Occupancy: office wing 2,700 m2 (> 2,000 m2) -> I = 1.2 (Table 8 (ii)); workshop wing (industrial, light
+  manufacturing) -> I = 1.0 (Table 8 (iii)); each wing a structurally independent unit (Table 8 Note 3).
+Lateral system: ordinary concentrically braced frames (IS 1893 Table 9 (ii)(a) OBF, R = 4.0 — permitted in Zone II;
+  Note 1 bans OBF in Zones III-V only), IS 800 12.7: X-bracing (12.7.1.2), braces IS 808 WPB of IS 2062 E250 B0 with
+  KL/r <= 120; braced-bay beams pinned; interior gravity framing pinned. IS 18168 optional in Zone II (not applied).
+Geometry (m): 7.5 m grid, L-shaped envelope 8 x 3 bays; the two wings are separated by an IS 1893 7.11.3 seismic
+  joint on grid line 5 (twin columns), because their floors do not align (split level):
+  office wing 4 x 3 bays (30 x 22.5 m), storeys 4.2 + 3 x 3.6 m (H = 15.0 m);
+  workshop wing 4 x 2 bays (30 x 15 m), two tall storeys 6.0 + 4.8 m (H = 10.8 m).
+  Composite metal-deck floors, one-way on secondary beams at 2.5 m; workshop mezzanine deck 3.5 kN/m2; cladding 0.5.
+Gravity (IS 875 Part 1 / Part 2): floor dead 3.0 (workshop 3.5), roof dead 2.8 kN/m2; office imposed 4.0 kN/m2
+  (Table 1 rooms without separate storage) + 1.0 partitions (3.1.2); workshop work areas with light-duty machinery
+  5.0 kN/m2 (Table 1 (vii)(b)(1)) + 1.0 partitions; roof 0.75 kN/m2 (Table 2); IS 875-2 3.2.1 column reduction in
+  the office wing only (3.2.1.1).
+Seismic weight: full dead + self-weight + partitions (7.3.6) + 50 % of the imposed load (Table 10, > 3.0 kN/m2).
+Wind (IS 875 Part 3:2015): Jaipur Vb = 47 m/s (Annex A); terrain category 3; k1 1.0, k3 1.0; inland -> k4 1.0,
+  Kd 0.9; Ka per Table 4; Table 5 Cpe; both wind and earthquake in every combination family (IS 800 Table 4).
+Analysis: response spectrum (office H = 15.0 m is not below 15 m, 7.7.1; workshop run the same way), CQC, scaled to
+  V-bar_B (7.7.3.1), 7.8.2 eccentricity; drift 0.004 h; IS 800 12.2.3 combinations for the 12.7.3.1 connection force.
+Design: IS 800:2007 LSD; IS 808 sections, IS 2062 E250 B0; connections IS 800 Section 10 / 12.7.3 (CJP 12.4.2,
+  HSFG 12.4.1); OCBF bases 1.2 Mp / 1.2 Vd (12.12).
+Deliverable: report.html + viewer_3d.html per unit (package root = office wing; units/workshop/); cfg['load_plan']
+  from the corpus retrievals stored in rag/.

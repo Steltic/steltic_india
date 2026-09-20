@@ -949,6 +949,12 @@ def _screen_findings(pkg, cfg_hint=None) -> list:
     d764 = pkg.get("diaphragm_7_6_4")
     if isinstance(d764, dict) and d764.get("ok") is None:
         out.append("IS 1893 7.6.4 diaphragm classification not evaluated: %s" % (d764.get("reason") or d764.get("error")))
+    pond = pkg.get("ponding")
+    if isinstance(pond, dict) and pond.get("ok") is None:
+        out.append("IS 875 (Part 4) 4.4 ponding screen not evaluated: %s" % (pond.get("reason") or pond.get("error")))
+    elif isinstance(pond, dict) and pond.get("ok") is False:
+        out.append("IS 875 (Part 4) 4.4 ponding screen fails: delta %.1f mm >= fall %.1f mm over the half span" % (
+            float(pond.get("value") or 0.0), float(pond.get("limit") or 0.0)))
     comp = pkg.get("composite_design")
     if isinstance(comp, dict) and comp.get("blocks_complete"):
         out.append("composite_design: IS 11384 not in the corpus -- record the scope (bare_steel + construction "

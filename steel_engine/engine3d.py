@@ -1293,6 +1293,20 @@ def india_dynamic_wind_gate(cfg, f1_hz):
     return not bad, bad, True
 
 
+def _bays_adjacent(present_k, i, j, dirn):
+    """How many present bays bound this beam (1 perimeter, 2 interior) -- mirrors static_model._bays_adjacent."""
+    n = 0
+    if dirn == "X":
+        for jj in (j - 1, j):
+            if all(c in present_k for c in ((i, jj), (i + 1, jj), (i, jj + 1), (i + 1, jj + 1))):
+                n += 1
+    else:
+        for ii in (i - 1, i):
+            if all(c in present_k for c in ((ii, j), (ii + 1, j), (ii, j + 1), (ii + 1, j + 1))):
+                n += 1
+    return n
+
+
 def beam_deflection_si(cfg):
     """IS 800 Table 6 live-load deflection of every beam group (SI), simply supported w L^4 check
     on the actual section.  Returns (worst ratio to limit, n evaluated, rows).  n == 0 -> the gate
@@ -1312,7 +1326,13 @@ def beam_deflection_si(cfg):
             continue
         dirn = "X" if Lx >= Ly else "Y"
         roof = (n1 // 100000) >= NF
-        trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (cfg["SY"] if dirn == "X" else cfg["SX"])
+        # tributary width by the bays actually bounding the beam (edge beam: one bay -> half the bay width;
+        # interior: two half bays) -- the full-bay width on every group over-read edge-beam deflections (WP6-fix)
+        k_ = n1 // 100000
+        i_, j_ = (min(n1, n2) % 100000) // 100, min(n1, n2) % 100
+        nb = _bays_adjacent(info.get("present", {}).get(k_, set()), i_, j_, dirn)
+        other = cfg["SY"] if dirn == "X" else cfg["SX"]
+        trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (nb * other / 2.0 if nb else other)
         key = (str(sec), round(L, 0), roof, dirn)
         if key not in groups or trib > groups[key][1]:
             groups[key] = (L, trib, roof, sec)

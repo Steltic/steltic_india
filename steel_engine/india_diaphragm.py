@@ -227,7 +227,7 @@ CITE_7_6_4 = ("IS 1893 (Part 1):2016 7.6.4: 'flexible, if ... the maximum latera
 
 
 def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=None, rc_slab=None,
-                   screed_mm=None, roof=False, plan_aspect_ratio=None):
+                   screed_mm=None, roof=False, plan_aspect_ratio=None, basis=None):
     """Rigid / flexible per 7.6.4.  With measured deflections: flexible when delta_max(chord) > 1.2 x average.
     Without them, the 'usually rigid' rule (RC monolithic slab, or precast with >= 50 mm floor / 75 mm roof screed,
     plan aspect ratio < 3) classifies as rigid; a bare metal deck / braced roof with no such data must be DECLARED
@@ -247,6 +247,8 @@ def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=
     if declared in ("flexible", "rigid"):
         out.update(method="declared by the EOR (7.6.4 basis to be recorded)", classification=declared,
                    flexible=declared == "flexible", ok=True)
+        if basis:
+            out["basis"] = str(basis)                    # the EOR's recorded 7.6.4 basis (WP6-fix: was rejected)
         return out
     out.update(method=None, classification=None, flexible=None, ok=None,
                reason="7.6.4 classification needs the diaphragm deflection ratio, an RC/screeded slab, or a declaration")

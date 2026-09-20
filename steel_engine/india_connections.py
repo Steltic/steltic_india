@@ -346,10 +346,12 @@ def base_plate_thickness_7_4_3_1(*, w_MPa, a_mm, b_mm, fy_MPa, tf_col_mm=None, t
     out = {"found": True, "ts_mm": ts, "t_required_mm": t_req, "w_MPa": w_MPa, "a_mm": a_mm, "b_mm": b_mm,
            "cite": "IS 800:2007 7.4.3.1 ts = sqrt(2.5 w (a^2-0.3b^2) gamma_m0/fy) > tf"}
     if t_prov_mm:
-        out["check"] = _check(t_req ** 2, t_prov_mm ** 2, dc=(ts / t_prov_mm) ** 2, clause="IS 800:2007 7.4.3.1",
-                              cite="DC = (t_req/t_prov)^2 (value/limit are the squared thicknesses, mm2)",
-                              t_req_mm=t_req, t_prov_mm=t_prov_mm)
-        out["check"]["ok"] = (ts / t_prov_mm) ** 2 <= 1.0 and (tf_col_mm is None or t_prov_mm > tf_col_mm)
+        # DC on the REQUIRED thickness (ts with the tf floor of 7.4.3.1), so that value / limit and dc agree
+        # (WP6-fix: dc used ts alone and disagreed with the stored value/limit pair whenever tf > ts)
+        out["check"] = _check(t_req ** 2, t_prov_mm ** 2, dc=(t_req / t_prov_mm) ** 2, clause="IS 800:2007 7.4.3.1",
+                              cite="DC = (t_req/t_prov)^2 (value/limit are the squared thicknesses, mm2; t_req = max(ts, tf))",
+                              t_req_mm=t_req, t_prov_mm=t_prov_mm, ts_mm=ts)
+        out["check"]["ok"] = (t_req / t_prov_mm) ** 2 <= 1.0 and (tf_col_mm is None or t_prov_mm > tf_col_mm)
         out["ts_gt_tf"] = None if tf_col_mm is None else t_prov_mm > tf_col_mm
     return out
 
