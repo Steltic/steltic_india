@@ -376,23 +376,33 @@ def _bearing_linear(P, M, B, L, f_anchor, As_t, n_mod):
     return {"Y_mm": Y, "C_N": C, "T_N": T, "fp_max_MPa": fp, "e_mm": e}
 
 
+IS456_EC_CITE = "IS 456:2000 6.2.3.1: Ec = 5000 sqrt(fck) (short-term static modulus, MPa)"
+
+
+def ec_is456(fck_MPa):
+    """IS 456:2000 6.2.3.1 short-term modulus Ec = 5000 sqrt(fck) MPa (the default when the EOR gives no Ec)."""
+    return 5000.0 * math.sqrt(float(fck_MPa))
+
+
 def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_plate_MPa, fck_MPa,
                       col_d_mm, col_bf_mm, col_tf_mm, anchors=None, Ec_MPa=None, modular_ratio=None,
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
-                      friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None):
+                      friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
+                      sfrs_moment_factor=1.2, Ec_source=None):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
     P_N > 0 compression. anchors = {n_total, n_tension (on the tension side), d_mm, grade, f_mm (distance of the
     tension anchor line from the plate centre), pitch_mm, edge_mm, Anb_mm2?}.
     - bearing: linear pressure <= 0.6 fck (7.4.1); e <= L/6 trapezoid, e > L/6 elastic compatibility with anchors
-      (needs Ec or modular ratio - EOR input; no default).
+      (modular ratio n = E/Ec; Ec from the EOR, else IS 456:2000 6.2.3.1 Ec = 5000 sqrt(fck) - recorded as the source).
     - anchors: 10.3.5 tension, 10.3.3 shear, 10.3.6 combined; concrete embedment/pull-out is outside IS 800
       (found:false unless embedment={capacity_N, cite} is supplied by the EOR).
     - shear path: friction 0.45 x compression (7.4.1) or shear key or anchors.
     - thickness: compression-side cantilever per 7.4.3.1 form (M = 0.2 t^2 fy/gamma_m0 per unit width, the
       1.2 Ze cap of 8.2.1.2 - equivalent to 7.4.3.1 with b = 0), tension-side anchor-line moment; ts > tf.
-    - 12.12: for SFRS fixed bases M_dem = max(M, 1.2 Mp_col), V_dem = max(V, 1.2 Vd_col).
+    - 12.12: for SFRS fixed bases M_dem = max(M, sfrs_moment_factor x Mp_col) (1.2 per IS 800 12.12.1; 1.1 Ry per
+      IS 18168 9.3 when it governs), V_dem = max(V, 1.2 Vd_col).
     - geometric feasibility: anchor pitch >= 2.5 d (10.2.2), edge >= 1.5 d0 (10.2.4.2 min edge), weld length <=
       column perimeter.
     """
@@ -401,9 +411,11 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     M_dem, V_dem = abs(float(M_Nmm or 0.0)), abs(float(V_N or 0.0))
     if sfrs_fixed_base:
         if col_Zp_mm3 and col_fy_MPa:
-            M12 = 1.2 * col_Zp_mm3 * col_fy_MPa
-            checks["12.12.1_moment_demand"] = {"value": M12, "clause": "IS 800:2007 12.12.1",
-                                               "cite": "1.2 x full plastic moment of the column", "ok": True}
+            M12 = float(sfrs_moment_factor) * col_Zp_mm3 * col_fy_MPa
+            checks["12.12.1_moment_demand"] = {"value": M12, "clause": "IS 800:2007 12.12.1" + (
+                " + IS 18168:2023 9.3" if sfrs_moment_factor > 1.2 else ""),
+                                               "cite": "%.2f x full plastic moment of the column" % sfrs_moment_factor,
+                                               "ok": True}
             M_dem = max(M_dem, M12)
         else:
             checks["12.12.1_moment_demand"] = _check(None, None, clause="IS 800:2007 12.12.1",
@@ -430,7 +442,10 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         bearing.update(method="trapezoidal (e <= L/6)", fp_max_MPa=fmax, Y_mm=L_mm)
         checks["bearing"] = _check(fmax, fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     elif P > 0:
+        if not modular_ratio and not Ec_MPa:
+            Ec_MPa, Ec_source = ec_is456(fck_MPa), IS456_EC_CITE
         n = modular_ratio or ((E_MPA / Ec_MPa) if Ec_MPa else None)
+        bearing.update(Ec_MPa=Ec_MPa, Ec_source=Ec_source or ("EOR" if (Ec_MPa or modular_ratio) else None))
         if not (n and As_t and a.get("f_mm") is not None):
             bearing.update(method="e > L/6 needs anchors (n_tension, d, f_mm) and Ec/modular ratio (EOR input)")
             checks["bearing"] = _check(None, fb, clause="IS 800:2007 7.4.1", cite=cite_b, ok=None,

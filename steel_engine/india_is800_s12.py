@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 
 import india_is800 as I8
 import india_connections as C
+import india_is18168 as I18
 
 SRC = "steel_engine/india_is800_s12.py"
 SUPPORTED_SYSTEMS = ("OCBF", "SCBF", "EBF", "OMF", "SMF")
@@ -73,6 +74,22 @@ def _chk(id_, value, limit, *, clause, cite, member=None, dc=None, ok=_AUTO, **e
 
 def _na(id_, *, clause, cite, member=None, reason):
     return _chk(id_, None, None, clause=clause, cite=cite, member=member, ok=None, reason=reason)
+
+
+def is18168_status(system, cfg):
+    """IS 18168:2023 applicability for this job (mandatory Zones III-V for SMRF/SCBF/EBF; Zone II opt-in)."""
+    cfg = cfg or {}
+    return I18.applies(system, cfg.get("zone") or cfg.get("Z"), opt_in=bool(cfg.get("apply_is18168")))
+
+
+def _ry(member, p):
+    """IS 18168 Table 1 Ry for the member grade (B0/C); IS 1161 tubes / other steels -> 1.4 per 5.2.1 (flagged)."""
+    grade = str(member.get("grade") or "")
+    key, q = I8.parse_is2062_grade(grade)
+    ry = I18.ry_for_grade(key, q) if key else None
+    if ry is None:
+        return 1.4, "Ry 1.4 (IS 18168:2023 5.2.1 'other steels'; grade %r not an IS 2062 B0/C grade)" % grade
+    return ry, "Ry %.1f (IS 18168:2023 Table 1, %s)" % (ry, key)
 
 
 # ------------------------------------------------------------------------------------------ zone / material
@@ -200,10 +217,17 @@ def brace_member_checks(system, m, model_data, cfg):
     klr = K * L / rmin if L else None
     lim = 120 if sysn == "OCBF" else 160
     klr_clause = "IS 800:2007 12.7.2.1" if sysn == "OCBF" else "IS 800:2007 12.8.2.2"
-    out.append(_chk("brace_KL_r", klr, lim, clause=klr_clause, member=m["id"],
-                    cite="slenderness of bracing members shall not exceed %d%s" % (
-                        lim, "" if sysn == "OCBF" else " (printed '(only hangers)'; applied to braces)"),
-                    K=K, L_mm=L, r_min_mm=rmin) if klr else
+    klr_cite = "slenderness of bracing members shall not exceed %d%s" % (
+        lim, "" if sysn == "OCBF" else " (printed '(only hangers)'; applied to braces)")
+    a18 = is18168_status(sysn, cfg)
+    strict = False
+    if sysn == "SCBF" and a18["applies"]:
+        # IS 18168 10.2 '< 160' vs IS 800 12.8.2.2 '<= 160': same number, the strict inequality governs; both cited
+        klr_clause += " + IS 18168:2023 10.2"
+        klr_cite += "; " + I18.CITE_10_2 + " (" + I18.PRECEDENCE + ")"
+        strict = True
+    out.append(_chk("brace_KL_r", klr, lim, clause=klr_clause, member=m["id"], cite=klr_cite,
+                    ok=(klr < lim) if strict else (klr <= lim), K=K, L_mm=L, r_min_mm=rmin) if klr else
                _na("brace_KL_r", clause=klr_clause, cite="KL/r", member=m["id"], reason="L_mm missing"))
     comp = I8.compression_capacity(p, fy, KLz_mm=K * L, KLy_mm=K * L, process=m.get("process")) if L else {"found": False}
     Pc = _brace_compression(model_data, m)
@@ -239,8 +263,9 @@ def brace_member_checks(system, m, model_data, cfg):
     return out
 
 
-def brace_connection_force(system, m, model_data, *, conn=None):
-    """12.8.3.1 SCBF: min(1.1 fy Ag, system max); 12.7.3.1 OCBF: min(1.2 fy Ag, 12.2.3 force, system max)."""
+def brace_connection_force(system, m, model_data, *, conn=None, cfg=None):
+    """12.8.3.1 SCBF: min(1.1 fy Ag, system max); 12.7.3.1 OCBF: min(1.2 fy Ag, 12.2.3 force, system max).
+    IS 18168:2023 10.4.1 (Zones III-V SCBF): expected yield max(1.1 Ry fy Ag, Ru fu An) replaces 1.1 fy Ag (stricter)."""
     sysn = normalize_system(system)
     p = _props(m)
     fy, _ = _fy(m, p)
@@ -248,12 +273,24 @@ def brace_connection_force(system, m, model_data, *, conn=None):
         return {"found": False, "demand_N": None, "reason": "grade/fy not resolved"}
     Ag = p["A"]
     sys_max = (conn or {}).get("system_max_force_N")
+    a18 = is18168_status(sysn, cfg)
     if sysn == "SCBF":
         base = 1.1 * fy * Ag
         cands = {"1.1 fy Ag (12.8.3.1a)": base}
-        if sys_max:
-            cands["system maximum (12.8.3.1b)"] = float(sys_max)
         clause = "IS 800:2007 12.8.3.1"
+        if a18["applies"]:
+            # IS 18168 10.4.1(a): max(1.1 Ry fy Ag, Ru fu An) -- stricter than IS 800's 1.1 fy Ag; both cited
+            ry, ry_note = _ry(m, p)
+            ru = I18.RU.get(I8.parse_is2062_grade(str(m.get("grade") or ""))[0] or "", 1.2)
+            _, fu = _fy(m, p)
+            An = m.get("An_mm2") or Ag
+            exp_ = max(1.1 * ry * fy * Ag, (ru * fu * An) if fu else 0.0)
+            cands["max(1.1 Ry fy Ag, Ru fu An) (IS 18168 10.4.1a; %s)" % ry_note] = exp_
+            # precedence: the stricter of the two 'expected yield' terms is the (a) term
+            cands = {k: v for k, v in cands.items() if v == max(base, exp_)}
+            clause += " + IS 18168:2023 10.4.1"
+        if sys_max:
+            cands["system maximum (12.8.3.1b / IS 18168 10.4.1b)"] = float(sys_max)
     else:
         base = 1.2 * fy * Ag
         cands = {"1.2 fy Ag (12.7.3.1a)": base}
@@ -275,7 +312,7 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
     if conn is None:
         return [_na("brace_connection", clause="IS 800:2007 " + pre, cite="brace end connection", member=m["id"],
                     reason="no connection data for brace")]
-    dem = brace_connection_force(system, m, model_data, conn=conn)
+    dem = brace_connection_force(system, m, model_data, conn=conn, cfg=cfg)
     if not dem["found"]:
         return [_na("brace_connection_force", clause="IS 800:2007 %s.1" % pre, cite="connection force",
                     member=m["id"], reason=dem["reason"])]
@@ -442,6 +479,13 @@ def column_checks(system, model_data, cfg):
             continue
         comp = I8.compression_capacity(p, fy, KLz_mm=(m.get("Kz") or 1.0) * m["L_mm"],
                                        KLy_mm=(m.get("Ky") or 1.0) * m["L_mm"], process=m.get("process"))
+        a18 = is18168_status(sysn, cfg)
+        if a18["applies"] and comp.get("found"):
+            # IS 18168 7.2 (alone: IS 800 Table 3 gives 180 for the same member) -> cite IS 18168
+            klr = comp.get("KL_over_r_max")
+            out.append(_chk("is18168_7_2_column_KL_r", klr, I18.COLUMN_KLR_LIMIT, clause="IS 18168:2023 7.2",
+                            member=m["id"], cite=I18.CITE_7_2, ok=(klr < I18.COLUMN_KLR_LIMIT) if klr is not None else None,
+                            note="IS 800:2007 Table 3 (180) is less strict; IS 18168 governs (Foreword)"))
         fs = _forces(model_data, m["id"])
         t4 = [f.get("P_N", 0.0) for f in fs if f.get("family", "table4") != "12.2.3"]
         if not comp.get("found") or not t4:
@@ -501,11 +545,29 @@ def base_checks(system, model_data, cfg):
                            [k for k in need if geo.get(k) is None]))
             continue
         geo.setdefault("col_d_mm", p["d"]); geo.setdefault("col_bf_mm", p["bf"]); geo.setdefault("col_tf_mm", p["tf"])
-        r = C.base_plate_design(sfrs_fixed_base=bool(b.get("fixed")), col_Zp_mm3=Zp, col_fy_MPa=fy, col_Vd_N=Vd, **geo)
+        Hc = geo.pop("Hc_mm", None) or m.get("L_mm")
+        mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 12.12 / 7.4 / 10.3", "fixed base 1.2 Mp (12.12.1); shear max(full, 1.2 Vd) (12.12.2)"
+        a18 = is18168_status(sysn, cfg)
+        if a18["applies"] and fy:
+            ry, ry_note = _ry(m, p)
+            if b.get("fixed"):
+                # IS 18168 9.3: M = 1.1 Ry Mpc (1.54 Mpc for E250 > IS 800's 1.2 Mp -> governs), V = 2.2 Ry Mpc/Hc
+                mfac = max(1.2, 1.1 * ry)
+                vmin = (2.2 * ry * Zp * fy / Hc) if Hc else None
+                cl += " + IS 18168:2023 9.3"
+                ct += "; IS 18168:2023 9.3 (pdf p. 13): fixed base 1.1 Ry Mpc, shear 2.2 Ry Mpc/Hc (%s; stricter governs)" % ry_note
+            else:
+                vmin = (1.1 * ry * Zp * fy / Hc) if Hc else None
+                cl += " + IS 18168:2023 9.4"
+                ct += "; IS 18168:2023 9.4 (pdf p. 13): pinned base min moment 0.5 Ry Myc, shear 1.1 Ry Mpc/Hc (%s)" % ry_note
+                geo["M_Nmm"] = max(float(geo.get("M_Nmm") or 0.0), 0.5 * ry * p["Sx"] * fy)
+        if vmin:
+            geo["V_N"] = max(float(geo.get("V_N") or 0.0), vmin)
+        r = C.base_plate_design(sfrs_fixed_base=bool(b.get("fixed")), col_Zp_mm3=Zp, col_fy_MPa=fy, col_Vd_N=Vd,
+                                sfrs_moment_factor=mfac, **geo)
         if not b.get("fixed") and Vd:
             r["demands"]["V_N"] = max(r["demands"]["V_N"], 1.2 * Vd)
-        out.append(_chk("12.12_base", r.get("dc"), 1.0, clause="IS 800:2007 12.12 / 7.4 / 10.3", member=b.get("id"),
-                        cite="fixed base 1.2 Mp (12.12.1); shear max(full, 1.2 Vd) (12.12.2)", ok=r.get("ok"),
+        out.append(_chk("12.12_base", r.get("dc"), 1.0, clause=cl, member=b.get("id"), cite=ct, ok=r.get("ok"),
                         dc=r.get("dc"), detail=r))
     return out
 
@@ -563,6 +625,58 @@ def scwb_joint(joint, model_data):
     return _chk("12.11.3.2_SCWB", ratio, 1.2, clause="IS 800:2007 12.11.3.2", member=joint.get("id"),
                 cite="sum Mpc (above + below, axial-reduced per 9.3.1.2) / sum Mpb >= 1.2", dc=1.2 / ratio,
                 ok=ratio >= 1.2, level=joint.get("level"), columns=terms_c, beams=terms_b)
+
+
+def scwb_joint_is18168(joint, model_data, cfg=None):
+    """IS 18168:2023 8.2: sum Zpc fyc (1 - Pu/Pd) / sum 1.1 Ry Zpb fyb > 1.4 (Pu = max factored axial compression,
+    Pd = 7.1.2 design compressive strength of the column); 8.2.1: not required at the roof level.  Stricter than
+    IS 800 12.11.3.2 (1.2, no Ry) -> governs where IS 18168 applies (both records kept)."""
+    cols, beams = joint.get("columns") or [], joint.get("beams") or []
+    cid = "is18168_8_2_SCWB"
+    if joint.get("roof") or not any(c.get("position") == "above" for c in cols):
+        return _chk(cid, None, None, clause="IS 18168:2023 8.2.1", cite="need not be satisfied at the roof level",
+                    member=joint.get("id"), ok=True, dc=None, note="roof joint")
+    if not cols or not beams:
+        return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                   reason="joint has no columns or beams")
+    sMpc, terms_c = 0.0, []
+    for c in cols:
+        m = _member(model_data, c["member_id"]) or c
+        p = _props(m)
+        fy, _ = _fy(m, p)
+        if not fy or not m.get("L_mm"):
+            return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                       reason="column grade / L_mm not resolved")
+        axis = "z" if (m.get("major_axis_plane") in (None, joint.get("frame_dir"))) else "y"
+        fs = _forces(model_data, m["id"])
+        Pu = max([f.get("P_N", 0.0) for f in fs] + [0.0])
+        comp = I8.compression_capacity(p, fy, KLz_mm=(m.get("Kz") or 1.0) * m["L_mm"],
+                                       KLy_mm=(m.get("Ky") or 1.0) * m["L_mm"], process=m.get("process"))
+        if not comp.get("found"):
+            return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                       reason="column Pd (7.1.2) not computed")
+        Zp = p["Zx"] if axis == "z" else p["Zy"]
+        Mpc = Zp * fy * max(1.0 - Pu / comp["Pd_N"], 0.0)
+        sMpc += Mpc
+        terms_c.append({"member": m["id"], "section": m["section"], "axis": axis, "Pu_N": Pu, "Pd_N": comp["Pd_N"],
+                        "Mpc_Nmm": Mpc})
+    sMbo, terms_b = 0.0, []
+    for b in beams:
+        m = _member(model_data, b["member_id"]) or b
+        p = _props(m)
+        fy, _ = _fy(m, p)
+        if not fy:
+            return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                       reason="beam grade not resolved")
+        ry, ry_note = _ry(m, p)
+        Mbo = 1.1 * ry * p["Zx"] * fy
+        sMbo += Mbo
+        terms_b.append({"member": m["id"], "section": m["section"], "Ry": ry, "Ry_basis": ry_note, "Mbo_Nmm": Mbo})
+    ratio = sMpc / sMbo
+    return _chk(cid, ratio, I18.SCWB_MIN, clause="IS 18168:2023 8.2", member=joint.get("id"),
+                cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry)",
+                dc=I18.SCWB_MIN / ratio if ratio else None, ok=ratio > I18.SCWB_MIN, level=joint.get("level"),
+                columns=terms_c, beams=terms_b)
 
 
 def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
@@ -650,6 +764,8 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
                             member=joint.get("id"), cite="continuity plates in all strong-axis welded connections",
                             ok=None if cp_ is None else bool(cp_), dc=None))
         out.append(scwb_joint(joint, model_data))
+        if is18168_status(sysn, cfg)["applies"]:
+            out.append(scwb_joint_is18168(joint, model_data, cfg))
     else:
         typ = str(conn.get("type") or "").lower()
         if "weld" in typ:
@@ -868,6 +984,16 @@ def section12_checks(system, model_data, cfg=None):
     zg = zone_gate(sysn, cfg)
     if zg:
         checks.append(zg)
+    a18 = is18168_status(sysn, cfg)
+    if a18["applies"]:
+        g = I18.system_gate(sysn, cfg.get("zone") or cfg.get("Z"), cfg.get("height_m"))
+        g["source"] = SRC
+        checks.append(g)
+        p55 = model_data.get("combos_is18168_5_5_present")
+        checks.append(_chk("is18168_5_5_combinations", bool(p55), True, clause="IS 18168:2023 5.5", cite=I18.CITE_5_5,
+                           ok=bool(p55), dc=None, Omega=I18.omega(sysn)["Omega"]) if p55 is not None else
+                      _na("is18168_5_5_combinations", clause="IS 18168:2023 5.5", cite=I18.CITE_5_5,
+                          reason="not reported by the load plan"))
     # all Section 12 systems
     if model_data.get("combos_12_2_3_present") is None:
         checks.append(_na("12.2.3_combinations", clause="IS 800:2007 12.2.3",
@@ -917,16 +1043,15 @@ def section12_checks(system, model_data, cfg=None):
             checks += smf_joint_checks(j, model_data, cfg, system=sysn)
     # IS 18168:2023 advisories (governs over IS 800 Section 12 where applicable - lead/EOR decision)
     zone = _zone_roman(cfg.get("zone") or cfg.get("Z"))
-    if zone == "V" and sysn == "SCBF":
-        advisories.append({"clause": "IS 18168:2023 1.3", "note": "Zone V: 'all steel buildings shall be made of "
-                           "EBF systems; SCBFs shall not be used' (IS 18168 governs where applicable)."})
-    if zone in ("IV", "V") and sysn == "SMF" and (cfg.get("height_m") or 0) >= 15:
-        advisories.append({"clause": "IS 18168:2023 1.3 / 12.1.1", "note": "SMRF in Zones IV/V only for "
-                           "buildings of height less than 15 m."})
-    if sysn in ("SCBF", "SMF", "EBF"):
-        advisories.append({"clause": "IS 18168:2023 5.5", "note": "IS 18168 overstrength combinations "
-                           "1.2DL+gLL LL+/-Omega EL and 0.9DL+/-Omega EL (Omega 2.5 SCBF/EBF, 3.0 SMRF) - see "
-                           "india_omega_is18168.resolve_omega"})
+    if a18["applies"]:
+        advisories.append({"clause": "IS 18168:2023 1.2 / Foreword", "applies": True, "mandatory": a18["mandatory"],
+                           "note": I18.PRECEDENCE, "live_checks": ["is18168_1_3_system", "is18168_5_5_combinations",
+                           "is18168_7_2_column_KL_r", "brace_KL_r (10.2)", "brace_connection_force (10.4.1)",
+                           "is18168_8_2_SCWB", "12.12_base (9.3/9.4)", "EBF links (11, 12.3)"]})
+    elif sysn in ("SCBF", "SMF", "EBF") and zone == "II":
+        advisories.append({"clause": "IS 18168:2023 1.2", "applies": False,
+                           "note": "Zone II: IS 18168 optional (set cfg['apply_is18168'] to apply it); Omega "
+                                   "2.5 SCBF/EBF, 3.0 SMRF (5.5) - see india_omega_is18168.resolve_omega"})
     oks = [c.get("ok") for c in checks]
     ok = False if any(o is False for o in oks) else (None if any(o is None for o in oks) else True)
     failing = [c for c in checks if c.get("ok") is False]

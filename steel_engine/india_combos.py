@@ -238,6 +238,21 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
     rsa = (method or "").upper() == "RSA" if method else _rsa_required(cfg, plan)
     nonpar = bool(cfg.get("nonparallel") or cfg.get("skew"))
     s12 = section12_system(cfg) if has_eq else False
+    # IS 18168:2023 5.5 overstrength combinations (decision D2; stricter-governs precedence): mandatory in
+    # Zones III-V for SMRF/SCBF/EBF.  Omega 2.5 (SCBF/EBF) equals the IS 800 12.2.3 factor -> those rows carry
+    # both cites; Omega 3.0 (SMRF) is stricter -> extra rows.  cl. 5.5 (a)-(d): columns; beams of SCBF/EBF;
+    # braces of EBF; all connections -> tags sfrs_beam / sfrs_brace mark who else must be checked.
+    is18168 = {"applies": False}
+    if s12:
+        try:
+            import india_is18168 as I18
+            is18168 = I18.applies(cfg.get("system"), _zone(cfg, plan), opt_in=bool(cfg.get("apply_is18168")))
+            if is18168["applies"]:
+                is18168["Omega"] = I18.omega(cfg.get("system"))["Omega"]
+                is18168["members"] = I18.overstrength_members(cfg.get("system"))
+                is18168["cite"] = I18.CITE_5_5
+        except Exception:
+            is18168 = {"applies": False}
     vreq, vwhy = vertical_required(cfg, plan) if has_eq else (False, [])
     av = av_vertical(cfg, plan) if vreq else {"found": False, "Av": None}
     if vreq and not av.get("found"):
@@ -287,11 +302,16 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                 rows.insert(1, (1.2, 1.2, 0.6, "T4 DL+LL+0.6WL"))
             if kind == "EQ" and s12:
                 rows += [(1.2, 0.5, 2.5, "IS 800 12.2.3(a)"), (0.9, 0.0, 2.5, "IS 800 12.2.3(b)")]
+                if is18168.get("applies") and (is18168.get("Omega") or 0) > 2.5:
+                    om = is18168["Omega"]          # SMRF 3.0: stricter than 12.2.3, both families kept
+                    rows += [(1.2, 0.5, om, "IS 18168 5.5(1)"), (0.9, 0.0, om, "IS 18168 5.5(2)")]
             if crane:
                 rows += [(1.2, 1.2, 0.6, "T4 DL+LL+CL+0.6%s" % ("EL" if kind == "EQ" else "WL")),
                          (1.2, 1.2, 1.2, "T4 DL+LL+0.53CL+1.2%s" % ("EL" if kind == "EQ" else "WL"))]
             for (fD, fL, fl, fam) in rows:
-                is1223 = fam.startswith("IS 800 12.2.3")
+                is1223 = fam.startswith("IS 800 12.2.3") or fam.startswith("IS 18168 5.5")
+                is5_5 = fam.startswith("IS 18168 5.5") or (fam.startswith("IS 800 12.2.3") and is18168.get("applies")
+                                                          and abs((is18168.get("Omega") or 0) - fl) < 1e-9)
                 fC = 0.0
                 if fam.startswith("T4 DL+LL+CL+0.6"):
                     fC = 1.05
@@ -312,14 +332,29 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                             if zv is not None:
                                 extra += "%s0.3EQ_Z" % ("+" if zv > 0 else "-")
                             tags = []
+                            cite_fam = IS800_T4
                             if is1223:
-                                tags = ["col_only", "conn_only", "is800_12_2_3"]
+                                tags = ["col_only", "conn_only"]
+                                if fam.startswith("IS 800 12.2.3"):
+                                    tags.append("is800_12_2_3")
+                                    cite_fam = "IS 800:2007 12.2.3"
+                                else:
+                                    cite_fam = "IS 18168:2023 5.5"
+                                if is5_5:
+                                    tags.append("is18168_5_5")
+                                    mem = is18168.get("members") or {}
+                                    if mem.get("beam"):
+                                        tags.append("sfrs_beam")
+                                    if mem.get("brace"):
+                                        tags.append("sfrs_brace")
+                                    if fam.startswith("IS 800 12.2.3"):
+                                        cite_fam += " (= IS 18168:2023 5.5, Omega %.1f)" % is18168["Omega"]
                                 extra += "[col]"
                             lab = _grav_label(fD, fL, fLr, 0, fC) + _lat_label(f, kind, d, extra)
                             cpats = [("L", None), ("R", None)] if fC else [None]
                             for cp in cpats:
-                                c = add(lab + ("[CL:%s]" % cp[0] if cp else ""), fD, fL, fLr, family=fam, cite=(IS800_T4 if not is1223 else
-                                        "IS 800:2007 12.2.3") + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015"),
+                                c = add(lab + ("[CL:%s]" % cp[0] if cp else ""), fD, fL, fLr, family=fam, cite=cite_fam
+                                        + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015"),
                                         lateral_kind=kind, direction=d, sign=s, tags=tags, fC=fC)
                                 if cp:
                                     c["crane"] = True
@@ -390,7 +425,7 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
     for c in combos:
         c.setdefault("lateral_kind", None)
     _META.clear()
-    _META.update({"rsa": rsa, "vertical": {"required": vreq, "why": vwhy, **av}, "section12": s12,
+    _META.update({"rsa": rsa, "vertical": {"required": vreq, "why": vwhy, **av}, "section12": s12, "is18168": is18168,
                   "nonparallel": nonpar, "torsion": {d: {k: v for k, v in (tors.get(d) or {}).items()
                                                          if k in ("esi", "b_i")} for d in ("X", "Y")},
                   "n": len(combos)})
@@ -449,6 +484,15 @@ def validate_combinations(combos, cfg, plan=None) -> list:
             if section12_system(cfg) and not fam(1.2, 0.5, 2.5, "fE") and not fam(0.9, 0.0, 2.5, "fE"):
                 out.append(("ERROR", "IS 800 12.2.3 combinations (1.2DL+0.5LL+-2.5EL, 0.9DL+-2.5EL) missing "
                                      "for a Section 12 system"))
+            try:
+                import india_is18168 as I18
+                a = I18.applies(cfg.get("system"), _zone(cfg, plan), opt_in=bool(cfg.get("apply_is18168")))
+                om = I18.omega(cfg.get("system"))["Omega"] if a["applies"] else None
+                if om and not fam(1.2, 0.5, om, "fE") and not fam(0.9, 0.0, om, "fE"):
+                    out.append(("ERROR", "IS 18168:2023 5.5 overstrength combinations (Omega = %.1f for %s) missing "
+                                         "(mandatory in Zone %s)" % (om, a["system"], a["zone"])))
+            except Exception:
+                pass
             vreq, why = vertical_required(cfg, plan)
             if vreq and not any(c.get("fEv") for c in combos):
                 out.append(("ERROR", "IS 1893 6.3.3.1 (Amd 2) vertical earthquake required (%s) but no ELZ "

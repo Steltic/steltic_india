@@ -2568,10 +2568,46 @@ def tension_capacity(Ag_mm2, fy_MPa, fu_MPa=None, *, An_mm2=None, member="plate"
 
 
 # ---------------------------------------------------------------- 7.1.2 member compression
+# IS 800:2007 Table 12 (pdf p. 54): constants k1, k2, k3 for single angles loaded through one leg (7.5.1.2)
+TABLE12_K = {(">=2", "fixed"): (0.20, 0.35, 20.0), (">=2", "hinged"): (0.70, 0.60, 5.0),
+             ("1", "fixed"): (0.75, 0.35, 20.0), ("1", "hinged"): (1.25, 0.50, 60.0)}
+T12_CITE = ("IS 800:2007 7.5.1.2 + Table 12 (pdf p. 54): lambda_e = sqrt(k1 + k2 lambda_vv^2 + k3 lambda_phi^2); "
+            ">= 2 bolts fixed 0.20/0.35/20, hinged 0.70/0.60/5; 1 bolt fixed 0.75/0.35/20, hinged 1.25/0.50/60")
+
+
+def single_angle_7_5_1_2(sec, fy_MPa, l_mm, *, n_bolts=2, fixity="hinged", gamma_m0=GAMMA_M0_DEFAULT,
+                         E_MPa=E_DEFAULT_MPA):
+    """IS 800 7.5.1.2 flexural-torsional buckling of a single angle loaded through one leg.
+    lambda_vv = (l/r_vv) / (eps sqrt(pi^2 E/250)); lambda_phi = ((b1+b2)/2t) / (eps sqrt(pi^2 E/250));
+    lambda_e = sqrt(k1 + k2 lambda_vv^2 + k3 lambda_phi^2); fcd from 7.1.2 with class c (Table 10) and
+    lambda = lambda_e.  Note: the print shows 'pi^2 eps/250' under the root -- dimensionally that must be
+    pi^2 E/250 (the Euler stress ratio); E = 2e5 MPa is used, recorded here.  Welded ends count as >= 2 bolts."""
+    p = _props(sec)
+    if p.get("section_type") != "angle":
+        return {"found": False, "Pd_N": None, "cite": T12_CITE, "note": "not an angle section"}
+    key = (">=2" if (n_bolts is None or int(n_bolts) >= 2) else "1", "fixed" if str(fixity).lower().startswith("fix") else "hinged")
+    k1, k2, k3 = TABLE12_K[key]
+    eps = math.sqrt(250.0 / float(fy_MPa))
+    den = eps * math.sqrt(math.pi ** 2 * float(E_MPa) / 250.0)
+    rvv = p.get("rv") or p["r_min"]
+    lam_vv = (float(l_mm) / rvv) / den
+    lam_phi = ((p["bf"] + p["d"]) / (2.0 * p["tw"])) / den
+    lam_e = math.sqrt(k1 + k2 * lam_vv ** 2 + k3 * lam_phi ** 2)
+    ares = alpha_for_class("c")
+    cres = chi_reduction(lam_e, ares["alpha"])
+    fcd = min(cres["chi"] * float(fy_MPa) / float(gamma_m0), float(fy_MPa) / float(gamma_m0))
+    return {"found": True, "Pd_N": p["A"] * fcd, "fcd_MPa": fcd, "chi": cres["chi"], "lambda": lam_e,
+            "lambda_vv": lam_vv, "lambda_phi": lam_phi, "k1": k1, "k2": k2, "k3": k3, "end_condition": key,
+            "KL_over_r": float(l_mm) / rvv, "KL_mm": float(l_mm), "r_mm": rvv, "A_mm2": p["A"], "fy_MPa": float(fy_MPa),
+            "buckling_class": "c", "cite": T12_CITE, "E_note": "E = %g MPa (printed 'pi^2 eps/250' read as pi^2 E/250)" % E_MPa}
+
+
 def compression_capacity(sec, fy_MPa, *, KLz_mm, KLy_mm, process=None, welded=False, gamma_m0=GAMMA_M0_DEFAULT,
-                         E_MPa=E_DEFAULT_MPA, KLv_mm=None):
+                         E_MPa=E_DEFAULT_MPA, KLv_mm=None, angle_connection=None):
     """Pdz / Pdy per 7.1.2 with the element's own K*L about each axis and the full Table 10 class.
-    Angles: minimum axis v-v with class c (7.5 single-angle eccentric connection factors not applied: flagged)."""
+    Angles: minimum axis v-v with class c; a single angle loaded through one leg (angle_connection =
+    {n_bolts, fixity: 'fixed'|'hinged', l_mm?}) uses the 7.5.1.2 equivalent slenderness (Table 12 k1, k2, k3).
+    Without angle_connection the 7.5.1.2 factors are not applied and the result is flagged."""
     p = _props(sec)
     st = p.get("section_type")
     sc = section_class_table2(p, fy_MPa, P_N=1.0, welded=welded, loading="axial")
@@ -2582,8 +2618,17 @@ def compression_capacity(sec, fy_MPa, *, KLz_mm, KLy_mm, process=None, welded=Fa
         return out
     axes = {"z": (KLz_mm, p["rx"]), "y": (KLy_mm, p["ry"])}
     if st == "angle":
+        if angle_connection:
+            ac = angle_connection
+            r7 = single_angle_7_5_1_2(sec, fy_MPa, ac.get("l_mm") or max(KLz_mm, KLy_mm), n_bolts=ac.get("n_bolts", 2),
+                                      fixity=ac.get("fixity", "hinged"), gamma_m0=gamma_m0, E_MPa=E_MPa)
+            out.update(found=True, Pd_N=r7["Pd_N"], Pdz_N=r7["Pd_N"], Pdy_N=r7["Pd_N"], axes={"v": r7},
+                       KL_over_r_max=r7["KL_over_r"], cite=out["cite"] + "; " + T12_CITE,
+                       note="single angle loaded through one leg: 7.5.1.2 equivalent slenderness lambda_e = %.3f" % r7["lambda"])
+            return out
         axes = {"v": (KLv_mm or max(KLz_mm, KLy_mm), p.get("rv") or p["r_min"])}
-        out["note"] = "single/double angle: 7.5 eccentric-connection equivalent slenderness not applied (flag)"
+        out["note"] = ("angle: 7.5.1.2 single-angle (one-leg) equivalent slenderness NOT applied -- pass "
+                       "angle_connection={n_bolts, fixity} for a single angle loaded through one leg (flag)")
     res = {}
     for ax, (KL, r) in axes.items():
         bc = buckling_class_for_section(p, "z" if ax == "z" else "y", process=process, welded=welded)

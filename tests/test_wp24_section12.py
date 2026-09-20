@@ -117,13 +117,20 @@ def test_scbf_full_run_blocks_on_missing_and_failing():
           "connections": [{"member_id": "B1", "kind": "brace_end", "weld_type": "fillet",
                            "bolts": {"n_bolts": 10, "d_mm": 20, "grade": "8.8", "t_mm": 12, "fu_plate_MPa": 410,
                                      "e_mm": 40, "p_mm": 60, "d0_mm": 22}}]}
-    r = S12.section12_checks("SCBF", md, {"zone": "IV", "brace_config": "X"})
+    # Zone II: IS 18168 optional -> IS 800 12.8.3.1 alone: 1.1 fy Ag
+    r = S12.section12_checks("SCBF", md, {"zone": "II", "brace_config": "X"})
     ids = {c["id"]: c for c in r["checks"]}
     assert ids["material_E250B"]["ok"] is False
     assert ids["brace_conn_bolts"]["value"] == pytest.approx(1.1 * 310 * 5306)
     assert ids["brace_conn_bolts"]["dc"] > 1.0      # 10 x M20 vs 1.1 fy Ag
     assert ids["12.4.2_weld_type"]["ok"] is False
     assert r["ok"] is False and r["blocks_complete"] is True
+    # Zone IV: IS 18168 10.4.1(a) governs (stricter): max(1.1 Ry fy Ag, Ru fu An) with Ry 1.4 / Ru 1.2 (5.2.1)
+    r = S12.section12_checks("SCBF", md, {"zone": "IV", "brace_config": "X"})
+    ids = {c["id"]: c for c in r["checks"]}
+    assert ids["brace_conn_bolts"]["value"] == pytest.approx(max(1.1 * 1.4 * 310 * 5306, 1.2 * 450 * 5306))
+    assert "IS 18168:2023 10.4.1" in ids["brace_connection_force"]["clause"]
+    assert ids["is18168_1_3_system"]["ok"] is True and ids["is18168_5_5_combinations"]["ok"] is None
 
 
 def test_ebf_link_checks_is18168():
