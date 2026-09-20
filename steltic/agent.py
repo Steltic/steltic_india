@@ -592,7 +592,7 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
         if re.search(r"composite[^.\n]{0,50}(deck|slab|floor)|(deck|slab|floor)[^.\n]{0,50}composite",
                      brief or "", re.I):
             user += ("\n\n[framework note] This brief specifies a COMPOSITE floor. Per the contract you must "
-                     "either perform the IS 800 composite/floor design for the floor members (COMPOSITE_I3.md) "
+                     "either scope the composite design per COMPOSITE_INDIA.md (IS 11384 is not in the corpus; bare-steel lower bound) "
                      "or record an explicit composite scope statement in the calc package -- and keep the word "
                      "'composite' in cfg (floor_system or notes) so the consistency check tracks it.")
         if images:                              # vision: attach reference image(s) as OpenAI image_url parts

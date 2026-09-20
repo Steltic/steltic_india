@@ -159,9 +159,9 @@ def design_and_report(name, cfg=None, do_report=True):
                         "figures are cfg['force_diagrams'] (~20-30 s), cfg['force_summary'] (~20-30 s), "
                         "cfg['mode_figures'] (~12 s), cfg['deformed_shape_figure'], cfg['section_color_figure'] and "
                         "cfg['appendix_case_figures'] -- set the flag(s) and re-render report.build_report.) "
-                        "(c) The report is ALREADY on the user\u2019s computer at jobs/<name>/report.html "
-                        "(== C:\\...\\jobs\\<name>\\report.html); just give them that path -- do NOT copy it "
-                        "anywhere or look for an \u2018outputs folder\u2019; the engine path IS their C: drive.")
+                        "(c) The report is at jobs/<name>/report.html and the app serves it; give that path -- do "
+                        "NOT copy it anywhere. (d) india_seismic_gates.design_status must report 'complete'; "
+                        "otherwise list every open reason it returns (the run ends PARTIAL).")
     print("\n" + "=" * 72 + "\n>> NEXT STEP (do not skip): " + out["NEXT_STEP"] + "\n" + "=" * 72)
     return out
 

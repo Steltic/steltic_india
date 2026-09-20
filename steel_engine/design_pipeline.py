@@ -124,7 +124,7 @@ def _composite_chI_worksheet_stubs():
         }
     return {
         "status": "stubs",
-        "cite": "IS 800:2007 Ch. I (composite construction) — retrieve LIVE; see COMPOSITE_I3.md",
+        "cite": "Composite construction is outside IS 800:2007 (IS 11384 not in the corpus) -- see COMPOSITE_INDIA.md",
         "policy": (
             "Fill from LIVE IS 800 Ch. I RAG only, or record an explicit composite scope "
             "statement (bare-steel lower bound / excluded / delegated). Do not invent stud "
