@@ -264,7 +264,7 @@ def test_resolve_storage_height_documented():
     })
     assert r["found"] is True
     assert r["h_m"] == 2.5
-    assert abs(r["L_kNpm2"] - 5.0) < 1e-9
+    assert abs(r["L_kNpm2"] - 7.5) < 1e-9          # 2.4 x 2.5 = 6.0 < the 7.5 kN/m2 minimum (Table 1 viii)(a), WP6-fix)
 
 
 def test_resolve_storage_height_refuses_silent():
@@ -277,7 +277,9 @@ def test_resolve_storage_height_refuses_silent():
 def test_resolve_storage_height_cfg_explicit():
     import india_loads as IL
     r = IL.resolve_storage_height_m({"storage_height_m": 3.0, "storage_height_cite": "brief"})
-    assert r["found"] and r["h_m"] == 3.0 and abs(r["L_kNpm2"] - 6.0) < 1e-9
+    assert r["found"] and r["h_m"] == 3.0 and abs(r["L_kNpm2"] - 7.5) < 1e-9     # 2.4 x 3.0 = 7.2 -> minimum 7.5
+    r4 = IL.resolve_storage_height_m({"storage_height_m": 4.0, "storage_height_cite": "brief"})
+    assert abs(r4["L_kNpm2"] - 9.6) < 1e-9                                        # 2.4 x 4.0 above the minimum
 
 
 def test_mass_irregularity_screen_mezzanine():

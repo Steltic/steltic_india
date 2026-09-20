@@ -744,26 +744,36 @@ def resolve_building_length_m(cfg, *, bay_spacing_m=None, n_bays=None, n_frames=
     }
 
 
+STORAGE_UNIT_LOAD_KNPM2_PER_M = 2.4      # IS 875 (Part 2):1987 Table 1 viii)(a) (corpus row recovered, WP6-fix)
+STORAGE_MIN_KNPM2 = 7.5                  # "... with a minimum of 7.5 kN/m2" (HRLOAD-25 / VERIFY C14)
+STORAGE_CITE = ("IS 875 (Part 2):1987 Table 1 viii)(a) storage rooms / warehouses: 2.4 kN/m2 per each metre of "
+                "storage height with a minimum of 7.5 kN/m2 (bulk density of the stored goods governs when larger)")
+
+
 def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_source=None,
-                             unit_load_kNpm2_per_m=2.0):
+                             unit_load_kNpm2_per_m=STORAGE_UNIT_LOAD_KNPM2_PER_M, minimum_kNpm2=STORAGE_MIN_KNPM2):
     """Mezz/warehouse storage height for IS 875 Part 2 storage UDL (kN/m² per m height).
 
     Prefer cfg['storage_height_m'] (brief). Else documented assumption with cite.
     Never invent a silent 2.5 m.
-    Returns L_floor = unit_load × height when resolved.
+    Returns L_floor = max(unit_load × height, minimum) when resolved (Table 1 viii)(a): 2.4 kN/m2 per m, min 7.5).
     """
     cfg = cfg or {}
+
+    def _L(h):
+        return max(float(unit_load_kNpm2_per_m) * float(h), float(minimum_kNpm2 or 0.0))
     for key in ("storage_height_m", "mezz_storage_height_m", "stack_height_m"):
         if cfg.get(key) is not None:
             h = float(cfg[key])
             return {
                 "found": True,
                 "h_m": h,
-                "L_kNpm2": float(unit_load_kNpm2_per_m) * h,
+                "L_kNpm2": _L(h),
                 "unit_load_kNpm2_per_m": float(unit_load_kNpm2_per_m),
+                "minimum_kNpm2": float(minimum_kNpm2 or 0.0),
                 "source": "cfg",
                 "key": key,
-                "cite": cfg.get("storage_height_cite") or "cfg explicit storage height",
+                "cite": (cfg.get("storage_height_cite") or "cfg explicit storage height") + "; " + STORAGE_CITE,
             }
     h = eor_h_m if eor_h_m is not None else cfg.get("storage_height_assumption_m")
     cite = eor_cite or cfg.get("storage_height_assumption_cite")
@@ -773,14 +783,14 @@ def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_sourc
         return {
             "found": True,
             "h_m": float(h),
-            "L_kNpm2": float(unit_load_kNpm2_per_m) * float(h),
+            "L_kNpm2": _L(h),
             "unit_load_kNpm2_per_m": float(unit_load_kNpm2_per_m),
+            "minimum_kNpm2": float(minimum_kNpm2 or 0.0),
             "source": src or "documented_assumption",
             "resolved_via": "eor_documented" if "eor" in (src or "documented") else "documented_assumption",
-            "cite": str(cite),
+            "cite": str(cite) + "; " + STORAGE_CITE,
             "note": (
-                "Storage height documented (not silent invent). Prefer brief storage_height_m. "
-                "IS 875 P2 Table 1 warehouses 2.0 kN/m² per m of storage height."
+                "Storage height documented (not silent invent). Prefer brief storage_height_m. " + STORAGE_CITE
             ),
             "brief_field_required": "storage_height_m",
         }
@@ -793,7 +803,7 @@ def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_sourc
             "OR storage_height_assumption_m + storage_height_assumption_cite",
         ],
         "brief_field_required": "storage_height_m",
-        "cite": "IS 875 (Part 2):1987 Table 1 STORAGE — 2.0 kN/m² per m of storage height",
+        "cite": STORAGE_CITE,
         "note": "Do not silently assume 2.5 m stack height — set cfg or document with cite.",
     }
 

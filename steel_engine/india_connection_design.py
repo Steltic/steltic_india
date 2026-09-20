@@ -111,7 +111,7 @@ def beam_column_connection(cfg, beam_member, p_beam, fy_beam, *, col_props=None)
             r = C.fin_plate_shear_checks(V_N=1.0, **sh)
             out["shear_capacity_N"] = r.get("capacity_N")
             out["shear_detail"] = r
-    for k in ("continuity_plates", "doubler_t_mm", "max_deliverable_moment_Nmm", "rbs"):
+    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm", "max_deliverable_moment_Nmm", "rbs"):
         if k in sp:
             out[k] = sp[k]
     return out

@@ -86,3 +86,20 @@ def test_roof_deflection_key_selects_the_table6_rafter_row():
     assert IL.floor_deflection_limit(cfg)[0] == 360.0
     with pytest.raises(IL.LoadPlanError):
         IL.floor_deflection_limit({"deflection_key_roof": "no_such_row"}, roof=True)
+
+
+def test_omf_continuity_plate_thickness_reaches_the_joint_check():
+    """WP6-fix: the declared beam_column 'continuity_plate_t_mm' is carried to the joint so the OMF 12.10.2.5 check
+    (continuity plate t >= beam flange t) is evaluated instead of 'not evaluated'."""
+    import india_connection_design as CD
+    import sections as S
+    import engine3d as E
+    E.activate_si_units()
+    cfg = {"connections": {"beam_column": {"NPB500X200X90.69": {
+        "type": "welded_cover_plate", "weld_type": "cjp", "bolt_type": "HSFG",
+        "cover_plate": {"plate_b_mm": 230.0, "plate_t_mm": 16.0, "fy_plate_MPa": 250.0,
+                        "weld": {"size_mm": 10.0, "length_mm": 400.0, "fu_MPa": 410.0, "n_sides": 2, "site": False}},
+        "continuity_plates": True, "continuity_plate_t_mm": 16.0, "doubler_t_mm": 16.0}}}}
+    p = S.props("NPB500X200X90.69")
+    cn = CD.beam_column_connection(cfg, {"section": "NPB500X200X90.69", "grade": "E250 B0", "role": "beam"}, p, 250.0)
+    assert cn and cn.get("continuity_plate_t_mm") == 16.0
