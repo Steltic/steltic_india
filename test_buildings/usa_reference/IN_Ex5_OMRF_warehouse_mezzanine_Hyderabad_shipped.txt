@@ -1,0 +1,7 @@
+IN_Ex5 — Multi-bay OMRF warehouse + mezzanine, Hyderabad (wind + seismic)
+
+Location: Hyderabad — RETRIEVE IS 1893 Zone, Z, soil, I (warehouse/commercial), R for OMRF.
+Geometry (SI N-mm): 3 bays × 5 frames @ 8 m; span 18 m; eave 9 m; mezzanine at 4.5 m over 2 bays.
+Loads: RETRIEVE IS 875 P1/P2 dead+imposed (roof + mezzanine); P3 wind — check both wind and
+  seismic base shear / drift (neither may be skipped).
+Design: IS 800 LSD ordinary MRF; LIVE cfg['load_plan'] from RAG before pipeline.

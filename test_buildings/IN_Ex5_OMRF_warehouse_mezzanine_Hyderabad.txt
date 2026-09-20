@@ -1,7 +1,20 @@
-IN_Ex5 — Multi-bay OMRF warehouse + mezzanine, Hyderabad (wind + seismic)
+IN_Ex5 — Multi-bay OMRF warehouse + storage mezzanine, Hyderabad (wind + seismic) (India)
 
-Location: Hyderabad — RETRIEVE IS 1893 Zone, Z, soil, I (warehouse/commercial), R for OMRF.
-Geometry (SI N-mm): 3 bays × 5 frames @ 8 m; span 18 m; eave 9 m; mezzanine at 4.5 m over 2 bays.
-Loads: RETRIEVE IS 875 P1/P2 dead+imposed (roof + mezzanine); P3 wind — check both wind and
-  seismic base shear / drift (neither may be skipped).
-Design: IS 800 LSD ordinary MRF; LIVE cfg['load_plan'] from RAG before pipeline.
+Site: Hyderabad. Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3), soil,
+importance factor (Table 8: general non-food storage -> (iii); a food-storage warehouse would be (i) 1.5 — the stored
+goods are declared non-food), R for the ordinary moment resisting frame (Table 9; permitted in Zone II by Note 1).
+Soil: medium (Type II).
+
+Geometry (metres; the engine works in N-mm):
+- 3 bays x 6 m (18 m span) x 4 bays x 8 m (5 frames, 32 m); eave height 9 m; flat roof (profiled sheeting on purlins)
+- storage mezzanine at 4.5 m over the first two bays (12 m x 32 m), storage stack height 2.5 m
+- steel OMRF both directions (IS 800:2007 12.10 connections for 1.2 Mp); fixed column bases
+- mezzanine deck and roof purlins span X (6 m) between the longitudinal beams; purlins at 1.5 m, girts at 2.0 m
+
+Loads (RETRIEVE — do not invent): dead IS 875 (Part 1); imposed IS 875 (Part 2): mezzanine storage Table 1 viii)(a)
+(2.4 kN/m2 per metre of storage height, minimum 7.5 kN/m2), roof Table 2 (maintenance access); wind IS 875 (Part 3):2015
+(Annex A Vb, terrain category 2, Table 4 Ka on the frame tributary, Table 5 walls, Table 6 flat roof, 7.3.2.2 Cpi +-0.5
+for the loading doors), member-level wind cases incl. roof uplift with 0.9 DL; check both wind and seismic (neither
+may be omitted: base shear, drift, +- reversal and the 7.8.2 eccentricity of the asymmetric mezzanine).
+Design: IS 800:2007 LSD; IS 2062 E250 B0; sections IS 808; base plates IS 800 7.4 / 12.12; IS 800 Table 6 deflections.
+Deliverable: report.html + viewer_3d.html. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.
