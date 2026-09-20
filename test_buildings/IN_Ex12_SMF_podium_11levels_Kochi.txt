@@ -1,0 +1,22 @@
+IN_Ex12 — 11-storey office with a 6.6 m open podium storey, perimeter SMRF, Kochi (coastal wind)
+
+Location: Kochi — IS 1893 (Part 1):2016 (+ Amd 1, 2) Annex E Zone III, Z = 0.16; soil Type II; office 4 × 3 bays × 11
+  floors ≈ 10,700 m² (> 200 persons) → I = 1.2 (Table 8 (ii)). Lateral system: steel special moment resisting frame
+  (SMRF, IS 800:2007 12.11 + IS 18168:2023 mandatory in Zone III for offices), R = 5.0 (Table 9 i)(d)). No foreign overstrength
+  factor: capacity design by IS 800 12.2.3 and IS 18168 5.5 (Ω = 3.0).
+Geometry (SI): plan 4 × 3 bays @ 9.0 m (36 × 27 m); L1 open lobby 6.6 m, typical storeys 3.3 m (roof 39.6 m).
+  Perimeter SMRF on all four faces (grids 1, 5, A, D), built-up welded box columns (IS 2062 E250 plates, L6) with the
+  6.6 m storey proportioned so that it is NOT a soft storey (IS 1893 Table 6(i), Amd 2 stiffness definition: K1 ≥ K2);
+  the brief's optional L1 intermediate-column omission with a level-2 transfer girder is not adopted (Table 6(vi)
+  floating columns). Interior columns are gravity columns (pinned bases, shear connections), built-up boxes at the
+  lower storeys; composite metal-deck floors on filler beams at 3.0 m spanning X into the Y-direction girders.
+Loads: IS 875 (Part 2):1987 Table 1 office 4.0 kN/m² (D9), 3.1.2 partitions 1.0 kN/m² (0.5 in W), Table 2 roof
+  0.75 kN/m²; IS 875 (Part 1):2026 dead loads: composite floor 3.0, roof 2.8, cladding 0.5 kN/m² of wall.
+  IS 875 (Part 3):2015 wind: Kochi is not in Annex A → Vb 39 m/s read from Fig. 1 at 9.97 N 76.28 E; terrain
+  category 3; Kerala coast is outside the 6.3.4 cyclone belt (east coast / Gujarat) → k4 1.0, Kd 0.9; f1 < 1 Hz →
+  along-wind forces by the 10.2 gust factor (hourly-mean speed), across-wind response declared (10.3); IS 800 Table 6
+  wind drift. IS 875 (Part 4) snow: not applicable. Seismic weight per IS 1893 7.3/7.4 (Table 10 50 % of 4.0).
+Design: IS 800:2007 LSD (Table 4); SMRF per 12.11 with IS 18168:2023 (5.5 Ω = 3.0 columns, 5.3 / Table 2 section
+  width-thickness, 7.2 KL/r < 75, 8.2 SCWB > 1.4 with Ry, 9.3 fixed bases 1.1 Ry Mpc); RSA (7.7.1, > 15 m) scaled
+  per 7.7.3.1; 7.8.2 torsion; 12.2.3; drift 0.004 h; 7.11.2 for the gravity columns. Connections IS 800 Section 10
+  (HSFG IS 4000, CJP welds); rolled sections IS 808, steel IS 2062 E250 B0 (plates fy by thickness).

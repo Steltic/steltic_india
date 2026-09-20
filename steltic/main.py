@@ -185,7 +185,7 @@ EXAMPLE_BRIEFS = {
     "in9": "IN_Ex9_SPSW_12levels_Tplan_Guwahati.txt",
     "in10": "IN_Ex10_Dual_SMF_BRBF_18levels_Noida.txt",
     "in11": "IN_Ex11_SMF_3levels_Zplan_school_Chandigarh.txt",
-    "in12": "IN_Ex12_SMF_softstory_podium_Kochi.txt",
+    "in12": "IN_Ex12_SMF_podium_11levels_Kochi.txt",
     "in13": "IN_Ex13_OCBF_bigbox_flexdiaphragm_Indore.txt",
     "in14": "IN_Ex14_Crane_bay_IMF_Vizag.txt",
     "in15": "IN_Ex15_Gable_warehouse_snow_Shimla.txt",
