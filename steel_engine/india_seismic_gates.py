@@ -43,6 +43,15 @@ OMEGA0_OK_SOURCES = frozenset({
 OMEGA0_REFUSED = frozenset({
     "assumed", "assumption", "silent", "silent_default", "invented",
     "asce7", "asce_7", "asce722", "proxy", "placeholder", "todo", "tbd", "guess",
+    # Concrete seismic / ductile detailing — never India steel SFRS Ω sources
+    "is15988", "is_15988", "is15988_2013", "is_15988_2013",
+    "is13920", "is_13920", "is13920_2016", "is_13920_2016",
+})
+
+# Steel corpus sources accepted for Ω when found:true (concrete refused above).
+OMEGA0_STEEL_CORPUS_SOURCES = frozenset({
+    "is18168", "is_18168",
+    "is1893", "is_1893", "rag",  # rare IS 1893 hit; do not invent
 })
 
 # India policy: IS 1893 does not tabulate an ASCE-style Ω0. For steel SFRS,
@@ -54,8 +63,9 @@ OMEGA0_POLICY = {
     "honest_is1893_found_false_blocks_complete": False,
     "is18168_values_require_corpus_hit": True,
     "note": (
-        "IS 1893 has no ASCE-style Ω0. Prefer corpus IS 18168 Ω for steel "
-        "SFRS (ELm=Ω·EL); never invent Ω values without a found:true corpus hit."
+        "Steel Ω path is IS 18168 only (corpus found:true; ELm=Ω·EL). "
+        "IS 15988 / IS 13920 are concrete and refused for steel overstrength. "
+        "IS 1893 has no ASCE-style Ω0; never invent Ω without a found:true hit."
     ),
 }
 
@@ -84,6 +94,49 @@ TABLE9_SYSTEM_FLAGS = (
 
 def _norm(s) -> str:
     return str(s or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _is_concrete_omega_source(src) -> bool:
+    """True when source names IS 15988 / IS 13920 (concrete — N/A for steel Ω)."""
+    s = _norm(src)
+    if not s:
+        return False
+    if s in {
+        "is15988", "is_15988", "is15988_2013", "is_15988_2013",
+        "is13920", "is_13920", "is13920_2016", "is_13920_2016",
+    }:
+        return True
+    # Containment covers spellings like is_15988_clause_x / rag_is13920
+    if "15988" in s or "13920" in s:
+        return True
+    return False
+
+
+def _concrete_omega_refuse(src, *, via="refused") -> dict:
+    """found:false payload when a concrete code is offered as steel Ω."""
+    policy = _omega0_policy()
+    src_n = _norm(src) or "concrete"
+    return {
+        "found": False,
+        "Omega0": None,
+        "corpus_found": False,
+        "source": src_n,
+        "resolved_via": via,
+        "cite": "IS 15988 / IS 13920 are concrete — N/A for steel overstrength",
+        "note": (
+            "Refused Ω source=%r. IS 15988 and IS 13920 are concrete seismic/"
+            "ductile-detailing codes, not steel SFRS overstrength sources. "
+            "Use corpus IS 18168 Ω (found:true) for steel; do not invent values."
+            % (src_n,)
+        ),
+        "required_inputs": [
+            "corpus_hit={found:true, source:is18168, cite, Ω}",
+            "OR Omega0_source=eor_documented + Omega0_cite",
+        ],
+        "is1893_omega0_present": False,
+        "omega0_policy": policy,
+        "disclosure": policy,
+    }
 
 
 def _pull_flag(cfg, seis, summ, keys):
@@ -203,8 +256,14 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
         om = (corpus_hit.get("Omega") or corpus_hit.get("omega")
               or corpus_hit.get("Omega0") or corpus_hit.get("Om0")
               or corpus_hit.get("omega0"))
-        # ASCE-labeled corpus material is never an India Ω source.
-        if (om is not None and corpus_source not in OMEGA0_REFUSED
+        # Concrete codes are never steel overstrength sources (even if HIT).
+        if _is_concrete_omega_source(corpus_source):
+            return _concrete_omega_refuse(corpus_source, via="refused_concrete_corpus")
+        # Accept steel corpus hits from IS 18168 (preferred) or rare IS 1893;
+        # ASCE / refused / other non-steel sources are not India Ω.
+        if (om is not None
+                and corpus_source in OMEGA0_STEEL_CORPUS_SOURCES
+                and corpus_source not in OMEGA0_REFUSED
                 and "asce" not in corpus_source):
             policy = _omega0_policy()
             return {
@@ -233,6 +292,10 @@ def resolve_Omega0(cfg=None, *, eor_Omega0=None, eor_cite=None, eor_source=None,
                 or summ.get("Omega0_source"))
     cite = (eor_cite or cfg.get("Omega0_cite") or seis.get("Omega0_cite")
             or summ.get("Omega0_cite"))
+
+    # Concrete Omega0_source (with or without a cite/value) is never steel Ω.
+    if _is_concrete_omega_source(src):
+        return _concrete_omega_refuse(src, via="refused_concrete_source")
 
     # Explicit found:false disclosure (preferred India path)
     flagged_false = (
