@@ -250,7 +250,7 @@ def scwb_ratio(
     *,
     columns: Optional[Sequence[Dict[str, Any]]] = None,
     beams: Optional[Sequence[Dict[str, Any]]] = None,
-    fy_MPa: float = 250.0,
+    fy_MPa: Optional[float] = None,
     gamma_m0: float = GAMMA_M0_DEFAULT,
     limit: float = 1.2,
 ) -> Dict[str, Any]:
@@ -278,8 +278,7 @@ def scwb_ratio(
                 continue
             zx = it.get("Zx_mm3") or it.get("Zx")
             fy = it.get("fy_MPa", fy_MPa)
-            gm = it.get("gamma_m0", gamma_m0)
-            r = plastic_moment_Nmm(zx, fy, gm)
+            r = plastic_moment_Mp(zx, fy)          # Section 12: Mp = Zp fy (no default fy)
             if r["found"]:
                 out.append(r["Mp_Nmm"])
         return out
@@ -319,7 +318,8 @@ def scwb_ratio(
         "pass": bool(ratio >= limit),
         "limit": limit,
         "cite": "IS 800:2007 §12.11.3.2  ΣMpc/ΣMpb ≥ 1.2",
-        "note": "Mp from §8.2.1 Zp fy/γm0 unless caller supplied Mp_Nmm directly",
+        "note": "Mp = Zp fy (Section 12, characteristic) unless caller supplied Mp_Nmm; per-joint SCWB with axial "
+                "reduction and model connectivity: india_is800_s12.scwb_joint / joints_from_model",
     }
 
 
@@ -1266,7 +1266,7 @@ def scwb_and_panel_from_schedule(
     *,
     column_props: Optional[Sequence[Dict[str, Any]]] = None,
     beam_props: Optional[Sequence[Dict[str, Any]]] = None,
-    fy_MPa: float = 250.0,
+    fy_MPa: Optional[float] = None,
     V_design_N: Optional[float] = None,
     panel_col: Optional[Dict[str, Any]] = None,
     panel_beam_d_mm: Optional[float] = None,
@@ -1843,13 +1843,13 @@ def panel_zone_apply_doubler_in_model(
 def scwb_multi_joint(
     joints=None,
     *,
-    fy_MPa=250.0,
+    fy_MPa=None,
     representative_only=False,
 ):
-    """Optional multi-joint SCWB. Each joint: {columns: [...], beams: [...], id?}.
+    """Multi-joint SCWB from an explicit joint list. Each joint: {columns: [...], beams: [...], id?}.
 
-    If joints is None/empty → found:false with note that representative-joint scope is OK.
-    If representative_only and one joint → same as scwb_ratio with scope note.
+    WP2.4: a 'representative joint' is NOT acceptable - every SMF joint from the model connectivity must be
+    checked (india_is800_s12.joints_from_model + scwb_joint, with axial-reduced Mpc). Empty -> found:false.
     """
     cite = "IS 800:2007 §12.11.3.2 ΣMpc/ΣMpb ≥ 1.2"
     if not joints:
@@ -1859,10 +1859,8 @@ def scwb_multi_joint(
             "joints": [],
             "cite": cite,
             "required_inputs": ["joints=[{columns, beams, id?}, ...]"],
-            "note": (
-                "Multi-joint SCWB optional — provide joints list to refine beyond the "
-                "representative joint documented in wave2."
-            ),
+            "note": ("SCWB must be evaluated at every SMF joint from model connectivity "
+                     "(india_is800_s12.joints_from_model / scwb_joint) - no representative joint."),
         }
     results = []
     for i, j in enumerate(joints):
@@ -1889,12 +1887,8 @@ def scwb_multi_joint(
         "pass": (worst is not None and worst >= 1.2) if any_found else None,
         "joints": results,
         "cite": cite,
-        "note": (
-            "Multi-joint SCWB from provided joint list; worst ΣMpc/ΣMpb reported. "
-            "H6/H7 remain process stubs."
-            if len(results) > 1 else
-            "Single/representative joint SCWB (multi-joint optional refinement not required)."
-        ),
+        "note": ("SCWB from the provided joint list; worst sum(Mpc)/sum(Mpb) reported. A single joint does not "
+                 "demonstrate 12.11.3.2 - use india_is800_s12 for every joint."),
     }
 
 
