@@ -13,7 +13,7 @@ OpenSees modelling patterns only. Prefer the India briefs:
 - `IN_Ex8_OCBF_4levels_splitlevel_Jaipur.txt`
 - `IN_Ex9_SPSW_12levels_Tplan_Guwahati.txt`
 - `IN_Ex10_Dual_SMF_BRBF_18levels_Noida.txt`
-- `IN_Ex11_IMF_3levels_Zplan_school_Chandigarh.txt`
+- `IN_Ex11_SMF_3levels_Zplan_school_Chandigarh.txt`
 - `IN_Ex12_SMF_softstory_podium_Kochi.txt`
 - `IN_Ex13_OCBF_bigbox_flexdiaphragm_Indore.txt`
 - `IN_Ex14_Crane_bay_IMF_Vizag.txt`

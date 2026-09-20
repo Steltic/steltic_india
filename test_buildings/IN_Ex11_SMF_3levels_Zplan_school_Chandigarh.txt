@@ -1,0 +1,23 @@
+IN_Ex11 — 3-storey SMF school, Z-plan of three seismically separated wings, Chandigarh (importance)
+
+Location: Chandigarh — IS 1893 (Part 1):2016 (+ Amd 1, 2) Annex E Zone IV, Z = 0.24; soil Type II (medium stiff);
+  educational building → I = 1.5 (Table 8 (i), Amd 2 wording). Lateral system: steel special moment resisting frame
+  (SMRF, IS 800:2007 12.11 + IS 18168:2023), R = 5.0 (Table 9 i)(d)); IS 18168 1.3 allows SMRF in Zone IV for h < 15 m
+  (tallest wing 10.8 m). OMRF is banned in Zone IV (Table 9 Note 1, IS 800 12.10.1.1); "IMF" has no Indian basis (D3).
+Geometry (SI): Z-plan of three wings on an 8.5 m grid, each a structurally independent unit separated by IS 1893 7.11.3
+  seismic joints (250 mm) so that no re-entrant corner exists (Amd 2 Table 5(ii)):
+  A classroom wing  3 × 2 bays (25.5 × 17 m), 3 storeys @ 3.6 m (10.8 m);
+  B link wing       2 × 2 bays (17 × 17 m), 2 storeys @ 3.6 m (7.2 m);
+  C gymnasium       2 × 2 bays (17 × 17 m), single storey 8.0 m clear, centre column omitted (17 m roof girders on grid 2).
+  Perimeter SMRF in both directions in every unit; interior columns and beams are gravity framing (shear connections,
+  pinned bases); composite metal-deck floors on filler beams at 2.83 m (units A, B); metal roof deck on purlins (C).
+Loads: IS 875 (Part 2):1987 Table 1 educational — class rooms 3.0, corridors/passages 4.0 → 4.0 kN/m² design envelope
+  (corridor layout not fixed); 3.1.2 partitions 1.0 kN/m² (0.5 in W, IS 1893 7.3.6); Table 2 roof 0.75 kN/m².
+  IS 875 (Part 1):2026 dead loads: composite floor 3.0, roof 2.8, gym light roof 1.2, cladding 0.5 kN/m² of wall.
+  IS 875 (Part 3):2015 wind: Vb 47 m/s (Annex A), terrain category 3, k1 1.0, k3 1.0, inland (no cyclone belt → k4 1.0,
+  Kd 0.9), Table 5 walls, Table 6 flat roof + Cpi ±0.2 member-level cases on the gym. IS 875 (Part 4) snow: not applicable.
+  Seismic weight per IS 1893 7.3/7.4 (full DL + self-weight + partitions + Table 10 50 % of the 4.0 kN/m² imposed load).
+Design: IS 800:2007 LSD (Table 4 combinations); SMRF per 12.11 with IS 18168:2023 (mandatory, Zone IV educational):
+  5.5 overstrength combinations (Ω = 3.0), 7.2 column KL/r < 75, 8.2 SCWB > 1.4 with Ry, 9.3 fixed bases for 1.1 Ry Mpc;
+  RSA (7.7.1) scaled per 7.7.3.1; 7.8.2 torsion; vertical EQ (6.3.3.1, Zone IV); 12.2.3; drift 0.004 h; 7.11.2 / 7.11.3.
+  Connections IS 800 Section 10 (HSFG IS 4000, CJP welds); sections IS 808, steel IS 2062 E250 B0.
