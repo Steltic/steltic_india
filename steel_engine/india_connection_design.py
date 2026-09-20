@@ -205,10 +205,12 @@ def hsfg_slip_checks(bolts, bolt_type, V_service_N, V_ultimate_N=None, *, slip_s
 
 
 # ------------------------------------------------------------------------------------------ composite (WP2.9)
-def composite_design_record(cfg, pkg_members):
+def composite_design_record(cfg, pkg_members, beam_dirs=None):
     """WP2.9: IS 11384 is not in the corpus -> found:false slots; scope 'bare_steel' is satisfied by the IS 800 8.2 /
     9.3 member checks already in the package plus a construction-stage (unshored wet concrete) check of the floor
-    beams with the compression flange unrestrained until the deck is fixed (cfg['construction_stage'])."""
+    beams with the compression flange unrestrained until the deck is fixed (cfg['construction_stage']).
+    beam_dirs = {section: {'X','Y'}} (WP6-fix): with cfg['deck_span'] declared, a beam group parallel to the deck span
+    carries no wet-deck load and is not wet-stage checked; the others take the full bay width (conservative)."""
     rec = I8.composite_is11384_worksheet_stubs(cfg)
     scope = str(cfg.get("composite_scope") or "").lower()
     if scope not in ("bare_steel", "bare-steel"):
@@ -227,12 +229,19 @@ def composite_design_record(cfg, pkg_members):
                              "LLT_mm (compression-flange restraint before the deck is fixed)}")
                 continue
             worst = None
+            ds = str(cfg.get("deck_span") or "").upper()
             for m in pkg_members:
                 if m["inputs"].get("role") != "floor":
                     continue
                 sec = m["inputs"]["section"]
+                dirs = (beam_dirs or {}).get(sec)
+                if ds in ("X", "Y") and dirs and set(dirs) <= {ds}:
+                    continue                                    # parallel to the deck span: no wet-deck load
                 L = float(m["inputs"]["length_mm"])
-                trib = float(cs.get("trib_mm") or min(cfg["SX"], cfg["SY"]))
+                if ds in ("X", "Y") and dirs:
+                    trib = float(cs.get("trib_mm") or (cfg["SY"] if ds == "Y" else cfg["SX"]))   # one-way: the bay across
+                else:
+                    trib = float(cs.get("trib_mm") or min(cfg["SX"], cfg["SY"]))
                 w = (1.5 * float(cs["D_wet_kNm2"]) + 1.5 * float(cs.get("L_const_kNm2") or 0.0)) * trib / 1000.0
                 M = w * L * L / 8.0
                 res = I8.member_check_is800({"id": "wet-" + sec, "section": sec, "grade": cfg.get("steel_grade"),

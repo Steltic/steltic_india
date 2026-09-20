@@ -620,6 +620,7 @@ def provenance_record(job_dir):
 
 def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
     grade = cfg.get("brace_grade") if kind == "brace" else cfg.get("steel_grade")
+    grade = (cfg.get("grade_by_section") or {}).get(sec) or grade      # per-section IS 2062 grade (e.g. E350 columns)
     m = {"id": "e%d" % t, "tag": t, "section": sec, "grade": grade, "role": _ROLE_TO_I8.get(kind, kind),
          "L_mm": length, "node_i": n1, "node_j": n2}
     if kind == "brace":
@@ -1258,7 +1259,12 @@ def design_india(name, cfg, outdir):
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()
     if "composite" in _blob or cfg.get("composite") or cfg.get("composite_scope"):
         try:
-            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"]),
+            _bdirs = {}
+            for (t_, k_, s_, n1_, n2_) in info0["ele"]:
+                if k_ == "beam":
+                    c1_, c2_ = ops.nodeCoord(n1_), ops.nodeCoord(n2_)
+                    _bdirs.setdefault(s_, set()).add("X" if abs(c2_[0] - c1_[0]) >= abs(c2_[1] - c1_[1]) else "Y")
+            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"], beam_dirs=_bdirs),
                                        "note": "WP2.9: IS 11384 not in the corpus; scope per COMPOSITE_INDIA.md"}
             pkg["composite_design"]["blocks_complete"] = pkg["composite_design"]["chI_worksheet"].get("blocks_complete")
         except Exception as ex:

@@ -101,3 +101,19 @@ def test_table3_row_by_member_action():
     # compression only in an EQ combination (collector) -> row (iii) 250
     r3 = I8.member_check_is800(mem, cf + [dict(cf[0], combo="1.5DL+1.5EQ_X", P_N=5.0e4)])
     assert r3["table3_slenderness"]["limit"] == 250
+
+
+def test_construction_stage_skips_deck_parallel_beams():
+    """WP6-fix: with deck_span declared, beams parallel to the deck span carry no wet-deck load in the WP2.9
+    construction-stage check (the tie beams were failing at D/C 6.8 under a full-bay wet load they never see)."""
+    import india_connection_design as CD
+    cfg = dict(_cfg(), SX=8500.0, SY=8500.0, deck_span="X", composite_scope="bare_steel",
+               construction_stage={"D_wet_kNm2": 3.0, "L_const_kNm2": 0.75, "LLT_mm": 2833.0})
+    mem = [{"inputs": {"role": "floor", "section": "NPB300X165X45.76", "length_mm": 8500.0}, "DC": 0.1},
+           {"inputs": {"role": "floor", "section": "NPB600X220X154.47", "length_mm": 8500.0}, "DC": 0.9}]
+    rec = CD.composite_design_record(cfg, mem, beam_dirs={"NPB300X165X45.76": {"X"}, "NPB600X220X154.47": {"Y"}})
+    cs = next(s for s in rec["slots"] if s["component"] == "construction_stage")
+    assert cs["detail"]["section"] == "NPB600X220X154.47" and cs["DC"] < 1.0
+    rec2 = CD.composite_design_record(cfg, mem, beam_dirs={"NPB300X165X45.76": {"Y"}, "NPB600X220X154.47": {"Y"}})
+    cs2 = next(s for s in rec2["slots"] if s["component"] == "construction_stage")
+    assert cs2["detail"]["section"] == "NPB300X165X45.76" and cs2["DC"] > 1.0
