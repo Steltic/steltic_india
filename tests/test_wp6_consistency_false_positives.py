@@ -103,3 +103,20 @@ def test_omf_continuity_plate_thickness_reaches_the_joint_check():
     p = S.props("NPB500X200X90.69")
     cn = CD.beam_column_connection(cfg, {"section": "NPB500X200X90.69", "grade": "E250 B0", "role": "beam"}, p, 250.0)
     assert cn and cn.get("continuity_plate_t_mm") == 16.0
+
+
+def test_omf_continuity_plate_row_dc_is_required_over_provided():
+    """WP6-fix: the 12.10.2.5 'provided t >= beam flange t' row reports D/C = required / provided (a 16 mm plate on a
+    13.1 mm flange read D/C 1.22 with ok True)."""
+    import india_is800_s12 as S12
+    import engine3d as E
+    E.activate_si_units()
+    m = {"id": "b1", "section": "NPB450X190X67.16", "grade": "E250 B0", "role": "beam", "sfrs": True}
+    joint = {"id": "J1", "beams": [{"member_id": "b1", "L_clear_mm": 5000.0, "V_gravity_N": 1.0e5}],
+             "columns": [], "connection": {"type": "welded_cover_plate", "weld_type": "cjp",
+                                            "moment_capacity_Nmm": 1.0e12, "shear_capacity_N": 1.0e9},
+             "continuity_plate_t_mm": 16.0}
+    rows = S12.smf_joint_checks(joint, {"members": [m], "forces": []}, {"system": "OMF"}, system="OMF")
+    cp = [r for r in rows if r["id"] == "12.10.2.5_continuity_plates"][0]
+    assert cp["ok"] is True and cp["value"] == 16.0
+    assert cp["dc"] is not None and cp["dc"] < 1.0 and abs(cp["dc"] - cp["limit"] / 16.0) < 1e-9
