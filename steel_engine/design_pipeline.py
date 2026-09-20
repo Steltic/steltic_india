@@ -1681,11 +1681,12 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
     import india_seismic_gates as G
     z = G.zone_of(cfg)
     out = {"clause": "IS 1893 7.11.2", "zone": z, "checks": []}
+    R = G.declared_R(cfg)
+    _separation_7_11_3(cfg, run, R, out)                    # 7.11.3 applies in every zone (WP6: Zone II units too)
     if z not in ("III", "IV", "V"):
         out["note"] = "Zone %s: 7.11.2 applies in Zones III-V only" % z
         pkg["deformation_compatibility"] = out
         return
-    R = G.declared_R(cfg)
     plan = cfg.get("load_plan") or {}
     cases = []
     for d in ("X", "Y"):
@@ -1730,18 +1731,25 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
         out["no_non_sfrs_columns"] = True
         out["note"] = ("every column belongs to a lateral-load-resisting line (moment or braced frame); IS 1893 7.11.2 "
                        "has no non-SFRS member to check -- the SFRS members are designed for the 7.11.1 drift")
-    sep = cfg.get("adjacent_units") or []
-    if sep:
-        import india_seismic as IS
-        dr = run.get("drift") or {}
-        for u in sep:
-            d = u.get("direction", "X")
-            D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
-            r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
-                                        bool(u.get("same_floor_levels")))
-            gap = u.get("gap_mm")
-            out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
-                                                     "dc": (r_["required_mm"] / gap) if gap else None,
-                                                     "ok": (gap is not None and r_["required_mm"] <= gap),
-                                                     "clause": "IS 1893 7.11.3", "cite": r_["cite"]})
     pkg["deformation_compatibility"] = out
+
+
+def _separation_7_11_3(cfg, run, R, out):
+    """IS 1893 7.11.3 separation from the declared adjacent units: R (D1 + D2) (or (R1 D1 + R2 D2)/2 at matching floor
+    levels, Amd 1); D1 = this unit's largest edge displacement in the joint direction (7.11.1 drift run)."""
+    sep = cfg.get("adjacent_units") or []
+    if not sep:
+        return
+    import india_seismic as IS
+    dr = run.get("drift") or {}
+    for u in sep:
+        d = u.get("direction", "X")
+        D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
+        r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
+                                    bool(u.get("same_floor_levels")))
+        gap = u.get("gap_mm")
+        out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
+                                                 "D1_mm": D1, "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
+                                                 "dc": (r_["required_mm"] / gap) if gap else None,
+                                                 "ok": (gap is not None and r_["required_mm"] <= gap),
+                                                 "clause": "IS 1893 7.11.3", "cite": r_["cite"]})
