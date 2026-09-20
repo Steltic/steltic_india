@@ -484,6 +484,10 @@ TABLE4_SETS = {
     "is18168_5_5": [(1.2, 0.5, 3.0), (0.9, 0.0, 3.0), (1.2, 0.25, 3.0), (1.2, 0.25, 2.5)],
     "service": [(1.0, 1.0, 0.0), (1.0, 0.8, 0.8), (1.0, 0.0, 1.0), (1.0, 0.0, 0.0)],
 }
+# IS 800 Table 4 rows with crane load CL (fD, fL, fC, |f_lat|): DL+LL+CL 1.5/1.5/1.05 (LL leading) and 1.5/1.05/1.5
+# (CL leading); DL+LL+CL+WL/EL 1.2/1.2/1.05/0.6 and 1.2/1.2/0.53/1.2 -- the generator's own crane rows were refused by
+# the validator, which knew no CL column (WP6-fix)
+TABLE4_CRANE_SETS = [(1.5, 1.5, 1.05, 0.0), (1.5, 1.05, 1.5, 0.0), (1.2, 1.2, 1.05, 0.6), (1.2, 1.2, 0.53, 1.2)]
 
 
 def validate_table4(combos, cfg=None) -> list:
@@ -505,6 +509,13 @@ def validate_table4(combos, cfg=None) -> list:
         vert = c.get("vertical") if isinstance(c.get("vertical"), dict) else {}
         if f is not None and abs(abs(float(vert.get("coef", 0.0))) - 1.0) < 1e-9:
             fl = fl / 0.3                          # IS 1893 6.3.4.1(c): ELZ leading, 0.3 EL accompanying
+        fC = float(c.get("fC") or 0.0)
+        if fC:
+            if not any(abs(fD - a) < 1e-6 and abs(fL - b) < 1e-6 and abs(fC - cc) < 1e-6 and abs(fl - e) < 1e-6
+                       for a, b, cc, e in TABLE4_CRANE_SETS):
+                out.append(("ERROR", "combinations[%d] (%s): factors DL %g / LL %g / CL %g / lateral %g are not an IS 800 "
+                                     "Table 4 crane set" % (i, c.get("label", "?"), fD, fL, fC, fl)))
+            continue
         if not any(abs(fD - a) < 1e-6 and abs(fL - b) < 1e-6 and abs(fl - e) < 1e-6 for a, b, e in allowed):
             out.append(("ERROR", "combinations[%d] (%s): factors DL %g / LL %g / lateral %g are not an IS 800 "
                                  "Table 4 (or 12.2.3 / IS 18168 5.5) set" % (i, c.get("label", "?"), fD, fL, fl)))

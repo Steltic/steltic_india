@@ -1125,7 +1125,12 @@ def design_india(name, cfg, outdir):
             ctype = "beam-to-column"
             dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
             sfrs_tags = [t for t in tags if t in sfrs_beams]
-            if sfrs_tags and G.section12_system(cfg) and S12.normalize_system(cfg.get("system")) in ("SMF", "OMF"):
+            # moment-connection rows only for the SFRS beams that are rigid at (at least) one end; a braced-bay beam
+            # pinned at both ends (eave strut / collector of a mixed OMF+OCBF job) takes the shear-connection path (WP6-fix)
+            rel0_ = info0.get("beam_rel") or {}
+            mf_tags = [t for t in sfrs_tags if (rel0_.get(t) or ("none",))[0] != "both"]
+            if mf_tags and G.section12_system(cfg) and S12.normalize_system(cfg.get("system")) in ("SMF", "OMF"):
+                sfrs_tags = mf_tags
                 # moment connection: the per-joint 12.11.2 checks (demand 1.2 Mp, shear) live in capacity_design
                 ids = {"connection_moment", "connection_shear", "12.4.2_weld_type", "12.4.1_bolt_type"}
                 worst = {}
@@ -1355,6 +1360,7 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
+        pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway (WP6-fix: recorded)
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):

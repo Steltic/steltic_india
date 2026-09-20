@@ -51,7 +51,20 @@ NO_BASIS = "no Indian basis"
 
 def normalize_system(system):
     s = str(system or "").upper().replace("-", "").replace("_", "").replace(" ", "")
+    if "+" in s:
+        s = s.split("+", 1)[0]                     # mixed per-direction system 'OMF+OCBF': the primary (first) one
     return _ALIASES.get(s)
+
+
+def system_components(system):
+    """Canonical components of a system string: 'OMF+OCBF' -> ['OMF', 'OCBF'] (WP6-fix: a transverse moment frame
+    with longitudinal braced bays is checked under BOTH Section 12 branches)."""
+    out = []
+    for part in str(system or "").upper().replace("-", "").replace("_", "").replace(" ", "").split("+"):
+        c = _ALIASES.get(part)
+        if c and c not in out:
+            out.append(c)
+    return out
 
 
 _AUTO = object()
@@ -890,9 +903,11 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
         typ = str(conn.get("type") or "").lower()
         if "weld" in typ:
             tcp, tfb = joint.get("continuity_plate_t_mm"), (Mp_list[0][2]["tf"] if Mp_list else None)
+            # provided-vs-required row: D/C = required / provided (dc=None would form provided / required, WP6-fix)
+            dc_cp = (float(tfb) / float(tcp)) if (tcp and tfb) else None
             out.append(_chk("12.10.2.5_continuity_plates", tcp, tfb, clause="IS 800:2007 12.10.2.5",
                             member=joint.get("id"), cite="continuity plates t >= beam flange t (rigid welded)",
-                            ok=None if (tcp is None or tfb is None) else tcp >= tfb, dc=None))
+                            ok=None if (tcp is None or tfb is None) else tcp >= tfb, dc=dc_cp))
     if conn:
         out.append(dict(C.cjp_weld_gate(conn.get("weld_type"), location="beam_column",
                                         eor_exception=(cfg or {}).get("eor_weld_exception")),
@@ -1167,9 +1182,20 @@ def section12_checks(system, model_data, cfg=None):
                 "note": "Decision D3: BRBF, SPSW, dual, IMF and other systems have no Indian design basis."}
     checks: List[Dict[str, Any]] = []
     advisories: List[Dict[str, Any]] = []
-    zg = zone_gate(sysn, cfg)
-    if zg:
-        checks.append(zg)
+    comps = system_components(system) or [sysn]
+    for cs_ in comps:
+        zg = zone_gate(cs_, cfg)
+        if zg:
+            checks.append(zg)
+    has_braces = any(c in ("OCBF", "SCBF") for c in comps)
+    has_joints = any(c in ("OMF", "SMF") for c in comps)
+    sys_br = next((c for c in comps if c in ("OCBF", "SCBF")), None)
+    sys_mf = next((c for c in comps if c in ("OMF", "SMF")), None)
+    if len(comps) > 1:
+        advisories.append({"clause": "IS 800:2007 12 / IS 1893 Table 9", "applies": True,
+                           "note": "mixed per-direction system %s: brace rules (12.7 / 12.8) for the braced bays and "
+                                   "moment-frame joint rules (12.10 / 12.11) for the portal joints; column / base rules of "
+                                   "the primary system %s; R = min over the components" % (" + ".join(comps), sysn)})
     a18 = is18168_status(sysn, cfg)
     if a18["applies"]:
         g = I18.system_gate(sysn, cfg.get("zone") or cfg.get("Z"), cfg.get("height_m"))
@@ -1218,9 +1244,10 @@ def section12_checks(system, model_data, cfg=None):
             checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
                                cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
                                     % {"brace": "iii", "column": "ii", "beam": "i"}[comp]))
-    if sysn in ("OCBF", "SCBF"):
+    if has_braces:
+        sysn_b = sys_br
         cfgb = str(cfg.get("brace_config") or "").lower()
-        cl = "IS 800:2007 12.7.1.2" if sysn == "OCBF" else "IS 800:2007 12.8.1.2"
+        cl = "IS 800:2007 12.7.1.2" if sysn_b == "OCBF" else "IS 800:2007 12.8.1.2"
         if not cfgb:
             checks.append(_na("brace_configuration", clause=cl, cite="diagonal and X-bracing only",
                               reason="brace_config not declared"))
@@ -1233,10 +1260,10 @@ def section12_checks(system, model_data, cfg=None):
         if not braces:
             checks.append(_na("braces", clause=cl, cite="brace members", reason="no brace members in model_data"))
         for m in braces:
-            checks += brace_member_checks(sysn, m, model_data, cfg)
-            checks += brace_connection_checks(sysn, m, conns.get(m["id"]), model_data, cfg)
-        checks += tension_share_checks(sysn, model_data)
-    elif sysn == "EBF":
+            checks += brace_member_checks(sysn_b, m, model_data, cfg)
+            checks += brace_connection_checks(sysn_b, m, conns.get(m["id"]), model_data, cfg)
+        checks += tension_share_checks(sysn_b, model_data)
+    if sysn == "EBF":
         links = model_data.get("links") or []
         if not links:
             checks.append(_na("ebf_links", clause="IS 18168:2023 11 / 12.3", cite="links modelled and designed",
@@ -1273,13 +1300,13 @@ def section12_checks(system, model_data, cfg=None):
         checks += ebf_beam_column_checks(links, model_data, cfg)
         advisories.append({"note": "IS 800:2007 12.9 refers EBF to specialist literature; IS 18168:2023 cl. 11/12.3 "
                                    "applied (decision D2)."})
-    elif sysn in ("OMF", "SMF"):
+    if has_joints:
         joints = model_data.get("joints") or []
         if not joints:
             checks.append(_na("moment_frame_joints", clause="IS 800:2007 12.11 / 12.10",
                               cite="every frame joint from model connectivity", reason="no joints in model_data"))
         for j in joints:
-            checks += smf_joint_checks(j, model_data, cfg, system=sysn)
+            checks += smf_joint_checks(j, model_data, cfg, system=sys_mf)
     # IS 18168:2023 advisories (governs over IS 800 Section 12 where applicable - lead/EOR decision)
     zone = _zone_roman(cfg.get("zone") or cfg.get("Z"))
     if a18["applies"]:

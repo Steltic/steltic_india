@@ -182,7 +182,8 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
             ops.element(*a)
             if kind == "col":
                 i, j, k = dec(a[2]); cols.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3],
-                                                  "i": i, "j": j, "k": k, "axis": "col"})
+                                                  "i": i, "j": j, "k": k, "axis": "col",
+                                                  "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None)})
             elif kind == "brace":
                 braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3]})
     for a in rec["rigidDiaphragm"]:
@@ -722,6 +723,18 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
                 kk = nd // 100000
                 if kk in lev:
                     lev[kk] += 0.5 * W
+    # declared permanent nodal loads (WP6-fix): gantry girder + rail reactions on crane brackets, hung equipment --
+    # cfg['nodal_dead_loads'] = [{node, Fz_N (down < 0), Mx_Nmm, My_Nmm, level, note}], factored with the dead load
+    for nl in (cfg.get("nodal_dead_loads") or []):
+        try:
+            nd = int(nl["node"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        Fz = float(nl.get("Fz_N") or 0.0)
+        ops.load(nd, 0.0, 0.0, fdead * Fz, fdead * float(nl.get("Mx_Nmm") or 0.0), fdead * float(nl.get("My_Nmm") or 0.0), 0.0)
+        kk = nl.get("level")
+        if kk in lev:
+            lev[kk] += -fdead * Fz
     if fC:
         apply_crane_loads(cfg, model, fC, crane_pattern)
     return lev
@@ -765,25 +778,56 @@ def member_wind_loads(cfg, model, pat, f):
     qw, ql = pat.get("wall_windward_kNm2"), pat.get("wall_leeward_kNm2")
     if qw is not None and ql is not None:
         oth = 1 - ax
-        for k in range(1, NF + 1):
-            h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
-            alln = set(ops.getNodeTags())
-            lvl = [ntag(i, j, k) for (i, j) in (model.get("present") or {}).get(k, ())]
-            crd = {n: ops.nodeCoord(n) for n in lvl if n in alln}
-            if not crd:
-                continue
-            for edge, q, sgn in ((min(c[ax] for c in crd.values()), qw, 1.0),
-                                 (max(c[ax] for c in crd.values()), ql, -1.0)):
-                on = [n for n, c in crd.items() if abs(c[ax] - edge) < 1e-6]
-                if len(on) < 1:
+        # wall pressure as a DISTRIBUTED load on the edge-line column elements (every piece of the column, full
+        # height): a portal column bends under the wall wind along its height and the lower half of the wall load
+        # reaches the base through the column shear, not as a nodal force at the roof (WP6-fix, HREX3-Ex14-02);
+        # nodal fallback (tributary storey height at the level's grid nodes) when no column element is on the line
+        xs_all = [c[ax] for c in nodes]
+        edge_lo, edge_hi = min(xs_all), max(xs_all)
+        by_edge = {}
+        for c in model["cols"]:
+            c1, c2 = ops.nodeCoord(c["n1"]), ops.nodeCoord(c["n2"])
+            xe = 0.5 * (c1[ax] + c2[ax])
+            for edge in (edge_lo, edge_hi):
+                if abs(xe - edge) < 1e-6:
+                    by_edge.setdefault(edge, []).append((c, c1, c2))
+        if by_edge and all(c.get("transf") in (1, 2) for lst in by_edge.values() for (c, _, _) in lst):
+            for edge, q, sgn in ((edge_lo, qw, 1.0), (edge_hi, ql, -1.0)):
+                lst = by_edge.get(edge) or []
+                if not lst:
                     continue
-                ys = [crd[n][oth] for n in on]
-                Lw = (max(ys) - min(ys)) or (cfg["SY"] if ax == 0 else cfg["SX"])
-                Ftot = f * float(q) * Lw * h_t / 1000.0 * sgn          # N along +axis
-                for n in on:
-                    v = [0.0] * 6; v[ax] = Ftot / len(on)
-                    ops.load(n, *v)
-                tot["wall_N"] += Ftot
+                lines = sorted({round(c1[oth], 3) for (c, c1, c2) in lst})
+                Lw = (lines[-1] - lines[0]) if len(lines) > 1 else (cfg["SY"] if ax == 0 else cfg["SX"])
+                w_line = f * float(q) * (Lw / len(lines)) / 1000.0 * sgn      # N/mm along +axis per column line
+                for (c, c1, c2) in lst:
+                    F = w_line
+                    # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
+                    if c["transf"] == 2:
+                        Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
+                    else:
+                        Wy, Wz = (0.0, F) if ax == 0 else (-F, 0.0)
+                    ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
+                    tot["wall_N"] += F * abs(c2[2] - c1[2])
+        else:
+            for k in range(1, NF + 1):
+                h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
+                alln = set(ops.getNodeTags())
+                lvl = [ntag(i, j, k) for (i, j) in (model.get("present") or {}).get(k, ())]
+                crd = {n: ops.nodeCoord(n) for n in lvl if n in alln}
+                if not crd:
+                    continue
+                for edge, q, sgn in ((min(c[ax] for c in crd.values()), qw, 1.0),
+                                     (max(c[ax] for c in crd.values()), ql, -1.0)):
+                    on = [n for n, c in crd.items() if abs(c[ax] - edge) < 1e-6]
+                    if len(on) < 1:
+                        continue
+                    ys = [crd[n][oth] for n in on]
+                    Lw = (max(ys) - min(ys)) or (cfg["SY"] if ax == 0 else cfg["SX"])
+                    Ftot = f * float(q) * Lw * h_t / 1000.0 * sgn          # N along +axis
+                    for n in on:
+                        v = [0.0] * 6; v[ax] = Ftot / len(on)
+                        ops.load(n, *v)
+                    tot["wall_N"] += Ftot
     return tot
 
 
