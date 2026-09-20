@@ -519,7 +519,11 @@ def demand_envelope(cfg, cases, nseg=6, floor_system=None, determinate=True,
     seis = [c for c in cases if c[4]]
     kinds = _member_kinds(build_static(cfg, "Linear", 1))     # cheap topology map (nseg=1)
     # ---- gravity envelope (size-invariant when determinate): disk cache, compute ONCE ----
-    gkey = _grav_key(cfg, nseg, floor_system, determinate, sec_sig)
+    _cd = _hashlib.md5(repr([(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
+                              sorted((getattr(c, "meta", {}) or {}).get("rsa", {}) or {}) if isinstance(
+                                  (getattr(c, "meta", {}) or {}).get("rsa"), dict) else None)
+                             for c in cases]).encode()).hexdigest()   # WP1.1: factors are in the key
+    gkey = _grav_key(cfg, nseg, floor_system, determinate, sec_sig) + _cd
     genv = _cache_load(cache_dir, gkey + "|grav")
     if genv is None:
         genv = {}
@@ -527,7 +531,7 @@ def demand_envelope(cfg, cases, nseg=6, floor_system=None, determinate=True,
             res, _k = _solve_case(cfg, case, nseg, floor_system); _merge(genv, _k, res, case[0], case[5])
         _cache_save(cache_dir, gkey + "|grav", genv)
     # ---- seismic/wind envelope (keyed on lateral sections + mass): disk cache ----
-    skey = _seis_key(cfg, nseg, floor_system, lat_sig)
+    skey = _seis_key(cfg, nseg, floor_system, lat_sig) + _cd
     senv = _cache_load(cache_dir, skey + "|seis")
     if senv is None:
         senv = {}

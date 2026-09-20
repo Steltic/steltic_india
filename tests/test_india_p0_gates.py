@@ -24,7 +24,7 @@ def _base_plan(**extra):
         "combinations": [
             {"label": "1.5DL+1.5LL", "fD": 1.5, "fL": 1.5, "fLr": 0.0,
              "lateral": {}, "cite": "IS 800:2007 Table 4"},
-            {"label": "1.5DL+1.5WL_X", "fD": 1.5, "fL": 0.0, "fLr": 0.0,
+            {"label": "1.5DL+1.5WL_X", "fD": 1.5, "fL": 0.0, "fLr": 0.0, "fW": 1.5, "units": "N",
              "lateral": {"1": [50.0, 0.0, 0.0]}, "cite": "IS 800 + IS 875 P3"},
         ],
     }

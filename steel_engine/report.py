@@ -1389,14 +1389,32 @@ def _governing_lateral(cfg, V, VwX, VwY):
 
 
 def _combo_table(cases):
-    def lab(label, lat):
-        if not lat: return "&mdash;"
-        if "WX" in label or "WY" in label: return "wind"
-        if "EX" in label or "EY" in label: return "seismic"
-        return "lateral"
-    rows = [[L, f"{fD:.2f}", f"{fL:.2f}", f"{fLr:.2f}", lab(L, lat), "columns only" if co else "all members"]
-            for (L, fD, fL, fLr, lat, co) in cases]
-    return _table(["Combination", "D", "L", "L<sub>r</sub>/S", "Lateral", "Applies to"], rows)
+    """IS 800 Table 4 / IS 1893 6.3 combination table generated from the ACTUAL case list
+    (WP1.1: the lateral load factor fE / fW is a column; WP1.2: tags / torsion / vertical)."""
+    def meta(c):
+        return getattr(c, "meta", {}) or {}
+    rows = []
+    for c in cases:
+        L, fD, fL, fLr, lat, co = tuple(c)[:6]
+        m = meta(c)
+        kind = m.get("kind") or ("lateral" if lat else None)
+        f = m.get("fLat")
+        lat_txt = "&mdash;" if not (lat or m.get("rsa")) else (
+            "%s %s%s" % ({"EQ": "EL", "W": "WL"}.get(kind, kind or "lateral"),
+                         (m.get("direction") or ""), " (RSA)" if m.get("rsa") else ""))
+        extras = []
+        if m.get("torsion"):
+            extras.append("7.8.2 e<sub>d</sub> %s" % m.get("torsion"))
+        if m.get("fEv"):
+            extras.append("EL<sub>Z</sub> %+.3g" % m.get("fEv"))
+        if m.get("fC"):
+            extras.append("CL %.2f" % m.get("fC"))
+        tags = ", ".join(m.get("tags") or []) or ("col_only" if co else "all members")
+        rows.append([L, "%.2f" % fD, "%.2f" % fL, "%.2f" % fLr,
+                     ("%+.2f" % f) if f is not None else "&mdash;", lat_txt,
+                     "; ".join(extras) or "&mdash;", tags])
+    return _table(["Combination", "DL", "LL", "LL<sub>roof</sub>/S", "f<sub>E</sub> / f<sub>W</sub>",
+                   "Lateral", "Other terms", "Applies to"], rows)
 
 def _combo_legend(cfg):
     rho = cfg.get("rho", 1.3)

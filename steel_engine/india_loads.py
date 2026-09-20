@@ -20,21 +20,28 @@ Schema (cfg['load_plan']):
       {"stem": "IS_1893_Part_1_2016", "query": "...", "found": true, "cite": "…"},
       ...
     ],
-    "combinations": [   # REQUIRED — at least gravity; lateral when EQ/WL apply
-      {"label": "1.5DL+1.5LL", "fD": 1.5, "fL": 1.5, "fLr": 0.0,
-       "lateral": {}, "col_only": false, "cite": "IS 800:2007 Table 4"},
+    "story_forces_units": "N" | "kN",          # REQUIRED when story_forces are given (WP1.12)
+    "story_forces": {"EQ_X": {"1": [Fx, Fy, Mz], ...}, "W_X": {...}, ...},  # UNFACTORED
+    "combinations": [   # REQUIRED — explicit list, or "auto" -> india_combos.expand_combinations
+      {"label": "1.5DL+1.5LL", "fD": 1.5, "fL": 1.5, "fLr": 1.5, "cite": "IS 800:2007 Table 4"},
       {"label": "1.2DL+1.2LL+1.2EQ_X", "fD": 1.2, "fL": 1.2, "fLr": 0.0,
-       "lateral": {"1": [Fx, Fy, Mz], ...}, "col_only": false,
-       "cite": "IS 800 Table 4 + IS 1893 …"},
+       "fE": 1.2, "lateral_ref": "EQ_X", "cite": "IS 800 Table 4 + IS 1893 6.3"},
+      {"label": "0.9DL-1.5W_Y", "fD": 0.9, "fL": 0.0, "fLr": 0.0, "fW": -1.5,
+       "lateral_ref": "W_Y", "cite": "IS 800 Table 4"},
       ...
     ],
     "notes": "optional free text"
   }
 
-lateral values: kip forces/moments at each story index (str or int keys), matching
-the existing design_pipeline / design_post run_case contract (engine remains kip+inch).
+WP1.1: story forces are UNFACTORED characteristic forces; every combination that references a
+lateral pattern carries a REQUIRED lateral load factor fE (earthquake) or fW (wind) -- there is
+no default -- and cases_from_load_plan multiplies every (fx, fy, mz) by it.  The factor must agree
+with the label ("1.5EQ_X" -> |fE| = 1.5; a '-' before the term -> negative).
+Engine units: N and N-mm (story_forces_units "kN" is converted x1000; kip is refused).
 """
 from __future__ import annotations
+
+import re as _re
 
 # Canonical India load / seismic stems the agent must hit via RAG every job.
 LOAD_STEMS = (
@@ -84,6 +91,71 @@ STEM_TO_COLLECTION = {v: k for k, v in COLLECTION_TO_STEM.items()
 
 class LoadPlanError(ValueError):
     """cfg['load_plan'] missing, incomplete, or not RAG-backed."""
+
+
+class Case(tuple):
+    """A resolved load case.  Behaves like the legacy 6-tuple
+    (label, fD, fL, fLr, lateral{k:(fx,fy,mz)} [already factored], col_only)
+    and carries metadata in .meta: fLat, kind ('EQ'|'W'|None), direction, sign, torsion,
+    fEv (vertical EQ factor x Av), rsa {dir: factor}, tags, family, cite, service, crane."""
+    def __new__(cls, label, fD, fL, fLr, lateral, col_only, **meta):
+        t = super().__new__(cls, (label, fD, fL, fLr, lateral, col_only))
+        t.meta = dict(meta)
+        return t
+
+    def __reduce__(self):
+        return (_rebuild_case, (tuple(self), self.meta))
+
+    @property
+    def label(self):
+        return self[0]
+
+
+def _rebuild_case(t, meta):
+    return Case(*t, **meta)
+
+
+LAT_FACTOR_KEYS = ("fE", "fW", "fLat")
+# a lateral term in a label:  [+|-] factor (EQ|EL|WL|W) [_X|Y|Z]   e.g. "1.5DL-1.5EQ_X", "0.6WL_Y"
+_LBL_LAT = _re.compile(r"([+-−]?)\s*\(?\s*([0-9]*\.?[0-9]+)\s*\)?\s*[\[(]?\s*(EQ|EL|WL|W)(?:_?([XYZ]))?(?![A-Za-z])", _re.I)
+
+
+def lateral_kind(name) -> str | None:
+    n = str(name or "").upper()
+    if _re.match(r"^\s*(EQ|EL|E)(_|\b|[XYZ])", n) or n.startswith("RSA") or "EQ" in n or "EL_" in n:
+        return "EQ"
+    if _re.match(r"^\s*(WL|W)(_|\b|[XYZ])", n) or "WIND" in n:
+        return "W"
+    return None
+
+
+def label_lateral_terms(label) -> list:
+    """[(signed factor, kind, direction)] parsed from a combination label."""
+    out = []
+    for m in _LBL_LAT.finditer(str(label or "")):
+        sgn = -1.0 if m.group(1) in ("-", "−") else 1.0
+        kind = "EQ" if m.group(3).upper() in ("EQ", "EL") else "W"
+        out.append((sgn * float(m.group(2)), kind, (m.group(4) or "").upper() or None))
+    return out
+
+
+def combo_lateral_factor(c) -> tuple:
+    """(factor, key) of a combination's lateral factor; (None, None) when absent."""
+    for k in LAT_FACTOR_KEYS:
+        if k in c and c.get(k) is not None:
+            return float(c[k]), k
+    return None, None
+
+
+def _story_force_scale(plan, c=None) -> float:
+    """Multiplier to N for story forces (WP1.12)."""
+    u = str((c or {}).get("units") or (plan or {}).get("story_forces_units") or "").strip().lower()
+    if u in ("n", "newton", "newtons"):
+        return 1.0
+    if u in ("kn", "kilonewton", "kilonewtons"):
+        return 1000.0
+    raise LoadPlanError("load_plan.story_forces_units must be 'N' or 'kN' (got %r); kip is refused on "
+                        "the India path (WP1.12)" % u)
 
 
 def _as_lateral(raw):
@@ -310,6 +382,8 @@ def validate_load_plan(cfg) -> list:
         out.append(("ERROR",
                     "cfg['load_plan'].combinations empty — after RAG, write IS 800 Table 4 "
                     "(partial factors) combinations with fD/fL/fLr and any lateral story forces."))
+    elif combos == "auto" or (isinstance(combos, dict) and combos.get("generate")):
+        pass                                   # india_combos.expand_combinations builds the set
     else:
         for i, c in enumerate(combos):
             if not isinstance(c, dict):
@@ -323,6 +397,14 @@ def validate_load_plan(cfg) -> list:
             if not c.get("cite"):
                 out.append(("WARN", "combinations[%d] (%s) has no cite — attach the retrieved clause"
                             % (i, c.get("label", "?"))))
+            out.extend(validate_lateral_factor(c, i, plan))
+        out.extend(validate_table4(combos, cfg))
+    sf = plan.get("story_forces")
+    if isinstance(sf, dict) and sf:
+        u = str(plan.get("story_forces_units") or "").strip().lower()
+        if u not in ("n", "kn"):
+            out.append(("ERROR", "load_plan.story_forces_units missing/invalid (%r): declare 'N' or 'kN' "
+                                 "(unfactored characteristic story forces, WP1.1/1.12)" % plan.get("story_forces_units")))
 
     # ---- P0 gates: wind (S5/H2) + Ta fail-closed (H1) ----
     out.extend(validate_wind_gate(cfg, plan))
@@ -341,6 +423,73 @@ def validate_load_plan(cfg) -> list:
     return out
 
 
+def validate_lateral_factor(c, i=0, plan=None) -> list:
+    """WP1.1: a combination with a lateral pattern needs an explicit fE/fW that matches its label."""
+    out = []
+    has_lat = bool(c.get("lateral") or c.get("lateral_ref") or c.get("rsa"))
+    f, key = combo_lateral_factor(c)
+    terms = label_lateral_terms(c.get("label"))
+    lab = c.get("label", "?")
+    if has_lat and f is None:
+        out.append(("ERROR", "combinations[%d] (%s) references a lateral pattern but has no lateral load "
+                             "factor -- add fE (earthquake) or fW (wind); there is no default (IS 800 Table 4, "
+                             "story forces are unfactored)" % (i, lab)))
+        return out
+    if f is not None and not has_lat:
+        out.append(("ERROR", "combinations[%d] (%s) has %s=%g but no lateral / lateral_ref" % (i, lab, key, f)))
+        return out
+    if f is None:
+        if terms:
+            out.append(("ERROR", "combinations[%d] (%s): label names a lateral term but no lateral pattern "
+                                 "and factor are given" % (i, lab)))
+        return out
+    kind_ref = lateral_kind(c.get("lateral_ref")) if c.get("lateral_ref") else None
+    kind_key = {"fE": "EQ", "fW": "W"}.get(key)
+    if kind_ref and kind_key and kind_ref != kind_key:
+        out.append(("ERROR", "combinations[%d] (%s): %s used with a %s pattern" % (i, lab, key, kind_ref)))
+    if not terms:
+        out.append(("ERROR", "combinations[%d] (%s): the label does not state the lateral factor "
+                             "(e.g. '1.5DL+1.5EQ_X')" % (i, lab)))
+        return out
+    lf = terms[0][0]
+    if abs(abs(lf) - abs(f)) > 1e-6:
+        out.append(("ERROR", "combinations[%d] (%s): %s=%g disagrees with the label factor %g"
+                             % (i, lab, key, f, lf)))
+    elif (lf < 0) != (f < 0) and "±" not in str(lab):
+        out.append(("ERROR", "combinations[%d] (%s): sign of %s=%g disagrees with the label" % (i, lab, key, f)))
+    return out
+
+
+# IS 800:2007 Table 4 factor sets (read from the PDF p.29 image): (DL, LL leading, lateral) --
+# strength rows, the 12.2.3 rows and the serviceability rows.  LL accompanying (crane) is separate.
+TABLE4_SETS = {
+    "strength": [(1.5, 1.5, 0.0), (1.2, 1.2, 0.6), (1.2, 1.2, 1.2), (1.5, 0.0, 1.5), (0.9, 0.0, 1.5),
+                 (1.5, 0.0, 0.0), (0.9, 0.0, 0.0)],
+    "is800_12_2_3": [(1.2, 0.5, 2.5), (0.9, 0.0, 2.5)],
+    "service": [(1.0, 1.0, 0.0), (1.0, 0.8, 0.8), (1.0, 0.0, 1.0), (1.0, 0.0, 0.0)],
+}
+
+
+def validate_table4(combos, cfg=None) -> list:
+    """Each explicit combination's (fD, fL, |f_lat|) must be an IS 800 Table 4 (or 12.2.3) set."""
+    out = []
+    allowed = [t for v in TABLE4_SETS.values() for t in v]
+    for i, c in enumerate(combos or []):
+        if not isinstance(c, dict):
+            continue
+        try:
+            fD = float(c.get("fD", 0) or 0)
+            fL = float(c.get("fL", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        f, _ = combo_lateral_factor(c)
+        fl = abs(f) if f is not None else 0.0
+        if not any(abs(fD - a) < 1e-6 and abs(fL - b) < 1e-6 and abs(fl - e) < 1e-6 for a, b, e in allowed):
+            out.append(("ERROR", "combinations[%d] (%s): factors DL %g / LL %g / lateral %g are not an IS 800 "
+                                 "Table 4 (or 12.2.3) set" % (i, c.get("label", "?"), fD, fL, fl)))
+    return out
+
+
 def cases_from_load_plan(cfg) -> list:
     """Build design_pipeline combo tuples from cfg['load_plan']. Raises LoadPlanError on ERRORs."""
     findings = validate_load_plan(cfg)
@@ -349,24 +498,53 @@ def cases_from_load_plan(cfg) -> list:
         raise LoadPlanError("India load_plan invalid:\n- " + "\n- ".join(errors))
 
     plan = cfg["load_plan"]
+    combos = plan["combinations"]
+    if combos == "auto" or (isinstance(combos, dict) and combos.get("generate")):
+        from india_combos import expand_combinations
+        combos = expand_combinations(plan, cfg)
     cases = []
-    for c in plan["combinations"]:
-        label = str(c["label"])
-        fD = float(c["fD"])
-        fL = float(c.get("fL", 0.0))
-        fLr = float(c.get("fLr", 0.0))
-        lateral = _as_lateral(c.get("lateral") or {})
-        # Allow named pattern reference: lateral_ref -> plan['story_forces'][name]
-        ref = c.get("lateral_ref")
-        if ref and not lateral:
-            forces = (plan.get("story_forces") or {}).get(ref)
-            if forces is None:
-                raise LoadPlanError("combinations entry %r lateral_ref=%r not in load_plan.story_forces"
-                                    % (label, ref))
-            lateral = _as_lateral(forces)
-        col_only = bool(c.get("col_only", False))
-        cases.append((label, fD, fL, fLr, lateral, col_only))
+    for c in combos:
+        cases.append(case_from_combination(c, plan))
     return cases
+
+
+def case_from_combination(c, plan) -> Case:
+    """One combination dict -> Case (lateral already multiplied by fE/fW and converted to N)."""
+    label = str(c["label"])
+    fD = float(c["fD"])
+    fL = float(c.get("fL", 0.0))
+    fLr = float(c.get("fLr", 0.0))
+    f, key = combo_lateral_factor(c)
+    raw = c.get("lateral") or {}
+    ref = c.get("lateral_ref")
+    if ref and not raw:
+        raw = (plan.get("story_forces") or {}).get(ref)
+        if raw is None:
+            raise LoadPlanError("combinations entry %r lateral_ref=%r not in load_plan.story_forces"
+                                % (label, ref))
+    lateral = _as_lateral(raw)
+    if lateral:
+        if f is None:
+            raise LoadPlanError("combination %r has a lateral pattern but no fE/fW (WP1.1)" % label)
+        sc = _story_force_scale(plan, c) * f
+        lateral = {k: (fx * sc, fy * sc, mz * sc) for k, (fx, fy, mz) in lateral.items()}
+    tor = c.get("torsion_mz") or {}
+    if tor:
+        sc = _story_force_scale(plan, c)
+        tor = {int(k): float(v) * sc * (f if f is not None else 1.0) for k, v in dict(tor).items()}
+        lateral = dict(lateral)
+        for k, mz in tor.items():
+            fx, fy, m0 = lateral.get(k, (0.0, 0.0, 0.0))
+            lateral[k] = (fx, fy, m0 + mz)
+    tags = list(c.get("tags") or [])
+    col_only = bool(c.get("col_only", False)) or "col_only" in tags
+    kind = {"fE": "EQ", "fW": "W"}.get(key) or (lateral_kind(ref) if ref else None)
+    return Case(label, fD, fL, fLr, lateral, col_only,
+                fLat=f, kind=kind, direction=c.get("direction") or (str(ref)[-1] if ref else None),
+                sign=(1 if (f or 0) >= 0 else -1), torsion=c.get("torsion"), fEv=float(c.get("fEv", 0.0) or 0.0),
+                rsa=c.get("rsa"), tags=tags, family=c.get("family"), cite=c.get("cite"),
+                service=bool(c.get("service")), crane=c.get("crane"), fC=float(c.get("fC", 0.0) or 0.0),
+                fS=float(c.get("fS", 0.0) or 0.0), notional=c.get("notional"), source=c)
 
 
 def render_findings(findings) -> str:

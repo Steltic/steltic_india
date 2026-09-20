@@ -31,17 +31,23 @@ def test_rag_backed_plan_builds_cases():
             "combinations": [
                 {"label": "1.5DL+1.5LL", "fD": 1.5, "fL": 1.5, "fLr": 0.0,
                  "lateral": {}, "cite": "IS 800:2007 Table 4"},
-                {"label": "1.2DL+1.2EQ_X", "fD": 1.2, "fL": 0.0, "fLr": 0.0,
-                 "lateral": {"1": [10.0, 0.0, 0.0]}, "cite": "IS 800 + IS 1893"},
+                {"label": "1.2DL+1.2LL+1.2EQ_X", "fD": 1.2, "fL": 1.2, "fLr": 0.0, "fE": 1.2,
+                 "lateral": {"1": [10.0, 0.0, 0.0]}, "units": "N", "cite": "IS 800 Table 4 + IS 1893 6.3"},
             ],
         },
     }
     findings = IL.validate_load_plan(cfg)
-    assert not any(s == "ERROR" for s, _ in findings)
+    assert not any(s == "ERROR" for s, _ in findings), findings
     cases = IL.cases_from_load_plan(cfg)
     assert len(cases) == 2
     assert cases[0][0] == "1.5DL+1.5LL"
-    assert cases[1][4][1][0] == 10.0
+    assert cases[1][4][1][0] == 12.0          # 1.2 x 10 N (WP1.1: the factor is applied)
+
+
+def test_non_table4_combination_rejected():
+    """'1.2DL+1.2EQ_X' (no LL) is not an IS 800 Table 4 combination (WP0.5)."""
+    errs = IL.validate_table4([{"label": "1.2DL+1.2EQ_X", "fD": 1.2, "fL": 0.0, "fLr": 0.0, "fE": 1.2}])
+    assert errs
 
 
 def test_asce_flag_forbidden():
