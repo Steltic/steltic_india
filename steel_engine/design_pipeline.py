@@ -704,6 +704,12 @@ def sfrs_beam_tags(reg, info0):
             out.add(t)
         elif rel.get(t) and rel[t][0] == "none" and n1 in info0.get("moment_nodes", set()) and n2 in info0.get("moment_nodes", set()):
             out.add(t)
+        elif rel.get(t) and rel[t][0] in ("I", "J"):
+            # one end pinned, the other rigid (e.g. the corner bay of a perimeter moment frame whose corner column
+            # belongs to the orthogonal frame): a moment-frame beam at its rigid end only (WP6-fix)
+            rigid = n2 if rel[t][0] == "I" else n1
+            if rigid in info0.get("moment_nodes", set()):
+                out.add(t)
     return out
 
 
@@ -728,6 +734,8 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
         mid = "e%d" % t
         rec = _member_input_record(cfg, t, kind, sec, n1, n2, length[t], role_of[t])
         rec["sfrs"] = role_of[t] in ("brace", "lateral_col") or (kind == "beam" and t in sfrs_beams)
+        if kind == "beam":
+            rec["release_major"] = ((info0.get("beam_rel") or {}).get(t) or ("none", "none"))[0]   # none | I | J | both
         rec["level"] = n1 // 100000 if kind != "col" else n2 // 100000
         rec["roof"] = (kind == "beam" and n1 // 100000 >= NF)
         if kind == "brace":
@@ -1036,6 +1044,13 @@ def design_india(name, cfg, outdir):
         for j in md["joints"]:
             bm = mem_by_id.get(j["beams"][0]["member_id"]) if j.get("beams") else None
             j["roof"] = bool(bm and bm.get("roof"))
+            # the joint's connection record comes from the first beam at the joint that has a declared beam_column
+            # spec (an SFRS beam piece next to a gravity beam on the same line, WP6)
+            for bb in (j.get("beams") or []):
+                bm_ = mem_by_id.get(bb["member_id"])
+                if bm_ and CD.spec_for(cfg, "beam_column", bm_["section"], "beam"):
+                    bm = bm_
+                    break
             if bm:
                 pb = S.props(bm["section"])
                 fyb = CD._fy(bm, pb)[0]
@@ -1120,6 +1135,18 @@ def design_india(name, cfg, outdir):
                 if not checks:
                     checks.append(_row("IS 800 12.11.2 moment connection", {"ok": None, "clause": "IS 800:2007 12.11.2",
                                                                             "reason": "no joint checks for this beam group"}))
+                # a moment-frame beam pinned at one end (corner bay whose corner column belongs to the orthogonal
+                # frame): that end is a shear connection under the governing V (WP6-fix)
+                rel_ = info0.get("beam_rel") or {}
+                if any((rel_.get(t) or ("none",))[0] in ("I", "J") for t in sfrs_tags):
+                    r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, g["V"])
+                    if r is None:
+                        checks.append(_row("IS 800 10 shear connection (pinned end)", {
+                            "ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
+                            "reason": "cfg['connections']['beam_shear'] not declared for %s (pinned end of the SMF beam)" % sec}))
+                    else:
+                        for nm, c in r["checks"].items():
+                            checks.append(_row("pinned-end shear connection: %s" % nm, c))
             else:
                 # braced-bay / gravity beam: shear connection under the governing V (SFRS braced-bay beams: also the
                 # collector axial is carried by the member check; the connection sees V and the 12.2.3 axial)

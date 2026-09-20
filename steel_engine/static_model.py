@@ -96,6 +96,26 @@ def _end_rel(relz, rely, end):
     return ("J" if relz in ("J", "both") else "none", "J" if rely in ("J", "both") else "none")
 
 
+def grid_ijk_from_coords(cfg, x, y, z, dirn, tol=1.0):
+    """(i, j, k) of the column-grid bay a beam piece lies in, from its coordinates -- for beams whose I-node is
+    NOT a column-grid node (EBF link / beam-outside-link pieces, brace work points at the link ends, WP6).
+    i (X beam) is the grid line at or just below min x; j is the grid line at y (nearest); k from z."""
+    NX, NY = cfg["NX"], cfg["NY"]
+    xs = [_XY(cfg, i, 0)[0] for i in range(NX + 1)]
+    ys = [_XY(cfg, 0, j)[1] for j in range(NY + 1)]
+    zs = zlevels(cfg)
+    k = min(range(len(zs)), key=lambda kk: abs(zs[kk] - z))
+    if dirn == "X":
+        i = max([ii for ii in range(NX + 1) if xs[ii] <= x + tol] or [0])
+        i = min(i, NX - 1)
+        j = min(range(NY + 1), key=lambda jj: abs(ys[jj] - y))
+    else:
+        j = max([jj for jj in range(NY + 1) if ys[jj] <= y + tol] or [0])
+        j = min(j, NY - 1)
+        i = min(range(NX + 1), key=lambda ii: abs(xs[ii] - x))
+    return i, j, k
+
+
 def _staticize_custom(cfg, transf="PDelta", nseg=10):
     """Distribute gravity over an AGENT-BUILT (custom_build) model. We RECORD every OpenSees call the
     custom_build makes, then REPLAY it with the beams sub-divided into `nseg` elements so the true
@@ -130,8 +150,13 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
     for idx, a in enumerate(rec["element"]):
         kind = einfos[idx][1] if idx < len(einfos) else None
         sec = einfos[idx][2] if idx < len(einfos) else None
-        if a[0] == "elasticBeamColumn" and kind == "beam":
-            n1, n2 = a[2], a[3]; props = a[4:10]; ttag = a[10]; relz, rely = _parse_rel(a[11:])
+        if a[0] in ("elasticBeamColumn", "ElasticTimoshenkoBeam") and kind == "beam":
+            n1, n2 = a[2], a[3]
+            if a[0] == "ElasticTimoshenkoBeam":
+                # EBF shear link (WP6): E, G, A, Jx, Iy, Iz, Avy, Avz, transf -- shear deformation kept, no releases
+                props = a[4:12]; ttag = a[12]; relz, rely = "none", "none"
+            else:
+                props = a[4:10]; ttag = a[10]; relz, rely = _parse_rel(a[11:])
             (x1, y1, z1) = coord[n1]; (x2, y2, z2) = coord[n2]
             L = ((x2-x1)**2 + (y2-y1)**2 + (z2-z1)**2) ** 0.5
             chain = [n1]
@@ -145,8 +170,12 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
                 if sgi == 0: ra += eng.release_args(*_end_rel(relz, rely, "I"))
                 if sgi == nseg-1: ra += eng.release_args(*_end_rel(relz, rely, "J"))
                 te = sub_ele; sub_ele += 1
-                ops.element("elasticBeamColumn", te, chain[sgi], chain[sgi+1], *props, ttag, *ra); segs.append(te)
+                ops.element(a[0], te, chain[sgi], chain[sgi+1], *props, ttag, *ra); segs.append(te)
             i, j, k = dec(n1); dirn = "X" if abs(x2-x1) >= abs(y2-y1) else "Y"
+            if not (0 <= i <= cfg["NX"] and 0 <= j <= cfg["NY"] and n1 == ntag(i, j, k)):
+                # beam piece starting at an off-grid work point (EBF link ends): locate its bay from the
+                # coordinates so it carries its share of the floor load like any other beam (WP6)
+                i, j, k = grid_ijk_from_coords(cfg, min(x1, x2), min(y1, y2), z1, dirn)
             beams.append({"i": i, "j": j, "k": k, "dir": dirn, "L": L, "A": n1, "B": n2,
                           "nodes": chain, "segs": segs, "sec": sec, "relz": relz, "rely": rely})
         else:
@@ -827,7 +856,26 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
     return w * L * L / 8.0, w * L / 2.0
 
 
-REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin")
+REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin",
+              "N_LAT", "V_LAT")
+# N_LAT / V_LAT (WP6, EBF): the LATERAL-load part of the member axial force / major shear in this combination
+# (static lateral increment or fLat x RSA response) -- the EL share that IS 18168 12.3.2.2 / 12.3.4.5 amplify to
+# the link overstrength. Zero on gravity-only combinations; records without the field read as 0.0.
+
+
+def _lateral_axial_shear(model, RL):
+    """{fset: (N_LAT, V_LAT)} from a lateral-only response dict (same element responses as member_records)."""
+    out = {}
+    for c in model["cols"]:
+        lf = RL[c["tag"]]
+        out[frozenset((c["n1"], c["n2"]))] = (float(lf[6]), max(abs(lf[1]), abs(lf[7])))
+    for b in model["braces"]:
+        out[frozenset((b["n1"], b["n2"]))] = (float(RL[b["tag"]][0]), 0.0)
+    for b in model["beams"]:
+        segs = b["segs"]
+        out[frozenset((b["A"], b["B"]))] = (float(RL[segs[0]][6]),
+                                           max(max(abs(RL[t][2]), abs(RL[t][8])) for t in segs))
+    return out
 
 
 def member_records(model, R, cfg, case_grav, floor_system):
@@ -883,7 +931,8 @@ def combo_forces_for_member_check(records, kind):
         r = list(r) + [0.0] * (len(REC_FIELDS) - len(r))
         d = dict(zip(REC_FIELDS, r))
         cf = {"combo": lab, "P_N": -d["N"], "Mz_i_Nmm": d["Mmaj_i"], "Mz_j_Nmm": d["Mmaj_j"],
-              "My_i_Nmm": d["Mmin_i"], "My_j_Nmm": d["Mmin_j"], "Vy_N": d["Vmaj"], "Vz_N": d["Vmin"]}
+              "My_i_Nmm": d["Mmin_i"], "My_j_Nmm": d["Mmin_j"], "Vy_N": d["Vmaj"], "Vz_N": d["Vmin"],
+              "P_LAT_N": -d["N_LAT"], "V_LAT_N": d["V_LAT"]}
         if kind == "beam":
             cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
         out.append(cf)
@@ -955,7 +1004,11 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     for t in RC:
                         if t in E_:
                             RC[t] = RC[t] + float(f) * E_[t]
-            per_case[c[0]] = member_records(model, RC, cfg, gk, floor_system)
+            recs = member_records(model, RC, cfg, gk, floor_system)
+            if RC is not RG:
+                lat = _lateral_axial_shear(model, {t: RC[t] - RG[t] for t in RG})
+                recs = {fs: tuple(r) + lat.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
+            per_case[c[0]] = recs
     return per_case, kinds or {}, info
 
 

@@ -1819,6 +1819,33 @@ def floor_beam_gaps(cfg, transf="Linear"):
     for t, c in coord.items():
         if c and c[2] > zmin + 1e-6 and _isgrid(t):
             byz[round(c[2], 3)].append((c[0], c[1], t))
+    # horizontal-element adjacency: a column-line beam may be modelled as a CHAIN of collinear pieces
+    # through off-grid work points (EBF link + beams outside the link, WP6) -- walk the chain
+    adj = defaultdict(set)
+    for fs in modelled:
+        a, b = tuple(fs)
+        adj[a].add(b); adj[b].add(a)
+    def _chained(t, tb):
+        ca, cb = coord[t], coord[tb]
+        seen = {t}; stack = [t]
+        while stack:
+            n = stack.pop()
+            for m in adj[n]:
+                if m == tb:
+                    return True
+                if m in seen:
+                    continue
+                cm_ = coord.get(m)
+                if not cm_ or abs(cm_[2] - ca[2]) > 1e-6:
+                    continue
+                # m must lie strictly inside the straight segment a-b
+                dx, dy = cb[0] - ca[0], cb[1] - ca[1]
+                ex, ey = cm_[0] - ca[0], cm_[1] - ca[1]
+                cross = abs(dx * ey - dy * ex); dot = dx * ex + dy * ey; L2 = dx * dx + dy * dy
+                if cross > 1e-3 * math.sqrt(L2) or dot <= 0 or dot >= L2:
+                    continue
+                seen.add(m); stack.append(m)
+        return False
     gaps = []
     for z, pts in byz.items():
         xs = sorted({round(p[0], 3) for p in pts}); ys = sorted({round(p[1], 3) for p in pts})
@@ -1827,7 +1854,7 @@ def floor_beam_gaps(cfg, transf="Linear"):
         for (gi, gj), (x, y, t) in at.items():
             for (di, dj) in ((1, 0), (0, 1)):
                 nb = at.get((gi+di, gj+dj))
-                if nb and frozenset((t, nb[2])) not in modelled:
+                if nb and frozenset((t, nb[2])) not in modelled and not _chained(t, nb[2]):
                     gaps.append((z, (x, y), (nb[0], nb[1])))
     return gaps
 

@@ -89,17 +89,27 @@ def collector_forces(cfg, kind="EQ"):
                     r[nd] = r.get(nd, 0.0) + gf[off + di]
         # sign: make the level total positive along +d
         ax = 0 if d == "X" else 1           # coordinate along the force
+        zlev = E.zlevels(cfg)
         for k in range(1, NF + 1):
             nodes = [E.ntag(i, j, k) for (i, j) in info["present"][k]]
             crd = {n: ops.nodeCoord(n) for n in nodes}
+            # off-grid work points at this level (EBF link ends, WP6): the braces deliver their storey shear
+            # to the diaphragm THERE, on the frame line, so they are part of the line's node set
+            gridset = set(nodes)
+            for n in r:
+                if n in gridset or n == E.mtag(k) or n >= 9_000_000:
+                    continue
+                c = ops.nodeCoord(n)
+                if abs(c[2] - zlev[k]) < 1e-6:
+                    nodes.append(n); crd[n] = c
             tot = sum(r.get(n, 0.0) for n in nodes)
             if abs(tot) < 1e-6:
                 continue
             sg = 1.0 if tot > 0 else -1.0
             lines = {}
+            # line key = the coordinate normal to the force (grid nodes and work points on one line share it)
             for n in nodes:
-                i, j = _ij(n)
-                lines.setdefault(j if d == "X" else i, []).append(n)
+                lines.setdefault(round(crd[n][1 if d == "X" else 0], 1), []).append(n)
             reac = []
             for key, ln in lines.items():
                 ln.sort(key=lambda n: crd[n][ax])
