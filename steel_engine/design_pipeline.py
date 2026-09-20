@@ -1040,7 +1040,8 @@ def design_india(name, cfg, outdir):
     mem_by_id = {m["id"]: m for m in md["members"]}
     s12_cfg = dict(cfg.get("section12_inputs") or {}, zone=G.zone_of(cfg), I=G.importance_of(cfg),
                    height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
-                   apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"))
+                   apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
+                   is18168_table2=cfg.get("is18168_table2"))
     joint_conn = {}
     try:
         import india_is800_s12 as S12
@@ -1064,7 +1065,7 @@ def design_india(name, cfg, outdir):
                 if cn:
                     j["connection"] = cn
                     joint_conn[bm["section"]] = cn
-                    for k in ("continuity_plates", "doubler_t_mm"):
+                    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm"):   # t for the OMF 12.10.2.5 check
                         if k in cn:
                             j[k] = cn[k]
     except Exception as ex:

@@ -114,3 +114,16 @@ def test_spec_for_role_group_key():
     assert CD.spec_for(cfg, "column_base", "WPB800X300X317.36", "lateral_col")["B_mm"] == 1
     b = CD.base_entry(cfg, {"id": "e1", "section": "WPB800X300X317.36", "role_group": "gravity_col"}, {})
     assert b["fixed"] is False
+
+
+def test_scbf_table2_opt_in():
+    """IS 18168 Table 2 on SCBF members runs only with cfg['is18168_table2'] (advisory otherwise)."""
+    md = {"members": [{"id": "e1", "tag": 1, "section": "NPB450X190X67.16", "grade": "E250 B0", "role": "beam", "L_mm": 6000.0,
+                       "sfrs": True, "node_i": 1, "node_j": 2}], "forces": {"e1": []}, "connections": [], "bases": [],
+          "brace_lines": [], "combos_12_2_3_present": True, "combos_is18168_5_5_present": True}
+    r0 = S12.section12_checks("SCBF", dict(md), {"zone": "IV", "I": 1.2, "brace_config": "X"})
+    assert not [c for c in r0["checks"] if c["id"] == "is18168_table2_beam"]
+    assert any(a.get("live") is False for a in r0["advisories"])
+    r1 = S12.section12_checks("SCBF", dict(md), {"zone": "IV", "I": 1.2, "brace_config": "X", "is18168_table2": True})
+    c = [c for c in r1["checks"] if c["id"] == "is18168_table2_beam"][0]
+    assert c["ok"] is False and c["value"]["d/tw"] > c["limit"]["d/tw"]

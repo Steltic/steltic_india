@@ -1191,6 +1191,33 @@ def section12_checks(system, model_data, cfg=None):
     checks += column_checks(sysn, model_data, cfg)
     checks += base_checks(sysn, model_data, cfg)
     conns = {c.get("member_id"): c for c in (model_data.get("connections") or []) if c.get("kind") == "brace_end"}
+    if a18["applies"] and sysn in ("SCBF", "SMF") and not cfg.get("is18168_table2"):
+        advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": False,
+                           "note": "width-to-thickness limits of the SFRS sections (Table 2 x eps/sqrt(Ry): beams 9.0/44.5, columns "
+                                   "9.0/72.7(1-1.04Ca), braces 11.3/44.4) are NOT enforced on this job -- set cfg['is18168_table2'] = "
+                                   "True to run them as live checks (rolled NPB webs d/tw > ~38 and WPB flanges b/tf > ~7.8 fail; WP6)"})
+    if a18["applies"] and sysn in ("SCBF", "SMF") and cfg.get("is18168_table2"):
+        # IS 18168:2023 5.3 / Table 2: width-to-thickness limits of the lateral load resisting system's sections
+        # (braces (iii), columns (ii) with Ca, SFRS beams (i)); EBF members are checked in their own branch (WP6).
+        # Opt-in on SCBF / SMF jobs (cfg['is18168_table2']) so the wave-2 fixtures keep their status; EBF always.
+        for m in _members(model_data):
+            if m.get("role") not in ("brace", "column", "beam") or (m.get("role") == "beam" and not m.get("sfrs")):
+                continue
+            try:
+                pm = _props(m)
+            except KeyError:
+                continue
+            fym, _ = _fy(m, pm)
+            if not fym or pm.get("section_type") != "I":
+                continue
+            comp = {"brace": "brace", "column": "column", "beam": "beam"}[m["role"]]
+            Ca = None
+            if comp == "column":
+                Py = fym * pm["A"] / I8.GAMMA_M0_DEFAULT
+                Ca = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, m["id"])] + [0.0]) / Py
+            checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
+                               cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
+                                    % {"brace": "iii", "column": "ii", "beam": "i"}[comp]))
     if sysn in ("OCBF", "SCBF"):
         cfgb = str(cfg.get("brace_config") or "").lower()
         cl = "IS 800:2007 12.7.1.2" if sysn == "OCBF" else "IS 800:2007 12.8.1.2"
