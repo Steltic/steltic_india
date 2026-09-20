@@ -346,8 +346,9 @@ def base_plate_thickness_7_4_3_1(*, w_MPa, a_mm, b_mm, fy_MPa, tf_col_mm=None, t
     out = {"found": True, "ts_mm": ts, "t_required_mm": t_req, "w_MPa": w_MPa, "a_mm": a_mm, "b_mm": b_mm,
            "cite": "IS 800:2007 7.4.3.1 ts = sqrt(2.5 w (a^2-0.3b^2) gamma_m0/fy) > tf"}
     if t_prov_mm:
-        out["check"] = _check(t_req, t_prov_mm, dc=(ts / t_prov_mm) ** 2, clause="IS 800:2007 7.4.3.1",
-                              cite="DC = (t_req/t_prov)^2")
+        out["check"] = _check(t_req ** 2, t_prov_mm ** 2, dc=(ts / t_prov_mm) ** 2, clause="IS 800:2007 7.4.3.1",
+                              cite="DC = (t_req/t_prov)^2 (value/limit are the squared thicknesses, mm2)",
+                              t_req_mm=t_req, t_prov_mm=t_prov_mm)
         out["check"]["ok"] = (ts / t_prov_mm) ** 2 <= 1.0 and (tf_col_mm is None or t_prov_mm > tf_col_mm)
         out["ts_gt_tf"] = None if tf_col_mm is None else t_prov_mm > tf_col_mm
     return out
@@ -544,9 +545,10 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                                                ok=None, reason="bearing / anchor solution missing")
         else:
             t_req = math.sqrt(5.0 * Mu * GAMMA_M0 / fy_plate_MPa)
-            c = _check(t_req, t_plate_mm, dc=(t_req / t_plate_mm) ** 2, clause="IS 800:2007 7.4.3.2 / 7.4.3.1",
-                       cite="plate moment per unit width <= 0.2 t^2 fy/gamma_m0 (7.4.3.1 form); DC=(t_req/t)^2",
-                       M_per_mm=Mu, M_comp_side=Mcomp, M_tension_side=Mten)
+            Mcap = 0.2 * t_plate_mm ** 2 * fy_plate_MPa / GAMMA_M0
+            c = _check(Mu, Mcap, dc=Mu / Mcap, clause="IS 800:2007 7.4.3.2 / 7.4.3.1",
+                       cite="plate moment per unit width (N-mm/mm) <= 0.2 t^2 fy/gamma_m0 (7.4.3.1 form); DC=(t_req/t)^2",
+                       M_per_mm=Mu, M_comp_side=Mcomp, M_tension_side=Mten, t_req_mm=t_req, t_prov_mm=t_plate_mm)
             c["ok"] = c["dc"] <= 1.0 and t_plate_mm > col_tf_mm
             checks["plate_thickness"] = c
     if weld_length_mm is not None:
@@ -559,3 +561,181 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     return {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
             "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
             "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+
+
+# ------------------------------------------------------------------- HR-INTEGRATE: connection capacities used by
+# the India pipeline (beam-column moment / shear connections, CJP welds, prying).  Still checks of DECLARED geometry.
+def cjp_weld_capacity_N(*, t_mm, length_mm, fy_MPa, n_sides=1, site=False, gamma_mw=None, action="shear"):
+    """IS 800 10.5.7.1.2: a complete penetration butt weld has the design strength of the parent metal (throat = the
+    thinner part, 10.5.3.1).  Shear: t L fy/(sqrt3 gamma_mw) (8.4.1 form); tension: t L fy/gamma_mw."""
+    miss = [k for k, v in (("t_mm", t_mm), ("length_mm", length_mm), ("fy_MPa", fy_MPa)) if not v]
+    cite = "IS 800:2007 10.5.7.1.2 (CJP butt weld = parent metal), 10.5.3.1 throat = thinner part, Table 5 gamma_mw"
+    if miss:
+        return {"found": False, "capacity_N": None, "cite": cite, "required_inputs": miss}
+    gmw = gamma_mw if gamma_mw is not None else (GAMMA_MW_SITE if site else GAMMA_MW_SHOP)
+    f = float(fy_MPa) / gmw / (math.sqrt(3.0) if action == "shear" else 1.0)
+    cap = f * float(t_mm) * float(length_mm) * int(n_sides or 1)
+    return {"found": True, "capacity_N": cap, "throat_mm": float(t_mm), "length_mm": float(length_mm),
+            "n_sides": int(n_sides or 1), "gamma_mw": gmw, "action": action, "cite": cite, "method": "LSD",
+            "weld_type": "cjp"}
+
+
+def prying_10_4_7(*, Te_N, lv_mm, le_mm, t_mm, be_mm, fo_MPa, fy_MPa, pretensioned=True, eta=1.5):
+    """IS 800 10.4.7 (pdf p. 83): Q = lv/(2 le) [Te - beta eta fo be t^4/(27 le lv^2)], beta 2 (non-pretensioned)
+    / 1 (pretensioned), eta 1.5, le = min(end distance, 1.1 t sqrt(beta fo/fy)); Q >= 0."""
+    beta = 1.0 if pretensioned else 2.0
+    le = min(float(le_mm), 1.1 * float(t_mm) * math.sqrt(beta * float(fo_MPa) / float(fy_MPa)))
+    Q = float(lv_mm) / (2.0 * le) * (float(Te_N) - beta * eta * float(fo_MPa) * float(be_mm) * float(t_mm) ** 4
+                                     / (27.0 * le * float(lv_mm) ** 2))
+    return {"Q_N": max(Q, 0.0), "le_used_mm": le, "beta": beta, "eta": eta,
+            "cite": "IS 800:2007 10.4.7 prying force; le = min(end distance, 1.1 t sqrt(beta fo/fy))"}
+
+
+def end_plate_moment_capacity(*, rows, d_mm, grade="8.8", t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
+                              pretensioned=True, bolt_type="HSFG", Anb_mm2=None, fub_MPa=None, fyb_MPa=None):
+    """Bolted end-plate moment connection: capacity = sum over tension bolt rows of (2 Te_row x h_row) where the
+    bolt tension Te per bolt is limited by (i) 10.3.5 Tdb with the 10.4.7 prying force added (Te + Q <= Tdb) and
+    (ii) the end-plate bending at the bolt line per pair, M = Te lv - Q le <= 1.2 (be t^2/6) fy/gamma_m0 (8.2.1.2
+    cap on a plate strip).  rows = [{h_mm (lever arm from the compression flange centre), n_pairs (default 1)}].
+    The compression side (flange bearing / column continuity / panel zone) is checked at the joint (12.11.2.3-.5)."""
+    one = bolt_capacity_is800(d_mm, grade, nn=1, ns=0, e_mm=None, p_mm=None, Anb_mm2=Anb_mm2, fub_MPa=fub_MPa,
+                              fyb_MPa=fyb_MPa)
+    Tdb = one.get("Tdb_N")
+    cite = "IS 800:2007 10.3.5 (Tdb) + 10.4.7 (prying) + 8.2.1.2 plate strip (1.2 Ze fy/gamma_m0)"
+    if not Tdb or not rows:
+        return {"found": False, "capacity_Nmm": None, "cite": cite, "required_inputs": ["rows", "d_mm", "grade"]}
+    fo = 0.70 * float(one["fub_MPa"])                                       # proof stress (10.4.3 F0 basis)
+    Mp_strip = 1.2 * (float(be_mm) * float(t_plate_mm) ** 2 / 6.0) * float(fy_plate_MPa) / GAMMA_M0
+    beta = 1.0 if pretensioned else 2.0
+    le = min(float(le_mm), 1.1 * float(t_plate_mm) * math.sqrt(beta * fo / float(fy_plate_MPa)))
+    K = beta * 1.5 * fo * float(be_mm) * float(t_plate_mm) ** 4 / (27.0 * le * float(lv_mm) ** 2)
+    a = float(lv_mm) / (2.0 * le)
+    # (i) bolt: Te + a (Te - K) <= Tdb  ->  Te <= (Tdb + a K)/(1 + a)   (prying active when Te > K)
+    Te_bolt = min((Tdb + a * K) / (1.0 + a), Tdb) if Tdb > K else Tdb
+    # (ii) plate: Te lv - Q le <= Mp_strip, Q = a (Te - K)  ->  Te (lv - a le) + a K le <= Mp_strip
+    coef = float(lv_mm) - a * le
+    Te_plate = (Mp_strip - a * K * le) / coef if coef > 0 else float("inf")
+    Te = max(min(Te_bolt, Te_plate), 0.0)
+    Q = prying_10_4_7(Te_N=Te, lv_mm=lv_mm, le_mm=le_mm, t_mm=t_plate_mm, be_mm=be_mm, fo_MPa=fo, fy_MPa=fy_plate_MPa,
+                      pretensioned=pretensioned)["Q_N"]
+    Mcap, terms = 0.0, []
+    for r in rows:
+        n = int(r.get("n_pairs") or 1)
+        Mcap += 2.0 * n * Te * float(r["h_mm"])
+        terms.append({"h_mm": float(r["h_mm"]), "n_pairs": n, "Te_per_bolt_N": Te})
+    out = {"found": True, "capacity_Nmm": Mcap, "Te_per_bolt_N": Te, "Q_per_bolt_N": Q, "Tdb_N": Tdb,
+           "governing": "bolt tension + prying" if Te_bolt <= Te_plate else "end-plate bending", "Te_bolt_N": Te_bolt,
+           "Te_plate_N": Te_plate, "Mp_strip_Nmm": Mp_strip, "le_used_mm": le, "rows": terms, "cite": cite,
+           "bolt_type": bolt_type, "type": "end_plate"}
+    g = hsfg_gate(bolt_type)
+    out["12.4.1"] = g
+    return out
+
+
+def cover_plate_moment_capacity(*, Zp_beam_mm3, fy_beam_MPa, plate_b_mm, plate_t_mm, d_beam_mm, fy_plate_MPa=None,
+                                weld=None):
+    """Reinforced (cover-plated) CJP-welded moment connection at the column face: Mcap = (Zp,beam + Zp,plates)
+    fy/gamma_m0 with Zp,plates = b t (d + t) (one plate each flange); the plate-to-flange fillet welds must carry the
+    plate force b t fy/gamma_m0 (10.5.7) and the plate-to-column welds are CJP (12.4.2).  weld = {size_mm, length_mm
+    (per plate, total), fu_MPa, site}."""
+    fyp = float(fy_plate_MPa or fy_beam_MPa)
+    Zp_pl = float(plate_b_mm) * float(plate_t_mm) * (float(d_beam_mm) + float(plate_t_mm))
+    Mcap = (float(Zp_beam_mm3) * float(fy_beam_MPa) + Zp_pl * fyp) / GAMMA_M0
+    out = {"found": True, "capacity_Nmm": Mcap, "Zp_plates_mm3": Zp_pl, "Zp_beam_mm3": float(Zp_beam_mm3),
+           "cite": "IS 800:2007 8.2.1.2 (plastic section at the column face incl. cover plates) / 10.5.7.1.2 CJP",
+           "type": "welded_cover_plate", "weld_type": "cjp"}
+    if weld:
+        Fpl = float(plate_b_mm) * float(plate_t_mm) * fyp / GAMMA_M0
+        w = fillet_weld_capacity_is800_N(**weld)
+        if w.get("found"):
+            out["plate_weld_check"] = _check(Fpl, w["capacity_N"], clause="IS 800:2007 10.5.7",
+                                             cite="cover-plate fillet welds carry the plate force b t fy/gamma_m0")
+            if out["plate_weld_check"]["dc"] > 1.0:
+                out["capacity_Nmm"] = (float(Zp_beam_mm3) * float(fy_beam_MPa) + Zp_pl * fyp * w["capacity_N"] / Fpl) / GAMMA_M0
+                out["governing"] = "cover-plate welds"
+        else:
+            out["plate_weld_check"] = {"found": False, "required_inputs": w.get("required_inputs")}
+    return out
+
+
+def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plate_MPa, bolts, weld=None,
+                           block_shear_areas=None, cjp=None):
+    """Simple (shear) beam-end connection: bolt group 10.3, plate shear yield 8.4.1 (Av fy/(sqrt3 gamma_m0)),
+    block shear 6.4.1 (areas from block_shear_bolted_areas), plate-to-support weld 10.5.7 (fillet) or 10.5.7.1.2
+    (CJP).  Returns {checks{}, capacity_N (minimum), ok, dc}."""
+    checks = {}
+    b = dict(bolts)
+    n = b.pop("n_bolts")
+    g = bolt_group_capacity_is800(n, b.pop("d_mm"), b.pop("grade", "8.8"), V_N=V_N, **b)
+    checks["bolts_10_3"] = g["check"] if g.get("found") else _check(None, None, clause="IS 800:2007 10.3", cite="bolts",
+                                                                     ok=None, reason=str(g.get("required_inputs")))
+    Vd = float(h_plate_mm) * float(t_plate_mm) * float(fy_plate_MPa) / (math.sqrt(3.0) * GAMMA_M0)
+    checks["plate_shear_8_4_1"] = _check(abs(V_N), Vd, clause="IS 800:2007 8.4.1", cite="Av fy/(sqrt3 gamma_m0)")
+    if block_shear_areas:
+        bs = block_shear(fy_MPa=fy_plate_MPa, fu_MPa=fu_plate_MPa, demand_N=V_N, **block_shear_areas)
+        checks["block_shear_6_4_1"] = bs["check"] if bs.get("found") else _check(None, None, clause="IS 800:2007 6.4.1",
+                                                                                cite="block shear", ok=None,
+                                                                                reason="areas missing")
+    if cjp:
+        w = cjp_weld_capacity_N(**cjp)
+    elif weld:
+        w = fillet_weld_capacity_is800_N(**weld)
+    else:
+        w = None
+    if w is not None:
+        checks["support_weld"] = _check(abs(V_N), w["capacity_N"], clause="IS 800:2007 10.5.7", cite=w["cite"]) \
+            if w.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None,
+                                          reason=str(w.get("required_inputs")))
+    caps = [c["limit"] for c in checks.values() if c.get("limit")]
+    oks = [c.get("ok") for c in checks.values()]
+    return {"found": bool(caps), "checks": checks, "capacity_N": min(caps) if caps else None,
+            "ok": None if any(o is None for o in oks) else all(oks),
+            "dc": max([c["dc"] for c in checks.values() if c.get("dc") is not None] or [None]) if caps else None,
+            "cite": "IS 800:2007 10.3 / 8.4.1 / 6.4.1 / 10.5.7 (simple beam-end connection)"}
+
+
+def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_mm, splice):
+    """Column splice: SFRS columns per 12.5.2.2 (each flange splice >= 1.2 fy Af; PJP welds 200 % of required,
+    12.5.2.1); gravity columns for the member forces.  splice = {type: 'flange_plates'|'cjp'|'pjp',
+    plate: {A_mm2, fy_MPa}, bolts: {n_bolts, d_mm, grade, ...} | weld: {t_mm, length_mm, n_sides}}."""
+    Ff_dem = 1.2 * float(fy_MPa) * float(Af_mm2) if sfrs else max(abs(float(P_N)) / 2.0 + abs(float(M_Nmm)) / float(d_mm),
+                                                                   0.0)
+    typ = str(splice.get("type") or "").lower()
+    cl = "IS 800:2007 12.5.2.2" if sfrs else "IS 800:2007 10 (member forces)"
+    cite = ("each flange splice >= 1.2 fy Af (Fig. 20, smaller column)" if sfrs else
+            "flange force P/2 + M/d from the governing combination")
+    checks = {}
+    if typ == "flange_plates":
+        pl = splice.get("plate") or {}
+        if pl.get("A_mm2") and pl.get("fy_MPa"):
+            checks["plate_yield_6_2"] = _check(Ff_dem, float(pl["A_mm2"]) * float(pl["fy_MPa"]) / GAMMA_M0,
+                                               clause=cl + " / 6.2", cite=cite + "; plate Ag fy/gamma_m0")
+        b = splice.get("bolts")
+        if b:
+            b = dict(b)
+            g = bolt_group_capacity_is800(b.pop("n_bolts"), b.pop("d_mm"), b.pop("grade", "8.8"), V_N=Ff_dem, **b)
+            checks["bolts_10_3"] = g["check"] if g.get("found") else _check(None, None, clause="IS 800:2007 10.3",
+                                                                             cite="bolts", ok=None,
+                                                                             reason=str(g.get("required_inputs")))
+        w = splice.get("weld")
+        if w:
+            wc = fillet_weld_capacity_is800_N(**w)
+            checks["plate_weld_10_5_7"] = _check(Ff_dem, wc["capacity_N"], clause="IS 800:2007 10.5.7", cite=wc["cite"]) \
+                if wc.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None)
+    elif typ in ("cjp", "pjp"):
+        w = splice.get("weld") or {}
+        t = w.get("t_mm") or (Af_mm2 / w["length_mm"] if w.get("length_mm") else None)
+        wc = cjp_weld_capacity_N(t_mm=t, length_mm=w.get("length_mm"), fy_MPa=fy_MPa, n_sides=1, action="tension")
+        fac = 0.5 if typ == "pjp" else 1.0                   # 12.5.2.1: PJP joint strength >= 200 % of required
+        checks["flange_weld"] = _check(Ff_dem, fac * wc["capacity_N"], clause=cl + (" / 12.5.2.1" if typ == "pjp" else
+                                       " / 10.5.7.1.2"), cite=cite + "; butt weld = parent metal" +
+                                       (" x 0.5 (PJP 200 %)" if typ == "pjp" else "")) if wc.get("found") else \
+            _check(None, None, clause=cl, cite="weld", ok=None, reason=str(wc.get("required_inputs")))
+    else:
+        checks["splice"] = _check(None, None, clause=cl, cite=cite, ok=None, reason="splice type not declared")
+    caps = [c["limit"] for c in checks.values() if c.get("limit")]
+    oks = [c.get("ok") for c in checks.values()]
+    return {"found": bool(caps), "checks": checks, "demand_N": Ff_dem, "capacity_N": min(caps) if caps else None,
+            "ok": None if any(o is None for o in oks) else all(oks),
+            "dc": max([c["dc"] for c in checks.values() if c.get("dc") is not None] or [None]) if caps else None,
+            "clause": cl, "cite": cite}

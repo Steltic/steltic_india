@@ -328,7 +328,16 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
                    _na("brace_conn_bolts", clause="IS 800:2007 10.3", cite="bolts", member=m["id"],
                        reason=str(g.get("required_inputs"))))
     w = conn.get("welds")
-    if w:
+    wcj = conn.get("welds_cjp")
+    if wcj:
+        wc = C.cjp_weld_capacity_N(**wcj)
+        out.append(_chk("brace_conn_welds", D, wc.get("capacity_N"), clause="IS 800:2007 10.5.7.1.2 at %s.1 force" % pre,
+                        cite="CJP butt weld = parent metal in shear (throat = thinner part)", member=m["id"])
+                   if wc.get("found") else
+                   _na("brace_conn_welds", clause="IS 800:2007 10.5.7.1.2", cite="CJP welds", member=m["id"],
+                       reason=str(wc.get("required_inputs"))))
+        w = w or wcj
+    elif w:
         wc = C.fillet_weld_capacity_is800_N(**w)
         out.append(_chk("brace_conn_welds", D, wc.get("capacity_N"), clause="IS 800:2007 10.5.7 at %s.1 force" % pre,
                         cite="fillet weld K s fu/(sqrt3 gamma_mw)", member=m["id"]) if wc.get("found") else
@@ -523,7 +532,8 @@ def base_checks(system, model_data, cfg):
     """12.12: fixed bases for 1.2 Mp of the column (+ anchors for shear+tension+prying); all bases for
     max(full shear, 1.2 x column shear capacity)."""
     out = []
-    cols = {m["id"]: m for m in _members(model_data, "column")}
+    sysn = normalize_system(system)
+    cols = {m["id"]: m for m in (model_data.get("members") or []) if m.get("role") == "column"}
     bases = model_data.get("bases") or []
     if not bases:
         return [_na("12.12_bases", clause="IS 800:2007 12.12", cite="column bases 1.2 Mp / 1.2 Vd",
@@ -532,13 +542,17 @@ def base_checks(system, model_data, cfg):
         m = cols.get(b.get("column_member_id"))
         if not m:
             continue
+        sfrs = bool(m.get("sfrs", True))
         p = _props(m)
         fy, _ = _fy(m, p)
         ax = b.get("axis", "z")
         Zp = p["Zx"] if ax == "z" else p["Zy"]
         Vd = I8.shear_capacity(p, fy, axis=ax).get("Vd_N") if fy else None
-        geo = {k: v for k, v in b.items() if k not in ("id", "column_member_id", "fixed", "axis")}
-        need = ("P_N", "B_mm", "L_mm", "t_plate_mm", "fy_plate_MPa", "fck_MPa")
+        import inspect as _insp
+        _allowed = set(_insp.signature(C.base_plate_design).parameters) | {"load_cases", "Hc_mm"}
+        geo = {k: v for k, v in b.items() if k in _allowed and k not in ("sfrs_fixed_base", "col_Zp_mm3", "col_fy_MPa",
+                                                                       "col_Vd_N", "sfrs_moment_factor")}
+        need = ("B_mm", "L_mm", "t_plate_mm", "fy_plate_MPa", "fck_MPa") + (() if geo.get("load_cases") else ("P_N",))
         if not all(geo.get(k) is not None for k in need):
             out.append(_na("12.12_base", clause="IS 800:2007 12.12 / 7.4", cite="base plate + anchors",
                            member=b.get("id"), reason="base geometry/forces missing: %s" %
@@ -546,9 +560,15 @@ def base_checks(system, model_data, cfg):
             continue
         geo.setdefault("col_d_mm", p["d"]); geo.setdefault("col_bf_mm", p["bf"]); geo.setdefault("col_tf_mm", p["tf"])
         Hc = geo.pop("Hc_mm", None) or m.get("L_mm")
-        mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 12.12 / 7.4 / 10.3", "fixed base 1.2 Mp (12.12.1); shear max(full, 1.2 Vd) (12.12.2)"
+        if not sfrs:
+            # gravity column base: IS 800 7.4 / 10.3 under its own (P, M, V); no 12.12 / IS 18168 9 demands
+            mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 7.4 / 10.3", "gravity column base: bearing 0.6 fck, anchors, plate (7.4)"
+            b = dict(b, fixed=False)
+            Vd = None
+        else:
+            mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 12.12 / 7.4 / 10.3", "fixed base 1.2 Mp (12.12.1); shear max(full, 1.2 Vd) (12.12.2)"
         a18 = is18168_status(sysn, cfg)
-        if a18["applies"] and fy:
+        if sfrs and a18["applies"] and fy:
             ry, ry_note = _ry(m, p)
             if b.get("fixed"):
                 # IS 18168 9.3: M = 1.1 Ry Mpc (1.54 Mpc for E250 > IS 800's 1.2 Mp -> governs), V = 2.2 Ry Mpc/Hc
@@ -561,14 +581,28 @@ def base_checks(system, model_data, cfg):
                 cl += " + IS 18168:2023 9.4"
                 ct += "; IS 18168:2023 9.4 (pdf p. 13): pinned base min moment 0.5 Ry Myc, shear 1.1 Ry Mpc/Hc (%s)" % ry_note
                 geo["M_Nmm"] = max(float(geo.get("M_Nmm") or 0.0), 0.5 * ry * p["Sx"] * fy)
-        if vmin:
-            geo["V_N"] = max(float(geo.get("V_N") or 0.0), vmin)
-        r = C.base_plate_design(sfrs_fixed_base=bool(b.get("fixed")), col_Zp_mm3=Zp, col_fy_MPa=fy, col_Vd_N=Vd,
-                                sfrs_moment_factor=mfac, **geo)
-        if not b.get("fixed") and Vd:
-            r["demands"]["V_N"] = max(r["demands"]["V_N"], 1.2 * Vd)
-        out.append(_chk("12.12_base", r.get("dc"), 1.0, clause=cl, member=b.get("id"), cite=ct, ok=r.get("ok"),
-                        dc=r.get("dc"), detail=r))
+        cases = geo.pop("load_cases", None) or [{"combo": "declared", "P_N": geo.get("P_N"), "M_Nmm": geo.get("M_Nmm", 0.0),
+                                                 "V_N": geo.get("V_N", 0.0)}]
+        worst, per_case = None, []
+        for lc in cases:
+            g2 = dict(geo, P_N=float(lc.get("P_N") or 0.0), M_Nmm=abs(float(lc.get("M_Nmm") or 0.0)),
+                      V_N=abs(float(lc.get("V_N") or 0.0)))
+            if vmin:
+                g2["V_N"] = max(g2["V_N"], vmin)
+            r = C.base_plate_design(sfrs_fixed_base=bool(b.get("fixed")), col_Zp_mm3=Zp, col_fy_MPa=fy, col_Vd_N=Vd,
+                                    sfrs_moment_factor=mfac, **g2)
+            if not b.get("fixed") and Vd:
+                r["demands"]["V_N"] = max(r["demands"]["V_N"], 1.2 * Vd)
+            r["combo"] = lc.get("combo")
+            per_case.append({"combo": lc.get("combo"), "dc": r.get("dc"), "ok": r.get("ok"), "P_N": g2["P_N"],
+                             "M_Nmm": g2["M_Nmm"], "V_N": g2["V_N"]})
+            key = (r.get("ok") is None, r.get("dc") if r.get("dc") is not None else -1)
+            if worst is None or key > worst[0]:
+                worst = (key, r)
+        r = worst[1]
+        out.append(_chk("12.12_base" if sfrs else "7.4_base", r.get("dc"), 1.0, clause=cl, member=b.get("id"), cite=ct,
+                        ok=r.get("ok"), dc=r.get("dc"), detail=r, governing_combo=r.get("combo"), n_cases=len(per_case),
+                        per_case=per_case, sfrs=sfrs))
     return out
 
 

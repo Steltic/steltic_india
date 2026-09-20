@@ -22,7 +22,7 @@ releases, etc.), set cfg["custom_build"] = a function custom_build(cfg, transf) 
 OpenSees model and returns the standard info dict {cm, present, z, NF, ele:[(tag,kind,sec,n1,n2)]}
 using engine3d.ntag(i,j,k)/mtag(k); the whole pipeline then runs on your model unchanged.
 """
-import os, sys, subprocess, copy
+import os, json, sys, subprocess, copy
 
 _HERE = os.path.dirname(os.path.abspath(__file__))     # .../engine
 _REPO = os.path.dirname(_HERE)                          # repo root (steel_builder)
@@ -116,6 +116,11 @@ def design_and_report(name, cfg=None, do_report=True):
 
     # 2) India load_plan combinations + per-member DEMAND envelope (NO capacities -- agent/RAG)
     import design_pipeline as DP
+    if E._india_job(cfg) and not os.path.exists(os.path.join(root, "load_plan.json")):
+        try:                                     # the resolved load plan is part of the package (provenance hash)
+            json.dump(DP._jsonable(cfg.get("load_plan") or {}), open(os.path.join(root, "load_plan.json"), "w"), indent=1)
+        except Exception:
+            pass
     out["demands_written"] = bool(DP.design(name, outdir=os.path.join(root, "design")))
     out["design_dir"] = os.path.join(root, "design")
 
@@ -142,6 +147,26 @@ def design_and_report(name, cfg=None, do_report=True):
     if do_report:
         import report as RPT
         out["report_html"] = RPT.build_report(name, root=root)
+        # 5) India: the COMPLETE authority is re-evaluated with the rendered report (grounding table, US residue);
+        #    the package status is refreshed and the report re-rendered once when it changed.
+        if E._india_job(cfg):
+            try:
+                import india_seismic_gates as G
+                cp = os.path.join(root, "design", "calc_package.json")
+                pkg = json.load(open(cp))
+                st = G.design_status(cfg, pkg, job_dir=root)
+                new_st = {"status": st["status"], "n_reasons": len(st["reasons"]), "reasons": st["reasons"][:200],
+                          "authority": st["authority"]}
+                if new_st != pkg.get("design_status"):
+                    pkg["design_status"] = new_st
+                    json.dump(pkg, open(cp, "w"), indent=1)
+                    out["report_html"] = RPT.build_report(name, root=root)
+                out["design_status"] = new_st
+                with open(os.path.join(root, "STATUS.md"), "w") as f:
+                    f.write("# %s -- design status: %s\n\nAuthority: %s\n\n" % (name, st["status"].upper(), st["authority"]))
+                    f.write("Open reasons (%d):\n" % len(st["reasons"]) + "".join("- %s\n" % r for r in st["reasons"]))
+            except Exception as ex:
+                out["design_status_error"] = str(ex)
 
     # End-of-run reminder the agent sees in the tool output, right before it replies to the user.
     out["NEXT_STEP"] = ("MANDATORY before you finish: (a) the model must be COMPLETE (model_complete must PASS -- every "

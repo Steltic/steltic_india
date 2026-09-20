@@ -354,9 +354,12 @@ def _apply_gravity_si(cfg, model, fD, fL, fLr):
         if not (1 <= k <= NF):
             continue
         roof = (k == NF)
-        pD = (cfg["D_roof"] if roof else cfg["D_floor"]) + float(extra.get(k, 0.0) or 0.0)
-        pL = 0.0 if roof else cfg["L_floor"]
-        pLr = (cfg.get("snow") or 1.0) if roof else 0.0  # kN/m² placeholder roof live/snow
+        # WP2.1.5: roof imposed load from cfg['Lr'] (IS 875-2 Table 2) and snow from cfg['snow'] -- both under the
+        # roof-imposed factor on this legacy path; no 1.0 kN/m2 placeholder (floor_pressures raises when Lr is missing)
+        D_, L_, Lr_, S_ = floor_pressures(cfg, k)
+        pD = D_
+        pL = 0.0 if roof else L_
+        pLr = (Lr_ + S_) if roof else 0.0
         p = fD*pD + fL*pL + fLr*pLr  # kN/m²
         nb = _bays_adjacent(model["present"].get(k, set()), i, j, dirn)
         other = SY if dirn == "X" else SX  # mm
@@ -887,8 +890,9 @@ def combo_forces_for_member_check(records, kind):
     return out
 
 
-def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_responses=False):
-    """Run every strength case.  Returns ({label: {fset: rec}}, kinds, info).
+def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_responses=False, service=False):
+    """Run every strength case (service=False) or every serviceability case (service=True; used for the IS 800
+    10.4.3 service-load slip check of HSFG connections).  Returns ({label: {fset: rec}}, kinds, info).
 
     rsa = {"X": {tag: |E| array}, "Y": ...} scaled RSA element responses (engine3d.rsa_analysis)."""
     per_case = {}
@@ -896,7 +900,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
     groups = {}
     for c in cases:
         m = getattr(c, "meta", {}) or {}
-        if m.get("service"):
+        if bool(m.get("service")) != bool(service):
             continue
         groups.setdefault(_grav_state_key(c), []).append(c)
     kinds = None

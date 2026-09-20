@@ -103,49 +103,10 @@ def _section12_smf_worksheets():
         }
 
 
-def _composite_chI_worksheet_stubs():
-    """H6: IS 800 Ch. I composite floor worksheet slots (structure only).
-
-    Parallel to §12 stubs: give empty found:false slots so agents do not invent
-    stud schedules, camber, or wet-stage D/C when IS 800 Ch. I retrieval misses
-    or composite is out of scope. Fill from LIVE RAG or record an explicit scope
-    statement — never invent numbers.
-    """
-    def _slot(component, note):
-        return {
-            "component": component,
-            "limit_state": None,
-            "cited": None,
-            "capacity": {},
-            "size": None,
-            "DC": None,
-            "found": False,
-            "note": note,
-        }
-    return {
-        "status": "stubs",
-        "cite": "Composite construction is outside IS 800:2007 (IS 11384 not in the corpus) -- see COMPOSITE_INDIA.md",
-        "policy": (
-            "Fill from LIVE IS 800 Ch. I RAG only, or record an explicit composite scope "
-            "statement (bare-steel lower bound / excluded / delegated). Do not invent stud "
-            "count, camber, or wet-stage D/C when retrieval misses — leave found:false."
-        ),
-        "qfm_scope": "H6 — composite Ch.I not auto-designed; stubs prevent invention",
-        "slots": [
-            _slot("b_eff",
-                  "Effective width b_eff — RAG IS 800 Ch. I; found:false until retrieved."),
-            _slot("studs",
-                  "Shear connectors: n, diameter, Qn/Rd — RAG IS 800 Ch. I; found:false until sized."),
-            _slot("partial_composite",
-                  "Degree of shear connection / partial composite % — RAG; found:false until set."),
-            _slot("camber",
-                  "Camber decision (even 'none') with wet deflection shown — found:false until decided."),
-            _slot("wet_stage",
-                  "Unshored wet-concrete / construction-stage check — found:false until checked."),
-            _slot("I_LB_deflection",
-                  "Service deflection on lower-bound I — RAG; found:false until checked."),
-        ],
-    }
+def _composite_chI_worksheet_stubs(cfg=None):
+    """WP2.9: composite floors are IS 11384 (not in the corpus) -> india_is800.composite_is11384_worksheet_stubs."""
+    import india_is800 as I8
+    return I8.composite_is11384_worksheet_stubs(cfg)
 
 
 # ---------- DEMAND envelope (analysis only; NO IS 800 capacities) ----------
@@ -308,12 +269,11 @@ def design(name, outdir=None):
             inp = {"kind": kind, "role": role, "section": sec, "length_in": round(L, 1)}
         p = P(sec)
         if kind == "brace":
-            inp.update(A=(E.HSS.get(sec) if hasattr(E, "HSS") else None), r=S.brace_r(sec))
+            inp.update(A=S.brace_area(sec), r=S.brace_r(sec))       # IS 808 / IS 1161 DB (never E.HSS)
         elif p:
-            # Lp ≈ 0.095·ry·E/Fy (AISC F2 twin) — SI uses MPa; not an IS capacity (agent RAG).
-            Lb_eff = min(L, 0.095*p["ry"]*_Edef/_Fydef) if kind == "beam" else L
+            # the unbraced length is the physical element length; LTB restraint (LLT) is a declared input
             lb_key = "Lb_mm" if _SI else "Lb_in"
-            inp.update(**{lb_key: round(Lb_eff, 1)}, A=p["A"], Ix=p["Ix"], Iy=p["Iy"], J=p["J"], Zx=p["Zx"],
+            inp.update(**{lb_key: round(L, 1)}, A=p["A"], Ix=p["Ix"], Iy=p["Iy"], J=p["J"], Zx=p["Zx"],
                        Zy=round(p["Zy"], 1), Sx=round(p["Sx"], 1), Sy=round(p["Sy"], 1),
                        rx=round(p["rx"], 3), ry=round(p["ry"], 3),
                        Aw=round(p["Aw"], 2) if p.get("Aw") else None,
@@ -491,13 +451,13 @@ def design(name, outdir=None):
                  + str(cfg.get("notes", "")).lower() + " "
                  + str(cfg.get("arch", "")).lower())
         if "composite" in _blob or cfg.get("composite"):
+            import india_is800 as _I8c
             pkg["composite_design"] = {
                 "status": "stubs",
-                "chI_worksheet": _composite_chI_worksheet_stubs(),
+                "chI_worksheet": _I8c.composite_is11384_worksheet_stubs(cfg),
                 "note": (
-                    "H6: composite Ch.I not auto-designed. Fill slots from IS 800 Ch. I RAG "
-                    "or record explicit scope (bare-steel lower bound / excluded / delegated). "
-                    "Do not invent stud/camber/wet-stage numbers."
+                    "WP2.9: composite beams are IS 11384 (not in the corpus -> found:false). Record the scope "
+                    "(bare-steel per IS 800 8.2 + construction stage, or delegated) -- see COMPOSITE_INDIA.md."
                 ),
             }
     except Exception as _ce:
@@ -723,18 +683,70 @@ def _check_rows(res):
     return rows
 
 
+def sfrs_beam_tags(reg, info0):
+    """Beams that are part of the lateral system: moment-frame beams (both ends rigid) and braced-bay beams
+    (a brace frames into the bay at the beam's level)."""
+    rel = info0.get("beam_rel") or {}
+    bays = set()
+    for t, (kind, sec, n1, n2) in reg.items():
+        if kind == "brace":
+            l1 = ((n1 % 100000) // 100, n1 % 100); l2 = ((n2 % 100000) // 100, n2 % 100)
+            for k in (n1 // 100000, n2 // 100000):
+                bays.add((frozenset((l1, l2)), k))
+    out = set()
+    for t, (kind, sec, n1, n2) in reg.items():
+        if kind != "beam":
+            continue
+        l1 = ((n1 % 100000) // 100, n1 % 100); l2 = ((n2 % 100000) // 100, n2 % 100)
+        if (frozenset((l1, l2)), n1 // 100000) in bays:
+            out.add(t)
+        elif rel.get(t) and rel[t][0] == "none" and n1 in info0.get("moment_nodes", set()) and n2 in info0.get("moment_nodes", set()):
+            out.add(t)
+    return out
+
+
 def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, info0):
-    """model_data for HR-MEMBERS' india_is800_s12.section12_checks (see its module docstring)."""
+    """model_data for india_is800_s12.section12_checks (see its module docstring): members with the declared
+    connection / base geometry (india_connection_design), per-combination forces tagged by family, joints, bases,
+    brace lines."""
     import static_model as SM
+    import india_connection_design as CD
     members, forces = [], {}
-    fam = {}
+    fam, tagof = {}, {}
     for c in cases:
         m = getattr(c, "meta", {}) or {}
-        fam[c[0]] = "12.2.3" if "is800_12_2_3" in (m.get("tags") or []) else ("service" if m.get("service") else "table4")
+        tg = m.get("tags") or []
+        tagof[c[0]] = tg
+        fam[c[0]] = ("12.2.3" if ("is800_12_2_3" in tg or "is18168_5_5" in tg) else
+                     ("service" if m.get("service") else "table4"))
+    sfrs_beams = per_case_tags.get("lateral_beams") or set()
+    NF = len(cfg["heights"])
     for t, (kind, sec, n1, n2) in reg.items():
         mid = "e%d" % t
         rec = _member_input_record(cfg, t, kind, sec, n1, n2, length[t], role_of[t])
-        rec["sfrs"] = role_of[t] in ("brace", "lateral_col") or (kind == "beam" and t in per_case_tags.get("lateral_beams", set()))
+        rec["sfrs"] = role_of[t] in ("brace", "lateral_col") or (kind == "beam" and t in sfrs_beams)
+        rec["level"] = n1 // 100000 if kind != "col" else n2 // 100000
+        rec["roof"] = (kind == "beam" and n1 // 100000 >= NF)
+        if kind == "brace":
+            sp = CD.spec_for(cfg, "brace_end", sec, "brace") or {}
+            if sp.get("An_mm2"):
+                rec["An_mm2"] = float(sp["An_mm2"])
+        if kind == "col":
+            ls = cfg.get("column_lateral_support_both_flanges")
+            if ls is not None:
+                rec["lateral_support_both_flanges"] = bool(ls)
+        if kind == "beam":
+            try:
+                c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+                d_ = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
+                dcol = max((S.props(reg[tc][1])["d"] for tc in reg if reg[tc][0] == "col" and reg[tc][3] in (n1, n2)),
+                           default=0.0)
+                rec["L_clear_mm"] = length[t] - dcol
+                bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"]}
+                rec["V_gravity_N"] = SM.one_way_gravity(cfg, bdict, 1.2, 0.5, 0.5)[1]
+                rec["V_gravity_cite"] = "1.2DL + 0.5LL simple-span end shear (12.11.2.2)"
+            except Exception:
+                pass
         try:
             c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
             dx, dy, dz = c2[0] - c1[0], c2[1] - c1[1], c2[2] - c1[2]
@@ -754,9 +766,43 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
         fl = SM.combo_forces_for_member_check(recs, kind)
         for f in fl:
             f["family"] = fam.get(f["combo"], "table4")
+            f["tags"] = tagof.get(f["combo"], [])
+        if kind == "brace":
+            # signed static EQ cases for the 12.7.2.3 / 12.8.2.4 tension-share test (RSA forces are unsigned)
+            ts = SM.combo_forces_for_member_check((per_case_tags.get("ts_records") or {}).get(t) or {}, kind)
+            for f in ts:
+                f["family"] = "tension_share"
+            fl += ts
         forces[mid] = fl
-    return {"members": members, "forces": forces,
-            "combos_12_2_3_present": any(v == "12.2.3" for v in fam.values())}
+    md = {"members": members, "forces": forces,
+          "combos_12_2_3_present": any("is800_12_2_3" in v for v in tagof.values()),
+          "combos_is18168_5_5_present": any("is18168_5_5" in v for v in tagof.values())}
+    # declared connections / bases (india_connection_design)
+    conns, bases = [], []
+    for m in members:
+        if m["role"] == "brace":
+            c = CD.brace_end_connection(cfg, m)
+            if c:
+                conns.append(c)
+        if m["role"] == "column" and (m["node_i"] // 100000) == 0:
+            lc = CD.base_load_cases(per_case_tags["records"].get(m["tag"]) or {})
+            b = CD.base_entry(cfg, m, lc)
+            if b:
+                bases.append(b)
+    md["connections"], md["bases"] = conns, bases
+    # brace lines: the +/- Table 4 DL+EL combination in the line's direction (torsion variant a)
+    lines = {}
+    for m in members:
+        if m["role"] == "brace" and m.get("line"):
+            lines.setdefault(m["line"], []).append(m["id"])
+    bl = []
+    ts_labels = per_case_tags.get("ts_labels") or {}
+    for ln, ids in lines.items():
+        d = ln[0]
+        combos = {sg: lab for sg, lab in (ts_labels.get(d) or {}).items()}
+        bl.append({"id": ln, "braces": ids, "combos": combos})
+    md["brace_lines"] = bl
+    return md
 
 
 def design_india(name, cfg, outdir):
@@ -764,6 +810,7 @@ def design_india(name, cfg, outdir):
     import static_model as SM
     import india_loads as IL
     import india_seismic_gates as G
+    import india_connections as C_
     from india_units import display_scale
     _SC = display_scale(cfg)
     _mdiv = _SC["moment_div"]
@@ -812,6 +859,19 @@ def design_india(name, cfg, outdir):
     envt = {t: env.get(frozenset((reg[t][2], reg[t][3])), dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="",
                                                               records={}, conn={})) for t in reg}
     zero = [t for t in reg if all(abs(x) < 1e-6 for r in (envt[t].get("records") or {}).values() for x in r[:4])]
+    sfrs_beams = sfrs_beam_tags(reg, info0)
+    tagof = {c[0]: ((getattr(c, "meta", {}) or {}).get("tags") or []) for c in cases}
+    # serviceability cases (IS 800 10.4.3 service-load slip of HSFG connections): {label: {fset: rec}}
+    try:
+        per_sls, _k2, _i2 = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el, service=True)
+    except Exception as ex:
+        per_sls = {"_error": str(ex)}
+    sls_rec = {}
+    for lab, res in per_sls.items():
+        if lab.startswith("_"):
+            continue
+        for fs, rec in res.items():
+            sls_rec.setdefault(fs, {})[lab] = [round(float(x), 1) for x in rec]
 
     # ---- member_schedule.csv + per-element combination forces for HR-MEMBERS ----
     with open(os.path.join(outdir, "member_schedule.csv"), "w", newline="") as f:
@@ -845,7 +905,10 @@ def design_india(name, cfg, outdir):
         for t in tags:
             recs = {l: r for l, r in (envt[t].get("records") or {}).items()}
             if kind != "col" and not (amp1223 and t in coll_added):
-                recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {})}
+                # 12.2.3 forces are for columns / connections; IS 18168 5.5 adds beams of SCBF/EBF and braces of EBF
+                keep = (lambda l: ("sfrs_beam" in tagof.get(l, []) and kind == "beam" and t in sfrs_beams) or
+                        ("sfrs_brace" in tagof.get(l, []) and kind == "brace"))
+                recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {}) or keep(l)}
             mem = _member_input_record(cfg, t, kind, sec, reg[t][2], reg[t][3], length[t], role)
             res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
             elem_results[t] = res
@@ -871,41 +934,62 @@ def design_india(name, cfg, outdir):
                                                                       for k, v in res["capacities"].items()},
                                "DC": dc, "governing_element_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})})
 
-    # ---- connections: demands (incl. 12.2.3 conn_only forces); capacities by HR-MEMBERS ----
-    for key, tags in sorted(by.items()):
-        kind, sec, role = key
-        g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
-        conn_max = 0.0
-        for t in tags:
-            for r in (envt[t].get("conn") or {}).values():
-                conn_max = max(conn_max, abs(r[0]))
-        if kind == "beam":
-            ctype = "beam-to-column"; dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
-        elif kind == "brace":
-            ctype = "brace-to-gusset"; dem = {"axial_N": round(max(g["comp"], g["tens"]), 1),
-                                              "axial_12_2_3_N": round(conn_max, 1)}
-        else:
-            ctype = "column splice / base"; dem = {"P_N": round(g["comp"], 1), "T_N": round(g["tens"], 1),
-                                                   "M_Nmm": round(g["Mz"], 1), "V_N": round(g["V"], 1),
-                                                   "P_12_2_3_N": round(conn_max, 1)}
-        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
-                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections)",
-                                   "checks": [], "DC": None, "limit_state": None, "cited": None})
-    # ---- Section 12 (HR-MEMBERS) ----
+    # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
+    import india_connection_design as CD
+    ts_rec, ts_labels = {}, {}
+    if any(reg[t][0] == "brace" for t in reg):
+        # signed static +/-EQ_X / +/-EQ_Y (ESM story forces, gamma 1.0) for the brace tension-share test
+        try:
+            plan_ = cfg.get("load_plan") or {}
+            tcs = []
+            for d in ("X", "Y"):
+                if (plan_.get("story_forces") or {}).get("EQ_" + d):
+                    for sg, f in (("+", 1.0), ("-", -1.0)):
+                        lab = "TS:1.0DL%s1.0EQ_%s" % (sg, d)
+                        tcs.append(IL.case_from_combination({"label": lab, "fD": 1.0, "fL": 0.0, "fLr": 0.0, "fE": f,
+                                                             "lateral_ref": "EQ_" + d, "direction": d}, plan_))
+                        ts_labels.setdefault(d, {})[sg] = lab
+            per_ts, _kk, _ii = SM.solve_cases_si(cfg, tcs, 2, fs_)
+            for lab, res in per_ts.items():
+                for t in reg:
+                    if reg[t][0] == "brace":
+                        r_ = res.get(frozenset((reg[t][2], reg[t][3])))
+                        if r_ is not None:
+                            ts_rec.setdefault(t, {})[lab] = [float(x) for x in r_]
+        except Exception as ex:
+            ts_labels = {"_error": str(ex)}
+    md = section12_model_data(cfg, reg, length, role_of, envt,
+                              {"records": {t: envt[t].get("records") or {} for t in reg}, "lateral_beams": sfrs_beams,
+                               "ts_records": ts_rec, "ts_labels": {k: v for k, v in ts_labels.items() if k in ("X", "Y")}},
+                              cases, info0)
+    mem_by_id = {m["id"]: m for m in md["members"]}
+    s12_cfg = dict(cfg.get("section12_inputs") or {}, zone=G.zone_of(cfg), I=G.importance_of(cfg),
+                   height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
+                   apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"))
+    joint_conn = {}
     try:
         import india_is800_s12 as S12
-        md = section12_model_data(cfg, reg, length, role_of, envt,
-                                  {"records": {t: envt[t].get("records") or {} for t in reg}}, cases, info0)
-        try:
-            nodes = {nd: tuple(ops.nodeCoord(nd)) for nd in ops.getNodeTags()}
-            md["joints"] = S12.joints_from_model(nodes, md["members"],
-                                                 frame_members={m["id"] for m in md["members"] if m.get("sfrs")})
-        except Exception as ex:
-            md["joints_error"] = str(ex)
-        s12 = S12.section12_checks(cfg.get("system"), md, dict(cfg.get("section12_inputs") or {},
-                                   zone=G.zone_of(cfg), I=G.importance_of(cfg),
-                                   height_m=G.building_height_m(cfg),
-                                   brace_config=cfg.get("brace_config")))
+        nodes = {nd: tuple(ops.nodeCoord(nd)) for nd in ops.getNodeTags()}
+        frame = {m["id"] for m in md["members"] if m.get("sfrs")}
+        md["joints"] = S12.joints_from_model(nodes, md["members"], frame_members=frame)
+        for j in md["joints"]:
+            bm = mem_by_id.get(j["beams"][0]["member_id"]) if j.get("beams") else None
+            j["roof"] = bool(bm and bm.get("roof"))
+            if bm:
+                pb = S.props(bm["section"])
+                fyb = CD._fy(bm, pb)[0]
+                cn = CD.beam_column_connection(cfg, bm, pb, fyb)
+                if cn:
+                    j["connection"] = cn
+                    joint_conn[bm["section"]] = cn
+                    for k in ("continuity_plates", "doubler_t_mm"):
+                        if k in cn:
+                            j[k] = cn[k]
+    except Exception as ex:
+        md["joints_error"] = str(ex)
+    try:
+        import india_is800_s12 as S12
+        s12 = S12.section12_checks(cfg.get("system"), md, s12_cfg)
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12": _jsonable(s12),
                                   "checks": {c.get("id", "c%d" % i) + ("@" + str(c.get("member")) if c.get("member") else ""):
                                              {"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
@@ -913,11 +997,184 @@ def design_india(name, cfg, outdir):
                                               "cite": c.get("cite"), "found": c.get("ok") is not None}
                                              for i, c in enumerate(s12.get("checks") or [])}}
     except ImportError as ex:
+        s12 = {"checks": []}
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},
-                                  "error": "india_is800_s12.section12_checks unavailable (HR-MEMBERS): %s" % ex}
+                                  "error": "india_is800_s12.section12_checks unavailable: %s" % ex}
     except Exception as ex:
+        s12 = {"checks": []}
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},
                                   "error": "section12_checks failed: %s" % ex}
+    s12_by_member = {}
+    for c in s12.get("checks") or []:
+        s12_by_member.setdefault(c.get("member"), []).append(c)
+
+    # ---- connections: demands + capacities from the declared geometry (india_connection_design) ----
+    def _row(name, c, **extra):
+        r = {"name": name, "value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"), "ok": c.get("ok"),
+             "clause": c.get("clause"), "cite": c.get("cite"), "source": c.get("source", CD.SRC)}
+        if c.get("reason"):
+            r["reason"] = c["reason"]
+        if c.get("ok") is None:
+            r["found"] = False
+        elif r["value"] is None and r["limit"] is None:
+            r["gate"] = True                     # boolean detailing gate (weld type / bolt type / load sharing)
+        r.update(extra)
+        return r
+
+    def _conn_force_sls(t, kind):
+        best = 0.0
+        for lab, r in (sls_rec.get(frozenset((reg[t][2], reg[t][3]))) or {}).items():
+            best = max(best, abs(r[0]) if kind == "brace" else abs(r[3]))
+        return best
+
+    for key, tags in sorted(by.items()):
+        kind, sec, role = key
+        g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
+        conn_max = 0.0
+        for t in tags:
+            for r in (envt[t].get("conn") or {}).values():
+                conn_max = max(conn_max, abs(r[0]))
+        checks, notes = [], []
+        if kind == "beam":
+            ctype = "beam-to-column"
+            dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
+            sfrs_tags = [t for t in tags if t in sfrs_beams]
+            if sfrs_tags and G.section12_system(cfg) and S12.normalize_system(cfg.get("system")) in ("SMF", "OMF"):
+                # moment connection: the per-joint 12.11.2 checks (demand 1.2 Mp, shear) live in capacity_design
+                ids = {"connection_moment", "connection_shear", "12.4.2_weld_type", "12.4.1_bolt_type"}
+                worst = {}
+                for t in sfrs_tags:
+                    for c in s12_by_member.get("e%d" % t, []):
+                        if c["id"] in ids:
+                            w = worst.get(c["id"])
+                            k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                            if w is None or k_ > w[0]:
+                                worst[c["id"]] = (k_, c)
+                for cid, (_, c) in worst.items():
+                    checks.append(_row("IS 800 12.11.2 %s (joint %s)" % (cid, c.get("member")), c))
+                cn = joint_conn.get(sec)
+                if cn and cn.get("moment_capacity_Nmm"):
+                    dem["M_1p2Mp_Nmm"] = None
+                    notes.append("moment capacity %.1f kN-m (%s)" % (cn["moment_capacity_Nmm"] / 1e6, cn.get("type")))
+                if not checks:
+                    checks.append(_row("IS 800 12.11.2 moment connection", {"ok": None, "clause": "IS 800:2007 12.11.2",
+                                                                            "reason": "no joint checks for this beam group"}))
+            else:
+                # braced-bay / gravity beam: shear connection under the governing V (SFRS braced-bay beams: also the
+                # collector axial is carried by the member check; the connection sees V and the 12.2.3 axial)
+                Vd = g["V"]
+                r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vd)
+                if r is None:
+                    checks.append(_row("IS 800 10 shear connection", {"ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
+                                                                       "reason": "cfg['connections']['beam_shear'] not declared for %s" % sec}))
+                else:
+                    for nm, c in r["checks"].items():
+                        checks.append(_row("beam-end shear connection: %s" % nm, c))
+                    sp = CD.spec_for(cfg, "beam_shear", sec, "beam") or {}
+                    if sp.get("bolts") and (sfrs_tags or sp.get("bolt_type")):
+                        sl = CD.hsfg_slip_checks(sp.get("bolts"), sp.get("bolt_type"),
+                                                 max(_conn_force_sls(t, "beam") for t in tags), Vd,
+                                                 slip_surface=sp.get("slip_surface"), mu_f=sp.get("mu_f"))
+                        for nm, c in (sl or {}).items():
+                            checks.append(_row("beam-end bolts %s" % nm, c))
+                    if sfrs_tags:
+                        checks.append(_row("12.4.2 weld type", dict(C_.cjp_weld_gate(sp.get("weld_type") or ("cjp" if sp.get("cjp") else None),
+                                                                             location="beam_column", sfrs=True,
+                                                                             eor_exception=cfg.get("eor_weld_exception")))))
+                        if sp.get("bolts"):
+                            checks.append(_row("12.4.1 bolt type", dict(C_.hsfg_gate(sp.get("bolt_type")))))
+        elif kind == "brace":
+            ctype = "brace-to-gusset"
+            dem = {"axial_N": round(max(g["comp"], g["tens"]), 1), "axial_12_2_3_N": round(conn_max, 1)}
+            try:
+                m0 = mem_by_id["e%d" % tags[0]]
+                cf = S12.brace_connection_force(cfg.get("system"), m0, md, conn=CD.brace_end_connection(cfg, m0), cfg=s12_cfg)
+                dem["Pu_capacity_design_N"] = round(cf["demand_N"], 1) if cf.get("found") else None
+                dem["Pu_capacity_design_basis"] = cf.get("basis")
+            except Exception as ex:
+                dem["Pu_capacity_design_N"] = None
+                dem["Pu_capacity_design_error"] = str(ex)
+            ids = {"brace_conn_bolts", "brace_conn_welds", "brace_conn_block_shear", "brace_conn_net_rupture",
+                   "gusset_whitmore_yield", "gusset_out_of_plane_buckling", "brace_conn_1p2Mp", "12.4.2_weld_type",
+                   "12.4.1_bolt_type", "12.4.3_no_load_sharing", "brace_conn_fasteners", "brace_connection",
+                   "brace_connection_force"}
+            worst = {}
+            for t in tags:
+                for c in s12_by_member.get("e%d" % t, []):
+                    if c["id"] in ids:
+                        w = worst.get(c["id"])
+                        k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                        if w is None or k_ > w[0]:
+                            worst[c["id"]] = (k_, c)
+            for cid, (_, c) in worst.items():
+                if cid == "brace_connection_force":
+                    continue
+                checks.append(_row("brace end: %s" % cid, c))
+            sp = CD.spec_for(cfg, "brace_end", sec, "brace") or {}
+            if sp.get("bolts"):
+                sl = CD.hsfg_slip_checks(sp.get("bolts"), sp.get("bolt_type"), max(_conn_force_sls(t, "brace") for t in tags),
+                                         dem.get("Pu_capacity_design_N"), slip_surface=sp.get("slip_surface"),
+                                         mu_f=sp.get("mu_f"), slip_at_ultimate=bool(sp.get("slip_at_ultimate")))
+                for nm, c in (sl or {}).items():
+                    checks.append(_row("brace end bolts %s" % nm, c))
+            if not checks:
+                checks.append(_row("IS 800 12.8.3 / 12.7.3 brace connection", {"ok": None, "clause": "IS 800:2007 12.8.3",
+                                                                                "reason": "cfg['connections']['brace_end'] not declared for %s" % sec}))
+        else:
+            ctype = "column splice / base"
+            dem = {"P_N": round(g["comp"], 1), "T_N": round(g["tens"], 1), "M_Nmm": round(g["Mz"], 1),
+                   "V_N": round(g["V"], 1), "P_12_2_3_N": round(conn_max, 1)}
+            base_tags = [t for t in tags if reg[t][2] // 100000 == 0]
+            bchecks = {}
+            for t in base_tags:
+                for c in s12_by_member.get("base-e%d" % t, []):
+                    w = bchecks.get(c["id"])
+                    k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                    if w is None or k_ > w[0]:
+                        bchecks[c["id"]] = (k_, c)
+            for cid, (_, c) in bchecks.items():
+                det = c.get("detail") or {}
+                for nm, cc in (det.get("checks") or {}).items():
+                    if isinstance(cc, dict) and ("limit" in cc or cc.get("ok") is None):
+                        checks.append(_row("column base (%s): %s" % (c.get("member"), nm), cc,
+                                           governing_combo=c.get("governing_combo")))
+                dem["base_demands"] = det.get("demands")
+            if base_tags and not bchecks:
+                checks.append(_row("IS 800 7.4 / 12.12 column base", {"ok": None, "clause": "IS 800:2007 7.4 / 12.12",
+                                                                        "reason": "cfg['connections']['column_base'] not declared for %s" % sec}))
+            upper = [t for t in tags if t not in base_tags]
+            if upper:
+                m0 = mem_by_id["e%d" % upper[0]]
+                p0 = S.props(sec); fy0 = CD._fy(m0, p0)[0]
+                recs_u = {}
+                for t in upper:
+                    for l, r in (envt[t].get("records") or {}).items():
+                        if l not in recs_u or abs(r[0]) > abs(recs_u[l][0]):
+                            recs_u[l] = r
+                spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"))
+                if spl is None:
+                    checks.append(_row("IS 800 12.5.2 column splice", {"ok": None, "clause": "IS 800:2007 12.5.2 / 10",
+                                                                        "reason": "cfg['connections']['column_splice'] not declared for %s" % sec}))
+                else:
+                    for nm, cc in spl["checks"].items():
+                        checks.append(_row("column splice: %s" % nm, cc))
+        dcs = [c["dc"] for c in checks if isinstance(c.get("dc"), (int, float))]
+        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
+                                   "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
+                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
+                                                   "india_connection_design; declared geometry in cfg['connections'])",
+                                   "checks": checks, "DC": max(dcs) if dcs else None,
+                                   "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": notes})
+
+    # ---- composite floors (WP2.9) ----
+    _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()
+    if "composite" in _blob or cfg.get("composite") or cfg.get("composite_scope"):
+        try:
+            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"]),
+                                       "note": "WP2.9: IS 11384 not in the corpus; scope per COMPOSITE_INDIA.md"}
+            pkg["composite_design"]["blocks_complete"] = pkg["composite_design"]["chI_worksheet"].get("blocks_complete")
+        except Exception as ex:
+            pkg["composite_design"] = {"status": "error", "error": str(ex), "blocks_complete": True}
 
     # ---- seismic analysis record, combinations, drift, irregularity, W ----
     rsa = run.get("rsa")

@@ -656,6 +656,10 @@ def entry_findings(kind, entry) -> list:
         val, lim = _pair(c)
         stored, has = _dc_stored(c)
         if val is None or lim is None:
+            if c.get("gate") is True and c.get("ok") is not None:
+                if c.get("ok") is False:
+                    out.append("%s '%s' / %s: ok:false" % (kind, eid, nm))
+                continue                     # boolean detailing gate (12.4.1 / 12.4.2 / 12.4.3): no D/C by nature
             if c.get("ok") is True or (_f(stored) is not None):
                 out.append("%s '%s' / %s: D/C or ok without numeric demand AND capacity" % (kind, eid, nm))
             elif c.get("found") is False or stored is None:
@@ -845,7 +849,8 @@ def combination_findings(cfg, pkg) -> list:
                or "conn_only" in (c.get("tags") or [])) and abs(abs(float(c.get("fE") or 0)) - 2.5) < 1e-6]
         if not has:
             out.append("IS 800 12.2.3 (1.2DL+0.5LL+-2.5EL / 0.9DL+-2.5EL) cases absent for a Section 12 system")
-    signs = {(c.get("direction"), 1 if float(c.get("fE") or 0) * float(c.get("sign") or 1) > 0 else -1)
+    # fE in the package record is the SIGNED lateral factor (india_loads.Case.meta fLat); 'sign' repeats its sign
+    signs = {(c.get("direction"), 1 if float(c.get("fE") if c.get("fE") is not None else c.get("sign") or 1) > 0 else -1)
              for c in seismic}
     for d in ("X", "Y"):
         if (d, 1) not in signs or (d, -1) not in signs:
@@ -921,12 +926,17 @@ def _grounding_findings(pkg, job_dir) -> list:
     return ["grounding record not available (report not built)"]
 
 
-def _screen_findings(pkg) -> list:
+def _screen_findings(pkg, cfg_hint=None) -> list:
     out = []
+    cfg_hint = cfg_hint or {}
     if not isinstance(pkg, dict):
         return out
     cd = pkg.get("capacity_design") or {}
     chk = cd.get("checks") if isinstance(cd, dict) else None
+    if isinstance(cd, dict) and cd.get("error"):
+        out.append("capacity_design (Section 12) not evaluated: %s" % cd["error"])
+    elif isinstance(cd, dict) and section12_system(cfg_hint) and not chk:
+        out.append("capacity_design.checks is empty for a Section 12 system")
     if isinstance(chk, dict):
         for k, v in chk.items():
             if isinstance(v, dict) and (v.get("pass") is False or v.get("ok") is False):
@@ -936,6 +946,10 @@ def _screen_findings(pkg) -> list:
     for row in (pkg.get("drift_table") or []):
         if isinstance(row, dict) and row.get("ok") is False:
             out.append("drift_table storey %s fails" % row.get("storey"))
+    comp = pkg.get("composite_design")
+    if isinstance(comp, dict) and comp.get("blocks_complete"):
+        out.append("composite_design: IS 11384 not in the corpus -- record the scope (bare_steel + construction "
+                   "stage, or delegated); unresolved slots block COMPLETE (WP2.9)")
     for blk in ("irregularity", "framework_screen"):
         for p, s in _walk_strings(pkg.get(blk) or {}):
             if REVISE_RE.search(s):
@@ -1001,7 +1015,7 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
                                                              "checks": [c]})
             if G_zone_needs_7112(cfg) and not dc_.get("checks"):
                 reasons.append("IS 1893 7.11.2 deformation-compatibility check of the gravity columns missing")
-        reasons += _screen_findings(pk)
+        reasons += _screen_findings(pk, cfg)
         reasons += analysis_findings(cfg, pk)
         reasons += combination_findings(cfg, pk)
         reasons += _R_system_agreement(cfg, pk)

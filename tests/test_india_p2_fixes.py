@@ -64,16 +64,18 @@ def test_table5_meta_is_corpus_preferred_fallback_ok():
     assert WT.TABLE_4_KA["source"] == "corpus_preferred"
 
 
-def test_composite_chI_stubs_structure():
+def test_composite_is11384_stubs_structure():
+    """WP2.9: composite floors are IS 11384 (not in the corpus): found:false slots + the bare-steel / construction
+    stage scope (no 'IS 800 Ch. I' -- that chapter does not exist)."""
     ws = _composite_chI_worksheet_stubs()
     assert ws["status"] == "stubs"
     comps = {s["component"] for s in ws["slots"]}
-    assert {"b_eff", "studs", "camber", "wet_stage"}.issubset(comps)
+    assert {"is11384_composite_strength", "is11384_shear_connectors", "bare_steel_8_2", "construction_stage"} == comps
+    assert "IS 11384" in ws["cite"] and "Ch. I" not in ws["cite"]
     for s in ws["slots"]:
         assert s["found"] is False
         assert s["DC"] is None
         assert s["capacity"] == {}
-        assert s["size"] is None
 
 
 def test_section12_stubs_still_present():

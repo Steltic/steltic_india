@@ -125,16 +125,87 @@ def test_ex1_report_is_india_only(ex1_job):
     assert not re.search(r"\bpsf\b|\bkips?\b|Risk Category|\bSDC\b", re.sub(r"<[^>]+>", " ", html))
 
 
-@pytest.mark.xfail(reason="HR-MEMBERS / agent inputs: LLT_sag / LLT_hog of the floor and roof beams are not declared "
-                          "in the fixture, so 8.2.2 uses the full span; connection capacities are designed by the "
-                          "agent with india_connections", strict=False)
+EOR_EMBEDMENT = {"capacity_N": 900e3, "cite": "EOR anchorage design: IS 456:2000 cone / bond pull-out of the M48 "
+                                            "anchors by the foundation engineer (outside the corpus; declared input)"}
+
+
+@pytest.fixture(scope="module")
+def ex1_complete_job(tmp_path_factory):
+    """Ex1 with every wave-2 input declared, incl. the EOR anchorage embedment -> must reach COMPLETE."""
+    import pipeline as P
+    jobs = tmp_path_factory.mktemp("jobs2")
+    os.environ["STELTIC_TEST_JOBS"] = str(jobs)
+    os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
+    cfg, _ = ex1_cfg_is(design=True, embedment=EOR_EMBEDMENT)
+    out = P.design_and_report("IN_Ex1_complete", cfg, do_report=True)
+    root = out.get("root")
+    pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
+    return out, root, pkg
+
+
 def test_ex1_all_member_dc_pass(ex1_job):
+    """Every member has an IS 800 record with a numeric D/C <= 1 (LLT declared, plastic SCBF columns)."""
     _, _, pkg = ex1_job
-    assert all(isinstance(m["DC"], (int, float)) and m["DC"] <= 1.0 for m in pkg["members"])
+    assert all(isinstance(m["DC"], (int, float)) and m["DC"] <= 1.0 for m in pkg["members"]), \
+        [(m["id"], m["DC"]) for m in pkg["members"]]
 
 
-@pytest.mark.xfail(reason="connections and Section 12 brace-connection checks need the agent's connection design "
-                          "(HR-MEMBERS india_connections); SCBF braces are IS 1161 YSt 310 (12.8.2.1)", strict=False)
-def test_ex1_complete(ex1_job):
+def test_ex1_partial_only_for_the_eor_embedment(ex1_job):
+    """Without the EOR anchorage capacity the ONLY open reasons are the anchorage embedment found:false rows."""
     _, _, pkg = ex1_job
-    assert pkg["design_status"]["status"] == "complete"
+    assert pkg["design_status"]["status"] == "partial"
+    assert all("12.12_base" in r or "anchorage_embedment" in r for r in pkg["design_status"]["reasons"]), \
+        pkg["design_status"]["reasons"]
+    s12 = pkg["capacity_design"]["section12"]
+    assert s12["n_fail"] == 0
+    assert all(c["ok"] is True for c in s12["checks"] if c["id"] != "12.12_base")
+
+
+def test_ex1_complete(ex1_complete_job):
+    _, _, pkg = ex1_complete_job
+    assert pkg["design_status"]["status"] == "complete", pkg["design_status"]["reasons"]
+
+
+def test_ex1_section12_table_populated(ex1_job):
+    _, _, pkg = ex1_job
+    ids = {c["id"] for c in pkg["capacity_design"]["section12"]["checks"]}
+    for need in ("brace_KL_r", "brace_compression", "brace_plastic", "brace_gross_yield_governs", "brace_conn_welds",
+                 "brace_conn_block_shear", "gusset_whitmore_yield", "gusset_out_of_plane_buckling", "brace_conn_1p2Mp",
+                 "12.4.2_weld_type", "brace_tension_share", "scbf_column_plastic", "12.5.1_trigger",
+                 "12.12_base", "7.4_base", "is18168_1_3_system",
+                 "is18168_5_5_combinations", "is18168_7_2_column_KL_r", "brace_configuration"):
+        assert need in ids, need
+    d = pkg["connections"]
+    br = next(c for c in d if c["type"] == "brace-to-gusset")
+    assert br["demand"]["Pu_capacity_design_N"] == pytest.approx(1.2 * 410 * 6480, rel=1e-6)   # IS 18168 10.4.1
+    assert all(isinstance(c["DC"], (int, float)) for c in d), [(c["id"], c["DC"]) for c in d]
+
+
+def test_ex1_roof_live_and_no_snow(ex1_job):
+    """Roof beams get 0.75 kN/m2 (IS 875-2 Table 2) and zero snow in Delhi -- no 1.0 kN/m2 placeholder."""
+    cfg, _ = ex1_cfg_is()
+    D, L, Lr, Sn = SM.floor_pressures(cfg, len(cfg["heights"]))
+    assert Lr == 0.75 and Sn == 0.0
+    import openseespy.opensees as ops
+    model = SM.build_static(cfg, "Linear", 2)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    lev = SM.apply_gravity_state(cfg, model, 0.0, 0.0, 1.0, self_weight=False)      # roof imposed only
+    assert lev[len(cfg["heights"])] / 1e3 == pytest.approx(0.75 * 30.0 * 24.0, rel=0.02)   # 540 kN on 720 m2
+    # legacy SI gravity path uses the same Lr (no placeholder)
+    model = SM.build_static(cfg, "Linear", 2)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    tot = SM._apply_gravity_si(cfg, model, 0.0, 0.0, 1.0)
+    assert tot / 1e3 == pytest.approx(0.75 * 30.0 * 24.0, rel=0.02)
+
+
+def test_ex1_model_mass_equals_seismic_weight(ex1_job):
+    """The linear engine mass equals the IS 1893 7.3/7.4 seismic weight W within 0.5 %."""
+    _, _, pkg = ex1_job
+    cfg, _ = ex1_cfg_is()
+    import openseespy.opensees as ops
+    E.build(cfg, "Linear")
+    NF = len(cfg["heights"])
+    m = sum(ops.nodeMass(E.mtag(k), 1) for k in range(1, NF + 1))
+    W_eng = m * E.g / 1e3
+    assert W_eng == pytest.approx(pkg["seismic_calc"]["W_design_kN"], rel=0.005)
+    assert W_eng == pytest.approx(pkg["seismic_calc"]["W_engine_kN"], rel=0.005)
