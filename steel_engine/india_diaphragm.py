@@ -52,9 +52,11 @@ def collector_forces(cfg, kind="EQ"):
     """{'X': {beam_tag: N_comp}, 'Y': {...}, 'rows': [...]} per unit lateral factor (N)."""
     import engine3d as E
     dia = str(cfg.get("diaphragm") or "rigid").lower()
+    if dia in ("flexible",):
+        return _collector_forces_flexible(cfg, kind)
     if dia not in ("rigid",):
-        raise DiaphragmError("diaphragm %r: collector / chord forces need a flexible or semi-rigid diaphragm "
-                             "model, which the engine does not provide -- the EOR must supply them (WP2.6)" % dia)
+        raise DiaphragmError("diaphragm %r: collector / chord forces need a rigid or flexible diaphragm model "
+                             "(semi-rigid shell diaphragms are not provided) -- the EOR must supply them (WP2.6)" % dia)
     out = {"X": {}, "Y": {}, "rows": [], "kind": kind, "cite": CITE}
     for d in ("X", "Y"):
         F = _story_forces(cfg, d, kind)
@@ -199,3 +201,154 @@ def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False):
             res[fs] = tuple(rec)
             added[t] = max(added.get(t, 0.0), abs(Nc))
     return added
+
+
+# =====================================================================================================
+# IS 1893 (Part 1):2016 7.6.4 -- diaphragm classification and the flexible-diaphragm distribution
+# (HR-INTEGRATE; text from IS_1893_Part_1_2016 page_025.md).  Pure functions: the flexible-diaphragm
+# 3D model (nodal masses, deck shear stiffness) is the wave-3 engine item; until then a job declaring
+# cfg['diaphragm'] = 'flexible' gets its storey shear distributed here by tributary width and the
+# braced-line shears written to the package for the line members / collectors.
+# =====================================================================================================
+CITE_7_6_4 = ("IS 1893 (Part 1):2016 7.6.4: 'flexible, if ... the maximum lateral displacement measured from the "
+              "chord of the deformed shape at any point of the diaphragm is more than 1.2 times the average "
+              "displacement of the entire diaphragm'; rigid action for RC slabs / screeded precast with plan aspect "
+              "ratio < 3")
+
+
+def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=None, rc_slab=None,
+                   screed_mm=None, roof=False, plan_aspect_ratio=None):
+    """Rigid / flexible per 7.6.4.  With measured deflections: flexible when delta_max(chord) > 1.2 x average.
+    Without them, the 'usually rigid' rule (RC monolithic slab, or precast with >= 50 mm floor / 75 mm roof screed,
+    plan aspect ratio < 3) classifies as rigid; a bare metal deck / braced roof with no such data must be DECLARED
+    (declared='flexible'|'rigid' with the EOR's basis) -- otherwise ok=None."""
+    out = {"clause": "IS 1893 (Part 1):2016 7.6.4", "cite": CITE_7_6_4}
+    if delta_max_from_chord_mm is not None and delta_avg_mm:
+        r = float(delta_max_from_chord_mm) / float(delta_avg_mm)
+        out.update(method="deflection ratio (Fig. 6)", ratio=r, limit=1.2, flexible=r > 1.2,
+                   classification="flexible" if r > 1.2 else "rigid", ok=True)
+        return out
+    if rc_slab or (screed_mm is not None and float(screed_mm) >= (75.0 if roof else 50.0)):
+        ar_ok = plan_aspect_ratio is None or float(plan_aspect_ratio) < 3.0
+        out.update(method="7.6.4 'usually rigid' rule", flexible=not ar_ok,
+                   classification="rigid" if ar_ok else "flexible (plan aspect ratio >= 3)", ok=True,
+                   plan_aspect_ratio=plan_aspect_ratio)
+        return out
+    if declared in ("flexible", "rigid"):
+        out.update(method="declared by the EOR (7.6.4 basis to be recorded)", classification=declared,
+                   flexible=declared == "flexible", ok=True)
+        return out
+    out.update(method=None, classification=None, flexible=None, ok=None,
+               reason="7.6.4 classification needs the diaphragm deflection ratio, an RC/screeded slab, or a declaration")
+    return out
+
+
+def tributary_line_shears(story_force_N, line_positions_mm, mass_extent_mm, *, eccentricity_mm=0.0):
+    """Flexible diaphragm: the storey force is distributed to the vertical lateral elements by tributary width
+    (7.6.4 'considering the in-plane flexibility'); no diaphragm torsion is transferred, so the 7.8.2 eccentricity
+    acts as a shift of the mass centre (the tributary widths are measured about the shifted mass distribution).
+
+    line_positions_mm: sorted coordinates (perpendicular to the force) of the braced / moment lines;
+    mass_extent_mm: (x_min, x_max) of the uniformly distributed floor mass.  Returns {position: V_N}."""
+    x0, x1 = float(mass_extent_mm[0]) + float(eccentricity_mm), float(mass_extent_mm[1]) + float(eccentricity_mm)
+    L = x1 - x0
+    pos = sorted(float(p) for p in line_positions_mm)
+    if not pos or L <= 0:
+        raise DiaphragmError("tributary distribution needs >= 1 line and a positive mass extent")
+    out = {}
+    for i, p in enumerate(pos):
+        lo = x0 if i == 0 else 0.5 * (pos[i - 1] + p)
+        hi = x1 if i == len(pos) - 1 else 0.5 * (p + pos[i + 1])
+        w = max(min(hi, x1) - max(lo, x0), 0.0)
+        out[p] = float(story_force_N) * w / L
+    return out
+
+
+def flexible_diaphragm_line_shears(cfg, kind="EQ"):
+    """cfg['diaphragm'] == 'flexible': per storey and direction, the storey force by tributary width to the lateral
+    lines (braced bays / moment frames) -- {d: {level: {line_coord_mm: V_N}}} per unit lateral factor, plus the
+    7.8.2 eccentricity variants (+/- 0.05 b as a mass-centre shift, 7.8.2 e_si = 0 for a symmetric flexible floor
+    without a torsional load path)."""
+    import engine3d as E
+    info = E.build(cfg, "Linear")
+    NF = info["NF"]
+    lines = {"X": set(), "Y": set()}
+    for (t, k_, sec, n1, n2) in info["ele"]:
+        if k_ == "brace":
+            c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+            if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]):
+                lines["X"].add(round(c1[1], 1))           # X-direction brace line at y = const
+            else:
+                lines["Y"].add(round(c1[0], 1))
+    for nd in info.get("moment_nodes", set()):
+        pass                                            # moment frames: declared via cfg['lateral_lines'] when no braces
+    decl = cfg.get("lateral_lines") or {}
+    for d in ("X", "Y"):
+        for v in decl.get(d) or []:
+            lines[d].add(float(v))
+    xs = [ops.nodeCoord(E.ntag(i, j, 1))[0] for (i, j) in info["present"][1]]
+    ys = [ops.nodeCoord(E.ntag(i, j, 1))[1] for (i, j) in info["present"][1]]
+    ext = {"X": (min(ys) - cfg["SY"] / 2.0, max(ys) + cfg["SY"] / 2.0),
+           "Y": (min(xs) - cfg["SX"] / 2.0, max(xs) + cfg["SX"] / 2.0)}
+    out = {"cite": CITE_7_6_4 + "; tributary-width distribution (no diaphragm torsion)", "kind": kind, "lines": {}}
+    for d in ("X", "Y"):
+        F = _story_forces(cfg, d, kind)
+        if not F or not lines[d]:
+            continue
+        di = 0 if d == "X" else 1
+        b = ext[d][1] - ext[d][0]
+        out["lines"][d] = sorted(lines[d])
+        for k in range(1, NF + 1):
+            f = F.get(k, (0.0, 0.0, 0.0))[di]
+            for tag, e in (("e0", 0.0), ("ea", 0.05 * b), ("eb", -0.05 * b)):
+                out.setdefault(tag, {}).setdefault(d, {})[k] = tributary_line_shears(f, sorted(lines[d]), ext[d],
+                                                                                    eccentricity_mm=e)
+    return out
+
+
+def _collector_forces_flexible(cfg, kind="EQ"):
+    """Flexible diaphragm (7.6.4): each lateral line receives its tributary storey shear; the collector on that
+    line carries the accumulated deck shear into the braced bay, so every beam on the line at that level is
+    given the line shear as its collector axial (upper bound: the whole line shear reaches the bay through one
+    beam).  Chord forces: the deck spans between lines as a simple beam of span s (the tributary panel) -- chord
+    T = w s^2 / (8 B) with w = the panel's share of the storey force per unit length and B the panel depth."""
+    import engine3d as E
+    ls = flexible_diaphragm_line_shears(cfg, kind)
+    info = E.build(cfg, "Linear")
+    NF = info["NF"]
+    out = {"X": {}, "Y": {}, "rows": [], "kind": kind, "cite": CITE_7_6_4 + " (tributary distribution)",
+           "diaphragm": "flexible"}
+    beams = {}
+    for (t, k_, sec, n1, n2) in info["ele"]:
+        if k_ == "beam":
+            c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+            d = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
+            beams.setdefault((d, _lvl(n1), round(c1[1] if d == "X" else c1[0], 1)), []).append(t)
+    for d, lines in (ls.get("lines") or {}).items():
+        for k in range(1, NF + 1):
+            sh = (ls.get("e0") or {}).get(d, {}).get(k) or {}
+            for pos, V in sh.items():
+                for t in beams.get((d, k, round(pos, 1)), []):
+                    out[d][t] = out[d].get(t, 0.0) + abs(V)
+                    out["rows"].append({"dir": d, "level": k, "line": pos, "beam": t, "role": "collector",
+                                        "N_N": round(abs(V), 1), "R_line_N": round(V, 1), "basis": "tributary line shear"})
+            # chords: panel between adjacent lines, uniform deck load w = (F x panel width / b) / span
+            srt = sorted(lines)
+            F = sum(abs(v) for v in sh.values())
+            b = (srt[-1] - srt[0]) if len(srt) > 1 else 0.0
+            for a, c in zip(srt[:-1], srt[1:]):
+                span = c - a
+                w = F * (span / b) / span if b else 0.0
+                # panel depth B = building dimension along the force
+                xs = [ops.nodeCoord(E.ntag(i, j, k))[0 if d == "X" else 1] for (i, j) in info["present"][k]]
+                B = (max(xs) - min(xs)) if xs else 0.0
+                if B <= 0:
+                    continue
+                T = w * span ** 2 / (8.0 * B)
+                dd = "Y" if d == "X" else "X"
+                for pos_edge in (min(xs), max(xs)):
+                    for t in beams.get((dd, k, round(pos_edge, 1)), []):
+                        out[dd][t] = out[dd].get(t, 0.0) + T
+                        out["rows"].append({"dir": d, "level": k, "beam": t, "role": "chord", "N_N": round(T, 1),
+                                            "span_mm": span, "B_mm": B, "basis": "flexible panel w s^2/(8 B)"})
+    return out

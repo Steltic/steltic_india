@@ -1203,6 +1203,21 @@ def design_india(name, cfg, outdir):
                                        "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
                                        "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
     pkg["irregularity"] = run.get("irregularity") or {"error": "irregularity screens not run"}
+    # IS 1893 7.6.4 diaphragm classification (rigid: 7.8.2 torsion in the model; flexible: tributary distribution)
+    try:
+        import india_diaphragm as DIA
+        d764 = dict(cfg.get("diaphragm_7_6_4") or {})
+        d764.setdefault("declared", str(cfg.get("diaphragm") or "rigid").lower())
+        d764.setdefault("plan_aspect_ratio", max(cfg["NX"] * cfg["SX"], cfg["NY"] * cfg["SY"]) /
+                        max(min(cfg["NX"] * cfg["SX"], cfg["NY"] * cfg["SY"]), 1.0))
+        rec764 = DIA.classify_7_6_4(**d764)
+        rec764["model"] = "rigid diaphragm constraint + 7.8.2 eccentricity" if not rec764.get("flexible") else \
+            "tributary-width storey-shear distribution to the lateral lines (no diaphragm torsion)"
+        if rec764.get("flexible"):
+            rec764["line_shears"] = _jsonable(DIA.flexible_diaphragm_line_shears(cfg, "EQ"))
+        pkg["diaphragm_7_6_4"] = rec764
+    except Exception as ex:
+        pkg["diaphragm_7_6_4"] = {"clause": "IS 1893 (Part 1):2016 7.6.4", "ok": None, "error": str(ex)}
     if (pkg["irregularity"].get("reentrant") or {}).get("irregular"):
         pkg["seismic_analysis"]["reentrant_flexible_required"] = True
         pkg["seismic_analysis"]["flexible_diaphragm_run"] = bool(cfg.get("_flexible_diaphragm_run"))

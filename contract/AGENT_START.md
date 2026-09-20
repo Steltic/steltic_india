@@ -164,10 +164,49 @@ You:
    (`cfg['K_factors'] = {role: {'Kz': .., 'Ky': ..}}`) with their basis, connection geometry.
 2. Verify every governing check against the RAG (clause id queries) and correct any input the framework
    could not know.
-3. Design every connection TYPE with `india_connections` (bearing bolts 10.3, HSFG slip 10.4, fillet
-   welds 10.5.7, block shear 6.4, Whitmore, base plates 7.4) at the IS 800 12.2.3 / Section 12 forces for
-   seismic systems, and write each check as `{value, limit, dc, ok, clause, cite, source}`.
-4. Resize, re-run, reconcile. See `IS800_WORKED_METHOD.md` (appended below) for the check sequence.
+3. DECLARE every connection type's geometry in `cfg['connections']` (the framework computes the capacities
+   with `india_connections` / `india_connection_design` and never sizes from demand):
+   * `brace_end[<brace section>|'default']`: `weld_type` ('cjp' — IS 800 12.4.2 — or 'fillet' with
+     `cfg['eor_weld_exception']`), `welds` {`cjp`:{t_mm} or `size_mm`, `length_mm`, `fy_MPa`/`fu_MPa`,
+     `n_sides`, `site`}, `bolts` {n_bolts, d_mm, grade, t_mm, fu_plate_MPa, e_mm, p_mm, d0_mm}, `bolt_type`
+     ('HSFG', 12.4.1), `slip_surface` (Table 20 key) for the 10.4.3 service-slip check, `gusset` {t_mm, fy_MPa,
+     fu_MPa, w_start_mm, L_conn_mm, L_unbraced_mm, K, Avg/Avn/Atg/Atn_mm2}, `An_mm2`, `moment_capacity_Nmm`
+     (+ cite) for IS 800 12.7.3.3 / IS 800 12.8.3.3, `bolts_and_welds_share` (12.4.3). The demand is the
+     IS 800 12.8.3.1 / IS 800 12.7.3.1 force — with IS 18168 (Zones III-V) `max(1.1 Ry fy Ag, Ru fu An)` (10.4.1) — written to
+     `connections[].demand.Pu_capacity_design_N`.
+   * `beam_column[<beam section>|'default']` (SMF/OMF beams): `type` 'welded_cover_plate' {`cover_plate`:
+     plate_b_mm, plate_t_mm, fy_plate_MPa, weld{size_mm, length_mm, fu_MPa, n_sides, site}} or 'end_plate'
+     {`end_plate`: rows[{h_mm, n_pairs}], d_mm, grade, t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
+     pretensioned} (10.3.5 + 10.4.7 prying), `shear` (fin/web plate + bolts, 12.11.2.2), `continuity_plates`,
+     `doubler_t_mm`, `weld_type`, `bolt_type`. Checked per joint against 1.2 Mp (12.11.2.1), the 12.11.2.2
+     shear, the panel zone (12.11.2.3/.4) and SCWB (12.11.3.2 >= 1.2; IS 18168 8.2 > 1.4 with Ry).
+   * `beam_shear[<beam section>|'default']` (pinned beams, braced-bay beams): t_plate_mm, h_plate_mm,
+     fy/fu_plate_MPa, bolts, `block_shear_areas`, `weld` (fillet) or `cjp` {t_mm, length_mm, fy_MPa, site},
+     `bolt_type`, `slip_surface`.
+   * `column_base[<column section>|'default']`: B_mm, L_mm, t_plate_mm, fy_plate_MPa (IS 2062 by thickness),
+     fck_MPa, `fixed`, `anchors` {n_total, n_tension, d_mm, grade, f_mm (tension-anchor line from the plate
+     centre), pitch_mm, edge_mm, n_per_row, Anb_mm2 when not in IS 4000 Table 2}, optional `Ec_MPa` /
+     `modular_ratio` (default Ec = 5000 sqrt(fck), IS 456:2000 6.2.3.1 — recorded as the source), `Hc_mm`,
+     `shear_key_N`, and `embedment` = {capacity_N, cite} — the EOR's concrete anchorage capacity (IS 456 cone /
+     bond / product data is outside IS 800 and not in the corpus: without it the row is found:false and the
+     package stays PARTIAL). SFRS bases are checked for 1.2 Mp / 1.2 Vd (IS 800 12.12) and, where IS 18168 applies,
+     1.1 Ry Mpc and 2.2 Ry Mpc/Hc (9.3; pinned 9.4). Every base is checked under every combination's (P, M, V).
+   * `column_splice[<upper section>|'default']`: {`none`: true, note} or {type 'flange_plates' {plate{A_mm2,
+     fy_MPa}, bolts | weld} | 'cjp' | 'pjp' {weld{t_mm, length_mm}}}: SFRS columns per 12.5.2.2 (1.2 fy Af
+     per flange; PJP 200 %, 12.5.2.1), gravity columns for their member forces.
+   * `column_lateral_support_both_flanges` (12.11.3.3), `sway_frame`, `brace_config` ('X'|'diagonal'),
+     `eor_weld_exception`, `apply_is18168` (opt-in in Zone II).
+   Each check is written as `{value, limit, dc, ok, clause, cite, source}`; boolean detailing gates
+   (12.4.1/12.4.2/12.4.3) carry `gate: true`.
+4. **IS 18168:2023** (mandatory in Zones III-V for SMRF/SCBF/EBF, cl. 1.2/1.3) is applied as LIVE checks with
+   the stricter-governs rule (both clauses cited): Zone V -> EBF only; SMRF in Zones IV/V only for h < 15 m;
+   5.5 overstrength combinations (Omega 2.5 SCBF/EBF = the 12.2.3 rows, 3.0 SMRF as extra rows) for columns,
+   SCBF/EBF beams, EBF braces and connections; 7.2 column KL/r < 75; 8.2 SCWB > 1.4 with Ry; 10.2 brace
+   KL/r < 160; 10.4.1 connection force; 9.3/9.4 bases; 11 / 12.3 links. See `india_is18168.py`.
+5. Composite decks: `cfg['composite_scope'] = 'bare_steel'` + `cfg['construction_stage'] = {D_wet_kNm2,
+   L_const_kNm2, LLT_mm}` (unshored wet-concrete stage, 8.2.2 with the compression flange unrestrained);
+   IS 11384 is not in the corpus, so composite action is never relied on (`COMPOSITE_INDIA.md`).
+6. Resize, re-run, reconcile. See `IS800_WORKED_METHOD.md` (appended below) for the check sequence.
 
 ## Report plan — 13 chapters
 1 Design basis and codes; 2 Structural system and load path; 3 Loads (IS 875 / IS 1893); 4 Load

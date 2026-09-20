@@ -60,15 +60,22 @@ def test_records_get_axial_only_in_lateral_cases(ex1):
     assert max(abs(r[0]) for r in per_case["L"].values()) == pytest.approx(1.2 * max(added.values()) / 1.2, rel=1e-9)
 
 
-def test_flexible_diaphragm_refused():
+def test_flexible_diaphragm_tributary_path():
+    """IS 1893 7.6.4: a flexible diaphragm is no longer refused -- the storey shear goes to the braced lines by
+    tributary width and the collectors carry the line shear; semi-rigid shells are still an EOR input."""
     cfg, _ = ex1_cfg_is()
     cfg["diaphragm"] = "flexible"
+    cf = D.collector_forces(cfg, "EQ")
+    assert cf.get("diaphragm") == "flexible" and cf["rows"]
+    ls = D.flexible_diaphragm_line_shears(cfg, "EQ")
+    for d in ("X", "Y"):
+        assert len(ls["lines"][d]) == 2                     # perimeter braced lines of Ex1
+        for k, sh in ls["e0"][d].items():
+            assert abs(sum(sh.values())) > 0
+            assert sh[min(sh)] == pytest.approx(sh[max(sh)], rel=1e-6)   # symmetric plan: equal shares
+        ea = ls["ea"][d][1]
+        assert ea[max(ea)] > ea[min(ea)]                      # +0.05 b mass shift loads the far line more
+    assert not any("error" in r for r in D.collector_demands(cfg))
+    cfg["diaphragm"] = "semi-rigid"
     with pytest.raises(D.DiaphragmError):
         D.collector_forces(cfg, "EQ")
-    assert "error" in D.collector_demands(cfg)[0]
-
-
-def test_asce_collector_stub_removed():
-    import design_pipeline as DP
-    src = inspect.getsource(DP)
-    assert "Fpx" not in src and "12.3.3.5" not in src

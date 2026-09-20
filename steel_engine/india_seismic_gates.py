@@ -946,10 +946,17 @@ def _screen_findings(pkg, cfg_hint=None) -> list:
     for row in (pkg.get("drift_table") or []):
         if isinstance(row, dict) and row.get("ok") is False:
             out.append("drift_table storey %s fails" % row.get("storey"))
+    d764 = pkg.get("diaphragm_7_6_4")
+    if isinstance(d764, dict) and d764.get("ok") is None:
+        out.append("IS 1893 7.6.4 diaphragm classification not evaluated: %s" % (d764.get("reason") or d764.get("error")))
     comp = pkg.get("composite_design")
     if isinstance(comp, dict) and comp.get("blocks_complete"):
         out.append("composite_design: IS 11384 not in the corpus -- record the scope (bare_steel + construction "
                    "stage, or delegated); unresolved slots block COMPLETE (WP2.9)")
+    if isinstance(comp, dict):
+        for s_ in ((comp.get("chI_worksheet") or {}).get("slots") or []):
+            if isinstance(s_, dict) and isinstance(s_.get("DC"), (int, float)) and s_["DC"] > 1.0 + 1e-6:
+                out.append("composite_design.%s: D/C = %.3f > 1.0 (%s)" % (s_.get("component"), s_["DC"], s_.get("cited")))
     for blk in ("irregularity", "framework_screen"):
         for p, s in _walk_strings(pkg.get(blk) or {}):
             if REVISE_RE.search(s):
