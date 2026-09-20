@@ -122,7 +122,149 @@ _SYS = {
 }
 
 
+def _is_india_cfg(cfg):
+    if not isinstance(cfg, dict):
+        return False
+    j = str(cfg.get("jurisdiction") or "").lower()
+    lp = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
+    return j in ("india", "in", "bis", "is", "is_bis") or str(lp.get("jurisdiction") or "").lower() in ("india", "is", "bis")
+
+
+INDIA_UNITS_OK = ("n-mm", "n-mm-s", "n-mm-sec", "m", "mm", "metric", "si", "india_si", "india_metric")
+
+
+def india_checks(cfg):
+    """WP1.3-1.13 India preflight block (replaces every ASCE requirement on India jobs)."""
+    out = []
+    say = lambda sev, msg: out.append((sev, msg))
+    u = str(cfg.get("units") or "").strip().lower()
+    if u not in INDIA_UNITS_OK:
+        say("ERROR", "India jobs need an explicit cfg['units'] ('m' or 'mm' for geometry; engine runs N-mm) -- "
+                     "got %r; the engine never guesses units (WP1.12)" % cfg.get("units"))
+        return out
+    try:
+        from india_units import apply_metric_geometry
+        apply_metric_geometry(cfg)
+    except Exception as ex:
+        say("ERROR", "unit conversion failed: %s" % ex)
+        return out
+    for sev, msg in _IL.validate_load_plan(cfg):
+        say(sev, msg)
+    H = [float(h) for h in (cfg.get("heights") or []) if isinstance(h, (int, float))]
+    if not H:
+        say("ERROR", "cfg['heights'] missing/empty"); return out
+    dex = set(int(k) for k in (cfg.get("drift_exempt_stories") or {}))
+    small = [(i, h) for i, h in enumerate(H, start=1) if h < 1800 and i not in dex]
+    if small:
+        say("ERROR", "storey height %s mm at storey %s looks like METRES -- engine lengths are mm" % (small[0][1], small[0][0]))
+    for k in ("SX", "SY"):
+        v = cfg.get(k)
+        if isinstance(v, (int, float)) and 0 < v < 1500:
+            say("ERROR", "%s=%g mm is < 1.5 m: bay spacing looks like METRES" % (k, v))
+    for k in ("xcoords", "ycoords"):
+        v = cfg.get(k)
+        if v and max(abs(float(x)) for x in v) < 500:
+            say("ERROR", "cfg['%s'] looks like METRES (max %g) -- give mm (they are not converted, WP1.12)" % (k, max(v)))
+    # ---- gravity magnitudes (kN/m2) ----
+    for k in ("D_floor", "D_roof", "L_floor", "Lr", "clad", "snow"):
+        v = cfg.get(k)
+        if isinstance(v, (int, float)) and v > 25.0:
+            say("ERROR", "%s=%g kN/m2 is implausible (> 25) -- psf entered on the SI path? (WP1.12)" % (k, v))
+    if cfg.get("Lr") is None:
+        say("ERROR", "cfg['Lr'] (roof imposed load, IS 875 Part 2 Table 2: 0.75 or 1.5 kN/m2) required (WP2.1)")
+    fs = str(cfg.get("floor_system") or "").lower()
+    if "one-way" in fs or "one way" in fs:
+        if str(cfg.get("deck_span") or "").upper() not in ("X", "Y"):
+            say("ERROR", "floor_system is one-way: declare cfg['deck_span'] = 'X' or 'Y' (the deck span direction; "
+                         "girders perpendicular to it carry the floor) -- WP2.7")
+    # ---- seismic: IS 1893 inputs, no ASCE shims (WP1.13) ----
+    import india_seismic_gates as G
+    lp = cfg.get("load_plan") or {}
+    ss = lp.get("seismic_summary") or {}
+    if not cfg.get("no_seismic"):
+        for k in ("Z", "zone", "I", "R", "soil", "Sa_g", "Ah", "Ta_s", "VB_kN", "W_kN"):
+            if ss.get(k) is None and (cfg.get("seis") or {}).get(k) is None:
+                say("ERROR", "load_plan.seismic_summary.%s missing (IS 1893 inputs replace SDS/SD1/Cd/Om0)" % k)
+        for sev, msg in G.system_zone_findings(cfg):
+            say(sev, msg)
+        for msg in G.occupancy_findings(cfg):
+            say("ERROR", "IS 1893 Table 8: " + msg)
+        # 7.7.1 gate (WP1.3)
+        ok_esm, why = G.esm_permitted(cfg, None)
+        an = [str(a).upper() for a in (cfg.get("analyses") or [])]
+        if not ok_esm and an and not any(a in ("RSA", "RS", "MRSA") for a in an):
+            say("ERROR", "IS 1893 7.7.1: linear dynamic analysis required (%s) but analyses=%s -- add 'RSA' "
+                         "(ESM alone only for regular buildings < 15 m in Zone II)" % (", ".join(why), an))
+        # Ah / VB recomputed (6.4.2, 7.6.1, Table 7)
+        try:
+            import india_seismic as IS
+            Z, I, R = float(ss["Z"]), float(ss["I"]), float(ss["R"])
+            Ta = float(ss.get("Ta_s"))
+            Ah = IS.design_Ah(Z, I, R, Ta, ss.get("soil"), "ESM")
+            rho_min = {"II": 0.007, "III": 0.011, "IV": 0.016, "V": 0.024}.get(G.zone_of(cfg))
+            Ah_d = max(Ah, rho_min or 0.0)
+            if abs(float(ss["Ah"]) - Ah_d) > 0.01 * Ah_d:
+                say("ERROR", "seismic_summary.Ah = %.5f but (Z/2)(I/R)(Sa/g)(Ta=%.3f s, ESM) = %.5f%s (6.4.2 / Table 7)"
+                    % (float(ss["Ah"]), Ta, Ah, (" -> Table 7 minimum %.3f" % rho_min) if rho_min and rho_min > Ah else ""))
+            VB, W = float(ss["VB_kN"]), float(ss["W_kN"])
+            if abs(VB - float(ss["Ah"]) * W) > 0.01 * VB:
+                say("ERROR", "seismic_summary VB_kN %.1f != Ah x W = %.1f (7.6.1)" % (VB, float(ss["Ah"]) * W))
+            import engine3d as E
+            E.build(cfg, "Linear")
+            NF = len(cfg["heights"])
+            We = sum(E.floor_w(cfg, k) for k in range(1, NF + 1)) / 1000.0
+            if abs(We - W) > 0.02 * W:
+                say("ERROR", "engine seismic weight %.1f kN differs from design W %.1f kN by %.1f %% (> 2 %%): W must be "
+                             "full DL + self-weight + partitions (7.3.6) + Table 10 IL + 7.3.5 snow (WP1.6)"
+                             % (We, W, 100 * (We - W) / W))
+            if abs(VB - float(ss["Ah"]) * We) > 0.15 * VB:
+                say("ERROR", "|VB - Ah x W_engine| > 15 %% (VB %.1f kN, Ah x W_engine %.1f kN) -- units? (WP1.12)"
+                    % (VB, float(ss["Ah"]) * We))
+            sc = _IL._story_force_scale(lp) if (lp.get("story_forces") or {}) else None
+            for d in ("X", "Y"):
+                sf = (lp.get("story_forces") or {}).get("EQ_" + d)
+                if not sf:
+                    say("ERROR", "load_plan.story_forces.EQ_%s missing" % d); continue
+                tot = abs(sum(float((list(v) + [0, 0])[0 if d == "X" else 1]) for v in dict(sf).values())) * sc / 1000.0
+                VBd = float(ss.get("VB_%s_kN" % d.lower(), VB))
+                if abs(tot - VBd) > 0.02 * VBd:
+                    say("ERROR", "sum of EQ_%s story forces %.1f kN differs from VB %.1f kN by > 2 %% (units / factored? "
+                                 "story forces are UNFACTORED, WP1.1/1.12)" % (d, tot, VBd))
+                if tot < 0.001 * We:
+                    say("ERROR", "EQ_%s story forces sum to < 0.1 %% of W -- kip/kN entered as N? (WP1.12)" % d)
+        except (KeyError, TypeError, ValueError) as ex:
+            say("ERROR", "IS 1893 seismic summary incomplete / invalid: %s" % ex)
+    if cfg.get("drift_relief_16_1_2"):
+        say("ERROR", "cfg['drift_relief_16_1_2'] is an ASCE 7-22 16.1.2 artefact -- no drift relief exists in "
+                     "IS 1893 (D3/D7); remove it")
+    # ---- drift limit (WP1.9) ----
+    dl = cfg.get("drift_limit")
+    if dl not in (None, "") and float(dl) > 0.004 + 1e-12:
+        say("ERROR", "drift_limit=%.4f exceeds IS 1893 7.11.1.1 (0.004 h); larger limits are not permitted" % float(dl))
+    # ---- model declaration ----
+    md = cfg.get("model")
+    if not (isinstance(md, dict) and {"bases", "joints", "gravity"} <= set(md)):
+        say("ERROR", "cfg['model'] = {'bases','joints','gravity'} declaration missing")
+    dia = cfg.get("diaphragm", "rigid")
+    if dia not in ("rigid", "flexible", "semi-rigid"):
+        say("ERROR", "cfg['diaphragm'] must be 'rigid' | 'flexible' | 'semi-rigid' (got %r)" % (dia,))
+    if not cfg.get("steel_grade"):
+        say("ERROR", "cfg['steel_grade'] (IS 2062 grade, e.g. 'E250BR' / 'E350') required -- no default fy (WP2.3)")
+    if cfg.get("braces") or "brace" in str(cfg.get("system") or "").lower() or "bf" in str(cfg.get("system") or "").lower():
+        if str(cfg.get("brace") or "").upper().startswith(("CHS", "NB")) and not (cfg.get("brace_grade") and cfg.get("brace_process")):
+            say("ERROR", "CHS braces need cfg['brace_grade'] (IS 1161 YSt ...) and cfg['brace_process'] (HFS/CDS/ERW)")
+    try:
+        from india_wind_tables import wind_findings
+        for sev, msg in wind_findings(cfg):
+            say(sev, msg)
+    except ImportError:
+        pass
+    return out
+
+
 def check(cfg):
+    if _is_india_cfg(cfg):
+        return india_checks(cfg)
     # India metric briefs → SI-native N-mm (wave 1); kip-in only if units/force_kip_in opt-in
     try:
         from india_units import apply_metric_geometry, is_si

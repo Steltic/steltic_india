@@ -157,6 +157,8 @@ def design(name, outdir=None):
     base = os.path.dirname(os.path.abspath(__file__))
     outdir = outdir or os.path.join(base, "buildings", name, "design")
     os.makedirs(outdir, exist_ok=True)
+    if E._india_job(cfg):
+        return design_india(name, cfg, outdir)
     cases = combos(cfg)
     try:
         from india_units import is_si, display_scale, demand_field_names
@@ -683,3 +685,434 @@ try:
 except Exception:  # pragma: no cover
     def h6_h7_residual_status(cfg=None, pkg=None):
         return {"blocking": False, "status": "unavailable", "H6": {"found": False}, "H7": {"found": False}}
+
+
+
+# =====================================================================================
+# India design path (WP1.1-1.3, WP1.6-1.9, WP2.1, WP2.6/2.7 hooks).  Demands in N / N-mm;
+# member capacities from HR-MEMBERS' india_is800.member_check_is800 (concurrent forces per
+# combination); Section 12 from india_is800_s12.section12_checks; the COMPLETE decision is
+# india_seismic_gates.design_status only.
+# =====================================================================================
+_ROLE_TO_I8 = {"col": "column", "beam": "beam", "brace": "brace"}
+
+
+def _jsonable(o):
+    if isinstance(o, dict):
+        return {str(k): _jsonable(v) for k, v in o.items() if not callable(v) and not str(k).startswith("_rsa")}
+    if isinstance(o, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in o]
+    if isinstance(o, (int, float, str, bool)) or o is None:
+        return o
+    try:
+        import numpy as _np
+        if isinstance(o, _np.ndarray):
+            return o.tolist()
+        if isinstance(o, _np.generic):
+            return o.item()
+    except Exception:
+        pass
+    return None
+
+
+def cfg_snapshot(cfg):
+    """JSON-serialisable cfg (callables dropped) for the app-side COMPLETE gate (agent.py)."""
+    return _jsonable({k: v for k, v in cfg.items() if not callable(v) and k not in ("custom_build",)})
+
+
+def _sha256(path):
+    import hashlib
+    try:
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()
+    except Exception:
+        return None
+
+
+def provenance_record(job_dir):
+    """Hashes of the job's scripts + cfg (0.2: the package must match the shipped script)."""
+    files = {}
+    if job_dir and os.path.isdir(job_dir):
+        for f in sorted(os.listdir(job_dir)):
+            if f.endswith(".py") or f in ("load_plan.json",):
+                h = _sha256(os.path.join(job_dir, f))
+                if h:
+                    files[f] = h
+    return {"files": files, "note": "sha256 of the job's cfg/fill scripts at package time"}
+
+
+def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
+    grade = cfg.get("brace_grade") if kind == "brace" else cfg.get("steel_grade")
+    m = {"id": "e%d" % t, "tag": t, "section": sec, "grade": grade, "role": _ROLE_TO_I8.get(kind, kind),
+         "L_mm": length, "node_i": n1, "node_j": n2}
+    if kind == "brace":
+        m["process"] = cfg.get("brace_process")
+    K = cfg.get("K_factors") or {}
+    kk = K.get(role) or K.get(kind) or {}
+    if kk:
+        m["Kz"], m["Ky"] = kk.get("Kz"), kk.get("Ky")
+    if kind == "beam":
+        m["LLT_sag_mm"] = cfg.get("LLT_sag_mm")
+        m["LLT_hog_mm"] = cfg.get("LLT_hog_mm")
+    if kind == "col":
+        m["sway"] = bool(cfg.get("sway_frame"))
+    return m
+
+
+def _top_records(recs, k=12):
+    """The governing combinations of one member (largest |N|, |Mmaj|, |Mmin|, |V|) -- concurrent tuples."""
+    if len(recs) <= k:
+        return recs
+    keep = set()
+    for idx in range(4):
+        keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx]))[: max(3, k // 4)])
+    comp = sorted(recs, key=lambda l: recs[l][0])[:3]        # most compressive
+    keep |= set(comp)
+    return {l: recs[l] for l in keep}
+
+
+def member_checks_is800(cfg, elem):
+    """Call HR-MEMBERS' member_check_is800 (guarded).  elem = {member, kind, records}."""
+    try:
+        import india_is800 as I8
+        f = I8.member_check_is800
+    except (ImportError, AttributeError) as ex:
+        return {"found": False, "ok": None, "dc": None,
+                "reason": "india_is800.member_check_is800 unavailable (HR-MEMBERS integration pending): %s" % ex}
+    import static_model as SM
+    cf = SM.combo_forces_for_member_check(_top_records(elem["records"]), elem["kind"])
+    try:
+        return f(elem["member"], cf, cfg=cfg)
+    except Exception as ex:
+        return {"found": False, "ok": None, "dc": None, "reason": "member_check_is800 failed: %s" % ex}
+
+
+def _check_rows(res):
+    """member_check_is800 result -> {value, limit, dc, ok, clause, cite, source} check records."""
+    rows = []
+    src = "india_is800.member_check_is800"
+    if res.get("found") and res.get("dc") is not None:
+        rows.append({"name": "IS 800 9.3 interaction / member resistance (governing combination %s)"
+                             % res.get("governing_combo"), "value": float(res["dc"]), "limit": 1.0,
+                     "dc": float(res["dc"]), "ok": bool(res["dc"] <= 1.0), "clause": res.get("clause"),
+                     "cite": res.get("cite") or res.get("clause"), "source": src})
+    else:
+        rows.append({"name": "IS 800 member check", "value": None, "limit": None, "dc": None, "ok": None,
+                     "found": False, "clause": "IS 800:2007 7-9", "cite": res.get("reason"), "source": src})
+    t3 = res.get("table3_slenderness")
+    if isinstance(t3, dict):
+        rows.append({"name": "IS 800 Table 3 slenderness KL/r", "value": t3.get("value"), "limit": t3.get("limit"),
+                     "dc": t3.get("dc"), "ok": t3.get("ok"), "clause": t3.get("clause"), "cite": t3.get("cite"),
+                     "source": src})
+    return rows
+
+
+def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, info0):
+    """model_data for HR-MEMBERS' india_is800_s12.section12_checks (see its module docstring)."""
+    import static_model as SM
+    members, forces = [], {}
+    fam = {}
+    for c in cases:
+        m = getattr(c, "meta", {}) or {}
+        fam[c[0]] = "12.2.3" if "is800_12_2_3" in (m.get("tags") or []) else ("service" if m.get("service") else "table4")
+    for t, (kind, sec, n1, n2) in reg.items():
+        mid = "e%d" % t
+        rec = _member_input_record(cfg, t, kind, sec, n1, n2, length[t], role_of[t])
+        rec["sfrs"] = role_of[t] in ("brace", "lateral_col") or (kind == "beam" and t in per_case_tags.get("lateral_beams", set()))
+        try:
+            c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+            dx, dy, dz = c2[0] - c1[0], c2[1] - c1[1], c2[2] - c1[2]
+            Lh = math.hypot(dx, dy); L3 = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+            if kind in ("brace", "beam"):
+                rec["frame_dir"] = "X" if abs(dx) >= abs(dy) else "Y"
+            if kind == "brace":
+                rec["cos_h"] = Lh / L3
+                # brace line = (frame direction, grid line perpendicular coordinate)
+                rec["line"] = "%s@%.0f" % (rec["frame_dir"], c1[1] if rec["frame_dir"] == "X" else c1[0])
+            if kind == "col":
+                rec["major_axis_plane"] = (info0.get("col_dir") or {}).get(t)
+        except Exception:
+            pass
+        members.append(rec)
+        recs = per_case_tags["records"].get(t) or {}
+        fl = SM.combo_forces_for_member_check(recs, kind)
+        for f in fl:
+            f["family"] = fam.get(f["combo"], "table4")
+        forces[mid] = fl
+    return {"members": members, "forces": forces,
+            "combos_12_2_3_present": any(v == "12.2.3" for v in fam.values())}
+
+
+def design_india(name, cfg, outdir):
+    """India demand + check package (N-mm)."""
+    import static_model as SM
+    import india_loads as IL
+    import india_seismic_gates as G
+    from india_units import display_scale
+    _SC = display_scale(cfg)
+    _mdiv = _SC["moment_div"]
+    job_dir = os.path.dirname(os.path.abspath(outdir))
+    cases = combos(cfg)
+    run = E.india_run_cached(cfg, name)
+    rsa_el = None
+    if any((getattr(c, "meta", {}) or {}).get("rsa") for c in cases):
+        rsa = run.get("rsa") or E.rsa_analysis(cfg)
+        run["rsa"] = rsa
+        rsa_el = rsa["elements"]
+    fs_ = "two-way" if "two" in str(cfg.get("floor_system", "one-way")).lower() else "one-way"
+    nseg = int(cfg.get("demand_nseg", 6))
+    per_case, kinds, sinfo = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el)
+    env = SM.envelope_from_records(per_case, kinds, cases)
+
+    info0 = E.build(cfg, "PDelta")
+    reg = {t: (kind, sec, n1, n2) for (t, kind, sec, n1, n2) in info0["ele"]}
+    length = {t: math.dist(ops.nodeCoord(n1), ops.nodeCoord(n2)) for t, (k, s_, n1, n2) in reg.items()}
+    NFlev = len(cfg["heights"])
+    brace_lines = set()
+    for (t, kind, sec, n1, n2) in info0["ele"]:
+        if kind == "brace":
+            for nd in (n1, n2):
+                brace_lines.add(((nd % 100000) // 100, nd % 100))
+    moment_lines = {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
+    lateral_lines = brace_lines | moment_lines
+
+    def _role(kind, n1, n2):
+        if kind == "brace":
+            return "brace"
+        if kind == "beam":
+            return "roof" if (n1 // 100000) >= NFlev else "floor"
+        return "lateral_col" if ((n1 % 100000) // 100, n1 % 100) in lateral_lines else "gravity_col"
+    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3]) for t in reg}
+    envt = {t: env.get(frozenset((reg[t][2], reg[t][3])), dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="",
+                                                              records={}, conn={})) for t in reg}
+    zero = [t for t in reg if all(abs(x) < 1e-6 for r in (envt[t].get("records") or {}).values() for x in r[:4])]
+
+    # ---- member_schedule.csv + per-element combination forces for HR-MEMBERS ----
+    with open(os.path.join(outdir, "member_schedule.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["ele_tag", "member", "role", "section", "length_mm", "P_comp_kN", "P_tens_kN",
+                    "M_major_kNm", "M_minor_kNm", "V_kN", "governing_combo"])
+        for t in sorted(reg):
+            kind, sec, n1, n2 = reg[t]; e = envt[t]
+            w.writerow([t, kind, role_of[t], sec, round(length[t], 1), round(e["comp"] / 1e3, 2),
+                        round(e["tens"] / 1e3, 2), round(e["Mz"] / _mdiv, 3), round(e["My"] / _mdiv, 3),
+                        round(e["V"] / 1e3, 2), e["combo"]])
+    json.dump({"fields": list(SM.REC_FIELDS), "units": "N, N-mm (Mmaj sagging + for beams)",
+               "elements": {str(t): {"kind": reg[t][0], "section": reg[t][1], "role": role_of[t],
+                                     "L_mm": round(length[t], 1), "records": envt[t].get("records") or {},
+                                     "conn_only_records": envt[t].get("conn") or {}} for t in reg}},
+              open(os.path.join(outdir, "member_combo_forces.json"), "w"))
+
+    # ---- IS 800 member checks per element (concurrent forces per combination) ----
+    by = {}
+    for t in reg:
+        by.setdefault((reg[t][0], reg[t][1], role_of[t]), []).append(t)
+    pkg = {"building": name, "code": "IS 800:2007 LSD", "unit_system": "N-mm", "stress_unit": "MPa",
+           "units": {"force": "N", "length": "mm", "moment": "N-mm", "display": "kN, kN-m, m, mm, MPa"},
+           "note": "Demands from the India analysis (IS 800 Table 4 / IS 1893 combinations); member checks "
+                   "from india_is800.member_check_is800 per combination with concurrent forces.",
+           "members": [], "connections": []}
+    elem_results = {}
+    for key, tags in sorted(by.items()):
+        kind, sec, role = key
+        worst = None
+        for t in tags:
+            recs = {l: r for l, r in (envt[t].get("records") or {}).items()}
+            if kind != "col":
+                recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {})}
+            mem = _member_input_record(cfg, t, kind, sec, reg[t][2], reg[t][3], length[t], role)
+            res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
+            elem_results[t] = res
+            if worst is None or (res.get("dc") or -1) > (worst[1].get("dc") or -1) or res.get("dc") is None:
+                worst = (t, res)
+                if res.get("dc") is None:
+                    break
+        t0, res = worst
+        e = envt[t0]
+        g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
+        inp = {"kind": kind, "role": role, "section": sec, "n_elements": len(tags), "governing_element": t0,
+               "length_mm": round(max(length[t] for t in tags), 1),
+               "P_comp_N": round(g["comp"], 1), "P_tens_N": round(g["tens"], 1), "Mz_Nmm": round(g["Mz"], 1),
+               "My_Nmm": round(g["My"], 1), "V_N": round(g["V"], 1), "governing_combo": e["combo"],
+               "combo_forces_file": "design/member_combo_forces.json",
+               "grade": _member_input_record(cfg, t0, kind, sec, 0, 0, 0, role).get("grade")}
+        rows = _check_rows(res)
+        dc = res.get("dc")
+        pkg["members"].append({"id": "%s-%s" % (role, sec), "inputs": inp, "checks": rows,
+                               "limit_state": "IS 800:2007 7-9 (member_check_is800)", "cited": res.get("clause"),
+                               "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
+                                                                          {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
+                                                                      for k, v in res["capacities"].items()},
+                               "DC": dc, "governing_element_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})})
+
+    # ---- connections: demands (incl. 12.2.3 conn_only forces); capacities by HR-MEMBERS ----
+    for key, tags in sorted(by.items()):
+        kind, sec, role = key
+        g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
+        conn_max = 0.0
+        for t in tags:
+            for r in (envt[t].get("conn") or {}).values():
+                conn_max = max(conn_max, abs(r[0]))
+        if kind == "beam":
+            ctype = "beam-to-column"; dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
+        elif kind == "brace":
+            ctype = "brace-to-gusset"; dem = {"axial_N": round(max(g["comp"], g["tens"]), 1),
+                                              "axial_12_2_3_N": round(conn_max, 1)}
+        else:
+            ctype = "column splice / base"; dem = {"P_N": round(g["comp"], 1), "T_N": round(g["tens"], 1),
+                                                   "M_Nmm": round(g["Mz"], 1), "V_N": round(g["V"], 1),
+                                                   "P_12_2_3_N": round(conn_max, 1)}
+        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
+                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections)",
+                                   "checks": [], "DC": None, "limit_state": None, "cited": None})
+    # ---- Section 12 (HR-MEMBERS) ----
+    try:
+        import india_is800_s12 as S12
+        md = section12_model_data(cfg, reg, length, role_of, envt,
+                                  {"records": {t: envt[t].get("records") or {} for t in reg}}, cases, info0)
+        try:
+            nodes = {nd: tuple(ops.nodeCoord(nd)) for nd in ops.getNodeTags()}
+            md["joints"] = S12.joints_from_model(nodes, md["members"],
+                                                 frame_members={m["id"] for m in md["members"] if m.get("sfrs")})
+        except Exception as ex:
+            md["joints_error"] = str(ex)
+        s12 = S12.section12_checks(cfg.get("system"), md, dict(cfg.get("section12_inputs") or {},
+                                   zone=G.zone_of(cfg), I=G.importance_of(cfg),
+                                   height_m=G.building_height_m(cfg),
+                                   brace_config=cfg.get("brace_config")))
+        pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12": _jsonable(s12),
+                                  "checks": {c.get("id", "c%d" % i) + ("@" + str(c.get("member")) if c.get("member") else ""):
+                                             {"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
+                                              "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
+                                              "cite": c.get("cite"), "found": c.get("ok") is not None}
+                                             for i, c in enumerate(s12.get("checks") or [])}}
+    except ImportError as ex:
+        pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},
+                                  "error": "india_is800_s12.section12_checks unavailable (HR-MEMBERS): %s" % ex}
+    except Exception as ex:
+        pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},
+                                  "error": "section12_checks failed: %s" % ex}
+
+    # ---- seismic analysis record, combinations, drift, irregularity, W ----
+    rsa = run.get("rsa")
+    sa = {"method": run.get("method"), "esm_permitted": run.get("esm_permitted"),
+          "esm_reasons": run.get("esm_reasons"), "rsa_used_in_demands": bool(rsa_el),
+          "cite": "IS 1893 7.6 / 7.7.1 / 7.7.3 / 7.7.5"}
+    if rsa:
+        sa["scale"] = {d: {"VB_rsa_kN": round(rsa[d]["VB_rsa_N"] / 1e3, 2), "VBbar_kN": round(rsa[d]["VBbar_N"] / 1e3, 2),
+                           "scale": round(rsa[d]["scale"], 4), "VB_scaled_kN": round(rsa[d]["VB_scaled_N"] / 1e3, 2),
+                           "mass_participation": round(rsa[d]["mass_participation"], 4)} for d in ("X", "Y")}
+        sa["modes"] = [{k: (round(v, 5) if isinstance(v, float) else v) for k, v in m_.items()} for m_ in rsa["modes"][:15]]
+    pkg["seismic_analysis"] = sa
+    pkg["load_combinations"] = [_jsonable(dict((getattr(c, "meta", {}) or {}).get("source") or {"label": c[0]},
+                                               lateral_kind=(getattr(c, "meta", {}) or {}).get("kind"),
+                                               direction=(getattr(c, "meta", {}) or {}).get("direction"),
+                                               sign=(getattr(c, "meta", {}) or {}).get("sign"),
+                                               fE=(getattr(c, "meta", {}) or {}).get("fLat") if (getattr(c, "meta", {}) or {}).get("kind") == "EQ" else None))
+                                for c in cases]
+    pkg["drift_table"] = []
+    for d, rec in (run.get("drift") or {}).items():
+        for i, x in enumerate(rec["drift"]):
+            lim = (run.get("drift_limits") or [0.004] * len(rec["drift"]))[i]
+            pkg["drift_table"].append({"storey": i + 1, "dir": d, "drift": round(x, 6), "limit": lim,
+                                       "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
+                                       "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
+    try:
+        import india_seismic as IS
+        pkg["irregularity"] = IS.irregularity_screens(cfg, run)
+    except Exception as ex:
+        pkg["irregularity"] = {"error": "irregularity screens unavailable: %s" % ex}
+    plan = cfg.get("load_plan") or {}
+    ss = plan.get("seismic_summary") or {}
+    pkg["seismic_calc"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "Z": ss.get("Z"), "I": G.importance_of(cfg),
+                           "zone": G.zone_of(cfg), "W_engine_kN": round(sum(E.floor_w(cfg, k) for k in range(1, NFlev + 1)) / 1e3, 1),
+                           "W_design_kN": ss.get("W_kN"),
+                           "W_by_floor_engine_kN": [round(E.floor_w(cfg, k) / 1e3, 1) for k in range(1, NFlev + 1)]}
+    pkg["load_plan"] = {"seismic_summary": ss, "retrieval": plan.get("retrieval"),
+                        "story_forces_units": plan.get("story_forces_units")}
+    pkg["zero_demand_elements"] = zero
+    pkg["beam_deflection"] = run.get("beam_deflection_rows")
+    pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
+    for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
+        try:
+            hook(cfg, pkg, run, envt, reg)
+        except Exception as ex:
+            pkg.setdefault("hook_errors", []).append("%s: %s" % (hook.__name__, ex))
+    pkg["provenance"] = provenance_record(job_dir)
+    json.dump(cfg_snapshot(cfg), open(os.path.join(outdir, "cfg_snapshot.json"), "w"), indent=1, default=str)
+    st = G.design_status(cfg, pkg, job_dir=job_dir)
+    pkg["design_status"] = {"status": st["status"], "n_reasons": len(st["reasons"]), "reasons": st["reasons"][:200],
+                            "authority": st["authority"]}
+    json.dump(_jsonable(pkg), open(os.path.join(outdir, "calc_package.json"), "w"), indent=1)
+
+    # ---- member_demands.md / connection_demands.csv / design_report.md ----
+    with open(os.path.join(outdir, "member_demands.md"), "w") as f:
+        f.write("# %s - member demands and IS 800 checks (N-mm engine, kN / kN-m display)\n\n" % name)
+        f.write("Combinations: %d (IS 800 Table 4 / IS 1893 6.3 / IS 800 12.2.3, generated). Analysis: %s.\n\n"
+                % (len(cases), run.get("method")))
+        f.write("| role | section | n | governing combo | P_comp (kN) | P_tens (kN) | M_maj (kN-m) | M_min (kN-m) | V (kN) | D/C |\n")
+        f.write("|---|---|---:|---|---:|---:|---:|---:|---:|---:|\n")
+        for m_ in pkg["members"]:
+            i_ = m_["inputs"]
+            f.write("| %s | %s | %d | %s | %.1f | %.1f | %.1f | %.1f | %.1f | %s |\n"
+                    % (i_["role"], i_["section"], i_["n_elements"], i_["governing_combo"], i_["P_comp_N"] / 1e3,
+                       i_["P_tens_N"] / 1e3, i_["Mz_Nmm"] / 1e6, i_["My_Nmm"] / 1e6, i_["V_N"] / 1e3,
+                       ("%.3f" % m_["DC"]) if isinstance(m_.get("DC"), (int, float)) else "not evaluated"))
+    with open(os.path.join(outdir, "connection_demands.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["connection", "type", "demand (N, N-mm)"])
+        for c in pkg["connections"]:
+            w.writerow([c["id"], c["type"], json.dumps(c["demand"])])
+    with open(os.path.join(outdir, "design_report.md"), "w") as f:
+        f.write("# %s - demand and check summary\n\nSystem %s (IS 1893 Table 9 R %s); %d storeys; %s analysis.\n\n"
+                % (name, cfg.get("system"), G.declared_R(cfg), NFlev, run.get("method")))
+        f.write("Status (india_seismic_gates.design_status): **%s** (%d reasons).\n" % (st["status"], len(st["reasons"])))
+    print("[%s] %d combinations, %d elements, %s -> demands + IS 800 checks written; status %s"
+          % (name, len(cases), len(reg), run.get("method"), st["status"]))
+    return {"members": len(reg), "combos": len(cases), "outdir": outdir, "status": st["status"]}
+
+
+def _collector_demands(cfg, pkg, run, envt, reg):
+    """WP2.6 hook -- replaced by the diaphragm load-path implementation (see _collectors_is1893)."""
+    try:
+        from india_diaphragm import collector_demands
+    except ImportError:
+        pkg.setdefault("collectors", [])
+        return
+    pkg["collectors"] = collector_demands(cfg, run, reg)
+
+
+def _secondary_member_demands(cfg, pkg, run, envt, reg):
+    """WP2.7 secondary members (joists / purlins / girts) -- simple-span demands per combination."""
+    sec = cfg.get("secondary_members") or []
+    if not sec:
+        return
+    out = []
+    for s_ in sec:
+        out.append(secondary_member_demand(cfg, s_))
+    pkg["secondary_members"] = out
+
+
+def secondary_member_demand(cfg, s_):
+    """{id, section, span_mm, spacing_mm, level ('floor'|'roof'), wind_uplift_kNm2?} -> demands for the
+    IS 800 check (sagging LTB restrained by the deck, hogging / uplift needs fly-brace spacing)."""
+    D = float(cfg.get("D_roof" if s_.get("level") == "roof" else "D_floor") or 0.0)
+    Lp = float(cfg.get("Lr") or 0.0) if s_.get("level") == "roof" else float(cfg.get("L_floor") or 0.0)
+    sp = float(s_["spacing_mm"]); L = float(s_["span_mm"])
+    rows = []
+    for lab, fD, fL, fW in (("1.5DL+1.5LL", 1.5, 1.5, 0.0), ("0.9DL+1.5WL(uplift)", 0.9, 0.0, 1.5)):
+        up = float(s_.get("wind_uplift_kNm2") or 0.0)
+        wv = (fD * D + fL * Lp - fW * up) * sp / 1000.0          # N/mm (+ down)
+        rows.append({"combo": lab, "w_N_per_mm": round(wv, 3), "M_Nmm": round(wv * L * L / 8.0, 1),
+                     "V_N": round(abs(wv) * L / 2.0, 1), "sign": "sagging" if wv >= 0 else "hogging"})
+    return {"id": s_.get("id"), "section": s_.get("section"), "span_mm": L, "spacing_mm": sp,
+            "demands": rows, "check": "india_is800.member_check_is800 with LLT_sag = deck restraint, "
+                                      "LLT_hog = fly-brace spacing (IS 800 8.2.2)"}
+
+
+def _deformation_compatibility(cfg, pkg, run, envt, reg):
+    """IS 1893 7.11.2 hook: gravity (non-SFRS) columns under R x storey displacement (Zones III-V)."""
+    try:
+        import india_seismic as IS
+        pkg["deformation_compatibility"] = IS.deformation_compatibility(cfg, run)
+    except AttributeError:
+        pass

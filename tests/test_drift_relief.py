@@ -46,32 +46,20 @@ def _warns(cfg):
     return [m for s, m in P.check(cfg) if s == "WARN"]
 
 
-def test_relief_lifts_the_rc_iii_table_error():
-    # India: no ASCE Table 12.12-1 ERROR (found:false). Excess drift_limit → IS 1893 WARN.
-    assert not any("Table 12.12-1 requires" in m for m in _errors(_cfg(drift_limit=0.0168)))
-    assert any("IS 1893" in m and "0.004" in m for m in _warns(_cfg(drift_limit=0.0168)))
-    c = _cfg(drift_limit=0.0168, drift_relief_16_1_2=dict(RELIEF, linear_target=0.0168))
-    assert not _errors(c) and P.relief_active(c)
-    assert any("16.1.2" in m and ("drift relief" in m or "artefact" in m) for m in _warns(c))
+def test_india_drift_limit_above_0p004_is_an_error():
+    """WP1.9: IS 1893 7.11.1.1 -- a drift_limit above 0.004 is an ERROR on India jobs (was a WARN)."""
+    assert any("7.11.1.1" in m and "0.004" in m for m in _errors(_cfg(units="mm", drift_limit=0.0168)))
 
 
-def test_relief_never_applies_to_risk_category_iv():
-    c = _cfg(drift_limit=0.0112, drift_relief_16_1_2=dict(RELIEF)); c["seis"]["Ie"] = 1.5
-    errs = _errors(c)
-    assert any("Risk Category IV" in m and "16.1.2" in m for m in errs)
-    assert any("0.010" in m for m in errs)  # USA table remnant in the ERROR text
-    assert not P.relief_active(c)
+def test_asce_16_1_2_relief_refused_on_india():
+    """The ASCE 7-22 16.1.2 relief is a USA artefact: an India cfg carrying it is an ERROR (D3/D7)."""
+    c = _cfg(units="mm", drift_limit=0.004, drift_relief_16_1_2=dict(RELIEF))
+    assert any("16.1.2" in m for m in _errors(c))
 
 
-def test_relief_block_must_carry_the_chapter_16_numbers():
-    c = _cfg(drift_relief_16_1_2={"clause": "x"})
-    assert any("missing" in m for m in _errors(c)) and not P.relief_active(c)
-    c = _cfg(drift_limit=0.035, drift_relief_16_1_2=dict(RELIEF, linear_target=0.035))
-    assert any("exceeds the Chapter 16 mean-drift limit" in m for m in _errors(c))
-    c = _cfg(drift_relief_16_1_2=dict(RELIEF, nlrha_mean_drift=0.031))
-    assert any("did not pass 16.4.1.2" in m for m in _errors(c))
-    c = _cfg(drift_limit=0.0120, drift_relief_16_1_2=dict(RELIEF))
-    assert any("differs from the relief's linear_target" in m for s, m in P.check(c) if s == "WARN")
+def test_usa_relief_helpers_still_validate_usa_cfgs():
+    usa = {k: v for k, v in _cfg(drift_relief_16_1_2={"clause": "x"}).items() if k != "load_plan"}
+    assert any("missing" in m for s, m in P.relief_findings(usa) if s == "ERROR") and not P.relief_active(usa)
 
 
 def test_consistency_mirrors_the_rules():

@@ -283,6 +283,14 @@ def build(cfg,transf="Linear"):
     else:
         from example_build import example_build as _example_build
         info = _example_build(cfg, transf)
+    if _UNIT_SYSTEM == "N-mm" and cfg.get("self_weight", True):
+        # WP1.6: member self-weight is part of W and of the modal mass; the masses assigned by the
+        # builder read cfg['_sw_by_level'], so rebuild once when it was missing / changed.
+        sw = self_weight_by_level(cfg, info)
+        old = cfg.get("_sw_by_level")
+        if sw and (not old or any(abs(float(old.get(k, 0.0)) - v) > 1e-6 * max(v, 1.0) for k, v in sw.items())):
+            cfg["_sw_by_level"] = sw
+            return build(cfg, transf)
     info["moment_nodes"] = set(_MOMENT_NODES)   # snapshot: nodes with a rigid (moment) beam framing in
     info["beam_rel"] = dict(_BEAM_REL)          # snapshot: per-beam end releases (viewer3d)
     info["col_dir"] = dict(_COL_DIR)            # snapshot: per-column strong-axis direction (viewer3d)
@@ -492,31 +500,79 @@ def floor_w(cfg,k):
     w+=cfg.get("extra_mass_floors",{}).get(k,0.0)*floor_area_ft2(cfg,k)/1000.0
     return w
 
-def _floor_w_si(cfg,k):
-    """Seismic weight (N): p[kN/m²] * A[mm²] / 1000 = N."""
-    NF=len(cfg["heights"]); roof=(k==NF)
-    d=_Dlev(cfg,k,roof)
-    area = floor_area_mm2(cfg,k)
-    w = d * area / 1000.0
-    th = cfg["heights"][k-1]
-    th = th if not roof else th / 2.0
-    # clad[kN/m²] * perim[mm] * th[mm] / 1000 → N
-    w += float(cfg.get("clad") or 0.0) * perim_mm(cfg,k) * th / 1000.0
-    if roof:
+STEEL_N_PER_MM3 = 7850.0 * 9.81 * 1e-9      # 78.5 kN/m3 (IS 875 Part 1) in N/mm3
+
+
+def self_weight_by_level(cfg, info=None):
+    """Member self-weight apportioned to the floor levels (N): beams at their level, columns and
+    braces half to each end level (IS 1893 7.4.1).  Needs the live model (called right after build)."""
+    out = {}
+    try:
+        eles = (info or {}).get("ele") or []
+        for (t, kind, sec, n1, n2) in eles:
+            try:
+                A = Ipack(sec)[0]
+                L = math.dist(ops.nodeCoord(n1), ops.nodeCoord(n2))
+            except Exception:
+                continue
+            W = A * STEEL_N_PER_MM3 * L
+            k1, k2 = n1 // 100000, n2 // 100000
+            if kind == "beam":
+                out[k1] = out.get(k1, 0.0) + W
+            else:
+                for kk in (k1, k2):
+                    if kk >= 1:
+                        out[kk] = out.get(kk, 0.0) + 0.5 * W
+    except Exception:
+        return {}
+    return out
+
+
+def _table10_fraction(p):
+    """IS 1893 Table 10: 25 % of imposed floor load up to 3.0 kN/m2, 50 % above."""
+    return 0.25 if float(p or 0.0) <= 3.0 else 0.50
+
+
+def seismic_weight_components(cfg, k):
+    """IS 1893 7.3/7.4 seismic weight of level k (N) -- the SAME W the design uses (WP1.6):
+    full DL + cladding + member self-weight + partitions (7.3.6, >= 0.5 kN/m2 on floors) +
+    Table 10 share of the floor imposed load (roof imposed load excluded, 7.3.2) + 20 % of snow
+    when snow > 1.5 kN/m2 (7.3.5) + declared extra mass."""
+    NF = len(cfg["heights"]); roof = (k == NF)
+    area = floor_area_mm2(cfg, k)
+    d = _Dlev(cfg, k, roof)
+    th = cfg["heights"][k-1]; th = th if not roof else th / 2.0
+    comp = {"dead": d * area / 1000.0,
+            "cladding": float(cfg.get("clad") or 0.0) * perim_mm(cfg, k) * th / 1000.0}
+    sw = (cfg.get("_sw_by_level") or {})
+    comp["self_weight"] = float(sw.get(k, sw.get(str(k), 0.0)) or 0.0) if cfg.get("self_weight", True) else 0.0
+    if not roof:
+        pp = cfg.get("partition_seismic_kNm2")
+        if pp is None:
+            pp = 0.5 if cfg.get("partitions", True) else 0.0
+        if cfg.get("partitions", True) and pp < 0.5:
+            raise ValueError("IS 1893 7.3.6: partition weight in W shall not be less than 0.5 kN/m2 (got %g)" % pp)
+        comp["partitions"] = float(pp) * area / 1000.0
+        L = float(_Llev(cfg, k))
+        comp["imposed"] = _table10_fraction(L) * L * area / 1000.0
+    else:
         snow = float(cfg.get("snow") or 0.0)
-        # IS 1893 snow participation: no ASCE 45 psf rule; include 0 unless cfg sets snow_seismic_frac
-        frac = float(cfg.get("snow_seismic_frac") or 0.0)
-        if frac and snow:
-            w += frac * snow * area / 1000.0
-    elif _is_storage(cfg,k):
-        w += 0.25 * _Llev(cfg,k) * area / 1000.0
-    extra = cfg.get("extra_mass_floors", {}).get(k, 0.0)
+        comp["snow"] = (0.20 * snow * area / 1000.0) if snow > 1.5 else 0.0
+    extra = (cfg.get("extra_mass_floors") or {}).get(k, 0.0)
     if extra:
-        w += float(extra) * area / 1000.0
-    return w
+        comp["extra"] = float(extra) * area / 1000.0
+    return comp
+
+
+def _floor_w_si(cfg, k):
+    """Seismic weight (N) of level k per IS 1893 7.3-7.4 (see seismic_weight_components)."""
+    return sum(seismic_weight_components(cfg, k).values())
+
 
 def floor_grav(cfg,k):
     NF=len(cfg["heights"]); roof=(k==NF)
+    if _UNIT_SYSTEM == "N-mm":                     # WP2.1: kN/m2 x mm2 / 1000 = N
+        return floor_dead(cfg, k) + 0.5 * floor_live(cfg, k) + floor_roofLrS(cfg, k)
     d=_Dlev(cfg,k,roof); l=0.0 if roof else _Llev(cfg,k)
     base=(d+0.5*l)*floor_area_ft2(cfg,k)/1000.0
     if roof: base+=cfg.get("snow",0.0)*floor_area_ft2(cfg,k)/1000.0
@@ -525,6 +581,9 @@ def floor_grav(cfg,k):
 
 def floor_dead(cfg,k):
     NF=len(cfg["heights"]); roof=(k==NF)
+    if _UNIT_SYSTEM == "N-mm":
+        c = seismic_weight_components(cfg, k)
+        return c["dead"] + c["cladding"] + c["self_weight"] + c.get("extra", 0.0)
     d=_Dlev(cfg,k,roof)
     w=d*floor_area_ft2(cfg,k)/1000.0
     th=cfg["heights"][k-1]/12.0; th=th if not roof else th/2
@@ -535,12 +594,18 @@ def floor_dead(cfg,k):
 def floor_live(cfg,k):
     NF=len(cfg["heights"])
     if k==NF: return 0.0
+    if _UNIT_SYSTEM == "N-mm":
+        return (float(_Llev(cfg, k)) + float(cfg.get("partition_load_kNm2") or 0.0)) * floor_area_mm2(cfg, k) / 1000.0
     return _Llev(cfg,k)*floor_area_ft2(cfg,k)/1000.0
 
 def floor_roofLrS(cfg,k):
     NF=len(cfg["heights"])
     if k!=NF: return 0.0
     snow=cfg.get("snow",0.0)
+    if _UNIT_SYSTEM == "N-mm":
+        if cfg.get("Lr") is None and not snow:
+            raise ValueError("cfg['Lr'] (roof imposed load, kN/m2) required (IS 875 Part 2 Table 2)")
+        return float(snow if snow and snow > 0 else cfg["Lr"]) * floor_area_mm2(cfg, k) / 1000.0
     return (snow if snow>0 else cfg.get("Lr",20.0))*floor_area_ft2(cfg,k)/1000.0   # snow, else cfg['Lr'] (default 20)
 
 _MODAL_CACHE = {}
@@ -550,6 +615,10 @@ _MODESHAPE_CACHE = {}   # _model_key(cfg) -> {T, coords, ev (all nodes, all solv
 def clear_caches():
     """Drop the per-run modal/elf/mode-shape memo. Called at the start of each design_and_report run."""
     _MODAL_CACHE.clear(); _ELF_CACHE.clear(); _MODESHAPE_CACHE.clear()
+    try:
+        _RSA_CACHE.clear(); _INDIA_RUN_CACHE.clear()
+    except NameError:
+        pass
 
 
 def _model_key(cfg):
@@ -693,6 +762,9 @@ def mode_shapes(cfg, nmodes=3):
     return c
 
 def sa(cfg,T):
+    """ASCE 7 spectrum -- USA archetypes only.  India: india_seismic.sa_over_g (6.4.2)."""
+    if _india_job(cfg):
+        raise RuntimeError("ASCE sa() is not available on India jobs -- use india_seismic.sa_over_g")
     s=cfg["seis"]; SDS=s["SDS"];SD1=s["SD1"];TL=s.get("TL",8.0)
     To=0.2*SD1/SDS; Ts=SD1/SDS
     if T<To: return SDS*(0.4+0.6*T/To)
@@ -710,6 +782,15 @@ def elf(cfg, T1):
     be treated as the design load path.
     """
     plan = cfg.get("load_plan") if isinstance(cfg, dict) else None
+    if _india_job(cfg) and isinstance(plan, dict) and isinstance(plan.get("seismic_summary"), dict) \
+            and (plan.get("story_forces") or {}).get("EQ_X"):
+        ss = plan["seismic_summary"]
+        Fx = {k: v[0] for k, v in india_story_forces(cfg, "X").items()}
+        V = VBbar(cfg, "X")
+        W = float(ss.get("W_kN", 0.0)) * 1000.0 if ss.get("W_kN") is not None else sum(
+            floor_w(cfg, k) for k in range(1, len(cfg["heights"]) + 1))
+        Ta = float(ss.get("Ta_x_s") or ss.get("Ta_s") or ss.get("Ta") or 0.0)
+        return (float(ss.get("Ah") or (V / W if W else 0.0)), V, Ta, Ta, 2.0, Fx, W)
     if isinstance(plan, dict) and isinstance(plan.get("seismic_summary"), dict):
         ss = plan["seismic_summary"]
         # Expected keys from agent after IS 1893 RAG: Cs, V, Tu, Ta, k, Fx, W
@@ -718,8 +799,10 @@ def elf(cfg, T1):
         return (float(ss.get("Cs", 0.0)), float(ss.get("V", 0.0)),
                 float(ss.get("Tu", T1 or 0.0)), float(ss.get("Ta", T1 or 0.0)),
                 float(ss.get("k", 1.0)), Fx, float(ss.get("W", 0.0)))
-    # Fall through to legacy ASCE-shaped body ONLY for period/modal scaffolding —
-    # design combos must still come from load_plan (design_pipeline.combos enforces this).
+    if _india_job(cfg):
+        raise RuntimeError("India job without load_plan.seismic_summary: the engine never falls back to "
+                           "an ASCE ELF (HRLOAD-13) -- write the IS 1893 seismic_summary into load_plan")
+    # Fall through to legacy ASCE-shaped body ONLY for USA archetypes (never on India jobs).
     key = (_model_key(cfg), round(float(T1), 6))
     r = _ELF_CACHE.get(key)
     if r is None:
@@ -727,6 +810,8 @@ def elf(cfg, T1):
     return r
 
 def _elf_impl(cfg,T1):
+    if _india_job(cfg):
+        raise RuntimeError("ASCE _elf_impl is not available on India jobs")
     s=cfg["seis"]; NF=len(cfg["heights"]); z=zlevels(cfg)
     W=sum(floor_w(cfg,k) for k in range(1,NF+1))
     Ta=s["Ct"]*(z[-1]/12)**s["x"]; Tu=min(T1,s["Cu"]*Ta)
@@ -742,6 +827,9 @@ def _elf_impl(cfg,T1):
     return Cs,V,Tu,Ta,kk,{k:V*whk[k]/ss for k in range(1,NF+1)},W
 
 def rs_baseshear(cfg,T,eX,eY,Mtot,direction):
+    """ASCE base-shear-only RS -- USA archetypes only.  India: rsa_analysis (IS 1893 7.7.5)."""
+    if _india_job(cfg):
+        raise RuntimeError("ASCE rs_baseshear is not available on India jobs -- use engine3d.rsa_analysis")
     s=cfg["seis"]; R,Ie=s["R"],s["Ie"]; W=Mtot*g
     eff=eX if direction=="X" else eY
     Vi=[ (sa(cfg,T[i])/(R/Ie))*eff[i]*W for i in range(len(T)) ]
@@ -753,6 +841,396 @@ def rs_baseshear(cfg,T,eX,eY,Mtot,direction):
             rho=(8*zeta**2*(1+r)*r**1.5)/((1-r**2)**2+4*zeta**2*r*(1+r)**2) if r>0 else (1 if i==j else 0)
             V2+=rho*Vi[i]*Vi[j]
     return math.sqrt(max(V2,0))
+
+# =====================================================================================
+# WP1.3 -- IS 1893 (Part 1) 7.7 response-spectrum analysis (India path)
+# =====================================================================================
+def india_seismic_params(cfg):
+    """{Z, I, R, soil, zone} from load_plan.seismic_summary / cfg['seis'] (no ASCE keys)."""
+    plan = cfg.get("load_plan") or {}
+    ss = plan.get("seismic_summary") or {}
+    s = cfg.get("seis") or {}
+    def pick(*keys):
+        for src in (ss, s, cfg):
+            for k in keys:
+                if src.get(k) is not None:
+                    return src.get(k)
+        return None
+    out = {"Z": pick("Z"), "I": pick("I", "Ie"), "R": pick("R"), "soil": pick("soil", "soil_type"),
+           "zone": pick("zone")}
+    miss = [k for k in ("Z", "I", "R", "soil") if out[k] is None]
+    if miss:
+        raise ValueError("IS 1893 seismic parameters missing: %s (seismic_summary / cfg['seis'])" % miss)
+    out["Z"], out["I"], out["R"] = float(out["Z"]), float(out["I"]), float(out["R"])
+    return out
+
+
+def modal_props(cfg):
+    """Undamped modes of the rigid-diaphragm model (7.7.5.1): periods, master-node mode shapes
+    (ux, uy, rz), floor masses (tonne) and mass moments of inertia.  All 3*NF diaphragm modes."""
+    info = build(cfg, "Linear"); NF = info["NF"]
+    masses = {k: floor_w(cfg, k) / g for k in range(1, NF + 1)}
+    Jm = {}
+    for k in range(1, NF + 1):
+        pts = info["present"][k]
+        xs = [_xy_in(cfg, i, j)[0] for i, j in pts]; ys = [_xy_in(cfg, i, j)[1] for i, j in pts]
+        Bx = max(xs) - min(xs) + cfg["SX"]; By = max(ys) - min(ys) + cfg["SY"]
+        Jm[k] = masses[k] * (Bx ** 2 + By ** 2) / 12.0
+    tm = 1e-8 * min(masses.values())
+    for t in ops.getNodeTags():
+        ops.mass(t, tm, tm, tm, tm, tm, tm)
+    for k in range(1, NF + 1):
+        ops.mass(mtag(k), masses[k] + tm, masses[k] + tm, tm, tm, tm, Jm[k] + tm)
+    ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+    nev = 3 * NF
+    try:
+        w2 = ops.eigen("-genBandArpack", nev)
+    except Exception:
+        w2 = ops.eigen("-fullGenLapack", nev)
+    phi = []
+    for n in range(1, len(w2) + 1):
+        phi.append({k: tuple(ops.nodeEigenvector(mtag(k), n)[i] for i in (0, 1, 5)) for k in range(1, NF + 1)})
+    return {"w2": list(w2), "T": [2 * math.pi / math.sqrt(max(x, 1e-12)) for x in w2], "phi": phi,
+            "m": masses, "J": Jm, "Mtot": sum(masses.values()), "NF": NF, "cm": info.get("cm") or {}}
+
+
+def india_story_forces(cfg, direction):
+    """Unfactored ESM story forces {k: (fx, fy, mz)} in N from load_plan.story_forces['EQ_<d>']."""
+    plan = cfg.get("load_plan") or {}
+    raw = (plan.get("story_forces") or {}).get("EQ_" + direction)
+    if not raw:
+        return {}
+    import india_loads as _IL
+    sc = _IL._story_force_scale(plan)
+    return {int(k): tuple(float(x) * sc for x in (list(v) + [0, 0, 0])[:3]) if not isinstance(v, dict)
+            else (float(v.get("fx", 0)) * sc, float(v.get("fy", 0)) * sc, float(v.get("mz", 0)) * sc)
+            for k, v in dict(raw).items()}
+
+
+def VBbar(cfg, direction):
+    """V-bar_B (N): design base shear from the approximate period Ta (7.7.3) -- the ESM VB of the
+    load_plan in that direction (VB_x_kN / VB_y_kN / VB_kN), cross-checked against the story forces."""
+    ss = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
+    v = ss.get("VB_%s_kN" % direction.lower(), ss.get("VB_kN"))
+    if v is not None:
+        return float(v) * 1000.0
+    Fx = india_story_forces(cfg, direction)
+    if Fx:
+        return abs(sum(f[0] if direction == "X" else f[1] for f in Fx.values()))
+    raise ValueError("V-bar_B for %s unavailable (seismic_summary.VB_kN or story_forces.EQ_%s)" % (direction, direction))
+
+
+def seismic_weights(cfg):
+    """IS 1893 7.4 seismic weight per floor (N) from the model (self-weight included) + components."""
+    build(cfg, "Linear")
+    NF = len(cfg["heights"])
+    comps = {k: seismic_weight_components(cfg, k) for k in range(1, NF + 1)}
+    return [sum(c.values()) for k, c in sorted(comps.items())], comps
+
+
+def esm_from_model(cfg, Ta, soil=None):
+    """Convenience: india_seismic.esm_summary with the engine seismic weights."""
+    import india_seismic as IS
+    prm = india_seismic_params(dict(cfg, seis=dict(cfg.get("seis") or {}, soil=soil or (cfg.get("seis") or {}).get("soil"))))
+    W, comps = seismic_weights(cfg)
+    r = IS.esm_summary(W, cfg["heights"], prm["Z"], prm["I"], prm["R"], prm["soil"], prm.get("zone"), Ta)
+    r["seismic_summary"]["W_components_kN"] = {k: {n: round(v / 1000.0, 2) for n, v in c.items()} for k, c in comps.items()}
+    return r
+
+
+_RSA_CACHE = {}
+
+
+def rsa_analysis(cfg, nseg=6, zeta=0.05):
+    """IS 1893 7.7.5 response-spectrum analysis.
+
+    * modes: all 3*NF rigid-diaphragm modes; mass participation per direction recorded (7.7.5.2)
+    * Ak = (Z/2)(I/R)(Sa/g)k with the RSA branch of 6.4.2 (R applied once)
+    * member forces: for each mode the modal inertia forces Qk = Ak g Gamma_k m phi_k are applied
+      to the (linear) static model and the element forces extracted; modes combined by CQC
+      (7.7.5.3(a), zeta 0.05), base shear likewise
+    * 7.7.3.1: when VB < V-bar_B the force responses are multiplied by V-bar_B / VB per direction;
+      7.7.3.2 displacements are not scaled
+    Returns {"X": {...}, "Y": {...}, "modes": [...], "elements": {"X": {tag: |E|}, "Y": ...}}."""
+    import numpy as np
+    import india_seismic as IS
+    import static_model as SM
+    key = _model_key(cfg)
+    if key in _RSA_CACHE:
+        return _RSA_CACHE[key]
+    prm = india_seismic_params(cfg)
+    mp = modal_props(cfg)
+    NF = mp["NF"]; nm = len(mp["T"])
+    m, J = mp["m"], mp["J"]
+    Mn, Gam = [], {"X": [], "Y": []}
+    for n in range(nm):
+        ph = mp["phi"][n]
+        M = sum(m[k] * (ph[k][0] ** 2 + ph[k][1] ** 2) + J[k] * ph[k][2] ** 2 for k in ph)
+        Mn.append(M)
+        Gam["X"].append(sum(m[k] * ph[k][0] for k in ph) / M)
+        Gam["Y"].append(sum(m[k] * ph[k][1] for k in ph) / M)
+    A = [IS.design_Ah(prm["Z"], prm["I"], prm["R"], T, prm["soil"], "RSA") for T in mp["T"]]
+    w = [math.sqrt(max(x, 1e-12)) for x in mp["w2"]]
+    rho = np.array([[IS.cqc_rho(w[i], w[j], zeta) for j in range(nm)] for i in range(nm)])
+    # unit modal load patterns on the linear static model, one solve per mode
+    model = SM.build_static(cfg, "Linear", nseg)
+    ops.timeSeries("Constant", 55)
+    ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+    ops.test("NormDispIncr", 1e-9, 10); ops.algorithm("Linear", "-factorOnce")
+    ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+    unit = []
+    for n in range(nm):
+        ph = mp["phi"][n]
+        ops.pattern("Plain", 500 + n, 55)
+        for k in range(1, NF + 1):
+            ops.load(mtag(k), g * m[k] * ph[k][0], g * m[k] * ph[k][1], 0.0, 0.0, 0.0, g * J[k] * ph[k][2])
+        ops.analyze(1)
+        unit.append(SM._responses(model))
+        ops.remove("loadPattern", 500 + n)
+        ops.reset()
+    tags = list(unit[0].keys())
+    out = {"modes": [], "elements": {}, "method": "IS 1893 7.7.5 RSA, CQC (7.7.5.3), zeta 0.05",
+           "params": prm}
+    for n in range(nm):
+        mx = Gam["X"][n] ** 2 * Mn[n] / mp["Mtot"]; my = Gam["Y"][n] ** 2 * Mn[n] / mp["Mtot"]
+        ph = mp["phi"][n]
+        out["modes"].append({"mode": n + 1, "T": mp["T"][n], "Sa_g": IS.sa_over_g(mp["T"][n], prm["soil"], "RSA"),
+                             "Ak": A[n], "mass_x": mx, "mass_y": my,
+                             "rot": sum(J[k] * ph[k][2] ** 2 for k in ph) / Mn[n]})
+    for d in ("X", "Y"):
+        coef = np.array([Gam[d][n] * A[n] for n in range(nm)])
+        # modal base shear (N): coef * g * sum(m phi_d)
+        Vn = np.array([coef[n] * g * sum(m[k] * mp["phi"][n][k][0 if d == "X" else 1] for k in m) for n in range(nm)])
+        VB = float(math.sqrt(max(Vn @ rho @ Vn, 0.0)))
+        # storey shears (CQC)
+        Vst = []
+        for k in range(1, NF + 1):
+            vk = np.array([coef[n] * g * sum(m[j] * mp["phi"][n][j][0 if d == "X" else 1] for j in range(k, NF + 1))
+                           for n in range(nm)])
+            Vst.append(float(math.sqrt(max(vk @ rho @ vk, 0.0))))
+        Vbar = VBbar(cfg, d)
+        scale = max(1.0, Vbar / VB) if VB > 0 else 1.0
+        E_ = {}
+        for t in tags:
+            Rm = np.array([unit[n][t] * coef[n] for n in range(nm)])      # modes x comps
+            E_[t] = scale * np.sqrt(np.maximum(np.einsum("ic,ij,jc->c", Rm, rho, Rm), 0.0))
+        cum = sum(md["mass_x" if d == "X" else "mass_y"] for md in out["modes"])
+        # unscaled master displacements (7.7.3.2): u = coef * g / w2 * phi, CQC per floor
+        disp = []
+        for k in range(1, NF + 1):
+            un = np.array([coef[n] * g / mp["w2"][n] * mp["phi"][n][k][0 if d == "X" else 1] for n in range(nm)])
+            disp.append(float(math.sqrt(max(un @ rho @ un, 0.0))))
+        out[d] = {"VB_rsa_N": VB, "VBbar_N": Vbar, "scale": scale, "VB_scaled_N": VB * scale,
+                  "mass_participation": cum, "storey_shear_N": Vst, "storey_shear_scaled_N": [v * scale for v in Vst],
+                  "disp_cm_mm_unscaled": disp,
+                  "cite": "IS 1893 7.7.3.1 (Amd 2): force responses x V-bar_B/VB when VB < V-bar_B; "
+                          "7.7.3.2 displacements not scaled"}
+        out["elements"][d] = E_
+    out["digest"] = hashlib.md5(repr([(d, round(out[d]["VB_scaled_N"], 3)) for d in ("X", "Y")]
+                                     + [round(x, 9) for x in mp["T"]]).encode()).hexdigest()
+    _RSA_CACHE[key] = out
+    return out
+
+
+def _apply_nodal_gravity(cfg, info, fD=1.0, fL=1.0):
+    """Gravity lumped at the column-line nodes (dynamic model), SI N."""
+    NF = info["NF"]
+    for k in range(1, NF + 1):
+        pts = info["present"][k]
+        p = (fD * floor_dead(cfg, k) + fL * (floor_live(cfg, k) + floor_roofLrS(cfg, k))) / len(pts)
+        for (i, j) in pts:
+            ops.load(ntag(i, j, k), 0, 0, -p, 0, 0, 0)
+
+
+def india_drift(cfg, eccentricity=None, gravity=(1.0, 1.0)):
+    """IS 1893 7.11.1.1 storey drift under VB with gamma = 1.0, measured at EVERY column line
+    (extreme edges govern) including the 7.8.2 design eccentricity (both variants), P-Delta with
+    1.0 DL + 1.0 LL.  Also returns Delta_max / Delta_ave per level from the total displacements at
+    the two extreme plan edges (Table 5(i) as substituted by Amd 2) and the CM storey drifts /
+    storey shears used for the Table 6(i) stiffness screen.  One drift function for India."""
+    import india_combos as IC
+    import india_loads as IL
+    plan = cfg.get("load_plan") or {}
+    if eccentricity is None:
+        eccentricity = design_eccentricities(cfg)
+    sc = IL._story_force_scale(plan)
+    out = {}
+    dex = set(int(k) for k in (cfg.get("drift_exempt_stories") or {}))
+    for d in ("X", "Y"):
+        F = india_story_forces(cfg, d)
+        if not F:
+            continue
+        tor = IC.torsion_moments(plan, cfg, d, eccentricity)
+        best = None
+        for v in ("a", "b", None):
+            info = build(cfg, "PDelta"); NF = info["NF"]
+            ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+            _apply_nodal_gravity(cfg, info, *gravity)
+            for k in range(1, NF + 1):
+                fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
+                if v:
+                    mz += float((tor.get(v) or {}).get(k, 0.0)) * sc
+                ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
+            ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+            ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
+            ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+            if ops.analyze(1) != 0:
+                raise RuntimeError("drift analysis (%s, variant %s) did not converge" % (d, v))
+            di = 0 if d == "X" else 1
+            disp = {}
+            for k in range(0, NF + 1):
+                for (i, j) in info["present"][k]:
+                    disp[(i, j, k)] = ops.nodeDisp(ntag(i, j, k), di + 1)
+            drift, drift_cm, ratio, dmax_lvl = [], [], [], []
+            for k in range(1, NF + 1):
+                h = cfg["heights"][k - 1]
+                lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
+                dr = [abs(disp[(i, j, k)] - disp.get((i, j, k - 1), 0.0)) / h for (i, j) in lines] or [0.0]
+                drift.append(max(dr) if k not in dex else 0.0)
+                um = ops.nodeDisp(mtag(k), di + 1)
+                um0 = ops.nodeDisp(mtag(k - 1), di + 1) if k > 1 else 0.0
+                drift_cm.append(abs(um - um0) / h)
+                # extreme edges perpendicular to the force
+                pts = info["present"][k]
+                crd = {(i, j): _xy_in(cfg, i, j) for (i, j) in pts}
+                ax = 1 if d == "X" else 0
+                lo = min(c[ax] for c in crd.values()); hi = max(c[ax] for c in crd.values())
+                e1 = [abs(disp[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - lo) < 1e-6]
+                e2 = [abs(disp[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - hi) < 1e-6]
+                D1, D2 = max(e1), max(e2)
+                Dmx, Dmn = max(D1, D2), min(D1, D2)
+                ratio.append(Dmx / ((Dmx + Dmn) / 2.0) if Dmx > 0 else 1.0)
+                dmax_lvl.append(Dmx)
+            Vst = [sum((F.get(j, (0, 0, 0))[di]) for j in range(k, NF + 1)) for k in range(1, NF + 1)]
+            rec = {"variant": v, "drift": drift, "drift_cm": drift_cm, "ratio": ratio, "disp_max": dmax_lvl,
+                   "storey_shear_N": Vst, "heights": list(cfg["heights"])}
+            if v is None:
+                base = rec
+                continue
+            if best is None or max(drift) > max(best["drift"]):
+                best = rec
+        best = best or base
+        best["ratio"] = [max(a, b) for a, b in zip(best["ratio"], base["ratio"])]
+        best["drift_cm_no_torsion"] = base["drift_cm"]
+        best["stiffness_N_per_mm"] = [(V / (dc * h)) if dc > 0 else float("inf")
+                                      for V, dc, h in zip(base["storey_shear_N"], base["drift_cm"], cfg["heights"])]
+        out[d] = best
+    return out
+
+
+def beam_deflection_si(cfg):
+    """IS 800 Table 6 live-load deflection of every beam group (SI), simply supported w L^4 check
+    on the actual section.  Returns (worst ratio to limit, n evaluated, rows).  n == 0 -> the gate
+    FAILS (WP2.1: never a silent pass)."""
+    import india_loads as IL
+    info = build(cfg, "Linear"); NF = info["NF"]
+    div, cite = IL.floor_deflection_limit(cfg)
+    ds = str(cfg.get("deck_span") or "").upper()
+    groups = {}
+    coords = {}
+    for (t, kind, sec, n1, n2) in info["ele"]:
+        if kind != "beam":
+            continue
+        c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+        Lx, Ly = abs(c1[0] - c2[0]), abs(c1[1] - c2[1]); L = max(Lx, Ly)
+        if L < 1e-6:
+            continue
+        dirn = "X" if Lx >= Ly else "Y"
+        roof = (n1 // 100000) >= NF
+        trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (cfg["SY"] if dirn == "X" else cfg["SX"])
+        key = (str(sec), round(L, 0), roof, dirn)
+        if key not in groups or trib > groups[key][1]:
+            groups[key] = (L, trib, roof, sec)
+    rows = []; worst = 0.0; n = 0
+    for (L, trib, roof, sec) in groups.values():
+        pL = float(cfg.get("Lr") or 0.0) if roof else float(cfg.get("L_floor") or 0.0) + float(cfg.get("partition_load_kNm2") or 0.0)
+        w = pL * trib / 1000.0                                         # N/mm
+        if w <= 0:
+            continue
+        A, Ix, Iy, J = Ipack(sec)
+        delta = 5.0 * w * L ** 4 / (384.0 * E * Ix)
+        lim = L / div
+        r = delta / lim
+        rows.append({"section": sec, "span_mm": round(L, 0), "roof": roof, "w_LL_N_per_mm": round(w, 3),
+                     "delta_mm": round(delta, 2), "limit_mm": round(lim, 2), "ratio": round(r, 3), "cite": cite})
+        worst = max(worst, r); n += 1
+    return worst, n, rows
+
+
+_INDIA_RUN_CACHE = {}
+
+
+def india_run_cached(cfg, name=None):
+    key = _model_key(cfg)
+    r = _INDIA_RUN_CACHE.get(key)
+    if r is None:
+        r = run_india(cfg, name)
+    return r
+
+
+def run_india(cfg, name=None):
+    """India sanity/analysis gates (replaces the ASCE run_one body on India jobs)."""
+    key = _model_key(cfg)
+    if key in _INDIA_RUN_CACHE:
+        return _INDIA_RUN_CACHE[key]
+    r = _run_india(cfg, name)
+    _INDIA_RUN_CACHE[key] = r
+    return r
+
+
+def _run_india(cfg, name=None):
+    import india_seismic as IS
+    import india_seismic_gates as G
+    NF = len(cfg["heights"])
+    mp = modal_props(cfg)
+    T = mp["T"]
+    esm_ok, why = G.esm_permitted(cfg, None)
+    want_rsa = (not esm_ok) or any(str(a).upper() in ("RSA", "RS") for a in (cfg.get("analyses") or []))
+    chk, extra = {}, {}
+    rsa = None
+    if want_rsa:
+        rsa = rsa_analysis(cfg)
+        for d in ("X", "Y"):
+            r = rsa[d]
+            chk["rsa_" + d] = abs(r["VB_scaled_N"] - r["VBbar_N"]) <= 0.005 * r["VBbar_N"] or r["scale"] == 1.0
+            chk["modalmass_" + d] = r["mass_participation"] >= 0.90
+            extra["VrsX/V" if d == "X" else "VrsY/V"] = r["VB_rsa_N"] / r["VBbar_N"]
+            extra["rsa_scale_" + d] = r["scale"]
+    else:
+        chk["esm_permitted"] = True
+    chk["stability"] = min(mp["w2"]) > 0
+    ecc = design_eccentricities(cfg)
+    dr = india_drift(cfg, ecc)
+    lims = []
+    for d in ("X", "Y"):
+        if d not in dr:
+            continue
+        lim = [min(IS.drift_allowable_for_storey(cfg, i), 0.004) for i in range(NF)]
+        lims = lim
+        chk["drift_" + d] = all(x <= l + 1e-12 for x, l in zip(dr[d]["drift"], lim)) and max(dr[d]["drift"]) > 0
+        extra["torsion_ratio_" + d] = max(dr[d]["ratio"])
+    rLL, nLL, rows = beam_deflection_si(cfg)
+    chk["beam_deflection"] = (nLL > 0 and rLL <= 1.0)
+    extra["beam_defl_LL_ratio"] = rLL; extra["beam_defl_groups"] = nLL
+    _decl_ok, _cons_ok, _mmsg = _model_gate(cfg)
+    chk["model_declared"] = _decl_ok; chk["model_consistent"] = _cons_ok
+    if _mmsg:
+        extra["model_warning"] = _mmsg
+    gaps = floor_beam_gaps(cfg)
+    chk["model_complete"] = len(gaps) == 0
+    ss = (cfg.get("load_plan") or {}).get("seismic_summary") or {}
+    V = VBbar(cfg, "X")
+    W = sum(floor_w(cfg, k) for k in range(1, NF + 1))
+    mdx = max(dr.get("X", {}).get("drift", [0.0])); mdy = max(dr.get("Y", {}).get("drift", [0.0]))
+    return dict(name=name, arch=cfg.get("arch"), NF=NF, T=T, Ta=float(ss.get("Ta_s") or ss.get("Ta") or 0.0),
+                Cs=float(ss.get("Ah") or 0.0), V=V, W=W, Tu=None, k=None,
+                cumX=(rsa["X"]["mass_participation"] if rsa else None),
+                cumY=(rsa["Y"]["mass_participation"] if rsa else None),
+                mde_x=mdx, mde_y=mdy, Cd=None, mdx=mdx, mdy=mdy, roofX=None, roofY=None,
+                Vx=V, Vy=VBbar(cfg, "Y"), gov=cfg.get("governing", "seismic"), chk=chk, extra=extra,
+                allp=all(chk.values()), drift=dr, drift_limits=lims, rsa=rsa, esm_permitted=esm_ok,
+                esm_reasons=why, eccentricity=ecc, beam_deflection_rows=rows, method="RSA" if want_rsa else "ESM")
+
 
 def design_eccentricities(cfg, F=1.0e5, T=1.0e8):
     """IS 1893 7.8.2 static eccentricity esi = CM - CR per floor, from unit-load analyses on the
@@ -871,6 +1349,12 @@ def _drift_env(cfg, drifts):
 
 
 def run(cfg):
+    if _india_job(cfg):
+        r = run_india(cfg)
+        out = {k: r[k] for k in ("T", "Ta", "V", "W", "mdx", "mdy", "cumX", "cumY")}
+        out.update(T1=r["T"][0], T2=r["T"][1] if len(r["T"]) > 1 else None,
+                   T3=r["T"][2] if len(r["T"]) > 2 else None, checks=r["chk"], all=r["allp"], india=r)
+        return out
     NF=len(cfg["heights"]); r={}
     T,w2,eX,eY,Mtot=modal(cfg,min(3*NF,12))
     Cs,V,Tu,Ta,kk,Fx,W=elf(cfg,T[0])
@@ -901,9 +1385,9 @@ def run(cfg):
         # -- i.e. the MRSA design base shear is the FULL 100% of V (the 7-16 85% floor is deleted).
         VrsX=rs_baseshear(cfg,T,eX,eY,Mtot,"X"); VrsY=rs_baseshear(cfg,T,eX,eY,Mtot,"Y")
         out["VrsX"]=VrsX; out["VrsY"]=VrsY
-        out["VrsX_scaled"]=max(VrsX,1.00*V); out["VrsY_scaled"]=max(VrsY,1.00*V)
-        chk["rs_X_ge_100pct"]=out["VrsX_scaled"]>=1.00*V-1e-6
-        chk["rs_Y_ge_100pct"]=out["VrsY_scaled"]>=1.00*V-1e-6
+        # WP1.3: the old gate max(Vrs, V) >= V was a tautology.  On this legacy USA path the RS
+        # base shear never enters the member demands, so no RS gate is reported as PASS.
+        out["rs_note"]="legacy USA RS base shear only -- not used in demands; no gate"
     if cfg.get("torsion_check"):
         sxa=static_lateral(cfg,Fx,"X",accidental=True)
         out["tratioX_acc"]=sxa[4]                          # B4: advisory (irregularity + Ax handled in report Ch.2)
@@ -1020,7 +1504,7 @@ def _ss_beam_defl(sec,L,w):
     """Mid-span deflection (in) of a pinned-pinned beam (2 elements + mid-node) under UDL w
     (k/in), using build()'s exact beam element signature (J,Ix,Iy + transf vecxz=(0,0,1)),
     so the check reflects the model's actual member orientation."""
-    A,Ix,Iy,J=SEC[sec]
+    A,Ix,Iy,J=Ipack(sec)                         # WP2.1: IS sections live in the CSV packs, not SEC
     ops.wipe(); ops.model("basic","-ndm",3,"-ndf",6)
     ops.node(1,0.,0.,0.); ops.node(2,L/2,0.,0.); ops.node(3,L,0.,0.)
     ops.fix(1,1,1,1,1,0,0); ops.fix(3,0,1,1,1,0,0)
@@ -1188,6 +1672,8 @@ def floor_beam_gaps(cfg, transf="Linear"):
 
 def run_one(name):
     cfg=CFG[name]; NF=len(cfg["heights"])
+    if _india_job(cfg):                        # WP1.3/1.9: no ASCE Cd/Ie, no ASCE RS, no wind_forces()
+        return run_india(cfg, name)
     T,w2,eX,eY,Mtot=modal(cfg,min(3*NF,12 if NF>=18 else 16))
     Cs,V,Tu,Ta,kk,Fx,W=elf(cfg,T[0]); gov=cfg.get("governing","seismic")
     if gov=="wind": FxX=wind_forces(cfg,"X"); FxY=wind_forces(cfg,"Y"); Vx=sum(FxX.values()); Vy=sum(FxY.values())
@@ -1219,7 +1705,7 @@ def run_one(name):
         # 7-22 sec.12.9.1.4.1: MRSA forces scale to the FULL ELF base shear V (Vt < V -> x V/Vt)
         VrsX=rs_baseshear(cfg,T,eX,eY,Mtot,"X"); VrsY=rs_baseshear(cfg,T,eX,eY,Mtot,"Y")
         extra["VrsX/V"]=VrsX/V; extra["VrsY/V"]=VrsY/V
-        chk["rs_X"]=max(VrsX,1.00*V)>=1.00*V-1e-6; chk["rs_Y"]=max(VrsY,1.00*V)>=1.00*V-1e-6
+        extra["rs_note"]="legacy USA RS base shear only -- not used in demands; no gate (WP1.3)"
     if cfg.get("torsion_check"):
         if NF>=30:
             tr=sx[4]

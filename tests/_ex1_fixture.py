@@ -34,3 +34,29 @@ def ex1_cfg(upgrade=True):
         cfg["seis"].pop(k, None)
     cfg["occupancy"] = {"use": "office", "area_m2": 3600.0}
     return cfg, seis
+
+
+def ex1_cfg_is():
+    """Ex1 rebuilt the way the India contract now requires (spec WP6 row Ex1 + D8/D9):
+    I = 1.2 (office > 2,000 m2, D8), office imposed load 4.0 kN/m2 (D9), IS 875-2 3.1.2 partition
+    allowance 1.0 kN/m2 for design and 0.5 kN/m2 in W (7.3.6), member self-weight in DL and W,
+    ESM summary recomputed from the engine seismic weights, generated combinations, RSA."""
+    cfg, seis = ex1_cfg(upgrade=True)
+    import engine3d as E
+    cfg.update(L_floor=4.0, partition_load_kNm2=1.0, deck_span="X", steel_grade="E250BR",
+               brace_grade="YSt 310", brace_process="HFS", analyses=["RSA"], brace_config="X")
+    cfg["seis"].update(I=1.2)
+    plan = cfg["load_plan"]
+    ss = plan["seismic_summary"]
+    ss.update(I=1.2, soil="II")
+    for k in ("Cs", "V", "Tu", "Ta", "k", "W", "Fx"):
+        ss.pop(k, None)
+    r = E.esm_from_model(cfg, {"X": ss["Ta_x_s"], "Y": ss["Ta_y_s"]}, soil="II")
+    ss.update(r["seismic_summary"])
+    ss.update(system="SCBF", zone="IV", Z=0.24, R=4.5, Ta_formula="0.09 h/sqrt(d) (7.6.2(c) all other buildings)")
+    sf = plan["story_forces"]
+    for d in ("X", "Y"):
+        sf["EQ_" + d] = r["story_forces"]["EQ_" + d]
+    plan["story_forces_units"] = "N"
+    plan["combinations"] = "auto"
+    return cfg, r

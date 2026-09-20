@@ -774,39 +774,66 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
     return w * L * L / 8.0, w * L / 2.0
 
 
+REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin")
+
+
 def member_records(model, R, cfg, case_grav, floor_system):
-    """Per parent member {fset: (N, Mz, My, V, Mzi, Mzj, Myi, Myj)} from element responses.
-    Columns: strong axis = local z; beams: strong axis = local y (engine convention).
-    End moments are INTERNAL moments (i end: -force, j end: +force) for Cm (9.3.2.2)."""
+    """Per parent member {fset: rec} with rec fields REC_FIELDS (N tension +, N-mm, N).
+
+    Columns: major axis = local z, end moments in the element's vector convention (M(0) = -f_i,
+    M(L) = +f_j) -- consistent along the member, so psi = Mj/Mi gives the curvature for Cm.
+    Beams: major axis = local y, BENDING-MOMENT-DIAGRAM values with sagging positive
+    (sag_i = +f_i, sag_j = -f_j, checked numerically), Mmaj_sag_max = largest sagging value along
+    the span.  One-way girder: Mg = w L^2/8 and Vg = w L/2 in N-mm (WP2.1) bound the FE values."""
     out = {}
     for c in model["cols"]:
         lf = R[c["tag"]]
         N = lf[6]
         Mzi, Mzj = -lf[5], lf[11]
         Myi, Myj = -lf[4], lf[10]
-        V = max(abs(lf[1]), abs(lf[2]))
-        out[frozenset((c["n1"], c["n2"]))] = (N, max(abs(Mzi), abs(Mzj)), max(abs(Myi), abs(Myj)), V,
-                                             Mzi, Mzj, Myi, Myj)
+        Vmaj = max(abs(lf[1]), abs(lf[7])); Vmin = max(abs(lf[2]), abs(lf[8]))
+        out[frozenset((c["n1"], c["n2"]))] = (N, max(abs(Mzi), abs(Mzj)), max(abs(Myi), abs(Myj)),
+                                             max(Vmaj, Vmin), Mzi, Mzj, Myi, Myj, 0.0, Vmaj, Vmin)
     for b in model["braces"]:
-        out[frozenset((b["n1"], b["n2"]))] = (float(R[b["tag"]][0]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        out[frozenset((b["n1"], b["n2"]))] = (float(R[b["tag"]][0]),) + (0.0,) * 10
     fD, fL, fLr, fS, fC, fEv = case_grav
     for b in model["beams"]:
         segs = b["segs"]
         Nb = R[segs[0]][6]
-        Mmaj = Mmin = V = 0.0
+        sag = []
+        Mmin = Vmaj = Vmin = 0.0
         for t in segs:
             lf = R[t]
-            Mmaj = max(Mmaj, abs(lf[4]), abs(lf[10]))
+            sag += [lf[4], -lf[10]]
             Mmin = max(Mmin, abs(lf[5]), abs(lf[11]))
-            V = max(V, abs(lf[2]), abs(lf[8]), abs(lf[1]), abs(lf[7]))
-        Myi, Myj = -R[segs[0]][4], R[segs[-1]][10]
-        Mzi, Mzj = -R[segs[0]][5], R[segs[-1]][11]
+            Vmaj = max(Vmaj, abs(lf[2]), abs(lf[8]))
+            Vmin = max(Vmin, abs(lf[1]), abs(lf[7]))
+        Mi, Mj = sag[0], sag[-1]
+        Mmaj = max(abs(x) for x in sag)
+        sag_max = max(sag)
+        Mni, Mnj = -R[segs[0]][5], R[segs[-1]][11]
         if floor_system != "two-way":
             Mg, Vg = one_way_gravity(cfg, b, fD, fL, fLr, fS, fEv)
-            if _deck_span(cfg) is None:
+            if _deck_span(cfg) is None and Mg > sag_max:
+                sag_max = Mg                                # legacy conservative one-way bound
                 Mmaj = max(Mmaj, Mg)
-            V = max(V, Vg)
-        out[frozenset((b["A"], b["B"]))] = (Nb, Mmaj, Mmin, V, Myi, Myj, Mzi, Mzj)
+            Vmaj = max(Vmaj, Vg)
+        out[frozenset((b["A"], b["B"]))] = (Nb, Mmaj, Mmin, max(Vmaj, Vmin), Mi, Mj, Mni, Mnj, sag_max, Vmaj, Vmin)
+    return out
+
+
+def combo_forces_for_member_check(records, kind):
+    """{label: rec} -> the combo_forces list of india_is800.member_check_is800 (HR-MEMBERS API):
+    P_N compression +, Mz = major axis, My = minor axis, Mz_mid (beams), Vy = major shear."""
+    out = []
+    for lab, r in records.items():
+        r = list(r) + [0.0] * (len(REC_FIELDS) - len(r))
+        d = dict(zip(REC_FIELDS, r))
+        cf = {"combo": lab, "P_N": -d["N"], "Mz_i_Nmm": d["Mmaj_i"], "Mz_j_Nmm": d["Mmaj_j"],
+              "My_i_Nmm": d["Mmin_i"], "My_j_Nmm": d["Mmin_j"], "Vy_N": d["Vmaj"], "Vz_N": d["Vmin"]}
+        if kind == "beam":
+            cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
+        out.append(cf)
     return out
 
 
@@ -886,9 +913,9 @@ def envelope_from_records(per_case, kinds, cases):
             kind = kinds.get(fs, ("beam", None))[0]
             e = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0,
                                         records={}, conn={}))
-            e["records"][lab] = [round(float(x), 3) for x in rec]
+            e["records"][lab] = [round(float(x), 1) for x in rec]
             if col_only.get(lab) and kind != "col":
-                e["conn"][lab] = [round(float(x), 3) for x in rec]     # 12.2.3 forces kept for connections
+                e["conn"][lab] = [round(float(x), 1) for x in rec]     # 12.2.3 forces kept for connections
                 continue
             N, Mz, My, V = rec[0], rec[1], rec[2], rec[3]
             e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))

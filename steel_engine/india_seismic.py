@@ -86,6 +86,103 @@ def importance_factor(occupancy) -> dict:
                 "note": "all other buildings (use %r)" % use}
     return {"found": False, "I": None, "cite": cite, "note": "occupancy.use missing"}
 
+# ---------------------------------------------------------------------------
+# WP1.3 -- IS 1893 6.4.2 design acceleration coefficient (read from the PDF p.9)
+# ---------------------------------------------------------------------------
+_SOIL = {"I": ("rock or hard", 0.40, 1.00, 0.25), "II": ("medium stiff", 0.55, 1.36, 0.34),
+         "III": ("soft", 0.67, 1.67, 0.42)}
+
+
+def soil_type(soil) -> str:
+    s = str(soil or "").strip().lower()
+    if s.startswith("type"):
+        s = s[4:].strip()
+    if s in ("i", "1", "rock", "hard", "rock or hard", "rock/hard", "a") or "rock" in s or "hard" in s:
+        return "I"
+    if s in ("iii", "3", "soft", "c") or "soft" in s:
+        return "III"
+    if s in ("ii", "2", "medium", "stiff", "b") or "medium" in s or "stiff" in s or "(type ii)" in s:
+        return "II"
+    raise ValueError("soil type %r not recognised (IS 1893 6.4.2.1: I rock/hard, II medium/stiff, III soft)" % soil)
+
+
+def sa_over_g(T, soil, method="RSA") -> float:
+    """IS 1893 (Part 1):2016 6.4.2 Sa/g, 5 % damping.
+
+    method 'ESM' (6.4.2(a), Fig. 2(a)): 2.5 plateau from T = 0.
+    method 'RSA' (6.4.2(b), Fig. 2(b)): 1 + 15T for T < 0.10 s, then the plateau.
+    Corners 0.40 / 0.55 / 0.67 s; 1.00/T, 1.36/T, 1.67/T up to 4 s; tails 0.25 / 0.34 / 0.42.
+    """
+    T = float(T)
+    if T < 0:
+        raise ValueError("period must be >= 0")
+    _, Tc, c, tail = _SOIL[soil_type(soil)]
+    m = str(method or "RSA").upper()
+    if m in ("RSA", "RS", "MRSA", "DYNAMIC") and T < 0.10:
+        return 1.0 + 15.0 * T
+    if T <= Tc:
+        return 2.5
+    if T <= 4.0:
+        return c / T
+    return tail
+
+
+def design_Ah(Z, I, R, T, soil, method="RSA") -> float:
+    """Ah = (Z/2)(I/R)(Sa/g) -- R applied ONCE (6.4.2)."""
+    return (float(Z) / 2.0) * (float(I) / float(R)) * sa_over_g(T, soil, method)
+
+
+def cqc_rho(wi, wj, zeta=0.05) -> float:
+    """IS 1893 7.7.5.3(a) cross-modal coefficient, beta = wj / wi, zeta = 0.05."""
+    b = float(wj) / float(wi)
+    return 8.0 * zeta ** 2 * (1.0 + b) * b ** 1.5 / ((1.0 - b ** 2) ** 2 + 4.0 * zeta ** 2 * b * (1.0 + b) ** 2)
+
+
+TABLE7_RHO = {"II": 0.007, "III": 0.011, "IV": 0.016, "V": 0.024}     # IS 1893 Table 7 (percent / 100)
+
+
+def esm_summary(W_by_floor_N, heights_mm, Z, I, R, soil, zone, Ta) -> dict:
+    """IS 1893 7.6 equivalent static method from the (engine) seismic weights.
+
+    Ta: seconds, or {'X': Tx, 'Y': Ty}.  VB = max(Ah W, rho W) (7.6.1, 7.2.2 / Table 7),
+    Qi = VB Wi hi^2 / sum(Wj hj^2) (7.6.3(a)).  Returns a seismic_summary fragment (kN) and the
+    unfactored story forces in N."""
+    W = [float(w) for w in W_by_floor_N]
+    hs = []
+    z = 0.0
+    for h in heights_mm:
+        z += float(h)
+        hs.append(z / 1000.0)
+    Tad = Ta if isinstance(Ta, dict) else {"X": float(Ta), "Y": float(Ta)}
+    rho = TABLE7_RHO.get(str(zone).upper().replace("ZONE", "").strip())
+    Wt = sum(W)
+    out = {"W_kN": round(Wt / 1000.0, 3), "W_by_floor_kN": [round(w / 1000.0, 3) for w in W],
+           "hi_m": [round(h, 4) for h in hs], "Z": Z, "I": I, "R": R, "soil": soil, "zone": zone,
+           "cite": IS1893_EDITION + " 6.4.2, 7.2.2 (Table 7), 7.6.1, 7.6.3"}
+    sf = {}
+    den = sum(w * h * h for w, h in zip(W, hs))
+    for d in ("X", "Y"):
+        sa = sa_over_g(Tad[d], soil, "ESM")
+        Ah = max((float(Z) / 2.0) * (float(I) / float(R)) * sa, rho or 0.0)
+        VB = Ah * Wt
+        Q = [VB * w * h * h / den for w, h in zip(W, hs)]
+        out["Ta_%s_s" % d.lower()] = round(Tad[d], 4)
+        out["Sa_g_%s" % d.lower()] = round(sa, 4)
+        out["Ah_%s" % d.lower()] = round(Ah, 6)
+        out["VB_%s_kN" % d.lower()] = round(VB / 1000.0, 3)
+        out["Qi_%s_kN" % d.lower()] = [round(q / 1000.0, 3) for q in Q]
+        sf["EQ_" + d] = {str(k + 1): ([q, 0.0, 0.0] if d == "X" else [0.0, q, 0.0]) for k, q in enumerate(Q)}
+    gov = "X" if out["VB_x_kN"] >= out["VB_y_kN"] else "Y"
+    out.update(Ta_s=out["Ta_%s_s" % gov.lower()], Sa_g=out["Sa_g_%s" % gov.lower()], Ah=out["Ah_%s" % gov.lower()],
+               VB_kN=out["VB_%s_kN" % gov.lower()], rho_min=rho)
+    return {"seismic_summary": out, "story_forces": sf, "story_forces_units": "N"}
+
+
+# NOTE (WP1.3 item 8, documented for the WP6 example rewrite): the example build scripts
+# IN_Ex7..Ex15 carry an ESM helper `_sa_g` that returns 1 + 15T for T <= 0.1 s -- that is the RSA
+# branch.  ESM uses 2.5 from T = 0 (6.4.2(a)); Ex13 VB_x 151.7 kN must be 161.2 kN.  Every job
+# must call india_seismic.sa_over_g(T, soil, "ESM") instead of a local helper.
+
 # --- authoritative clause anchors (found:true) ---------------------------------
 CLAUSES = {
     "storey_drift_limit": {
@@ -104,8 +201,8 @@ CLAUSES = {
         "stem": "IS_1893_Part_1_2016",
         "clause": "7.11.1.2",
         "text": (
-            "Displacement estimates obtained from dynamic analysis methods shall not be "
-            "scaled as given in 7.7.3."
+            "Displacement estimates obtained from dynamic analysis need not be scaled, "
+            "as stated in 7.7.3.2 (Amd 2)."
         ),
     },
     "plan_irregularities_table": {

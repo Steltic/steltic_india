@@ -378,12 +378,16 @@ def validate_load_plan(cfg) -> list:
                         "load_plan.retrieval has no found:true hits — refuse to invent load factors."))
 
     combos = plan.get("combinations") or []
-    if not isinstance(combos, list) or len(combos) < 1:
+    if combos == "auto" or (isinstance(combos, dict) and combos.get("generate")):
+        try:
+            _gen = expanded_combinations(cfg)
+            out.extend(validate_table4(_gen, cfg))
+        except (LoadPlanError, Exception) as ex:
+            out.append(("ERROR", "combination generation failed: %s" % ex))
+    elif not isinstance(combos, list) or len(combos) < 1:
         out.append(("ERROR",
                     "cfg['load_plan'].combinations empty — after RAG, write IS 800 Table 4 "
                     "(partial factors) combinations with fD/fL/fLr and any lateral story forces."))
-    elif combos == "auto" or (isinstance(combos, dict) and combos.get("generate")):
-        pass                                   # india_combos.expand_combinations builds the set
     else:
         for i, c in enumerate(combos):
             if not isinstance(c, dict):
@@ -456,7 +460,11 @@ def validate_lateral_factor(c, i=0, plan=None) -> list:
         out.append(("ERROR", "combinations[%d] (%s): the label does not state the lateral factor "
                              "(e.g. '1.5DL+1.5EQ_X')" % (i, lab)))
         return out
-    lf = terms[0][0]
+    horiz = [t for t in terms if t[2] != "Z"]
+    if not horiz:
+        out.append(("ERROR", "combinations[%d] (%s): no horizontal lateral term in the label" % (i, lab)))
+        return out
+    lf = horiz[0][0]
     if abs(abs(lf) - abs(f)) > 1e-6:
         out.append(("ERROR", "combinations[%d] (%s): %s=%g disagrees with the label factor %g"
                              % (i, lab, key, f, lf)))
@@ -489,6 +497,9 @@ def validate_table4(combos, cfg=None) -> list:
             continue
         f, _ = combo_lateral_factor(c)
         fl = abs(f) if f is not None else 0.0
+        vert = c.get("vertical") if isinstance(c.get("vertical"), dict) else {}
+        if f is not None and abs(abs(float(vert.get("coef", 0.0))) - 1.0) < 1e-9:
+            fl = fl / 0.3                          # IS 1893 6.3.4.1(c): ELZ leading, 0.3 EL accompanying
         if not any(abs(fD - a) < 1e-6 and abs(fL - b) < 1e-6 and abs(fl - e) < 1e-6 for a, b, e in allowed):
             out.append(("ERROR", "combinations[%d] (%s): factors DL %g / LL %g / lateral %g are not an IS 800 "
                                  "Table 4 (or 12.2.3) set" % (i, c.get("label", "?"), fD, fL, fl)))
@@ -952,3 +963,36 @@ def resolve_site_annex_proxy(
         ],
         "policy": "refuse_silent_wrong_city",
     }
+
+
+
+# ---------------------------------------------------------------------------
+# IS 800:2007 Table 6 deflection limits (read from the PDF p.31 image) -- WP2.1 / WP1.11
+# ---------------------------------------------------------------------------
+IS800_TABLE6 = {
+    # other buildings
+    "floor_roof_live_not_cracking": 300.0, "floor_roof_live_cracking": 360.0,
+    "cantilever_live_not_cracking": 150.0, "cantilever_live_cracking": 180.0,
+    "building_wind_elastic": 300.0, "building_wind_brittle": 500.0, "storey_wind": 300.0,
+    # industrial buildings
+    "purlin_girt_elastic": 150.0, "purlin_girt_brittle": 180.0,
+    "industrial_simple_span_live_elastic": 240.0, "industrial_simple_span_live_brittle": 300.0,
+    "industrial_cantilever_live_elastic": 120.0, "industrial_cantilever_live_brittle": 150.0,
+    "rafter_profiled_sheeting": 180.0, "rafter_plastered_sheeting": 240.0,
+    "gantry_manual": 500.0, "gantry_electric_upto_50t": 750.0, "gantry_electric_over_50t": 1000.0,
+    "column_no_crane_elastic": 150.0, "column_no_crane_brittle": 240.0,
+    "gantry_lateral_crane_absolute": 400.0, "gantry_lateral_rails_relative_mm": 10.0,
+    "frame_crane_pendant_elastic": 200.0, "frame_crane_cab_brittle": 400.0,
+}
+IS800_TABLE6_CITE = "IS 800:2007 Table 6 (5.6.1), serviceability loads at gamma_f = 1.0"
+
+
+def floor_deflection_limit(cfg) -> tuple:
+    """(span divisor, cite) for floor/roof live-load deflection per IS 800 Table 6."""
+    ind = str(cfg.get("building_type") or "").lower().startswith("industrial")
+    crack = bool(cfg.get("finishes_susceptible_to_cracking", True))
+    if ind:
+        key = "industrial_simple_span_live_brittle" if crack else "industrial_simple_span_live_elastic"
+    else:
+        key = "floor_roof_live_cracking" if crack else "floor_roof_live_not_cracking"
+    return IS800_TABLE6[key], "%s: %s -> span/%d" % (IS800_TABLE6_CITE, key, IS800_TABLE6[key])
