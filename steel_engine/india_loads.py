@@ -479,12 +479,15 @@ TABLE4_SETS = {
     "strength": [(1.5, 1.5, 0.0), (1.2, 1.2, 0.6), (1.2, 1.2, 1.2), (1.5, 0.0, 1.5), (0.9, 0.0, 1.5),
                  (1.5, 0.0, 0.0), (0.9, 0.0, 0.0)],
     "is800_12_2_3": [(1.2, 0.5, 2.5), (0.9, 0.0, 2.5)],
+    # IS 18168:2023 5.5 (pdf p. 7): 1.2DL + gLL LL +- Omega EL, 0.9DL +- Omega EL; Omega 2.5 SCBF/EBF (= 12.2.3 set),
+    # 3.0 SMRF; gLL 0.25 / 0.50 -- the generator keeps IS 800's 0.5 LL (stricter) with Omega 3.0
+    "is18168_5_5": [(1.2, 0.5, 3.0), (0.9, 0.0, 3.0), (1.2, 0.25, 3.0), (1.2, 0.25, 2.5)],
     "service": [(1.0, 1.0, 0.0), (1.0, 0.8, 0.8), (1.0, 0.0, 1.0), (1.0, 0.0, 0.0)],
 }
 
 
 def validate_table4(combos, cfg=None) -> list:
-    """Each explicit combination's (fD, fL, |f_lat|) must be an IS 800 Table 4 (or 12.2.3) set."""
+    """Each explicit combination's (fD, fL, |f_lat|) must be an IS 800 Table 4 (or 12.2.3 / IS 18168 5.5) set."""
     out = []
     allowed = [t for v in TABLE4_SETS.values() for t in v]
     for i, c in enumerate(combos or []):
@@ -502,7 +505,7 @@ def validate_table4(combos, cfg=None) -> list:
             fl = fl / 0.3                          # IS 1893 6.3.4.1(c): ELZ leading, 0.3 EL accompanying
         if not any(abs(fD - a) < 1e-6 and abs(fL - b) < 1e-6 and abs(fl - e) < 1e-6 for a, b, e in allowed):
             out.append(("ERROR", "combinations[%d] (%s): factors DL %g / LL %g / lateral %g are not an IS 800 "
-                                 "Table 4 (or 12.2.3) set" % (i, c.get("label", "?"), fD, fL, fl)))
+                                 "Table 4 (or 12.2.3 / IS 18168 5.5) set" % (i, c.get("label", "?"), fD, fL, fl)))
     return out
 
 

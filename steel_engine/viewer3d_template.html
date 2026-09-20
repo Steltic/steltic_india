@@ -389,8 +389,9 @@ function loadLegend(){
   if ($('lLLdyn').checked && LD.LLdyn) h += `<div class="lgsec"><span class="swatch" style="background:#2ecc71"></span>Live (dynamic model): level totals at grid nodes — ΣL = <b>${LD.LLdyn.total}</b> k</div>`;
   if ($('lDLstat').checked && LD.stat && LD.stat.D) h += `<div class="lgsec"><span class="swatch" style="background:#7aa2ff"></span>Dead (static model): two-way tributary ribbons, height ∝ w — ΣD = <b>${LD.stat.D.total}</b> k</div>`;
   if ($('lLLstat').checked && LD.stat && LD.stat.L) h += `<div class="lgsec"><span class="swatch" style="background:#2ecc71"></span>Live (static model): two-way tributary ribbons — ΣL = <b>${LD.stat.L.total}</b> k</div>`;
-  if ($('lWind').checked && LD.wind) h += `<div class="lgsec"><span class="swatch" style="background:#00bcd4"></span>Wind story forces (kip) X: ${LD.wind.X.join(', ')} · Y: ${LD.wind.Y.join(', ')}</div>`;
-  if ($('lSeis').checked && LD.seis) h += `<div class="lgsec"><span class="swatch" style="background:#c08bff"></span>Seismic ELF story forces (kip): ${LD.seis.F.join(', ')} — V = <b>${LD.seis.V}</b> k (Cs=${LD.seis.Cs})</div>`;
+  const FU = LD.force_unit || '', SL = LD.seismic_label || 'Seismic story forces', CL = LD.coef_label || 'coef';
+  if ($('lWind').checked && LD.wind) h += `<div class="lgsec"><span class="swatch" style="background:#00bcd4"></span>Wind story forces (${FU}) X: ${LD.wind.X.join(', ')} · Y: ${LD.wind.Y.join(', ')}</div>`;
+  if ($('lSeis').checked && LD.seis) h += `<div class="lgsec"><span class="swatch" style="background:#c08bff"></span>${SL} (${FU}): ${LD.seis.F.join(', ')} — V = <b>${LD.seis.V}</b> ${FU} (${CL}=${LD.seis.Cs})</div>`;
   return h;
 }
 function legendHTML(){

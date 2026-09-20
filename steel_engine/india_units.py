@@ -30,10 +30,9 @@ ENGINE_UNITS = {
     "E_steel_MPa": 200000.0,
     "G_steel_MPa": 76923.07692307692,  # E/2.6
     "note": (
-        "India native OpenSees / design unit system is N-mm-sec (wave 1 SI). "
-        "Call india_units.apply_si_geometry(cfg) [alias: apply_metric_geometry] for metric briefs. "
-        "Legacy kip-in: set units='kip-in' or force_kip_in=True. "
-        "Remaining kip islands: see KIP_ISLANDS / conversion status markdown."
+        "India native OpenSees / design unit system is N-mm-sec. "
+        "Call india_units.apply_si_geometry(cfg) [alias: apply_metric_geometry] for metric briefs; "
+        "the USA twin's legacy unit system is never selected on an India job."
     ),
 }
 

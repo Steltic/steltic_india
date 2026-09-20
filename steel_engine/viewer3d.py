@@ -180,22 +180,44 @@ def _loads(cfg, info, coords, T1):
                 ptsL.append([round(c[0], 1), round(c[1], 1), round(c[2], 1), round(pL, 2)])
     out["DLdyn"] = {"pts": ptsD, "total": round(totD, 0)}
     out["LLdyn"] = {"pts": ptsL, "total": round(totL, 0)}
-    # ---- wind story forces (both directions)
-    try:
-        FX = E.wind_forces(cfg, "X"); FY = E.wind_forces(cfg, "Y")
-        out["wind"] = {"z": [z[k] for k in range(1, NF + 1)],
-                       "X": [round(FX[k], 1) for k in range(1, NF + 1)],
-                       "Y": [round(FY[k], 1) for k in range(1, NF + 1)]}
-    except Exception:
-        pass
-    # ---- ELF seismic story forces
-    try:
-        Cs, V, Tu, Ta, kk, Fk, Wt = E.elf(cfg, T1)
-        out["seis"] = {"z": [z[k] for k in range(1, NF + 1)],
-                       "F": [round(Fk[k], 1) for k in range(1, NF + 1)],
-                       "V": round(V, 1), "Cs": round(Cs, 4)}
-    except Exception:
-        pass
+    si = _viewer_si(cfg)
+    out["force_unit"] = "kN" if si else "kip"
+    out["seismic_label"] = "IS 1893 story forces (ESM, characteristic)" if si else "Seismic ELF story forces"
+    out["coef_label"] = "Ah" if si else "Cs"
+    if si:
+        # India: story forces from load_plan (characteristic, N) -> kN; no ASCE wind_forces()/elf() on this path
+        try:
+            plan = cfg.get("load_plan") or {}
+            sf = plan.get("story_forces") or {}
+            def _vec(ref, comp):
+                v = sf.get(ref) or {}
+                return [round(float((v.get(str(k)) or v.get(k) or [0, 0, 0])[comp]) / 1000.0, 1) for k in range(1, NF + 1)]
+            if sf.get("W_X") or sf.get("W_Y"):
+                out["wind"] = {"z": [z[k] for k in range(1, NF + 1)], "X": _vec("W_X", 0), "Y": _vec("W_Y", 1)}
+            if sf.get("EQ_X"):
+                F = _vec("EQ_X", 0)
+                ss = plan.get("seismic_summary") or {}
+                out["seis"] = {"z": [z[k] for k in range(1, NF + 1)], "F": F, "V": round(sum(F), 1),
+                               "Cs": round(float(ss.get("Ah") or 0.0), 4)}
+        except Exception:
+            pass
+    else:
+        # ---- wind story forces (both directions)
+        try:
+            FX = E.wind_forces(cfg, "X"); FY = E.wind_forces(cfg, "Y")
+            out["wind"] = {"z": [z[k] for k in range(1, NF + 1)],
+                           "X": [round(FX[k], 1) for k in range(1, NF + 1)],
+                           "Y": [round(FY[k], 1) for k in range(1, NF + 1)]}
+        except Exception:
+            pass
+        # ---- ELF seismic story forces
+        try:
+            Cs, V, Tu, Ta, kk, Fk, Wt = E.elf(cfg, T1)
+            out["seis"] = {"z": [z[k] for k in range(1, NF + 1)],
+                           "F": [round(Fk[k], 1) for k in range(1, NF + 1)],
+                           "V": round(V, 1), "Cs": round(Cs, 4)}
+        except Exception:
+            pass
     # ---- static model true tributary gravity (built LAST: build_static wipes the ops domain)
     try:
         out["stat"] = _static_gravity(cfg, coords)
@@ -311,14 +333,12 @@ def _viewer_data(cfg, name, root):
         stats.append(["Max D/C (screening)", "%.2f" % umax])
     if loads.get("seis"):
         _u = "kN" if _viewer_si(cfg) else "kip"
-        _Vs = loads["seis"]["V"] / (1000.0 if _viewer_si(cfg) else 1.0)
-        stats.append(["Seismic base shear V", "%.0f %s (Cs=%.3f)" %
-                      (_Vs, _u, loads["seis"]["Cs"])])
+        stats.append(["Seismic base shear VB" if _viewer_si(cfg) else "Seismic base shear V", "%.0f %s (%s=%.4f)" %
+                      (loads["seis"]["V"], _u, "Ah" if _viewer_si(cfg) else "Cs", loads["seis"]["Cs"])])
     if loads.get("wind"):
         _u = "kN" if _viewer_si(cfg) else "kip"
-        _fd = 1000.0 if _viewer_si(cfg) else 1.0
         stats.append(["Wind base shear X / Y", "%.0f / %.0f %s" %
-                      (sum(loads["wind"]["X"])/_fd, sum(loads["wind"]["Y"])/_fd, _u)])
+                      (sum(loads["wind"]["X"]), sum(loads["wind"]["Y"]), _u)])
 
     return {
         "meta": {

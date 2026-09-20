@@ -607,13 +607,15 @@ def _sha256(path):
 def provenance_record(job_dir):
     """Hashes of the job's scripts + cfg (0.2: the package must match the shipped script)."""
     files = {}
+    generated = {"model_opensees.py", "model_static.py", "cfg_snapshot.json"}     # written by the pipeline itself
     if job_dir and os.path.isdir(job_dir):
         for f in sorted(os.listdir(job_dir)):
-            if f.endswith(".py") or f in ("load_plan.json",):
+            if (f.endswith(".py") or f in ("load_plan.json",)) and f not in generated:
                 h = _sha256(os.path.join(job_dir, f))
                 if h:
                     files[f] = h
-    return {"files": files, "note": "sha256 of the job's cfg/fill scripts at package time"}
+    return {"files": files, "note": "sha256 of the job's cfg/fill scripts + load_plan.json at package time "
+                                    "(engine-generated model files excluded)"}
 
 
 def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
