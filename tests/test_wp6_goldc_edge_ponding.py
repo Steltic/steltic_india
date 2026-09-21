@@ -127,3 +127,16 @@ def test_is18168_mixed_system_components():
     assert I18.applies("SMF+SCBF", "IV")["applies"] is True
     assert I18.system_gate("SMF+SCBF", "V")["ok"] is False
     assert I18.system_gate("SMF+SCBF", "IV", height_m=11.0)["ok"] is True
+
+
+def test_secondary_strut_check():
+    import design_pipeline as DP
+    import engine3d as E
+    E.activate_si_units()
+    cfg = {"units": "N-mm", "steel_grade": "E250 B0"}
+    s_ = {"kind": "strut", "id": "lean-to column", "section": "WPB200X200X61.3", "L_mm": 5000.0, "Kz": 1.0, "Ky": 1.0,
+          "demands": [{"combo": "1.5DL+1.5SL(drift)", "P_N": 200000.0}], "basis": "test"}
+    r = DP.secondary_strut_checks(cfg, s_)
+    assert r["kind"] == "strut" and isinstance(r["DC"], float) and 0 < r["DC"] < 1.0
+    r2 = DP.secondary_strut_checks(cfg, dict(s_, demands=[{"combo": "x", "P_N": 5.0e6}]))
+    assert r2["DC"] > 1.0

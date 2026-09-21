@@ -1423,10 +1423,37 @@ def _secondary_member_demands(cfg, pkg, run, envt, reg):
         return
     out = []
     for s_ in sec:
+        if str(s_.get("kind") or "").lower() == "strut":
+            out.append(secondary_strut_checks(cfg, s_))            # declared compression member (lean-to column, WP6-fix)
+            continue
         rec = secondary_member_demand(cfg, s_)
         rec.update(secondary_member_checks(cfg, s_, rec))
         out.append(rec)
     pkg["secondary_members"] = out
+
+
+def secondary_strut_checks(cfg, s_):
+    """IS 800 7.1.2 check of a declared secondary compression member (e.g. the columns of an attached lean-to whose
+    beams are secondary members): {kind: 'strut', id, section, L_mm, Kz, Ky, demands: [{combo, P_N, M_Nmm?}],
+    basis} -- the factored axial demands come from the job script (transparent formula in `basis`)."""
+    import india_is800 as I8
+    sec = s_.get("section")
+    L = float(s_["L_mm"])
+    mem = {"id": s_.get("id"), "section": sec, "grade": s_.get("grade") or cfg.get("steel_grade"), "role": "column",
+           "L_mm": L, "Kz": float(s_.get("Kz") or 1.0), "Ky": float(s_.get("Ky") or 1.0), "LLT_sag_mm": L, "LLT_hog_mm": L,
+           "process": s_.get("process")}
+    cf = [{"combo": d["combo"], "P_N": abs(float(d["P_N"])), "Mz_i_Nmm": float(d.get("M_Nmm") or 0.0), "Mz_j_Nmm": 0.0,
+           "Mz_mid_Nmm": 0.0, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0, "Vy_N": 0.0, "Vz_N": 0.0} for d in (s_.get("demands") or [])]
+    try:
+        res = I8.member_check_is800(mem, cf, cfg=cfg)
+    except Exception as ex:
+        res = {"found": False, "ok": None, "dc": None, "reason": "member_check_is800 failed: %s" % ex}
+    rows = _check_rows(res)
+    dcs = [c["dc"] for c in rows if isinstance(c.get("dc"), (int, float))]
+    return {"id": s_.get("id"), "kind": "strut", "section": sec, "L_mm": L, "demands": s_.get("demands"), "basis": s_.get("basis"),
+            "check": "india_is800.member_check_is800 (7.1.2 compression, 9.3 with the declared end moment, Table 3 KL/r)",
+            "checks": rows, "DC": (max(dcs) if dcs and all(isinstance(c.get("dc"), (int, float)) for c in rows) else None),
+            "member_result": _jsonable({k: v for k, v in (res or {}).items() if k != "per_combo"})}
 
 
 def secondary_member_demand(cfg, s_):
