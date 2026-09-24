@@ -1,0 +1,36 @@
+IN_Ex9 — 12-storey residential, eccentrically braced frames (EBF, IS 18168 shear links), T-plan split into two
+units by a seismic joint, Guwahati
+
+Location: Guwahati — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone V, Z 0.36; soil medium (Type II).
+Occupancy: residential, 13,872 m2 (flange 10,404 m2 + stem 3,468 m2, each > 2,000 m2) -> I = 1.2 (Table 8 (ii));
+  each unit a structurally independent building (Table 8 Note 3).
+Lateral system: eccentrically braced frames — IS 1893 Table 9 (ii)(c) special braced frame with eccentric braces,
+  R = 5.0; IS 18168:2023 mandatory (1.3: the only braced system permitted in Zone V; OBF banned by Table 9 Note 1).
+  Chevron braces with 900 mm mid-span shear links (11.2 / 11.3, e < 1.6 MpL/VpL), links modelled as members, link
+  rotation 12.3.3.1 (<= 0.08 rad), stiffeners 11.4, Table 2 width-thickness for links, beams, braces and columns,
+  braces / beams outside the links / columns capacity-protected for 1.1 Ry Sh Vd and 1.2 Ry Vd (12.3.2.2, 12.3.4.5),
+  beam-to-column joints 12.3.4.4, fixed EBF bases 1.1 Ry Mpc (9.3). Gravity framing pinned.
+Geometry (m): 8.5 m grid; the T-plan is separated on the flange's south face by an IS 1893 7.11.3 seismic joint (twin
+  column lines; gap >= (R1 D1 + R2 D2)/2 with matching floor levels, Amd 1):
+  flange unit 6 x 2 bays (51 x 17 m), stem unit 2 x 2 bays (17 x 17 m); 12 storeys 4.2 (lobby) + 11 x 3.2 m (H = 39.4 m).
+  EBF bays point-symmetric about each unit's centre (CR = CM): flange X on both long faces (3 bays each), Y on the end
+  lines (both bays) and lines 1, 2, 4, 5; stem X in both bays of both long faces, Y in one bay of each end face
+  (Tx, Ty at least 10 % apart, Table 6(vii) Zone V; torsional period below both, Table 5 (i)).
+  Composite metal-deck floors (bare-steel scope), one-way on secondary beams at 2.83 m spanning onto the Y girders;
+  cladding 0.5 kN/m2. The optional partial mechanical penthouse is not built.
+Gravity (IS 875 Part 1 / Part 2): floor dead 3.0, roof dead 2.8 kN/m2; residential imposed 3.0 kN/m2 (Table 1 (i)(a)
+  envelope: rooms 2.0, corridors / passages / balconies 3.0) + 1.0 partitions (3.1.2); roof 0.75 kN/m2 (Table 2);
+  IS 875-2 3.2.1 column imposed-load reduction (up to 50 % over 10 floors).
+Seismic weight: full dead + self-weight + partitions (7.3.6) + 25 % of the imposed load (Table 10, <= 3.0 kN/m2).
+Wind (IS 875 Part 3:2015): Guwahati Vb = 50 m/s (Annex A); terrain category 3; k1 1.0, k3 1.0, k4 1.0 (not in the
+  cyclonic belt of 6.3.4); Kd 0.9; Ka per Table 4; Table 5 Cpe; 10.2 gust factor where f1 < 1 Hz; both wind and
+  earthquake in every combination family (IS 800 Table 4).
+Analysis: response spectrum (7.7.1: Zone V, H > 15 m), CQC, scaled to V-bar_B (7.7.3.1), 7.8.2 eccentricity; vertical
+  earthquake 6.3.3.1 / 6.4.6 (Zone V) in the combinations; drift 0.004 h (7.11.1.1); IS 800 12.2.3 = IS 18168 5.5
+  amplified combinations (Omega 2.5) for the capacity-design forces; 7.11.2 deformation compatibility of the gravity
+  columns under R x drift; 7.11.3 separation of the two units.
+Design: IS 800:2007 LSD; IS 808 rolled sections + built-up welded box columns for the EBF (E250 plates, CJP corners);
+  IS 2062 E250 B0 / E350 B0 (fy by thickness); connections IS 800 Section 10 / 12.4 (CJP 12.4.2, HSFG 12.4.1),
+  EBF joints 12.3.4.4 / 12.3.4.6; anchorage embedment is an engineer-of-record input (IS 456 not in the corpus).
+Deliverable: report.html + viewer_3d.html per unit (package root = flange; units/stem/); cfg['load_plan'] from the
+  corpus retrievals stored in rag/.
