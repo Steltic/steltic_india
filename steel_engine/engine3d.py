@@ -1137,9 +1137,10 @@ def _apply_nodal_gravity(cfg, info, fD=1.0, fL=1.0):
 def india_drift(cfg, eccentricity=None, gravity=(1.0, 1.0)):
     """IS 1893 7.11.1.1 storey drift under VB with gamma = 1.0, measured at EVERY column line
     (extreme edges govern) including the 7.8.2 design eccentricity (both variants), P-Delta with
-    1.0 DL + 1.0 LL.  Also returns Delta_max / Delta_ave per level from the total displacements at
-    the two extreme plan edges (Table 5(i) as substituted by Amd 2) and the CM storey drifts /
-    storey shears used for the Table 6(i) stiffness screen.  One drift function for India."""
+    1.0 DL + 1.0 LL, for +F and -F (the worse governs, H03).  Also returns Delta_max / Delta_ave per
+    level from the LATERAL displacements only (gravity state subtracted) at the two extreme plan edges
+    (Table 5(i) as substituted by Amd 2) and the CM storey drifts / storey shears used for the Table 6(i)
+    stiffness screen.  One drift function for India."""
     import india_combos as IC
     import india_loads as IL
     plan = cfg.get("load_plan") or {}
@@ -1154,55 +1155,81 @@ def india_drift(cfg, eccentricity=None, gravity=(1.0, 1.0)):
             continue
         tor = IC.torsion_moments(plan, cfg, d, eccentricity)
         best = None
+        base = None
+        ratio_all = None
+        di = 0 if d == "X" else 1
+        grav_on = any(float(x or 0.0) for x in gravity)
         for v in ("a", "b", None):
-            info = build(cfg, "PDelta"); NF = info["NF"]
-            ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
-            _apply_nodal_gravity(cfg, info, *gravity)
-            for k in range(1, NF + 1):
-                fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
-                if v:
-                    mz += float((tor.get(v) or {}).get(k, 0.0)) * sc
-                ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
-            ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
-            ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
-            ops.integrator("LoadControl", 1.0); ops.analysis("Static")
-            if ops.analyze(1) != 0:
-                raise RuntimeError("drift analysis (%s, variant %s) did not converge" % (d, v))
-            di = 0 if d == "X" else 1
-            disp = {}
-            for k in range(0, NF + 1):
-                for (i, j) in info["present"][k]:
-                    disp[(i, j, k)] = ops.nodeDisp(ntag(i, j, k), di + 1)
-            drift, drift_cm, ratio, dmax_lvl = [], [], [], []
-            for k in range(1, NF + 1):
-                h = cfg["heights"][k - 1]
-                lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
-                dr = [abs(disp[(i, j, k)] - disp.get((i, j, k - 1), 0.0)) / h for (i, j) in lines] or [0.0]
-                drift.append(max(dr) if k not in dex else 0.0)
-                um = ops.nodeDisp(mtag(k), di + 1)
-                um0 = ops.nodeDisp(mtag(k - 1), di + 1) if k > 1 else 0.0
-                drift_cm.append(abs(um - um0) / h)
-                # extreme edges perpendicular to the force
-                pts = info["present"][k]
-                crd = {(i, j): _xy_in(cfg, i, j) for (i, j) in pts}
-                ax = 1 if d == "X" else 0
-                lo = min(c[ax] for c in crd.values()); hi = max(c[ax] for c in crd.values())
-                e1 = [abs(disp[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - lo) < 1e-6]
-                e2 = [abs(disp[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - hi) < 1e-6]
-                D1, D2 = max(e1), max(e2)
-                Dmx, Dmn = max(D1, D2), min(D1, D2)
-                ratio.append(Dmx / ((Dmx + Dmn) / 2.0) if Dmx > 0 else 1.0)
-                dmax_lvl.append(Dmx)
-            Vst = [sum((F.get(j, (0, 0, 0))[di]) for j in range(k, NF + 1)) for k in range(1, NF + 1)]
-            rec = {"variant": v, "drift": drift, "drift_cm": drift_cm, "ratio": ratio, "disp_max": dmax_lvl,
-                   "storey_shear_N": Vst, "heights": list(cfg["heights"])}
-            if v is None:
-                base = rec
-                continue
-            if best is None or max(drift) > max(best["drift"]):
-                best = rec
+            for sgn in (1.0, -1.0):
+                # H03: gravity state first (P-Delta, 1.0 DL + 1.0 LL), held constant; then the lateral forces +F / -F.
+                # Drift is checked on the total (gravity + lateral) displacements for both signs (the worse is kept);
+                # the Table 5(i) ratio uses the lateral displacements only, Delta(G+E) - Delta(G).
+                info = build(cfg, "PDelta"); NF = info["NF"]
+                ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+                ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
+                ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+                dg = {}
+                if grav_on:
+                    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+                    _apply_nodal_gravity(cfg, info, *gravity)
+                    if ops.analyze(1) != 0:
+                        raise RuntimeError("drift gravity state (%s, variant %s) did not converge" % (d, v))
+                    for k in range(0, NF + 1):
+                        for (i, j) in info["present"][k]:
+                            dg[(i, j, k)] = ops.nodeDisp(ntag(i, j, k), di + 1)
+                    ug = {k: ops.nodeDisp(mtag(k), di + 1) for k in range(1, NF + 1)}
+                    ops.loadConst("-time", 0.0)
+                else:
+                    ug = {}
+                ops.timeSeries("Linear", 2); ops.pattern("Plain", 2, 2)
+                for k in range(1, NF + 1):
+                    fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
+                    if v:
+                        mz += float((tor.get(v) or {}).get(k, 0.0)) * sc
+                    ops.load(mtag(k), sgn * fx, sgn * fy, 0.0, 0.0, 0.0, sgn * mz)
+                if ops.analyze(1) != 0:
+                    raise RuntimeError("drift analysis (%s, variant %s, sign %+d) did not converge" % (d, v, sgn))
+                disp = {}
+                for k in range(0, NF + 1):
+                    for (i, j) in info["present"][k]:
+                        disp[(i, j, k)] = ops.nodeDisp(ntag(i, j, k), di + 1)
+                lat = {key: u - dg.get(key, 0.0) for key, u in disp.items()}
+                drift, drift_cm, ratio, dmax_lvl = [], [], [], []
+                for k in range(1, NF + 1):
+                    h = cfg["heights"][k - 1]
+                    lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
+                    dr = [abs(disp[(i, j, k)] - disp.get((i, j, k - 1), 0.0)) / h for (i, j) in lines] or [0.0]
+                    drift.append(max(dr) if k not in dex else 0.0)
+                    um = ops.nodeDisp(mtag(k), di + 1)
+                    um0 = ops.nodeDisp(mtag(k - 1), di + 1) if k > 1 else 0.0
+                    drift_cm.append(abs(um - um0) / h)
+                    # extreme edges perpendicular to the force -- lateral displacement only
+                    pts = info["present"][k]
+                    crd = {(i, j): _xy_in(cfg, i, j) for (i, j) in pts}
+                    ax = 1 if d == "X" else 0
+                    lo = min(c[ax] for c in crd.values()); hi = max(c[ax] for c in crd.values())
+                    e1 = [abs(lat[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - lo) < 1e-6]
+                    e2 = [abs(lat[(i, j, k)]) for (i, j), c in crd.items() if abs(c[ax] - hi) < 1e-6]
+                    D1, D2 = max(e1), max(e2)
+                    Dmx, Dmn = max(D1, D2), min(D1, D2)
+                    ratio.append(Dmx / ((Dmx + Dmn) / 2.0) if Dmx > 0 else 1.0)
+                    dmax_lvl.append(Dmx)
+                Vst = [sum((F.get(j, (0, 0, 0))[di]) for j in range(k, NF + 1)) for k in range(1, NF + 1)]
+                rec = {"variant": v, "sign": "+F" if sgn > 0 else "-F", "drift": drift, "drift_cm": drift_cm,
+                       "ratio": ratio, "disp_max": dmax_lvl, "storey_shear_N": Vst, "heights": list(cfg["heights"])}
+                ratio_all = ratio if ratio_all is None else [max(a, b) for a, b in zip(ratio_all, ratio)]
+                if v is None:
+                    if base is None or max(drift) > max(base["drift"]):
+                        base = rec
+                    continue
+                if best is None or max(drift) > max(best["drift"]):
+                    best = rec
         best = best or base
-        best["ratio"] = [max(a, b) for a, b in zip(best["ratio"], base["ratio"])]
+        best["ratio"] = ratio_all
+        best["ratio_basis"] = ("IS 1893 Table 5(i) (Amd 2): Delta_max / Delta_ave at the extreme edges from the lateral "
+                               "displacements only (Delta(G+E) - Delta(G)), worst of +F / -F and the 7.8.2 variants")
+        best["drift_basis"] = ("IS 1893 7.11.1.1: total displacement (1.0 DL + 1.0 LL P-Delta gravity state + design "
+                               "lateral force), worse of +F and -F")
         best["drift_cm_no_torsion"] = base["drift_cm"]
         # Table 6(i) (Amd 2) storey lateral stiffness = storey shear / inter-storey drift under the design
         # lateral-force distribution.  Stiffness is a property of the structure, so it is taken from a FIRST-ORDER

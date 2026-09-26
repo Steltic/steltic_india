@@ -870,14 +870,35 @@ def soft_storey_screen(K, exempt=()) -> dict:
                         % [i + 1 for i, f in enumerate(soft) if f]) if any(soft) else "no soft storey"}
 
 
+R9_RULE = ("owner ruling R9: fundamental torsional mode = the longest-period mode whose rotational participation "
+           "exceeds both its X and Y mass participation; Tx / Ty = the longest-period X-dominant / Y-dominant modes "
+           "(distinct); Table 6(vii) counts the first three translational-dominant modes (max(mass_x, mass_y) > rot)")
+
+
+def _by_period(modes):
+    return sorted([dict(m, mode=m.get("mode", n + 1)) for n, m in enumerate(modes)], key=lambda m: -float(m.get("T", 0.0)))
+
+
+def fundamental_modes(modes) -> dict:
+    """R9 mode identification: {'torsional', 'x', 'y'} -> mode dict or None (longest-period mode of each kind)."""
+    ms = _by_period(modes)
+    g = lambda m, k: float(m.get(k, 0.0) or 0.0)
+    tor = next((m for m in ms if g(m, "rot") > g(m, "mass_x") and g(m, "rot") > g(m, "mass_y")), None)
+    tx = next((m for m in ms if g(m, "mass_x") > g(m, "mass_y") and g(m, "mass_x") >= g(m, "rot")), None)
+    ty = next((m for m in ms if g(m, "mass_y") > g(m, "mass_x") and g(m, "mass_y") >= g(m, "rot")), None)
+    return {"torsional": tor, "x": tx, "y": ty}
+
+
 def modes_screen(modes, zone) -> dict:
     """Table 6(vii) (Amd 2): first three lateral translational modes >= 65 % mass in each direction
-    (all zones); Zones IV/V also fundamental Tx, Ty at least 10 % apart."""
-    trans = [m for m in modes if max(m.get("mass_x", 0), m.get("mass_y", 0)) > m.get("rot", 0)]
+    (all zones); Zones IV/V also fundamental Tx, Ty at least 10 % apart.  H51: the modes counted are
+    recorded (ruling R9)."""
+    ms = _by_period(modes)
+    trans = [m for m in ms if max(m.get("mass_x", 0), m.get("mass_y", 0)) > m.get("rot", 0)]
     first3 = trans[:3]
     mx = sum(m.get("mass_x", 0) for m in first3); my = sum(m.get("mass_y", 0) for m in first3)
-    tx = max((m for m in trans), key=lambda m: m.get("mass_x", 0), default=None)
-    ty = max((m for m in trans), key=lambda m: m.get("mass_y", 0), default=None)
+    fm = fundamental_modes(modes)
+    tx, ty = fm["x"], fm["y"]
     sep = None
     if tx and ty:
         sep = abs(tx["T"] - ty["T"]) / max(tx["T"], ty["T"])
@@ -886,6 +907,9 @@ def modes_screen(modes, zone) -> dict:
     b_ok = True if z not in ("IV", "V") or sep is None else sep >= 0.10
     ok = a_ok and b_ok
     return {"first3_mass_x": mx, "first3_mass_y": my, "Tx": tx and tx["T"], "Ty": ty and ty["T"], "separation": sep,
+            "modes_counted": [m["mode"] for m in first3], "mode_Tx": tx and tx["mode"], "mode_Ty": ty and ty["mode"],
+            "modes_excluded_rotation_dominant": [m["mode"] for m in ms if m not in trans][:6],
+            "rule": R9_RULE,
             "irregular": not ok, "clause": "IS 1893 Table 6(vii) (Amd 2)",
             "verdict": "modes regular" if ok else
             "revise configuration: Table 6(vii) (Amd 2) requires the first three translational modes >= 65 %% mass "
@@ -894,16 +918,23 @@ def modes_screen(modes, zone) -> dict:
 
 
 def torsional_period_ok(modes) -> dict:
-    tor = max(modes, key=lambda m: m.get("rot", 0), default=None)
-    tx = max(modes, key=lambda m: m.get("mass_x", 0), default=None)
-    ty = max(modes, key=lambda m: m.get("mass_y", 0), default=None)
+    """Table 5(i) (Amd 2): the fundamental torsional mode period must be smaller than those of the first two
+    translational modes.  H03 / ruling R9: torsional = the longest-period rotation-dominant mode (not the most
+    rotational one), Tx / Ty = the longest-period X- / Y-dominant modes (distinct modes)."""
+    fm = fundamental_modes(modes)
+    tor, tx, ty = fm["torsional"], fm["x"], fm["y"]
+    rec = {"rule": R9_RULE, "clause": "IS 1893 Table 5(i) (Amd 2)",
+           "mode_torsional": tor and tor["mode"], "mode_Tx": tx and tx["mode"], "mode_Ty": ty and ty["mode"]}
     if not (tor and tx and ty):
-        return {"ok": None}
+        rec.update(ok=None, reason="no %s mode identified" % "/".join(
+            n for n, m in (("rotation-dominant", tor), ("X-dominant", tx), ("Y-dominant", ty)) if not m))
+        return rec
     ok = tor["T"] < tx["T"] and tor["T"] < ty["T"]
-    return {"ok": ok, "T_torsion": tor["T"], "Tx": tx["T"], "Ty": ty["T"],
-            "verdict": "torsional mode period below both translational periods" if ok else
-            "revise configuration: fundamental torsional period %.3f s is not below Tx %.3f / Ty %.3f "
-            "(Table 5(i), Amd 2)" % (tor["T"], tx["T"], ty["T"])}
+    rec.update(ok=ok, T_torsion=tor["T"], Tx=tx["T"], Ty=ty["T"],
+               verdict="torsional mode period below both translational periods" if ok else
+               "revise configuration: fundamental torsional period %.3f s (mode %s) is not below Tx %.3f (mode %s) / "
+               "Ty %.3f (mode %s) (Table 5(i), Amd 2)" % (tor["T"], tor["mode"], tx["T"], tx["mode"], ty["T"], ty["mode"]))
+    return rec
 
 
 def irregularity_screens(cfg, run) -> dict:
