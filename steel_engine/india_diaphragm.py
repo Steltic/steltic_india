@@ -172,7 +172,9 @@ def collector_demands(cfg, run=None, reg=None):
         except DiaphragmError as ex:
             return [{"error": str(ex)}]
         for r in cf["rows"]:
-            rows.append(dict(r, kind=kind, units="N per unit fE/fW (+ = compression under +dir)", cite=CITE))
+            # H49: a row keeps its own cite (flexible rows cite 7.6.4 flexible / tributary), else the result's cite
+            rows.append(dict(r, kind=kind, units="N per unit fE/fW (+ = compression under +dir)",
+                             cite=r.get("cite") or cf.get("cite") or CITE))
     return rows
 
 
@@ -298,22 +300,26 @@ def flexible_diaphragm_line_shears(cfg, kind="EQ"):
     for d in ("X", "Y"):
         for v in decl.get(d) or []:
             lines[d].add(float(v))
-    xs = [ops.nodeCoord(E.ntag(i, j, 1))[0] for (i, j) in info["present"][1]]
-    ys = [ops.nodeCoord(E.ntag(i, j, 1))[1] for (i, j) in info["present"][1]]
-    ext = {"X": (min(ys) - cfg["SY"] / 2.0, max(ys) + cfg["SY"] / 2.0),
-           "Y": (min(xs) - cfg["SX"] / 2.0, max(xs) + cfg["SX"] / 2.0)}
-    out = {"cite": CITE_7_6_4 + "; tributary-width distribution (no diaphragm torsion)", "kind": kind, "lines": {}}
+    # H49: the mass extent of each level is that level's own footprint (column-line coordinates), no half-bay padding
+    ext_k = {}
+    for k in range(1, NF + 1):
+        xs = [ops.nodeCoord(E.ntag(i, j, k))[0] for (i, j) in info["present"][k]]
+        ys = [ops.nodeCoord(E.ntag(i, j, k))[1] for (i, j) in info["present"][k]]
+        ext_k[k] = {"X": (min(ys), max(ys)), "Y": (min(xs), max(xs))}
+    out = {"cite": CITE_7_6_4 + "; tributary-width distribution (no diaphragm torsion)", "kind": kind, "lines": {},
+           "mass_extent_mm": {k: {d: list(v) for d, v in e.items()} for k, e in ext_k.items()}}
     for d in ("X", "Y"):
         F = _story_forces(cfg, d, kind)
         if not F or not lines[d]:
             continue
         di = 0 if d == "X" else 1
-        b = ext[d][1] - ext[d][0]
         out["lines"][d] = sorted(lines[d])
         for k in range(1, NF + 1):
             f = F.get(k, (0.0, 0.0, 0.0))[di]
+            ext = ext_k[k][d]
+            b = ext[1] - ext[0]
             for tag, e in (("e0", 0.0), ("ea", 0.05 * b), ("eb", -0.05 * b)):
-                out.setdefault(tag, {}).setdefault(d, {})[k] = tributary_line_shears(f, sorted(lines[d]), ext[d],
+                out.setdefault(tag, {}).setdefault(d, {})[k] = tributary_line_shears(f, sorted(lines[d]), ext,
                                                                                     eccentricity_mm=e)
     return out
 
