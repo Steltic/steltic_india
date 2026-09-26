@@ -204,9 +204,28 @@ def _member(model_data, mid):
     return None
 
 
-def _brace_compression(model_data, m):
+def _brace_compression(model_data, m, families=None):
+    """Largest brace compression over the member's force records; families=('table4',) restricts it to the IS 800
+    Table 4 / IS 1893 design combinations (H07: OCBF / SCBF brace members -- the 12.2.3 / IS 18168 5.5 rows are for
+    columns and connections, 12.2.3 / 12.7.3.1; 5.5(c) names braces of EBFs only)."""
     fs = _forces(model_data, m["id"])
+    if families is not None:
+        fs = [f for f in fs if (f.get("family") or "table4") in families]
     return max([f.get("P_N", 0.0) for f in fs] + [0.0]) if fs else None
+
+
+def _per_axis_KL(m, p):
+    """(KLz, KLy, KL/r max, basis) with the member's own K per axis (H07): Kz L on rz (rx, major) and Ky L on ry;
+    angles: max(Kz, Ky) L on the minimum radius r_vv."""
+    L = m.get("L_mm")
+    Kz, Ky = (m.get("Kz") or 1.0), (m.get("Ky") or 1.0)
+    if not L:
+        return None, None, None, None
+    KLz, KLy = Kz * L, Ky * L
+    if p.get("section_type") == "angle":
+        r = p.get("rv") or p.get("r_min") or min(p["rx"], p["ry"])
+        return KLz, KLy, max(KLz, KLy) / r, "max(Kz, Ky) L / r_vv (angle)"
+    return KLz, KLy, max(KLz / p["rx"], KLy / p["ry"]), "max(Kz L / rz, Ky L / ry)"
 
 
 # ------------------------------------------------------------------------------------------ braces
@@ -227,9 +246,7 @@ def brace_member_checks(system, m, model_data, cfg):
                        reason="grade not resolved (no default fy)"))
         return out
     L = m.get("L_mm")
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    rmin = p.get("r_min") or min(p["rx"], p["ry"])
-    klr = K * L / rmin if L else None
+    KLz, KLy, klr, klr_basis = _per_axis_KL(m, p)
     lim = 120 if sysn == "OCBF" else 160
     klr_clause = "IS 800:2007 12.7.2.1" if sysn == "OCBF" else "IS 800:2007 12.8.2.2"
     klr_cite = "slenderness of bracing members shall not exceed %d%s" % (
@@ -242,16 +259,18 @@ def brace_member_checks(system, m, model_data, cfg):
         klr_cite += "; " + I18.CITE_10_2 + " (" + I18.PRECEDENCE + ")"
         strict = True
     out.append(_chk("brace_KL_r", klr, lim, clause=klr_clause, member=m["id"], cite=klr_cite,
-                    ok=(klr < lim) if strict else (klr <= lim), K=K, L_mm=L, r_min_mm=rmin) if klr else
+                    ok=(klr < lim) if strict else (klr <= lim), Kz=m.get("Kz") or 1.0, Ky=m.get("Ky") or 1.0,
+                    L_mm=L, KL_r_basis=klr_basis) if klr else
                _na("brace_KL_r", clause=klr_clause, cite="KL/r", member=m["id"], reason="L_mm missing"))
-    comp = I8.compression_capacity(p, fy, KLz_mm=K * L, KLy_mm=K * L, process=m.get("process")) if L else {"found": False}
-    Pc = _brace_compression(model_data, m)
+    comp = I8.compression_capacity(p, fy, KLz_mm=KLz, KLy_mm=KLy, process=m.get("process")) if L else {"found": False}
+    Pc = _brace_compression(model_data, m, families=("table4",))
     fac = 0.8 if sysn == "OCBF" else 1.0
     cl = "IS 800:2007 12.7.2.2" if sysn == "OCBF" else "IS 800:2007 12.8.2.3"
     if comp.get("found") and Pc is not None:
         out.append(_chk("brace_compression", Pc, fac * comp["Pd_N"], clause=cl, member=m["id"],
-                        cite="required compressive strength <= %s Pd (7.1.2)" % ("0.8" if fac < 1 else "1.0"),
-                        Pd_N=comp["Pd_N"]))
+                        cite="required compressive strength <= %s Pd (7.1.2); demand from the IS 800 Table 4 design "
+                             "combinations (12.2.3 rows are for columns / connections)" % ("0.8" if fac < 1 else "1.0"),
+                        Pd_N=comp["Pd_N"], KLz_mm=KLz, KLy_mm=KLy, demand_family="table4"))
     else:
         out.append(_na("brace_compression", clause=cl, cite="P <= %.1f Pd" % fac, member=m["id"],
                        reason="Pd or brace forces missing (%s)" % (comp.get("note") or "")))
@@ -374,12 +393,11 @@ def ebf_brace_checks(m, model_data, cfg):
         out.append(dict(I18.table2_check("brace", p, fy, ry, member=m["id"]),
                         cite="12.3.4.1: braces satisfy the Table 2 (iii) width-to-thickness limits"))
     L = m.get("L_mm")
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    rmin = p.get("r_min") or min(p["rx"], p["ry"])
-    klr = K * L / rmin if L else None
+    _, _, klr, klr_basis = _per_axis_KL(m, p)
     out.append(_chk("brace_KL_r", klr, I18.BRACE_KLR_LIMIT, clause="IS 18168:2023 10.2 (braced frames) / IS 800:2007 Table 3",
                     member=m["id"], cite=I18.CITE_10_2 + " (applied to EBF braces as the braced-frame limit; IS 800 "
-                    "Table 3 gives 180)", ok=(klr < I18.BRACE_KLR_LIMIT) if klr else None, K=K, L_mm=L, r_min_mm=rmin))
+                    "Table 3 gives 180)", ok=(klr < I18.BRACE_KLR_LIMIT) if klr else None, Kz=m.get("Kz") or 1.0,
+                    Ky=m.get("Ky") or 1.0, L_mm=L, KL_r_basis=klr_basis))
     over = _link_overstrength_for_brace(model_data, m["id"])
     fs = [f for f in _forces(model_data, m["id"]) if f.get("P_EL_N") is not None]
     if over and fs:
@@ -463,8 +481,8 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
     # 12.x.3.4 gusset out-of-plane buckling: compression = brace buckling strength (IS 18168:2023 10.4.2 wording)
     p = _props(m)
     fy, _ = _fy(m, p)
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    comp = I8.compression_capacity(p, fy, KLz_mm=K * m["L_mm"], KLy_mm=K * m["L_mm"], process=m.get("process")) \
+    KLz_, KLy_, _, _ = _per_axis_KL(m, p)             # H07: brace buckling strength with its own K per axis
+    comp = I8.compression_capacity(p, fy, KLz_mm=KLz_, KLy_mm=KLy_, process=m.get("process")) \
         if (fy and m.get("L_mm")) else {"found": False}
     if wm.get("found") and comp.get("found"):
         gb = C.whitmore_buckling(whitmore_width_mm=wm["whitmore_width_mm"], t_gusset_mm=gus.get("t_mm"),
