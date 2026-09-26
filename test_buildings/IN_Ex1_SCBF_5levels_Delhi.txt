@@ -3,7 +3,8 @@ IN_Ex1 — 5-storey office, special concentrically braced frame (SCBF), New Delh
 Site: New Delhi. Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE zone (Annex E), Z (Table 3),
 importance factor (Table 8), R for the special concentrically braced frame (Table 9), design spectrum (6.4.2).
 Soil: medium (Type II) — retrieve Sa/g from IS 1893.
-Occupancy: office, 5 floors x 720 m2 = 3,600 m2 (persons not stated; > 2,000 m2 -> I per Table 8 (ii), D8).
+Occupancy: office, 5 floors x 720 m2 = 3,600 m2 -> I = 1.2 by owner ruling D8 (area > 2,000 m2 as the proxy for the
+  Table 8 (ii) '> 200 persons'; persons not stated).
 
 Geometry (metres; the engine works in N-mm):
 - 5 storeys @ 3.6 m; plan 5 bays x 4 bays @ 6.0 m (30 m x 24 m)

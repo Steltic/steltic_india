@@ -1,13 +1,19 @@
 IN_Ex6 — 8-storey office, L-plan (re-entrant corner), eccentrically braced frames (EBF), Pune
 
 Location: Pune — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone III, Z 0.16; soil medium (Type II).
-Occupancy: office, 13,932 m2 (> 2,000 m2) -> importance factor I = 1.2 (Table 8 (ii)).
+Occupancy: office, 13,932 m2 -> importance factor I = 1.2 by owner ruling D8 (area > 2,000 m2 as the proxy for the
+  Table 8 (ii) '> 200 persons'; persons not stated).
 Lateral system: eccentrically braced frames (IS 1893 Table 9 (ii)(c) SBF with eccentric braces, R = 5.0), links
   designed to IS 18168:2023 cl. 11 / 12.3 (mandatory in Zone III, cl. 1.2); chevron EBF bays with 900 mm centre
   shear links on the perimeter / re-entrant lines both directions; interior gravity framing pinned (IS 18168 1.4).
 Geometry (m): L-plan — north bar 7 x 2 bays @ 9.0 m, 8 storeys; west leg 4 x 3 bays @ 9.0 m, 5 storeys (stepped
   roof). Storey 1 = 4.8 m; typical = 3.9 m (H = 32.1 m). Composite metal deck floors, one-way (deck spans 3.0 m
   between secondary beams; secondaries span X onto the Y girders); cladding 0.5 kN/m2.
+Re-entrant plan (IS 1893 Table 5(ii), Amd 2): ONE 3-D model of the whole L-plan (no seismic joint). The engine runs the
+  flexible-floor-diaphragm 3-D dynamic analysis in addition to the rigid-diaphragm case and envelopes the two when the
+  deck in-plane stiffness is declared: cfg['diaphragm_stiffness'] = {type: 'metal_deck', topping_t_mm, fck_MPa,
+  source, cite} for the composite deck (topping thickness and concrete grade are EOR inputs; Ec by IS 456 6.2.3.1 is
+  an EOR-labelled default, VERIFY). Without it the job stays PARTIAL (ruling R7).
 Gravity (IS 875 Part 1 / Part 2): floor dead 3.0 kN/m2, roof dead 2.8 kN/m2 (unit weights per Part 1 Table 1);
   office imposed 4.0 kN/m2 (Part 2 Table 1, rooms without separate storage) + 1.0 kN/m2 partition allowance (3.1.2);
   roof imposed 0.75 kN/m2 (Table 2, access not provided); IS 875-2 3.2.1 imposed-load reduction for columns.

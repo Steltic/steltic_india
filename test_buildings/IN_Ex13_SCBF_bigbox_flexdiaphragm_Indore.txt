@@ -3,7 +3,10 @@ IN_Ex13 — single-storey big-box retail, perimeter SCBF, flexible (bare metal d
 Location: Indore — not listed in IS 1893 (Part 1):2016 Annex E nor in IS 875 (Part 3):2015 Annex A; both values are
   Fig. 1 map readings at 22.72 N, 75.86 E recorded as derived_from_map (VERIFY): seismic Zone III, Z = 0.16 (Table 3);
   basic wind speed Vb = 39 m/s (western Madhya Pradesh zone; Bhopal 39, Jabalpur 47). Soil Type II.
-  Retail (mercantile) hall of 5,400 m² → occupancy > 200 persons → I = 1.2 (Table 8 (ii), D8).
+  Retail (mercantile) hall of 5,400 m², single-tenant store, occupancy > 200 persons → I = 1.2 (Table 8 (ii)
+  commercial building > 200 persons): a single-tenant big-box store is read as a commercial building, NOT as a
+  Table 8 (i) 'large community hall building (... shopping malls, assembly halls ...)' (1.5) -- the EOR confirms the
+  classification (VERIFY); if the owner treats the store as a mall / assembly use, I = 1.5.
   Lateral system: steel special concentrically braced frame (SCBF, IS 800:2007 12.8 + IS 18168:2023), R = 4.5
   (Table 9 ii)(b) SBF with concentric braces); OBF/OCBF is banned in Zone III (Table 9 Note 1, IS 800 12.7.1.1, D4).
   IS 18168 applied: a retail store is read as a business building (1.2 (b)); stricter provisions govern.
@@ -12,8 +15,12 @@ Geometry (SI): plan 6 × 4 bays @ 15 m (90 × 60 m), single storey, eave 9.5 m, 
   IS 808 WPB braces of IS 2062 E250 B0 (12.8.2.1) connected at the crossing; all roof beams pinned (gussets + fin plates);
   all column bases pinned (IS 18168 9.4 minimum base moment on the SCBF columns). Interior columns are gravity columns.
   Roof: bare metal deck on IS 808 joists spanning 15 m in X at 2.5 m into the Y-direction girders (one-way load path);
-  the bare deck is a FLEXIBLE diaphragm (IS 1893 7.6.4 declaration): storey shear to the braced walls by tributary
-  width, collector / chord forces on the perimeter beams. Wall girts at 2.375 m restrain the column weak axis.
+  the bare deck is a FLEXIBLE diaphragm (IS 1893 7.6.4 declaration: cfg['diaphragm'] = 'flexible' with the EOR basis
+  in cfg['diaphragm_7_6_4']): storey shear to the braced walls by tributary width, collector / chord forces on the
+  perimeter beams. The plan is not re-entrant; the optional 3-D flexible-deck dynamic run needs the bare-deck
+  in-plane stiffness cfg['diaphragm_stiffness'] = {type: 'metal_deck', Gd_kN_per_m (product / test value), source,
+  cite} (EOR input, VERIFY) and cfg['flexible_diaphragm_analysis'] = True. Wall girts at 2.375 m restrain the column
+  weak axis.
 Loads: IS 875 (Part 2):1987 Table 2 roof 0.75 kN/m² (maintenance access); Table 1 vi)(a) retail 4.0 kN/m² on the slab
   on grade (not on the steel). IS 875 (Part 1):2026 dead loads: roof assembly 0.85 kN/m² (deck 0.10, joists 0.20,
   insulation / roofing 0.20, services and sprinklers 0.25, ceiling / lighting 0.10); wall cladding + girts 0.40 kN/m².

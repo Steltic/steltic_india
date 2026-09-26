@@ -5,7 +5,10 @@ Location: Chandigarh — IS 1893 (Part 1):2016 (+ Amd 1, 2) Annex E Zone IV, Z =
   (SMRF, IS 800:2007 12.11 + IS 18168:2023), R = 5.0 (Table 9 i)(d)); IS 18168 1.3 allows SMRF in Zone IV for h < 15 m
   (tallest wing 10.8 m). OMRF is banned in Zone IV (Table 9 Note 1, IS 800 12.10.1.1); "IMF" has no Indian basis (D3).
 Geometry (SI): Z-plan of three wings on an 8.5 m grid, each a structurally independent unit separated by IS 1893 7.11.3
-  seismic joints (250 mm) so that no re-entrant corner exists (Amd 2 Table 5(ii)):
+  seismic joints (250 mm) so that no re-entrant corner exists (Amd 2 Table 5(ii)); the three wings run as units of
+  one job: pipeline.design_units(name, {unit: cfg}, joints=[{units, direction, gap_mm}]) designs each unit as its own
+  sub-job <name>/units/<unit>/ (report.html + viewer_3d.html per unit), checks the 7.11.3 separation of every joint
+  from the two units' displacements and writes one combined STATUS and a units index:
   A classroom wing  3 × 2 bays (25.5 × 17 m), 3 storeys @ 3.6 m (10.8 m);
   B link wing       2 × 2 bays (17 × 17 m), 2 storeys @ 3.6 m (7.2 m);
   C gymnasium       2 × 2 bays (17 × 17 m), single storey 8.0 m clear, centre column omitted (17 m roof girders on grid 2).

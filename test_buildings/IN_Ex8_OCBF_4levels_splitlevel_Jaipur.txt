@@ -2,7 +2,8 @@ IN_Ex8 — 4-storey office wing and 2-storey light-manufacturing workshop wing, 
 (OCBF), split-level plan, Jaipur
 
 Location: Jaipur — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone II, Z 0.10; soil medium (Type II).
-Occupancy: office wing 2,700 m2 (> 2,000 m2) -> I = 1.2 (Table 8 (ii)); workshop wing (industrial, light
+Occupancy: office wing 2,700 m2 -> I = 1.2 by owner ruling D8 (area > 2,000 m2 as the proxy for the Table 8 (ii)
+  '> 200 persons'; persons not stated); workshop wing (industrial, light
   manufacturing) -> I = 1.0 (Table 8 (iii)); each wing a structurally independent unit (Table 8 Note 3).
 Lateral system: ordinary concentrically braced frames (IS 1893 Table 9 (ii)(a) OBF, R = 4.0 — permitted in Zone II;
   Note 1 bans OBF in Zones III-V only), IS 800 12.7: X-bracing (12.7.1.2), braces IS 808 WPB of IS 2062 E250 B0 with
@@ -23,5 +24,8 @@ Analysis: response spectrum (office H = 15.0 m is not below 15 m, 7.7.1; worksho
   V-bar_B (7.7.3.1), 7.8.2 eccentricity; drift 0.004 h; IS 800 12.2.3 combinations for the 12.7.3.1 connection force.
 Design: IS 800:2007 LSD; IS 808 sections, IS 2062 E250 B0; connections IS 800 Section 10 / 12.7.3 (CJP 12.4.2,
   HSFG 12.4.1); OCBF bases 1.2 Mp / 1.2 Vd (12.12).
-Deliverable: report.html + viewer_3d.html per unit (package root = office wing; units/workshop/); cfg['load_plan']
-  from the corpus retrievals stored in rag/.
+Deliverable: two units (office, workshop) -- pipeline.design_units(name, {unit: cfg}, joints=[{units, direction,
+  gap_mm}]) runs
+  each unit as its own sub-job <name>/units/<unit>/ (report.html + viewer_3d.html per unit), checks the 7.11.3
+  separation of every joint from the two units' displacements and writes one combined STATUS and a units index;
+  cfg['load_plan'] from the corpus retrievals stored in rag/.

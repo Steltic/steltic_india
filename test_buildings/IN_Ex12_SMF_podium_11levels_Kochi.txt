@@ -14,7 +14,11 @@ Loads: IS 875 (Part 2):1987 Table 1 office 4.0 kN/m² (D9), 3.1.2 partitions 1.0
   0.75 kN/m²; IS 875 (Part 1):2026 dead loads: composite floor 3.0, roof 2.8, cladding 0.5 kN/m² of wall.
   IS 875 (Part 3):2015 wind: Kochi is not in Annex A → Vb 39 m/s read from Fig. 1 at 9.97 N 76.28 E; terrain
   category 3; Kerala coast is outside the 6.3.4 cyclone belt (east coast / Gujarat) → k4 1.0, Kd 0.9; f1 < 1 Hz →
-  along-wind forces by the 10.2 gust factor (hourly-mean speed), across-wind response declared (10.3); IS 800 Table 6
+  along-wind forces by the 10.2 gust factor (hourly-mean speed); across-wind (10.3): declare
+  wind_summary.across_wind with a numeric result (found: true + Mc_kNm, or
+  Mc_kNm_X / Mc_kNm_Y) or the Cfs record (EOR reading of Fig. 10 / 11 with source and cite: Cfs, k, beta, fc_hz)
+  from which the engine computes Mc and adds the W_X_across / W_Y_across cases; without it the job stays PARTIAL
+  (R10); IS 800 Table 6
   wind drift. IS 875 (Part 4) snow: not applicable. Seismic weight per IS 1893 7.3/7.4 (Table 10 50 % of 4.0).
 Design: IS 800:2007 LSD (Table 4); SMRF per 12.11 with IS 18168:2023 (5.5 Ω = 3.0 columns, 5.3 / Table 2 section
   width-thickness, 7.2 KL/r < 75, 8.2 SCWB > 1.4 with Ry, 9.3 fixed bases 1.1 Ry Mpc); RSA (7.7.1, > 15 m) scaled
