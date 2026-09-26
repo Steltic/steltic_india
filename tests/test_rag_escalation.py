@@ -27,6 +27,7 @@ class Stub(JobWorkspace):
         self.answers = answers          # how -> number of hits it returns
         self.sent = []                  # every (query, collection, clause) that went out
         self.building = False
+        self._aliases_cache = {}        # no alias rung: the stub must not depend on a corpus on disk
 
     def log(self, tool, detail="", result=""):
         return {}
@@ -42,12 +43,16 @@ def _ws(answers):
     return Stub(answers)
 
 
-def test_one_hit_is_not_an_answer_and_the_ladder_keeps_climbing():
+def test_one_fts_hit_is_not_an_answer_and_the_ladder_keeps_climbing():
+    # R02: the ENOUGH rule still holds for FULL-TEXT rungs (the stub's hits carry no id and no
+    # `matched`, so they are navigation-grade); an exact hit is exempt -- see test_fix_R01_R04_rag.py
     ws = _ws(lambda q, c, cl, n: 1 if n == 1 else 5)
     out = ws.search_engineering_standards(IS800, "engineering_standards_IS800")
-    assert len(ws.sent) > 1, "a single thin hit must not stop the ladder"
+    assert len(ws.sent) > 1, "a single thin full-text hit must not stop the ladder"
     assert len(out["results"]) == 5
     assert out.get("escalation") and len(out["escalation"]) > 1
+    # the escalation note names the answering rung and what attempt 1 really returned (1 hit)
+    assert "found nothing" not in out["escalated"] and "returned 1 hit" in out["escalated"]
 
 
 def test_a_full_first_rung_still_stops_immediately():
@@ -58,13 +63,16 @@ def test_a_full_first_rung_still_stops_immediately():
 
 
 def test_the_best_thin_rung_is_returned_rather_than_a_false_absence():
-    # every rung thin: two hits on the third attempt, one everywhere else
-    ws = _ws(lambda q, c, cl, n: 2 if n == 3 else 1)
-    out = ws.search_engineering_standards(IS800, "engineering_standards_IS800")
+    # every rung thin: two hits on the second attempt (rung 2, filter dropped), one everywhere else.
+    # (Before R02 this test let rung 5 -- another document -- win on count; rung 5 now runs only when
+    # rungs 1-4 found nothing, so the thin rungs are all from the asked document.)
+    ws = _ws(lambda q, c, cl, n: 2 if n == 2 else 1)
+    out = ws.search_engineering_standards(IS800, "engineering_standards_IS800", clause="F2.2")
     assert out.get("results"), "a thin hit still beats reporting the provision absent"
     assert len(out["results"]) == 2
     assert "thin" in out
     assert out.get("not_found_kind") is None
+    assert all(c == "engineering_standards_IS800" for _, c, _ in ws.sent), "rung 5 must not run"
 
 
 def test_genuinely_nothing_still_reports_which_kind_of_nothing():

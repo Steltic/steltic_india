@@ -70,8 +70,14 @@ RAG_ALIASES_FILE   = os.environ.get("RAG_ALIASES_FILE", "")
 
 # --- India corpus collection ↔ stem map (engineering_rag_india) ---
 # Prefer the India aliases file on this shared box when RAG_ALIASES_FILE is unset.
+# L-08: the corpus root comes from INDIA_CORPUS_ROOT (fallback: sibling ../engineering_rag_india,
+# then /workspace/engineering_rag_india) -- india_collections.india_corpus_root().
 if not RAG_ALIASES_FILE:
-    _india_aliases = pathlib.Path("/workspace/engineering_rag_india/indexes/aliases.json")
+    try:
+        from .india_collections import india_corpus_root as _icr
+    except ImportError:
+        from india_collections import india_corpus_root as _icr  # type: ignore
+    _india_aliases = pathlib.Path(_icr()) / "indexes" / "aliases.json"
     if _india_aliases.is_file():
         RAG_ALIASES_FILE = str(_india_aliases)
 
