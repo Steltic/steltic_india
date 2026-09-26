@@ -891,18 +891,27 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
         cp = _props(cm)
         fyc, _ = _fy(cm, cp)
         strong = cm.get("major_axis_plane") in (None, joint.get("frame_dir"))
-        if strong and fyc:
+        is_box = cp.get("section_type") == "box"
+        if (strong or is_box) and fyc:
             bp0 = Mp_list[0][2]
             Vcol = below.get("V_N") or 0.0
             Vpz = panel_zone_design_shear([x[4] for x in Mp_list], bp0["d"], bp0["tf"], Vcol)
-            pz = I8.panel_zone_check(d_col_mm=cp["d"], tw_mm=cp["tw"], bf_mm=cp["bf"], tf_mm=cp["tf"],
-                                     d_beam_mm=bp0["d"], tf_beam_mm=None, V_design_N=Vpz, fy_MPa=fyc,
+            if strong:
+                geo = dict(d_col_mm=cp["d"], tw_mm=cp["tw"], bf_mm=cp["bf"], tf_mm=cp["tf"])
+            else:
+                # H09: a box column framed in its second direction -- the panel is bounded by the flange plates,
+                # which act as the two webs (d_col = B, web t = tf, 'flange' t = tw)
+                geo = dict(d_col_mm=cp["bf"], tw_mm=cp["tf"], bf_mm=cp["d"], tf_mm=cp["tw"])
+            pz = I8.panel_zone_check(d_beam_mm=bp0["d"], tf_beam_mm=None, V_design_N=Vpz, fy_MPa=fyc,
                                      doubler_t_mm=joint.get("doubler_t_mm") or 0.0,
-                                     continuity_plates=bool(joint.get("continuity_plates")))
+                                     continuity_plates=bool(joint.get("continuity_plates")),
+                                     n_webs=2 if is_box else 1, **geo)
             out.append(_chk("12.11.2.3_panel_zone", pz.get("dc"), 1.0, clause="IS 800:2007 12.11.2.3 / 12.11.2.4",
                             member=joint.get("id"), ok=pz.get("pass"), dc=pz.get("dc"),
-                            cite="panel zone shear buckling (8.4.2) at the 12.11.2.2 shear; individual t >= (dp+bp)/90",
-                            detail=pz))
+                            cite="panel zone shear buckling (8.4.2) at the 12.11.2.2 shear; individual t >= (dp+bp)/90"
+                                 + ("; built-up box: both web plates" if is_box else "")
+                                 + ("" if strong else " (box panel in the second frame direction: flange plates as webs)"),
+                            detail=pz, frame_dir=joint.get("frame_dir"), column_axis="major" if strong else "minor"))
         elif not strong:
             out.append(_chk("12.11.2.3_panel_zone", None, None, clause="IS 800:2007 12.11.2.3", member=joint.get("id"),
                             cite="column strong-axis connections only", ok=True, note="weak-axis joint"))

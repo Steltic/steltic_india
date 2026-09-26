@@ -337,6 +337,7 @@ def panel_zone_check(
     Av_override_mm2: Optional[float] = None,
     continuity_plates: bool = True,
     tf_beam_mm: Optional[float] = None,
+    n_webs: int = 1,
 ) -> Dict[str, Any]:
     """Panel zone - IS 800:2007 12.11.2.3 / 12.11.2.4 (HR800-17).
 
@@ -345,6 +346,7 @@ def panel_zone_check(
     12.11.2.3: shear buckling per 8.4.2 at the 12.11.2.2 design shear: each plate's tau_b from 8.4.2.2(a)
     (Kv from c/d with c = dp when continuity plates bound the panel, else 5.35); Vd = sum(bp t_i tau_b_i)/gamma_m0.
     V_design_N = panel shear (see india_is800_s12.panel_zone_design_shear). Missing inputs -> found:false.
+    n_webs = number of column web plates in the panel (2 for a built-up box, H09); each is checked individually.
     """
     missing = []
     for name, val in (("column_d_mm", d_col_mm), ("column_tw_mm", tw_mm), ("column_bf_mm", bf_mm),
@@ -389,7 +391,9 @@ def panel_zone_check(
             tb = fy / (math.sqrt(3.0) * lw ** 2)
         return tb, dt, Kv, True
 
-    plates = [("column web", tw)] + ([("doubler", t_dbl)] if t_dbl > 0 else [])
+    n_webs = max(int(n_webs or 1), 1)
+    plates = ([("column web", tw)] if n_webs == 1 else [("column web %d" % (i + 1), tw) for i in range(n_webs)]) + \
+        ([("doubler", t_dbl)] if t_dbl > 0 else [])
     detail = []
     Vn = 0.0
     for name, t in plates:
@@ -404,7 +408,7 @@ def panel_zone_check(
     shear_ok = dc is not None and dc <= 1.0
     t_need_shear = 0.0
     if dc is not None and dc > 1.0:
-        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - tw)
+        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - n_webs * tw)
     # A doubler (if needed for shear) must itself be >= t_min (12.11.2.4); a web thinner than t_min cannot be
     # cured by a doubler -> doubler_required None (change the column section).
     if not web_ok:
@@ -416,7 +420,8 @@ def panel_zone_check(
     return {
         "found": True, "pass": bool(thickness_ok and shear_ok), "ok": bool(thickness_ok and shear_ok),
         "thickness_ok": bool(thickness_ok), "web_thickness_ok": web_ok, "doubler_thickness_ok": dbl_ok,
-        "shear_ok": shear_ok, "t_provided_mm": tw + t_dbl, "t_min_mm": t_min, "dp_mm": dp, "bp_mm": bp,
+        "shear_ok": shear_ok, "t_provided_mm": n_webs * tw + t_dbl, "t_min_mm": t_min, "dp_mm": dp, "bp_mm": bp,
+        "n_webs": n_webs,
         "plates": detail, "Vd_N": Vd, "V_design_N": V, "DC_shear": dc, "dc": max(dc or 0.0, (t_min / tw) if tw else 0.0),
         "doubler_required_mm": doubler_req,
         "doubler_provided_mm": t_dbl,
