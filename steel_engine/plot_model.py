@@ -129,6 +129,19 @@ def _draw_ghost_framing(ax, cfg, info, legend=True):
         ax.plot([], [], [], color=COL_C["beam"], lw=0.8, ls="--", alpha=0.7, label="gravity floor framing (hand-designed)")
     return drew
 
+def fig_stem(name):
+    """H45 (HR-C-06): file-name stem for a job name such as 'units/workshop' (multi-unit jobs): path separators
+    become '__' so every figure lands directly in figs/."""
+    return str(name).replace("\\","/").strip("/").replace("/","__")
+
+def title_name(name):
+    """Display name for titles: the basename of a 'units/<unit>' job name."""
+    return os.path.basename(str(name).replace("\\","/").rstrip("/")) or str(name)
+
+def _fig_path(outdir,name,suffix):
+    os.makedirs(outdir,exist_ok=True)
+    return os.path.join(outdir,f"{fig_stem(name)}_{suffix}.png")
+
 def geometry(name,outdir):
     cfg,info,nodes,eles,bxyz=_model(name)
     fig=plt.figure(figsize=(8,7)); ax=fig.add_subplot(111,projection="3d")
@@ -138,10 +151,10 @@ def geometry(name,outdir):
     ax.scatter([p[0] for p in bxyz],[p[1] for p in bxyz],[p[2] for p in bxyz],
                marker="s" if base_fixed else "^",s=40,color="black",
                label=f"{'fixed' if base_fixed else 'pinned'} base")
-    _setup(ax,f"{name} — {cfg['arch']} ({info['NF']}-story) geometry\n"
+    _setup(ax,f"{title_name(name)} — {cfg['arch']} ({info['NF']}-story) geometry\n"
               f"col {cfg['col']}, beam {cfg['beam']}"+(f", brace {cfg['brace']}" if cfg.get('brace') else ""))
     ax.legend(loc="upper left",fontsize=8)
-    p=os.path.join(outdir,f"{name}_geometry.png"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
+    p=_fig_path(outdir,name,"geometry"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
 
 def orientation(name,outdir):
     cfg,info,nodes,eles,bxyz=_model(name)
@@ -160,10 +173,10 @@ def orientation(name,outdir):
         lab=f"{bk} web/depth dir" if first.get(bk,True) else None; first[bk]=False
         ax.plot([x0[0],x1[0]],[x0[1],x1[1]],[x0[2],x1[2]],
                 color="black" if bk=="col" else "#ff7f0e",lw=2.0,label=lab)
-    _setup(ax,f"{name} — member ORIENTATION check\n(each beam web/depth tick must be VERTICAL; "
+    _setup(ax,f"{title_name(name)} — member ORIENTATION check\n(each beam web/depth tick must be VERTICAL; "
               f"columns show strong-axis direction)")
     ax.legend(loc="upper left",fontsize=8)
-    p=os.path.join(outdir,f"{name}_orientation.png"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
+    p=_fig_path(outdir,name,"orientation"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
 
 def deformed(name,outdir,direction="X",scale=None):
     cfg=E.CFG[name]; info=E.build(cfg,"PDelta"); NF=info["NF"]; di=0 if direction=="X" else 1
@@ -191,9 +204,9 @@ def deformed(name,outdir,direction="X",scale=None):
         ax.plot([a[0],b[0]],[a[1],b[1]],[a[2],b[2]],color="0.75",lw=0.6)
         da=[a[i]+scale*disp[n1][i] for i in range(3)]; db=[b[i]+scale*disp[n2][i] for i in range(3)]
         ax.plot([da[0],db[0]],[da[1],db[1]],[da[2],db[2]],color=COL_C[_ck(kind)],lw=1.3)
-    _setup(ax,f"{name} — deformed shape, lateral {direction} (disp ×{scale:.0f})\n"
+    _setup(ax,f"{title_name(name)} — deformed shape, lateral {direction} (disp ×{scale:.0f})\n"
               f"grey = undeformed, color = deformed")
-    p=os.path.join(outdir,f"{name}_deformed_{direction}.png"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
+    p=_fig_path(outdir,name,f"deformed_{direction}"); fig.tight_layout(); fig.savefig(p,dpi=130); plt.close(fig); return p
 
 def figures(name,outdir=None,deformed_fig=True):
     """Write the model figures. Each figure runs in its OWN try so one failure cannot kill the

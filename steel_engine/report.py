@@ -2072,6 +2072,11 @@ def _deflection_section(cfg, nseg=6):
             + _table(["Member", "Span", "Live &delta; (vs L/360)", "&le;", "Total &delta; (vs L/240)", "&le;", "Camber"], rows))
 
 
+def _fig_stem(name):
+    """H45: figure file stem of a (possibly 'units/<unit>') job name (= plot_model.fig_stem)."""
+    return str(name).replace("\\", "/").strip("/").replace("/", "__")
+
+
 def _grounding_check(cfg, name, pkg):
     """Verify the design actually queried the RAG collections its systems require (reliability).
     Reads the activity log and the calc_package cites.  H44 (L-06): credit only by the IS collection names and
@@ -2235,7 +2240,7 @@ def build_report(name, root=None):
                f"\\(F_y={Fy:.0f}\\) MPa, \\(E={Emod:,.0f}\\) MPa (N-mm-sec).")
     else:
         mat = "ASTM A992 steel: \\(F_y=50\\) ksi, \\(F_u=65\\) ksi, \\(E=29{,}000\\) ksi."
-    parts = [f"<h1>{name} &mdash; structural analysis &amp; design report</h1>",
+    parts = [f"<h1>{os.path.basename(str(name).rstrip('/')) or name} &mdash; structural analysis &amp; design report</h1>",
              f"<p><b>{cfg.get('arch','')}</b> &middot; generated {datetime.date.today()}</p>",
              _toc(), _design_basis(cfg)]
     figdir = os.path.join(root, "figs"); os.makedirs(figdir, exist_ok=True)
@@ -2244,7 +2249,7 @@ def build_report(name, root=None):
         import plot_model as PM
         PM.figures(name, figdir, deformed_fig=bool(cfg.get("deformed_shape_figure")))
         # Figure 2 (member orientation) is REQUIRED -- retry once on its own if missing
-        if not os.path.exists(os.path.join(figdir, f"{name}_orientation.png")):
+        if not os.path.exists(os.path.join(figdir, f"{_fig_stem(name)}_orientation.png")):
             try: PM.orientation(name, figdir)
             except Exception as _oex:
                 parts.append(f"<p class='note'>[REQUIRED orientation figure (Fig 2) failed twice: {_oex} "
@@ -2282,7 +2287,7 @@ def build_report(name, root=None):
     parts.append("<h3>Geometry</h3>")
     try: parts.append(_img(fig_plan(cfg), "Plan grid &mdash; the (i, j) labels used in the reaction/force tables"))
     except Exception as ex: parts.append(f"<p class='note'>[plan figure failed: {ex}]</p>")
-    parts.append(_img(_png_file_b64(os.path.join(figdir, f"{name}_orientation.png")),
+    parts.append(_img(_png_file_b64(os.path.join(figdir, f"{_fig_stem(name)}_orientation.png")),
                       "Section orientation (web/depth ticks &mdash; beam strong axis must be vertical)"))
 
     # ====================== Chapter 2 — Structural system & load path =======================
@@ -2292,7 +2297,7 @@ def build_report(name, root=None):
     parts.append(_lfrs_table(cfg))
     parts.append("<h3>Lateral-load design inputs</h3>"); parts.append(_lateral_inputs_table(cfg))
     if cfg.get("deformed_shape_figure"):   # OFF the default workflow (viewer shows the same live)
-        parts.append(_img(_png_file_b64(os.path.join(figdir, f"{name}_deformed_X.png")),
+        parts.append(_img(_png_file_b64(os.path.join(figdir, f"{_fig_stem(name)}_deformed_X.png")),
                           "Deformed shape under lateral X (confirms a continuous lateral load path)"))
     else:
         parts.append("<p class='note'>Static deformed-shape figure omitted for faster reporting &mdash; "
@@ -2680,7 +2685,7 @@ def build_report(name, root=None):
                      "(set cfg['force_summary']=True and re-render report.build_report).</p>")
     parts.append(_activity_section(name))
 
-    html = (f"<!doctype html><html><head><meta charset='utf-8'><title>{name} report</title>"
+    html = (f"<!doctype html><html><head><meta charset='utf-8'><title>{os.path.basename(str(name).rstrip('/')) or name} report</title>"
             f"<style>{CSS}{CHK_CSS}</style>{MATHJAX}</head><body>" + "".join(parts) + "</body></html>")
     _fc = [0]
     def _fignum(_m):

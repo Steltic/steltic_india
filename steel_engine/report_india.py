@@ -456,6 +456,16 @@ def _base_reactions(cfg, root):
                ["max column shear at the base", _kN(V) + " kN"]])
 
 
+def _PM_stem(name):
+    """H45: figure file stem of a (possibly 'units/<unit>') job name -- plot_model.fig_stem."""
+    return str(name).replace("\\", "/").strip("/").replace("/", "__")
+
+
+def _title_name(name):
+    """H45: report title uses the basename of a 'units/<unit>' job name."""
+    return os.path.basename(str(name).replace("\\", "/").rstrip("/")) or str(name)
+
+
 def _grounding(cfg, name, pkg):
     R = _R()
     recs, _ = R._load_activity(name)
@@ -508,7 +518,7 @@ def build_report_india(name, root):
     figdir = os.path.join(root, "figs"); os.makedirs(figdir, exist_ok=True)
     R._FIGDIR = figdir; R._FIGSEQ[0] = 0
     run = E.india_run_cached(cfg, name)
-    parts = [f"<h1>{name} &mdash; structural analysis &amp; design report (IS 800 / IS 875 / IS 1893)</h1>",
+    parts = [f"<h1>{_title_name(name)} &mdash; structural analysis &amp; design report (IS 800 / IS 875 / IS 1893)</h1>",
              f"<p><b>{cfg.get('arch', '')}</b> &middot; generated {datetime.date.today()} &middot; units: kN, kN-m, "
              "m, mm, MPa (engine N-mm)</p>", _toc()]
     try:
@@ -538,7 +548,7 @@ def build_report_india(name, root):
         parts.append(R._img(_plan_fig(cfg), "Plan grid (level 1)"))
     except Exception as ex:
         parts.append(f"<p class='note'>[plan figure failed: {ex}]</p>")
-    parts.append(R._img(R._png_file_b64(os.path.join(figdir, f"{name}_orientation.png")),
+    parts.append(R._img(R._png_file_b64(os.path.join(figdir, "%s_orientation.png" % _PM_stem(name))),
                         "Section orientation (web/depth ticks; beam strong axis vertical)"))
     # 2
     parts.append(_chapter(2))
@@ -615,7 +625,7 @@ def build_report_india(name, root):
     if cases:
         parts.append(R._combo_table(cases))
     parts.append(R._activity_section(name))
-    html = (f"<!doctype html><html><head><meta charset='utf-8'><title>{name} report</title>"
+    html = (f"<!doctype html><html><head><meta charset='utf-8'><title>{_title_name(name)} report</title>"
             f"<style>{R.CSS}{R.CHK_CSS}</style>{R.MATHJAX}</head><body>" + "".join(parts) + "</body></html>")
     fc = [0]
 

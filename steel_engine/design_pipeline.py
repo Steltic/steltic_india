@@ -1827,6 +1827,26 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
     pkg["deformation_compatibility"] = out
 
 
+def _separation_D1(u, disp_max):
+    """H45 (HR-D-13): D1 for 7.11.3.  With same_floor_levels the (R1 D1 + R2 D2)/2 form compares the two units at a
+    matching floor level: D1 is this unit's displacement at that level -- adjacent_units[].level (1-based; e.g. the
+    lower unit's roof) or, when absent, min(this unit's levels, adjacent_units[].n_levels).  Otherwise (or when no
+    level can be identified) the largest displacement over all levels (conservative).  Returns (D1, basis, level)."""
+    dm = [float(x or 0.0) for x in (disp_max or [0.0])] or [0.0]
+    if u.get("same_floor_levels"):
+        lev = u.get("level", u.get("matching_level"))
+        if lev is None and u.get("n_levels") is not None:
+            lev = min(len(dm), int(u["n_levels"]))
+        try:
+            lev = int(lev) if lev is not None else None
+        except (TypeError, ValueError):
+            lev = None
+        if lev is not None and 1 <= lev <= len(dm):
+            return dm[lev - 1], "displacement at the matching level %d (same_floor_levels)" % lev, lev
+        return max(dm), "max over levels: declare adjacent_units[].level (or n_levels) for the matching level", None
+    return max(dm), "max over levels (R x (D1 + D2))", None
+
+
 def _separation_7_11_3(cfg, run, R, out):
     """IS 1893 7.11.3 separation from the declared adjacent units: R (D1 + D2) (or (R1 D1 + R2 D2)/2 at matching floor
     levels, Amd 1); D1 = this unit's largest edge displacement in the joint direction (7.11.1 drift run)."""
@@ -1837,12 +1857,14 @@ def _separation_7_11_3(cfg, run, R, out):
     dr = run.get("drift") or {}
     for u in sep:
         d = u.get("direction", "X")
-        D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
+        dm = list((dr.get(d) or {}).get("disp_max") or [0.0])
+        D1, D1_basis, lev = _separation_D1(u, dm)
         r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
                                     bool(u.get("same_floor_levels")))
         gap = u.get("gap_mm")
         out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
-                                                 "D1_mm": D1, "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
+                                                 "D1_mm": D1, "D1_basis": D1_basis, "level": lev,
+                                                 "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
                                                  "dc": (r_["required_mm"] / gap) if gap else None,
                                                  "ok": (gap is not None and r_["required_mm"] <= gap),
                                                  "clause": "IS 1893 7.11.3", "cite": r_["cite"]})
