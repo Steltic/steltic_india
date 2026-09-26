@@ -760,6 +760,13 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
                            default=0.0)
                 rec["L_clear_mm"] = length[t] - dcol
                 bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"]}
+                # H13 (HR-C-03/HR-D-08): the beam's grid position + level footprint give the actual tributary
+                # (edge girder: half bay; beam parallel to the deck span: its secondary strip when declared)
+                n_lo = min(n1, n2)
+                ij = ((n_lo % 100000) // 100, n_lo % 100)
+                pk = (info0.get("present") or {}).get(n1 // 100000)
+                if pk and ij in pk:
+                    bdict.update(i=ij[0], j=ij[1], present_k=pk)
                 rec["V_gravity_N"] = SM.one_way_gravity(cfg, bdict, 1.2, 0.5, 0.5)[1]
                 rec["V_gravity_cite"] = "1.2DL + 0.5LL simple-span end shear (12.11.2.2)"
             except Exception:

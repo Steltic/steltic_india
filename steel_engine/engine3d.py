@@ -1315,6 +1315,8 @@ def beam_deflection_si(cfg):
     info = build(cfg, "Linear"); NF = info["NF"]
     div, cite = IL.floor_deflection_limit(cfg)
     ds = str(cfg.get("deck_span") or "").upper()
+    import static_model as _SM
+    roofs = IL.roof_level_set(cfg, NF)                                 # H50: top level + cfg['roof_levels']
     groups = {}
     coords = {}
     for (t, kind, sec, n1, n2) in info["ele"]:
@@ -1325,21 +1327,31 @@ def beam_deflection_si(cfg):
         if L < 1e-6:
             continue
         dirn = "X" if Lx >= Ly else "Y"
-        roof = (n1 // 100000) >= NF
+        k_ = n1 // 100000
+        roof = k_ >= NF or k_ in roofs
         # tributary width by the bays actually bounding the beam (edge beam: one bay -> half the bay width;
         # interior: two half bays) -- the full-bay width on every group over-read edge-beam deflections (WP6-fix)
-        k_ = n1 // 100000
         i_, j_ = (min(n1, n2) % 100000) // 100, min(n1, n2) % 100
-        nb = _bays_adjacent(info.get("present", {}).get(k_, set()), i_, j_, dirn)
+        pk = info.get("present", {}).get(k_, set())
+        nb = _bays_adjacent(pk, i_, j_, dirn)
         other = cfg["SY"] if dirn == "X" else cfg["SX"]
         trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (nb * other / 2.0 if nb else other)
-        key = (str(sec), round(L, 0), roof, dirn)
-        if key not in groups or trib > groups[key][1]:
-            groups[key] = (L, trib, roof, sec)
-    rows = []; worst = 0.0; n = 0
-    for (L, trib, roof, sec) in groups.values():
-        pL = float(cfg.get("Lr") or 0.0) if roof else float(cfg.get("L_floor") or 0.0) + float(cfg.get("partition_load_kNm2") or 0.0)
+        if ds in ("X", "Y"):
+            tw = _SM.one_way_trib_mm(cfg, pk, i_, j_, dirn)          # H13: actual bays + secondary strips
+            if tw is not None:
+                trib = tw
+        # H11 (HR-E-08): roof imposed = max(Lr, snow) (IS 875-5 8.1 Note 1); floors: the per-level imposed load
+        # (_Llev: cfg['L_by_level'] override) + partitions
+        if roof:
+            pL = max(float(cfg.get("Lr") or 0.0), float(cfg.get("snow") or 0.0))
+        else:
+            pL = float(_Llev(cfg, k_) or 0.0) + float(cfg.get("partition_load_kNm2") or 0.0)
         w = pL * trib / 1000.0                                         # N/mm
+        key = (str(sec), round(L, 0), roof, dirn)
+        if key not in groups or w > groups[key][1]:
+            groups[key] = (L, w, roof, sec)
+    rows = []; worst = 0.0; n = 0
+    for (L, w, roof, sec) in groups.values():
         if w <= 0:
             continue
         A, Ix, Iy, J = Ipack(sec)

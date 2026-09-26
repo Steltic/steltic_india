@@ -821,6 +821,24 @@ def resolve_storage_height_m(cfg=None, *, eor_h_m=None, eor_cite=None, eor_sourc
 
 
 
+def roof_level_set(cfg, NF=None) -> set:
+    """H50 (HR-B-16, HR-E-21): the storey levels treated as roofs -- the top level NF plus cfg['roof_levels']
+    (1-based levels of lower roofs / lean-tos / setback roofs).  A roof level carries D_roof, Lr and snow, no
+    partitions and no floor imposed load."""
+    cfg = cfg or {}
+    if NF is None:
+        NF = len(cfg.get("heights") or [])
+    out = {int(NF)} if NF else set()
+    for k in (cfg.get("roof_levels") or []):
+        try:
+            k = int(k)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= k <= int(NF or k):
+            out.add(k)
+    return out
+
+
 # --- HR polish Wave D: Annex town / site proxy disclosure ---------------------
 
 SITE_PROXY_OK_SOURCES = frozenset({

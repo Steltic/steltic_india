@@ -619,9 +619,18 @@ def partition_design_load(cfg):
     return float(cfg.get("partition_load_kNm2") or 0.0)
 
 
+def roof_level_set(cfg, NF=None):
+    """H50: levels treated as roofs -- the top level plus cfg['roof_levels'] (1-based storey levels of lower roofs,
+    lean-tos, setbacks).  Roof levels carry D_roof, Lr and snow and no partitions / floor imposed load.
+    (india_loads.roof_level_set is the same rule for callers that do not import the static model.)"""
+    import india_loads as _IL
+    return _IL.roof_level_set(cfg, NF)
+
+
 def floor_pressures(cfg, k):
-    """(D, L_floor_incl_partitions, Lr, S) in kN/m2 at level k (roof = top level)."""
-    NF = len(cfg["heights"]); roof = (k >= NF)
+    """(D, L_floor_incl_partitions, Lr, S) in kN/m2 at level k (roof = top level or a cfg['roof_levels'] level,
+    H50: D_roof, Lr, snow, no partitions)."""
+    NF = len(cfg["heights"]); roof = (k >= NF) or (k in roof_level_set(cfg, NF))
     by = cfg.get("D_by_level") or {}
     D = float(by.get(k, by.get(str(k), cfg["D_roof"] if roof else cfg["D_floor"])))
     D += float((cfg.get("extra_mass_floors") or {}).get(k, 0.0) or 0.0)
@@ -645,6 +654,67 @@ def _beam_floor_width(model, b, cfg):
     return nb, nb * other / 2.0
 
 
+def _grid_xy_lines(cfg):
+    """Actual grid-line coordinates (xcoords / ycoords when given, else i*SX / j*SY)."""
+    NX, NY = int(cfg.get("NX") or 0), int(cfg.get("NY") or 0)
+    xco, yco = cfg.get("xcoords"), cfg.get("ycoords")
+    xs = [float(xco[i]) if xco else i * float(cfg["SX"]) for i in range(NX + 1)]
+    ys = [float(yco[j]) if yco else j * float(cfg["SY"]) for j in range(NY + 1)]
+    return xs, ys
+
+
+def adjacent_panels(cfg, present_k, i, j, dirn):
+    """H13: the present bays bounding grid beam (i, j, dirn) as [(width_perpendicular_mm, span_along_mm)] from the
+    actual grid coordinates (edge beam: one panel, interior: two)."""
+    xs, ys = _grid_xy_lines(cfg)
+    out = []
+    try:
+        if dirn == "X":
+            for jj in (j - 1, j):
+                if all(c in present_k for c in ((i, jj), (i + 1, jj), (i, jj + 1), (i + 1, jj + 1))):
+                    out.append((ys[jj + 1] - ys[jj], xs[i + 1] - xs[i]))
+        else:
+            for ii in (i - 1, i):
+                if all(c in present_k for c in ((ii, j), (ii + 1, j), (ii, j + 1), (ii + 1, j + 1))):
+                    out.append((xs[ii + 1] - xs[ii], ys[j + 1] - ys[j]))
+    except (IndexError, TypeError):
+        return []
+    return out
+
+
+def secondary_spacing(cfg):
+    """cfg['secondary_spacing_mm'] (H13): spacing of the secondary beams that run PARALLEL to cfg['deck_span'] and
+    frame into the girders perpendicular to it (None when not declared)."""
+    v = cfg.get("secondary_spacing_mm")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def one_way_trib_mm(cfg, present_k, i, j, dirn):
+    """H13: one-way tributary width (mm) of a grid beam, from the actual bays bounding it.
+
+    Without secondaries: a beam parallel to cfg['deck_span'] carries 0, a girder perpendicular to it carries half of
+    each bounding bay (edge girder: half bay).  With cfg['secondary_spacing_mm'] = s: a grid beam parallel to the
+    span is a secondary line and carries min(s/2, bay/2) from each bounding bay (edge s/2, interior s capped at the
+    bay); the girders perpendicular to it carry the rest, (w/2)(1 - s/B) per bay (B = bay dimension along the
+    girder), so the panel load is conserved.  Returns None when the beam bounds no present bay (caller falls back)."""
+    ds = _deck_span(cfg)
+    panels = adjacent_panels(cfg, present_k, i, j, dirn)
+    if not panels:
+        return None
+    s = secondary_spacing(cfg)
+    if ds is None:
+        return sum(w / 2.0 for (w, _) in panels)
+    if dirn == ds:
+        return sum(min(s / 2.0, w / 2.0) for (w, _) in panels) if s else 0.0
+    if s:
+        return sum((w / 2.0) * max(0.0, 1.0 - s / B) if B > 0 else 0.0 for (w, B) in panels)
+    return sum(w / 2.0 for (w, _) in panels)
+
+
 def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_weight=True, crane_pattern=None,
                         snow_pattern=None):
     """SI gravity for one gravity state; returns {level: total vertical load N}.
@@ -662,11 +732,18 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
     # IS 875 (Part 4):2021 4.3 partial snow: snow_pattern = (axis, 'lo'|'hi') keeps the roof snow on the half of the
     # plan below / above the mid-line normal to `axis` (zero snow on the other half; WP6-fix)
     sp_axis, sp_side, sp_mid = None, None, None
+    roofs = roof_level_set(cfg, NF)
     if snow_pattern:
         sp_axis = 0 if str(snow_pattern[0]).upper() == "X" else 1
         sp_side = str(snow_pattern[1]).lower()
-        crd_all = [ops.nodeCoord(n) for n in ops.getNodeTags()]
-        sp_mid = 0.5 * (min(c[sp_axis] for c in crd_all) + max(c[sp_axis] for c in crd_all))
+        # H50 (HR-E-06): split at the declared ridge cfg['snow_partial']['ridge_mm'] (default: plan mid-line)
+        spx = cfg.get("snow_partial")
+        rmm = spx.get("ridge_mm") if isinstance(spx, dict) else None
+        if rmm is not None:
+            sp_mid = float(rmm)
+        else:
+            crd_all = [ops.nodeCoord(n) for n in ops.getNodeTags()]
+            sp_mid = 0.5 * (min(c[sp_axis] for c in crd_all) + max(c[sp_axis] for c in crd_all))
     for b in model["beams"]:
         i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
         if not (1 <= k <= NF):
@@ -675,6 +752,10 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
         p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
         p_nosnow = p - fS * S
         nb, trib1 = _beam_floor_width(model, b, cfg)
+        if ds is not None:
+            tw = one_way_trib_mm(cfg, model["present"].get(k, set()), i, j, dirn)       # H13
+            if tw is not None:
+                trib1 = tw
         other = cfg["SY"] if dirn == "X" else cfg["SX"]
         wcap = other / 2.0
         th = heights[k - 1] / 2.0 if k == NF else heights[k - 1]
@@ -692,12 +773,12 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
             s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
             if ds is None:
                 width_mm = nb * min(smid, L - smid, wcap)
-            elif dirn == ds:
-                width_mm = 0.0                       # beam parallel to the deck span carries no deck load
             else:
-                width_mm = trib1
+                # one-way (H13): girders perpendicular to the span carry their bays; a beam parallel to the span
+                # carries nothing, or its secondary strip when cfg['secondary_spacing_mm'] is declared
+                width_mm = trib1 if (dirn != ds or secondary_spacing(cfg)) else 0.0
             pp = p
-            if sp_axis is not None and k == NF and S:
+            if sp_axis is not None and k in roofs and S:
                 ca_, cb_ = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
                 xm = ca_[sp_axis] + (cb_[sp_axis] - ca_[sp_axis]) * (smid / L)
                 loaded = (xm <= sp_mid + 1e-6) if sp_side == "lo" else (xm >= sp_mid - 1e-6)
@@ -752,6 +833,24 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
         kk = nl.get("level")
         if kk in lev:
             lev[kk] += -fdead * Fz
+    # declared imposed point loads (H50, HR-E-26): cfg['nodal_imposed_loads'] = [{node, Fz_N (down < 0), Mx_Nmm,
+    # My_Nmm, level, kind: 'floor' | 'roof'}] -- factored with fL (floor imposed) or fLr (roof imposed; replaced by
+    # snow per IS 875-5 8.1 Note 1 in the rows where fS carries the roof term)
+    for nl in (cfg.get("nodal_imposed_loads") or []):
+        try:
+            nd = int(nl["node"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        fI = fLr if str(nl.get("kind") or "floor").lower() == "roof" else fL
+        if not fI:
+            continue
+        Fz = float(nl.get("Fz_N") or 0.0)
+        ops.load(nd, 0.0, 0.0, fI * Fz, fI * float(nl.get("Mx_Nmm") or 0.0), fI * float(nl.get("My_Nmm") or 0.0), 0.0)
+        kk = nl.get("level")
+        if kk is None:
+            kk = nd // 100000
+        if kk in lev:
+            lev[kk] += -fI * Fz
     # declared snow point loads (WP6-fix): reactions of an attached lower roof (lean-to drift, IS 875-4 5.2.4) on the
     # main columns -- cfg['nodal_snow_loads'] = [{node, Fz_N (down < 0), Mx_Nmm, My_Nmm, level}], factored with fS
     if fS:
@@ -777,60 +876,109 @@ def apply_crane_loads(cfg, model, fC, pattern=None):
         ops.load(int(nd), fC * fx, fC * fy, fC * fz, fC * mx, fC * my, fC * mz)
 
 
+def _strip_widths(coords, tol=1.0):
+    """H14 (HR-B-12): tributary wall width per column line = half the distance to each neighbouring line
+    (end line: half the distance to its one neighbour).  coords = the distinct line coordinates."""
+    cs = sorted(coords)
+    out = {}
+    for n, c in enumerate(cs):
+        lo = (c - cs[n - 1]) / 2.0 if n > 0 else 0.0
+        hi = (cs[n + 1] - c) / 2.0 if n + 1 < len(cs) else 0.0
+        out[c] = lo + hi
+    return out
+
+
+def _roof_split(cfg, pat, ax, nodes):
+    """(split coordinate along the wind axis, windward side 'lo'|'hi') for the roof zones of one pattern (H14).
+    Wind across a declared ridge (cfg['ridge'] = {'axis': plan axis the ridge coordinate is measured on, i.e. the
+    axis normal to the ridge line, 'coord_mm': ridge position}) splits at the ridge; otherwise at the plan mid-line
+    normal to the wind (Table 6 key plan: the line normal to the ridge divides E/G from F/H)."""
+    rg = cfg.get("ridge") if isinstance(cfg.get("ridge"), dict) else None
+    axn = "X" if ax == 0 else "Y"
+    if rg and str(rg.get("axis") or "").upper() == axn and rg.get("coord_mm") is not None:
+        split = float(rg["coord_mm"])
+    else:
+        split = 0.5 * (min(c[ax] for c in nodes) + max(c[ax] for c in nodes))
+    return split, ("hi" if _pattern_sign(pat) < 0 else "lo")
+
+
+def _pattern_sign(pat):
+    """+1: wind blowing towards +axis (windward face = low-coordinate edge); -1: reversed (H14)."""
+    try:
+        return -1.0 if float(pat.get("sign", 1)) < 0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def member_wind_loads(cfg, model, pat, f):
     """IS 875-3 7.3.1 member wind for one pattern x factor f, applied inside the current load pattern.
 
-    Roof: (Cpe - Cpi) pd on the roof beams (+ = downward), windward / leeward halves split at the
-    plan mid-line normal to pat['wind_axis'], width = the same one-way/two-way tributary as gravity.
-    Walls: windward / leeward wall pressure x (tributary storey height x wall length) as nodal
-    forces shared equally by the column nodes on that wall line (+ = inward).  Returns
-    {'roof_N': total vertical, 'wall_N': total horizontal} for the record."""
+    H14 (HR-A-15, HR-B-12, HR-E-16):
+    * direction: pat['sign'] = +1 (wind towards +wind_axis, windward = low-coordinate side) or -1 (reversed;
+      india_combos generates both for every pattern);
+    * roof: (Cpe - Cpi) pd on EVERY roof-level beam (top level + cfg['roof_levels']), + = downward, with the
+      windward / leeward zone decided per sub-segment at the declared ridge cfg['ridge'] (or the plan mid-line),
+      width = the gravity tributary (two-way 45-deg or one-way incl. secondary strips);
+    * walls: the first exposed column line met from upwind in each strip normal to the wind (projected-envelope
+      scan per column piece, so a main wall above / beyond a lean-to is loaded) takes the windward pressure, the
+      last one the leeward pressure, each over its tributary width (half the distance to the neighbouring lines).
+    Returns {'roof_N': total vertical, 'wall_N': total horizontal} for the record."""
     NF = model["NF"]; ax = 0 if pat["wind_axis"] == "X" else 1
+    oth = 1 - ax
     ds = _deck_span(cfg)
+    sgn_w = _pattern_sign(pat)
     nodes = [ops.nodeCoord(n) for n in ops.getNodeTags()]
-    mid = 0.5 * (min(c[ax] for c in nodes) + max(c[ax] for c in nodes))
     tot = {"roof_N": 0.0, "wall_N": 0.0}
     pw, pl = pat.get("roof_windward_kNm2"), pat.get("roof_leeward_kNm2")
     if pw is not None and pl is not None:
+        roofs = roof_level_set(cfg, NF)
+        split, wside = _roof_split(cfg, pat, ax, nodes)
         for b in model["beams"]:
-            if b["k"] != NF:
+            if b["k"] not in roofs:
                 continue
             nb, trib1 = _beam_floor_width(model, b, cfg)
-            if ds is not None and b["dir"] == ds:
-                continue
-            width = trib1 if ds is not None else nb * (cfg["SY"] if b["dir"] == "X" else cfg["SX"]) / 4.0
+            if ds is not None:
+                tw = one_way_trib_mm(cfg, model["present"].get(b["k"], set()), b["i"], b["j"], b["dir"])
+                trib1 = tw if tw is not None else (0.0 if b["dir"] == ds else trib1)
+                if trib1 <= 0.0:
+                    continue
+            other = cfg["SY"] if b["dir"] == "X" else cfg["SX"]
             ca, cb = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
-            pp = pw if 0.5 * (ca[ax] + cb[ax]) <= mid else pl
-            w = f * float(pp) * width / 1000.0                      # N/mm, + downward
-            for t in b["segs"]:
+            L = b["L"]; segs = b["segs"]
+            for s_, t in enumerate(segs):
+                s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+                width = trib1 if ds is not None else nb * min(smid, L - smid, other / 2.0)
+                xm = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
+                windward = (xm <= split + 1e-6) if wside == "lo" else (xm >= split - 1e-6)
+                pp = pw if windward else pl
+                w = f * float(pp) * width / 1000.0                      # N/mm, + downward
                 ops.eleLoad("-ele", t, "-type", "-beamUniform", 0.0, -w, 0.0)
-            tot["roof_N"] += w * b["L"]
+                tot["roof_N"] += w * (s1 - s0)
     qw, ql = pat.get("wall_windward_kNm2"), pat.get("wall_leeward_kNm2")
     if qw is not None and ql is not None:
-        oth = 1 - ax
-        # wall pressure as a DISTRIBUTED load on the edge-line column elements (every piece of the column, full
+        # wall pressure as a DISTRIBUTED load on the exposed column elements (every piece of the column, full
         # height): a portal column bends under the wall wind along its height and the lower half of the wall load
         # reaches the base through the column shear, not as a nodal force at the roof (WP6-fix, HREX3-Ex14-02);
         # nodal fallback (tributary storey height at the level's grid nodes) when no column element is on the line
-        xs_all = [c[ax] for c in nodes]
-        edge_lo, edge_hi = min(xs_all), max(xs_all)
-        by_edge = {}
+        # (face, q, force sign along +axis): windward face inward = along the wind; leeward face inward = against it
+        faces = (("up", qw, sgn_w), ("down", ql, -sgn_w))
+        cols = []
         for c in model["cols"]:
             c1, c2 = ops.nodeCoord(c["n1"]), ops.nodeCoord(c["n2"])
-            xe = 0.5 * (c1[ax] + c2[ax])
-            for edge in (edge_lo, edge_hi):
-                if abs(xe - edge) < 1e-6:
-                    by_edge.setdefault(edge, []).append((c, c1, c2))
-        if by_edge and all(c.get("transf") in (1, 2) for lst in by_edge.values() for (c, _, _) in lst):
-            for edge, q, sgn in ((edge_lo, qw, 1.0), (edge_hi, ql, -1.0)):
-                lst = by_edge.get(edge) or []
-                if not lst:
-                    continue
-                lines = sorted({round(c1[oth], 3) for (c, c1, c2) in lst})
-                Lw = (lines[-1] - lines[0]) if len(lines) > 1 else (cfg["SY"] if ax == 0 else cfg["SX"])
-                w_line = f * float(q) * (Lw / len(lines)) / 1000.0 * sgn      # N/mm along +axis per column line
-                for (c, c1, c2) in lst:
-                    F = w_line
+            cols.append((c, c1, c2, 0.5 * (c1[ax] + c2[ax]), round(0.5 * (c1[oth] + c2[oth]), 3),
+                         min(c1[2], c2[2]), max(c1[2], c2[2])))
+        if cols and all(c.get("transf") in (1, 2) for (c, *_r) in cols):
+            for (c, c1, c2, xa, yo, z0, z1) in cols:
+                zm = 0.5 * (z0 + z1)
+                same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
+                strip = [r[3] for r in same_h if abs(r[4] - yo) < 1.0]
+                widths = _strip_widths({r[4] for r in same_h})
+                wtrib = widths.get(yo) or (cfg["SY"] if ax == 0 else cfg["SX"])
+                for face, q, fs in faces:
+                    upwind_first = (min(strip) if (face == "up") == (sgn_w > 0) else max(strip))
+                    if abs(xa - upwind_first) > 1e-6:
+                        continue
+                    F = f * float(q) * wtrib / 1000.0 * fs      # N/mm along +axis
                     # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
                     if c["transf"] == 2:
                         Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
@@ -839,25 +987,26 @@ def member_wind_loads(cfg, model, pat, f):
                     ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
                     tot["wall_N"] += F * abs(c2[2] - c1[2])
         else:
+            alln = set(ops.getNodeTags())
             for k in range(1, NF + 1):
                 h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
-                alln = set(ops.getNodeTags())
                 lvl = [ntag(i, j, k) for (i, j) in (model.get("present") or {}).get(k, ())]
                 crd = {n: ops.nodeCoord(n) for n in lvl if n in alln}
                 if not crd:
                     continue
-                for edge, q, sgn in ((min(c[ax] for c in crd.values()), qw, 1.0),
-                                     (max(c[ax] for c in crd.values()), ql, -1.0)):
-                    on = [n for n, c in crd.items() if abs(c[ax] - edge) < 1e-6]
-                    if len(on) < 1:
-                        continue
-                    ys = [crd[n][oth] for n in on]
-                    Lw = (max(ys) - min(ys)) or (cfg["SY"] if ax == 0 else cfg["SX"])
-                    Ftot = f * float(q) * Lw * h_t / 1000.0 * sgn          # N along +axis
-                    for n in on:
-                        v = [0.0] * 6; v[ax] = Ftot / len(on)
+                strips = {}
+                for n, c in crd.items():
+                    strips.setdefault(round(c[oth], 3), []).append(n)
+                widths = _strip_widths(strips)
+                for yo, ns in strips.items():
+                    wtrib = widths.get(yo) or (cfg["SY"] if ax == 0 else cfg["SX"])
+                    for face, q, fs in faces:
+                        pick = min if (face == "up") == (sgn_w > 0) else max
+                        n = pick(ns, key=lambda nn: crd[nn][ax])
+                        Ftot = f * float(q) * wtrib * h_t / 1000.0 * fs          # N along +axis
+                        v = [0.0] * 6; v[ax] = Ftot
                         ops.load(n, *v)
-                    tot["wall_N"] += Ftot
+                        tot["wall_N"] += Ftot
     return tot
 
 
@@ -914,18 +1063,34 @@ def _grav_state_key(c):
             tuple(m.get("snow_pattern") or ()))
 
 
-def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0):
+def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
     """One-way girder gravity (Mg = w L^2/8, Vg = w L/2) in N-mm (WP2.1: kN/m2 x mm / 1000 = N/mm).
-    With cfg['deck_span'] declared, beams parallel to the deck span get no deck load."""
+    With cfg['deck_span'] declared, beams parallel to the deck span get no deck load, or their secondary strip when
+    cfg['secondary_spacing_mm'] is declared (H13).  H13 (HR-C-03): the tributary is taken from the bays actually
+    bounding the beam (edge girder: half bay) with the actual xcoords / ycoords, when the beam's grid position
+    (b['i'], b['j']) and the level footprint (``present`` = {k: {(i, j)}}, or b['present_k']) are known; otherwise
+    the legacy full bay width."""
     k = b["k"]; L = b["L"]
     D, Lf, Lr, S = floor_pressures(cfg, k)
     p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
     ds = _deck_span(cfg)
-    if ds is not None and b["dir"] == ds:
+    pk = b.get("present_k")
+    if pk is None and present is not None:
+        pk = present.get(k, set())
+    tw = None
+    if pk is not None and b.get("i") is not None and b.get("j") is not None:
+        tw = one_way_trib_mm(cfg, pk, int(b["i"]), int(b["j"]), b["dir"])
+    if tw is not None:
+        trib = tw
+    elif ds is not None and b["dir"] == ds:
         trib = 0.0
     else:
         trib = cfg["SY"] if b["dir"] == "X" else cfg["SX"]
     w = p * trib / 1000.0
+    if tw is not None and cfg.get("clad") and len(adjacent_panels(cfg, pk, int(b["i"]), int(b["j"]), b["dir"])) == 1:
+        NF = len(cfg["heights"])                     # perimeter beam: cladding line load, as apply_gravity_state
+        th = cfg["heights"][k - 1] / 2.0 if k == NF else cfg["heights"][k - 1]
+        w += (fD + fEv) * float(cfg["clad"]) * th / 1000.0
     A = b.get("_A") or 0.0
     w += (fD + fEv) * A * STEEL_UNIT_WEIGHT_N_PER_MM3
     return w * L * L / 8.0, w * L / 2.0
@@ -989,7 +1154,7 @@ def member_records(model, R, cfg, case_grav, floor_system):
         sag_max = max(sag)
         Mni, Mnj = -R[segs[0]][5], R[segs[-1]][11]
         if floor_system != "two-way":
-            Mg, Vg = one_way_gravity(cfg, b, fD, fL, fLr, fS, fEv)
+            Mg, Vg = one_way_gravity(cfg, b, fD, fL, fLr, fS, fEv, present=model.get("present"))
             if _deck_span(cfg) is None and Mg > sag_max:
                 sag_max = Mg                                # legacy conservative one-way bound
                 Mmaj = max(Mmaj, Mg)
@@ -1177,6 +1342,10 @@ def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rs
             sig = repr((sorted((e[1], e[2], e[3], e[4]) for e in info0["ele"]), cfg.get("heights"), cfg.get("SX"),
                         cfg.get("SY"), cfg.get("D_floor"), cfg.get("D_roof"), cfg.get("L_floor"), cfg.get("Lr"),
                         cfg.get("snow"), cfg.get("clad"), cfg.get("deck_span"), cfg.get("partition_load_kNm2"),
+                        # H13 / H14 / H50 load-distribution inputs
+                        cfg.get("secondary_spacing_mm"), cfg.get("roof_levels"), cfg.get("ridge"),
+                        cfg.get("snow_partial"), cfg.get("nodal_imposed_loads"), cfg.get("xcoords"),
+                        cfg.get("ycoords"),
                         floor_system, nseg, [(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
                                               sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
                                               .__repr__()) for c in cases],

@@ -732,24 +732,62 @@ def site_proxy_findings(rec, *, quantity="Vb", cfg=None) -> list:
         "Vb" if quantity == "Vb" else "zone", "; ".join(r.get("required_inputs") or [r.get("note") or "incomplete"])))]
 
 
+def _by_theta(x, theta):
+    """{0: .., 90: ..} / {'theta_0': .., 'theta_90': ..} -> the entry for theta; a plain record -> theta 0 only."""
+    if not isinstance(x, dict):
+        return None
+    for k in (theta, str(theta), "theta_%d" % theta):
+        if k in x:
+            return x[k]
+    if any(k in x for k in (0, 90, "0", "90", "theta_0", "theta_90")):
+        return None
+    return x if theta == 0 else None
+
+
 def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_ratio, *, theta_cases=(0, 90),
-                        ridge_axis=None):
+                        ridge_axis=None, corpus_hit=None, walls=None, roof=None, eor_cpe=None):
     """Member-level wind pressure sets for low-rise / portal buildings (7.3.1 F = (Cpe - Cpi) A pd):
     walls from Table 5, roof from Table 6 by pitch, Cpi +- from the opening ratio.  Returns a list of
     patterns {name, roof_windward_kNm2, roof_leeward_kNm2, wall_windward_kNm2, wall_leeward_kNm2,
-    direction} (+ = towards the surface, i.e. roof downward / wall inward)."""
+    direction} (+ = towards the surface, i.e. roof downward / wall inward).
+
+    H14 / L-15: ``corpus_hit`` = the retrieved Table 5 record(s) (exact_table 5; a plain record for theta 0 or
+    {0: .., 90: ..}) is passed through (walls_source 'corpus'); ``walls`` = resolved wall records (same shapes) and
+    ``roof`` = a resolved Table 6 record {EF, GH, EG, FH} override the in-repo tables; ``eor_cpe`` = EOR Cpe
+    record(s) for geometry outside Table 5 (H15).  The along-ridge (WM90) patterns carry the gable-wall Table 5
+    theta = 90 coefficients (C windward, D leeward).  india_combos applies every pattern from both sides."""
     cpi = cpi_from_openings(opening_ratio)["Cpi"]
     hw = float(h_eave_m) / float(w_m)
     lw = float(l_m) / float(w_m)
-    walls = resolve_cpe_walls(hw, lw, 0.0, corpus_hit=None)
-    roof = roof_cpe_pitched(hw, roof_pitch_deg)
+
+    def _walls(theta):
+        ov = _by_theta(walls, theta)
+        if isinstance(ov, dict) and ov.get("Cpe"):
+            return dict(ov, found=True, resolved_via=ov.get("resolved_via") or "override")
+        hit = _by_theta(corpus_hit, theta)
+        return resolve_cpe_walls(hw, lw, float(theta), corpus_hit=hit, eor_cpe=_by_theta(eor_cpe, theta))
+
+    walls0, walls90 = _walls(0), _walls(90)
+    if isinstance(roof, dict) and all(roof.get(k) is not None for k in ("EF", "GH", "EG", "FH")):
+        roof = dict(roof, found=True)
+    else:
+        roof = roof_cpe_pitched(hw, roof_pitch_deg)
     if not roof.get("found"):
         return {"found": False, "note": roof.get("note")}
-    wc = (walls.get("Cpe") or {}) if isinstance(walls, dict) and walls.get("found") else {}
+    wc = (walls0.get("Cpe") or {}) if isinstance(walls0, dict) and walls0.get("found") else {}
     Aw, Bw = wc.get("A"), wc.get("B")
     if Aw is None or Bw is None:
         return {"found": False, "note": "IS 875-3 Table 5 wall Cpe not resolved for h/w=%.3f l/w=%.3f; "
-                                        "no default coefficients are substituted" % (hw, lw)}
+                                        "no default coefficients are substituted" % (hw, lw),
+                "walls": walls0}
+    wc90 = (walls90.get("Cpe") or {}) if isinstance(walls90, dict) and walls90.get("found") else {}
+    Cw, Dw = wc90.get("C"), wc90.get("D")
+    if Cw is None or Dw is None:
+        return {"found": False, "note": "IS 875-3 Table 5 theta = 90 (gable wall) Cpe not resolved for h/w=%.3f "
+                                        "l/w=%.3f; no default coefficients are substituted" % (hw, lw),
+                "walls": walls90}
+    src0 = walls0.get("resolved_via") if isinstance(walls0, dict) else None
+    src90 = walls90.get("resolved_via") if isinstance(walls90, dict) else None
     pats = []
     for s_cpi in (+cpi, -cpi):
         # theta = 0: wind normal to the ridge (E/F windward slope, G/H leeward)
@@ -758,14 +796,18 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
                      "roof_leeward_kNm2": (roof["GH"] - s_cpi) * pd_kNm2,
                      "wall_windward_kNm2": (Aw - s_cpi) * pd_kNm2,
                      "wall_leeward_kNm2": (Bw - s_cpi) * pd_kNm2,
-                     "Cpi": s_cpi, "roof": roof, "walls_source": walls.get("resolved_via") if isinstance(walls, dict) else None})
+                     "Cpi": s_cpi, "roof": roof, "walls_source": src0})
+        # theta = 90: wind along the ridge -- roof E/G windward, F/H leeward; gable walls C (windward) / D (leeward)
         pats.append({"name": "WM90%s" % ("+" if s_cpi > 0 else "-"), "direction": "along_ridge",
                      "roof_windward_kNm2": (roof["EG"] - s_cpi) * pd_kNm2,
                      "roof_leeward_kNm2": (roof["FH"] - s_cpi) * pd_kNm2,
-                     "Cpi": s_cpi, "roof": roof})
+                     "wall_windward_kNm2": (Cw - s_cpi) * pd_kNm2,
+                     "wall_leeward_kNm2": (Dw - s_cpi) * pd_kNm2,
+                     "Cpi": s_cpi, "roof": roof, "walls_source": src90})
     if ridge_axis in ("X", "Y"):
         across = "Y" if ridge_axis == "X" else "X"
         for p in pats:
             p["wind_axis"] = across if p["direction"] == "across_ridge" else ridge_axis
     return {"found": True, "patterns": pats, "Cpi": cpi, "h_over_w": hw,
+            "walls_source": {"theta_0": src0, "theta_90": src90},
             "cite": "IS 875 (Part 3):2015 7.3.1, 7.3.2, Table 5, Table 6"}

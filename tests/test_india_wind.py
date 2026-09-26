@@ -118,7 +118,9 @@ def test_member_wind_combinations_generated():
     plan["member_wind"] = {"patterns": [dict(p, wind_axis="X") for p in r["patterns"][:1]]}
     cs = [c for c in IC.expand_combinations(plan, cfg) if "member_wind" in c.get("tags", [])]
     fams = {c["family"] for c in cs}
-    assert any("0.9DL" in f for f in fams) and len(cs) == 4
+    # H14: each pattern is applied from both sides of its axis (the reversed '<name>R' pattern, sign -1)
+    assert any("0.9DL" in f for f in fams) and len(cs) == 8
+    assert sum(1 for c in cs if c["member_wind"]["name"].endswith("R") and c["sign"] == -1) == 4
     assert all(c["fWM"] in (1.5, 1.2, 0.6) for c in cs)
     plan["member_wind"] = {"patterns": [dict(r["patterns"][0])]}           # no wind_axis
     with pytest.raises(IC.CombinationError):
