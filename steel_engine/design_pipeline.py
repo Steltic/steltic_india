@@ -961,14 +961,44 @@ def design_india(name, cfg, outdir):
     job_dir = os.path.dirname(os.path.abspath(outdir))
     cases = combos(cfg)
     run = E.india_run_cached(cfg, name)
+    # X01: IS 1893 Table 5(ii) (Amd 2) flexible-diaphragm 3-D dynamic analysis, in addition to the rigid case
+    import india_flexible_diaphragm as FD
+    flex_on, flex_why = FD.trigger(cfg, run.get("irregularity") or {})
+    flex, flex_err, flex_note = None, None, None
+    _has_rsa = lambda cs: any((getattr(c, "meta", {}) or {}).get("rsa") for c in cs)
+    if flex_on and not _has_rsa(cases):
+        # Table 5(ii) asks for a three-dimensional DYNAMIC analysis: the rigid case becomes RSA as well
+        cfg["analyses"] = list(cfg.get("analyses") or []) + ["RSA"]
+        E._INDIA_RUN_CACHE.pop(E._model_key(cfg), None)
+        run = E.india_run_cached(cfg, name)
+        cases = combos(cfg)
+        flex_note = ("IS 1893 Table 5(ii): three-dimensional dynamic analysis -> RSA adopted for the rigid case too "
+                     "(cfg['analyses'] += ['RSA'])")
     rsa_el = None
-    if any((getattr(c, "meta", {}) or {}).get("rsa") for c in cases):
+    if _has_rsa(cases):
         rsa = run.get("rsa") or E.rsa_analysis(cfg)
         run["rsa"] = rsa
         rsa_el = rsa["elements"]
+    if flex_on:
+        if rsa_el is None:
+            flex_err = "no RSA combinations to envelope (EQ story forces missing?)"
+        else:
+            try:
+                flex = FD.rsa_flexible(cfg)
+            except FD.FlexibleDiaphragmError as ex:
+                flex_err = str(ex)
+            except Exception as ex:
+                flex_err = "flexible-diaphragm run failed: %s: %s" % (type(ex).__name__, ex)
     fs_ = "two-way" if "two" in str(cfg.get("floor_system", "one-way")).lower() else "one-way"
     nseg = int(cfg.get("demand_nseg", 6))
     per_case, kinds, sinfo = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el)
+    flex_env, per_flex = None, None
+    if flex is not None:
+        try:
+            _eqc = [c for c in cases if (getattr(c, "meta", {}) or {}).get("rsa")]
+            per_flex, _kf, _if = SM.solve_cases_si(cfg, _eqc, nseg, fs_, rsa=flex["elements"])
+        except Exception as ex:
+            flex, flex_err = None, "flexible-run combinations failed: %s: %s" % (type(ex).__name__, ex)
     # WP2.6: collector / chord axial from the diaphragm load path (rigid diaphragm gives beams P = 0)
     coll_added, coll_error = {}, None
     amp1223 = str(cfg.get("collector_basis") or "").lower() in ("is800_12_2_3", "12.2.3")
@@ -979,6 +1009,12 @@ def design_india(name, cfg, outdir):
         coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223)
     except Exception as ex:
         coll_error = "%s: %s" % (type(ex).__name__, ex)
+    if per_flex is not None:
+        # X01 Table 5(ii) worst effect: rigid run (with its collector / chord forces) vs flexible run, per combination
+        per_rigid_eq = {lab: dict(per_case[lab]) for lab in per_flex if lab in per_case}
+        n_f, n_r = FD.merge_records(per_case, per_flex)
+        flex_env = {"per_flex": per_flex, "per_rigid": per_rigid_eq, "n_flexible_governs": n_f, "n_records": n_r,
+                    "n_cases": len(per_flex)}
     env = SM.envelope_from_records(per_case, kinds, cases)
 
     info0 = E.build(cfg, "PDelta")
@@ -1012,6 +1048,9 @@ def design_india(name, cfg, outdir):
     # serviceability cases (IS 800 10.4.3 service-load slip of HSFG connections): {label: {fset: rec}}
     try:
         per_sls, _k2, _i2 = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el, service=True)
+        _eqs = [c for c in cases if (getattr(c, "meta", {}) or {}).get("rsa") and (getattr(c, "meta", {}) or {}).get("service")]
+        if flex is not None and _eqs:                                    # X01: same rigid / flexible envelope
+            FD.merge_records(per_sls, SM.solve_cases_si(cfg, _eqs, nseg, fs_, rsa=flex["elements"], service=True)[0])
     except Exception as ex:
         per_sls = {"_error": str(ex)}
     sls_rec = {}
@@ -1503,6 +1542,80 @@ def design_india(name, cfg, outdir):
             pkg["drift_table"].append({"storey": i + 1, "dir": d, "drift": round(x, 6), "limit": lim,
                                        "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
                                        "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
+    flex_d764 = None
+    if flex_on:
+        # X01: record of the Table 5(ii) flexible-diaphragm run (periods, base shears, envelope ratios, drift, 7.6.4)
+        frec = {"trigger": flex_why, "clause": FD.T5II_CLAUSE + "; 7.7.5; 7.7.3.1; 7.6.4; 7.11.1.1",
+                "cite": FD.T5II_QUOTE}
+        if flex_note:
+            frec["method_note"] = flex_note
+        if flex is None:
+            sa["flexible_diaphragm_engine_error"] = flex_err
+            frec.update(status="not run", error=flex_err)
+        else:
+            st_ = flex["stiffness"]
+            frec.update(status="run", basis="engine",
+                        model=FD.MODEL_TEXT % ("2 x 2" if st_["mesh"] == 2 else "1 x 1"),
+                        diaphragm_stiffness=_jsonable({k: v for k, v in st_.items() if k != "void_cells"}),
+                        deck=_jsonable(flex["deck"]), n_modes=len(flex["modes"]),
+                        periods_s=[round(m_["T"], 4) for m_ in flex["modes"][:12]],
+                        periods_rigid_s=[round(m_["T"], 4) for m_ in (rsa or {}).get("modes", [])[:12]],
+                        modes=[{k: (round(v, 5) if isinstance(v, float) else v) for k, v in m_.items()}
+                               for m_ in flex["modes"][:15]],
+                        base_shear={d: {"VB_rsa_kN": round(flex[d]["VB_rsa_N"] / 1e3, 2),
+                                        "VBbar_kN": round(flex[d]["VBbar_N"] / 1e3, 2),
+                                        "scale": round(flex[d]["scale"], 4),
+                                        "VB_scaled_kN": round(flex[d]["VB_scaled_N"] / 1e3, 2),
+                                        "rigid_VB_rsa_kN": round(rsa[d]["VB_rsa_N"] / 1e3, 2),
+                                        "mass_participation": round(flex[d]["mass_participation"], 4)}
+                                    for d in ("X", "Y")})
+            chks = []
+            for d in ("X", "Y"):
+                mp_ = flex[d]["mass_participation"]
+                chks.append({"name": "7.7.5.2 modal mass %s (flexible run)" % d, "value": round(mp_, 4), "limit": 0.90,
+                             "dc": round(0.90 / mp_, 4) if mp_ > 0 else None, "ok": mp_ >= 0.90,
+                             "clause": "IS 1893 7.7.5.2", "cite": "sum of modal masses >= 90 % of the seismic mass",
+                             "source": "india_flexible_diaphragm.rsa_flexible"})
+                vs, vb = flex[d]["VB_scaled_N"], flex[d]["VBbar_N"]
+                chks.append({"name": "7.7.3.1 scaled base shear %s (flexible run)" % d, "value": round(vs / 1e3, 2),
+                             "limit": round(vb / 1e3, 2), "dc": round(vb / vs, 4) if vs > 0 else None,
+                             "ok": vs >= vb * 0.999, "clause": "IS 1893 7.7.3.1",
+                             "cite": "force responses x V-bar_B / VB when VB < V-bar_B",
+                             "source": "india_flexible_diaphragm.rsa_flexible"})
+            frec["checks"] = chks
+            if flex_env is not None:
+                rofs = {frozenset((reg[t][2], reg[t][3])): role_of[t] for t in reg}
+                frec["envelope"] = {"method": FD.ENVELOPE_TEXT, "n_cases": flex_env["n_cases"],
+                                    "n_records": flex_env["n_records"],
+                                    "n_components_flexible_governs_by_1pct": flex_env["n_flexible_governs"],
+                                    "ratio_flexible_over_rigid_by_group": FD.group_ratios(
+                                        flex_env["per_rigid"], flex_env["per_flex"], rofs, list(flex_env["per_flex"]))}
+            try:
+                sup = set(info0.get("moment_nodes") or set())
+                for (t_, k_, s_, n1_, n2_) in info0["ele"]:
+                    if k_ == "brace":
+                        sup.update((n1_, n2_))
+                fdr = FD.drift_and_764(cfg, run.get("eccentricity"), support_nodes=sup or None)
+                flex_d764 = fdr
+                frec["drift"] = {"basis": fdr["basis"], "flexible": _jsonable(fdr["drift"]),
+                                 "rigid": {d: _jsonable((run.get("drift") or {}).get(d, {}).get("drift"))
+                                           for d in fdr["drift"]}}
+                for row in pkg["drift_table"]:
+                    fv = (fdr["drift"].get(row["dir"]) or [None] * 999)[row["storey"] - 1]
+                    row["drift_rigid"] = row["drift"]
+                    row["drift_flexible"] = round(fv, 6) if fv is not None else None
+                    if fv is not None and fv > row["value"]:
+                        row.update(drift=round(fv, 6), value=fv, dc=fv / row["limit"] if row["limit"] else None,
+                                   ok=fv <= row["limit"], governs="flexible-diaphragm run")
+                    row["clause"] += "; worse of the rigid and flexible-diaphragm runs (Table 5(ii))"
+            except Exception as ex:
+                frec["drift_error"] = "%s: %s" % (type(ex).__name__, ex)
+                chks.append({"name": "7.11.1.1 drift (flexible run)", "value": None, "limit": None, "dc": None,
+                             "ok": None, "clause": "IS 1893 7.11.1.1 / Table 5(ii)", "cite": "flexible-run drift",
+                             "reason": frec["drift_error"], "source": "india_flexible_diaphragm.drift_and_764"})
+            sa["flexible_diaphragm_run"] = True
+            sa["flexible_diaphragm_basis"] = "engine"
+        sa["flexible_diaphragm"] = _jsonable(frec)
     pkg["irregularity"] = run.get("irregularity") or {"error": "irregularity screens not run"}
     # IS 1893 7.6.4 diaphragm classification (rigid: 7.8.2 torsion in the model; flexible: tributary distribution)
     try:
@@ -1519,6 +1632,11 @@ def design_india(name, cfg, outdir):
         pkg["diaphragm_7_6_4"] = rec764
     except Exception as ex:
         pkg["diaphragm_7_6_4"] = {"clause": "IS 1893 (Part 1):2016 7.6.4", "ok": None, "error": str(ex)}
+    if flex_d764:
+        # X01: per-level in-plane deformation vs average storey drift measured on the flexible-diaphragm run (record)
+        pkg["diaphragm_7_6_4"]["flexible_run"] = {"levels": _jsonable(flex_d764["d764"]), "cite": FD.Q_7_6_4,
+                                                  "basis": flex_d764["basis_7_6_4"],
+                                                  "source": "india_flexible_diaphragm.drift_and_764 (Table 5(ii) run)"}
     # IS 875 (Part 4):2021 4.4 ponding screen for long-span flat roofs (WP6-fix): the job declares the roof slope,
     # the governing span and the mid-span deflection under the impounded rain / snow load (transparent formula
     # in cfg['ponding']); india_loads.ponding_screen_4_4 records the engineering-practice screen and its verdict
@@ -1535,8 +1653,8 @@ def design_india(name, cfg, outdir):
         _sa = pkg["seismic_analysis"]
         _sa["reentrant_flexible_required"] = True
         # H01: never from a cfg flag.  True only when (a) an engine flexible-diaphragm run recorded it in
-        # pkg['seismic_analysis'] (hook: flexible_diaphragm_run True + basis 'engine'; no engine function sets it
-        # yet) or (b) a complete EOR record cfg['flexible_diaphragm_eor'] = {analysis_ref, results, source, cite}.
+        # pkg['seismic_analysis'] (flexible_diaphragm_run True + basis 'engine', set by the X01 run above) or (b) a
+        # complete EOR record cfg['flexible_diaphragm_eor'] = {analysis_ref, results, source, cite}.
         if not (_sa.get("flexible_diaphragm_run") is True and _sa.get("flexible_diaphragm_basis") == "engine"):
             _feor, _fmiss = G.flexible_diaphragm_eor(cfg)
             _sa["flexible_diaphragm_run"] = _feor is not None

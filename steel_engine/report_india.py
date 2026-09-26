@@ -286,6 +286,33 @@ def _seismic_table(cfg, pkg, run):
         out += ("<h4>Response spectrum analysis (7.7)</h4><p>CQC with 5 % damping (7.7.5.3); base shear scaled up to "
                 "V&#772;<sub>B</sub> from Ta (7.7.3.1); displacements are not scaled (7.7.3.2).</p>"
                 + _t(["dir", "V_B RSA (kN)", "V&#772;_B (kN)", "scale", "mass participation"], tab))
+    fd = sa.get("flexible_diaphragm") if isinstance(sa.get("flexible_diaphragm"), dict) else None
+    if fd:
+        # X01: IS 1893 Table 5(ii) (Amd 2) flexible-diaphragm run, in addition to the rigid case
+        import html
+        out += "<h4>Flexible-diaphragm 3-D dynamic analysis (Table 5(ii), Amd 2)</h4><p>%s</p>" % html.escape(
+            str(fd.get("cite") or ""))
+        if fd.get("status") != "run":
+            out += "<p><b>Not run:</b> %s</p>" % html.escape(str(fd.get("error")))
+        else:
+            out += "<p>%s</p>" % html.escape(str(fd.get("model") or ""))
+            tab = [[d, _num(v.get("rigid_VB_rsa_kN"), 1), _num(v.get("VB_rsa_kN"), 1), _num(v.get("VBbar_kN"), 1),
+                    _num(v.get("scale"), 3), _num(v.get("mass_participation"), 3)]
+                   for d, v in (fd.get("base_shear") or {}).items()]
+            out += _t(["dir", "V_B RSA rigid (kN)", "V_B RSA flexible (kN)", "V&#772;_B (kN)", "scale (flexible)",
+                       "mass participation (flexible)"], tab)
+            Tf, Tr = fd.get("periods_s") or [], fd.get("periods_rigid_s") or []
+            out += _t(["mode", "T rigid (s)", "T flexible (s)"],
+                      [[i + 1, _num(Tr[i] if i < len(Tr) else None), _num(Tf[i] if i < len(Tf) else None)]
+                       for i in range(min(6, max(len(Tf), len(Tr))))])
+            env = fd.get("envelope") or {}
+            if env:
+                out += "<p>%s</p>" % html.escape(str(env.get("method") or ""))
+                rows = [[g, f, _num(v.get("rigid"), 0), _num(v.get("flexible"), 0), _num(v.get("ratio"), 3)]
+                        for g, fl in sorted((env.get("ratio_flexible_over_rigid_by_group") or {}).items())
+                        for f, v in fl.items() if isinstance(v, dict) and (v.get("rigid") or v.get("flexible"))]
+                out += _t(["group", "field", "rigid max (N / N-mm)", "flexible max (N / N-mm)", "flexible / rigid"],
+                          rows)
     return out
 
 

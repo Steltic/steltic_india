@@ -879,9 +879,22 @@ def analysis_findings(cfg, pkg) -> list:
         ok_flex = an.get("flexible_diaphragm_run") is True and (
             basis == "engine" or (basis == "EOR-documented" and all(eor.get(k) for k in FLEX_EOR_KEYS)))
         if not ok_flex:
+            eng_err = an.get("flexible_diaphragm_engine_error")
             out.append("Amd 2 Table 5(ii): re-entrant plan requires a flexible-diaphragm 3D dynamic analysis in "
                        "addition to the rigid case -- not performed (no engine run and no complete "
-                       "cfg['flexible_diaphragm_eor'] {analysis_ref, results, source, cite})")
+                       "cfg['flexible_diaphragm_eor'] {analysis_ref, results, source, cite})"
+                       + ("; engine run: %s" % eng_err if eng_err else ""))
+    fd = an.get("flexible_diaphragm") if isinstance(an.get("flexible_diaphragm"), dict) else {}
+    if an.get("flexible_diaphragm_engine_error") and not an.get("reentrant_flexible_required"):
+        out.append("flexible-diaphragm analysis requested (cfg['flexible_diaphragm_analysis']) but not run: %s"
+                   % an["flexible_diaphragm_engine_error"])
+    if an.get("flexible_diaphragm_basis") == "engine":
+        # X01: the engine run counts only with its own 7.7.5.2 / 7.7.3.1 / drift records evaluated and passing
+        for c in fd.get("checks") or []:
+            if isinstance(c, dict) and c.get("ok") is not True:
+                out.append("Table 5(ii) flexible-diaphragm run: %s %s (%s)" % (
+                    c.get("name"), "fails" if c.get("ok") is False else "not evaluated",
+                    c.get("reason") or "value %s, limit %s" % (c.get("value"), c.get("limit"))))
     return out
 
 
