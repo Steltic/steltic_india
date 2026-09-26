@@ -48,6 +48,80 @@ def _check(value, limit, *, clause, cite, dc=None, ok=None, **extra):
     return out
 
 
+# ------------------------------------------------------------------ AUD-2: plate yield stress by thickness (IS 2062)
+PLATE_FY_CLAUSE = "IS 2062 (Part 1):2025 Table 3 (ReH min by thickness band); IS 800:2007 2.2.4 (fy of the part)"
+_PLATE_GRADES = ("E250", "E275", "E300", "E350", "E410", "E450", "E500", "E550", "E600", "E650")
+
+
+def plate_fy_is2062(fy_MPa, t_mm, grade=None, *, job_grade=None, what="plate"):
+    """AUD-2 (gold audit H2/M1): the yield stress of a plate (base plate, gusset, splice / cover / end / fin plate,
+    stiffener, shear key) is the IS 2062:2025 Table 3 ReH of its grade for ITS thickness band (<=16, >16-40, >40-100,
+    >100 mm; e.g. E250: 250/240/230/210).  A declared fy above the table value is replaced by the table value and the
+    reduction recorded; a lower declared fy is kept.
+    Grade: the plate's own declared grade; else the job steel_grade when the declared fy does not exceed that grade's
+    designation (<=16 mm ReH); else the lowest IS 2062 grade (E250 up) whose designation is >= the declared fy
+    (inferred -- declare the plate grade to use a higher one).
+    Returns (fy_used, record); record None when fy is None."""
+    if fy_MPa is None:
+        return None, None
+    import india_is800 as _I8
+    fy = float(fy_MPa)
+    rec = {"what": what, "fy_declared_MPa": fy, "fy_used_MPa": fy, "t_mm": t_mm, "reduced": False,
+           "clause": PLATE_FY_CLAUSE, "cite": _I8.IS2062_CITE, "source": "steel_engine/india_connections.py"}
+    if t_mm is None or not _isnum(t_mm) or float(t_mm) <= 0:
+        rec.update(band_checked=False, note="%s thickness not declared: IS 2062 Table 3 band not verified for the "
+                                            "declared fy %.0f MPa (declare t_mm)" % (what, fy))
+        return fy, rec
+    key, basis = None, None
+    g, _q = _I8.parse_is2062_grade(grade)
+    if g in _I8.IS2062_TABLE3:
+        key, basis = g, "declared plate grade %s" % grade
+    else:
+        jg, _q = _I8.parse_is2062_grade(job_grade)
+        if jg in _I8.IS2062_TABLE3 and fy <= _I8.IS2062_TABLE3[jg][1][0] + 1e-9:
+            key, basis = jg, "job steel_grade %s (plate grade not declared)" % job_grade
+        else:
+            for cand in _PLATE_GRADES:
+                if _I8.IS2062_TABLE3[cand][1][0] >= fy - 1e-9:
+                    key, basis = cand, ("inferred %s: lowest IS 2062 grade whose designation >= the declared fy "
+                                        "(plate grade not declared -- declare it to use another grade)" % cand)
+                    break
+    if key is None:
+        rec.update(band_checked=False, note="no IS 2062 grade has ReH >= declared fy %.0f MPa" % fy)
+        return fy, rec
+    tab = _I8.is2062_properties(key, float(t_mm))
+    rec.update(grade=key, grade_basis=basis, thickness_band_mm=tab.get("thickness_band_mm"))
+    if not tab.get("found"):
+        rec.update(band_checked=False, fy_table_MPa=None,
+                   note="IS 2062 Table 3 gives no ReH for %s above 100 mm (Note 4: by agreement) -- declared fy kept, "
+                        "VERIFY with the mill certificate" % key)
+        return fy, rec
+    ft = float(tab["fy_MPa"])
+    rec.update(band_checked=True, fy_table_MPa=ft)
+    if fy > ft + 1e-9:
+        rec.update(fy_used_MPa=ft, reduced=True,
+                   note="%s: declared fy %.0f MPa exceeds IS 2062:2025 Table 3 ReH %.0f MPa for %s at t = %g mm "
+                        "(band %s mm); %.0f MPa used" % (what, fy, ft, key, float(t_mm), tab.get("thickness_band_mm"), ft))
+        return ft, rec
+    return fy, rec
+
+
+def tag_plate_fy(check, rec):
+    """Attach a plate_fy record to a check row; a reduction is stated in the row's note and cite (AUD-2)."""
+    if not isinstance(check, dict) or not rec:
+        return check
+    lst = check.get("plate_fy") if isinstance(check.get("plate_fy"), list) else []
+    if rec not in lst:
+        lst.append(rec)
+    check["plate_fy"] = lst
+    if rec.get("reduced"):
+        check["note"] = ((str(check["note"]) + "; ") if check.get("note") else "") + rec["note"]
+        c = str(check.get("cite") or "")
+        if PLATE_FY_CLAUSE not in c:
+            check["cite"] = (c + "; " if c else "") + "fy by thickness: " + PLATE_FY_CLAUSE
+    return check
+
+
 def _geom_gate(value, limit, *, clause, cite, **extra):
     """H31: geometric feasibility row (pitch / edge / fit / weld length) -- a gate, not a strength ratio: ok is
     value <= limit, dc None, gate True, so it never becomes the governing D/C of a connection."""
@@ -869,13 +943,24 @@ def _isnum(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(float(x))
 
 
-def shear_key_check(V_key_N, shear_key):
+def shear_key_check(V_key_N, shear_key, *, job_steel_grade=None):
     """GOLD-4 (IN_Ex8): the declared base shear key / lug.  Row: V_key (shear beyond friction) <= capacity_N, the
     EOR capacity with its source and cite (IS 456 bearing / lug shear, bending and weld are outside the IS 800 base
     rules the engine checks: the capacity is an EOR record, VERIFY).  Missing capacity, source or cite -> not
     evaluated (ok None, found:false): a capacity that is subtracted from the anchor shear must be traceable."""
     sk = shear_key or {}
     cap, src, cite = sk.get("capacity_N"), sk.get("source"), sk.get("cite")
+    # AUD-2: a key record that states its plate (t_mm, fy_MPa, grade?) is held to the IS 2062 Table 3 fy for that
+    # thickness; a declared fy above it scales the declared capacity by fy_table / fy_declared (conservative: only the
+    # plate shear / bending terms are proportional to fy, the concrete bearing term is not)
+    kfy = None
+    if _isnum(sk.get("fy_MPa")):
+        _fyu, kfy = plate_fy_is2062(sk.get("fy_MPa"), sk.get("t_mm"), sk.get("grade"), job_grade=job_steel_grade,
+                                    what="shear key plate")
+        if kfy and kfy.get("reduced") and _isnum(cap):
+            kfy["capacity_declared_N"] = float(cap)
+            cap = float(cap) * kfy["fy_used_MPa"] / kfy["fy_declared_MPa"]
+            kfy["note"] += "; declared capacity scaled by fy_table/fy_declared"
     miss = [k for k, v in (("capacity_N", cap), ("source", src), ("cite", cite))
             if not (_isnum(v) and float(v) > 0 if k == "capacity_N" else isinstance(v, str) and v.strip())]
     common = dict(clause="IS 800:2007 7.4.1 (base shear transfer) / 12.12.2; EOR shear key capacity",
@@ -885,9 +970,9 @@ def shear_key_check(V_key_N, shear_key):
                    reason="found:false - shear key %s missing: declare shear_key = {capacity_N, source, cite} (or "
                           "shear_key_N + shear_key_source + shear_key_cite)" % "/".join(miss), **common)
         r.update(limit=float(cap) if _isnum(cap) else None, dc=None, ok=None)      # not evaluated, never a pass
-        return r
-    return _check(V_key_N, float(cap), cite="shear key demand (shear beyond friction) <= declared capacity: %s"
-                  % cite.strip(), **common)
+        return tag_plate_fy(r, kfy)
+    return tag_plate_fy(_check(V_key_N, float(cap), cite="shear key demand (shear beyond friction) <= declared "
+                               "capacity: %s" % cite.strip(), **common), kfy)
 
 
 def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_plate_MPa, fck_MPa,
@@ -895,7 +980,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
                       shear_key=None, shear_key_source=None, shear_key_cite=None, friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
                       sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None, stiffeners=None,
-                      stiffener_axis="z"):
+                      stiffener_axis="z", plate_grade=None, job_steel_grade=None):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
@@ -921,9 +1006,19 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
       'flange_extension' | 'cross', n_per_side_y?, y_mm?} -> IS 800 7.4.2 gusseted base (stiffened_base_checks):
       plate panels (strip method, EOR method VERIFY), gusset outstand / shear / bending, gusset welds; bearing and
       anchors unchanged.  Without stiffeners the result is the unstiffened model, unchanged.
+    - plate / stiffener fy (AUD-2): IS 2062:2025 Table 3 ReH for the plate thickness (plate_fy_is2062; plate_grade,
+      stiffeners.grade, else job_steel_grade / inferred); a declared fy above the table value is reduced and recorded.
     """
     checks = {}
     cite_b = "IS 800:2007 7.4.1 (linear bearing, 0.6 fck)"
+    fy_plate_MPa, _pfy = plate_fy_is2062(fy_plate_MPa, t_plate_mm, plate_grade, job_grade=job_steel_grade,
+                                         what="base plate")
+    _sfy = None
+    if isinstance(stiffeners, dict) and stiffeners.get("fy_MPa"):
+        stiffeners = dict(stiffeners)
+        stiffeners["fy_MPa"], _sfy = plate_fy_is2062(stiffeners["fy_MPa"], stiffeners.get("t_mm"),
+                                                     stiffeners.get("grade") or plate_grade, job_grade=job_steel_grade,
+                                                     what="base stiffener (gusset)")
     M_dem, V_dem = abs(float(M_Nmm or 0.0)), abs(float(V_N or 0.0))
     if shear_key is not None or shear_key_N:
         sk_ = dict(shear_key) if isinstance(shear_key, dict) else {}
@@ -1041,7 +1136,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                                 "anchors_N": V_anchor, "clause": "IS 800:2007 7.4.1 (friction 0.45)",
                                 "cite": "shear by friction, shear key, then anchors", "ok": True}
         if shear_key is not None:
-            checks["shear_key"] = shear_key_check(max(V_dem - V_fric, 0.0), shear_key)
+            checks["shear_key"] = shear_key_check(max(V_dem - V_fric, 0.0), shear_key, job_steel_grade=job_steel_grade)
         if a.get("pitch_mm") is not None:
             checks["geometry_anchor_pitch"] = _geom_gate(2.5 * a["d_mm"], a["pitch_mm"], clause="IS 800:2007 10.2.2",
                                                      cite="pitch >= 2.5 d")
@@ -1067,7 +1162,8 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         checks["shear_path"] = _check(V_dem, friction_mu * max(P, 0.0) + (shear_key_N or 0.0),
                                       clause="IS 800:2007 7.4.1", cite="friction 0.45 x compression (+ key)")
     if shear_key is not None and "shear_key" not in checks:
-        checks["shear_key"] = shear_key_check(max(V_dem - friction_mu * max(P, 0.0), 0.0), shear_key)
+        checks["shear_key"] = shear_key_check(max(V_dem - friction_mu * max(P, 0.0), 0.0), shear_key,
+                                              job_steel_grade=job_steel_grade)
     # plate thickness
     a_proj = (L_mm - 0.95 * col_d_mm) / 2.0
     b_proj = (B_mm - 0.8 * col_bf_mm) / 2.0
@@ -1129,6 +1225,11 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
             if p7 is not None:
                 stiff["checks"]["plate_thickness"]["t_req_unstiffened_7_4_3_1_mm"] = p7.get("t_req_mm")
         checks.update(stiff["checks"])
+    for k_, c_ in checks.items():                      # AUD-2: fy basis on every plate / stiffener row
+        if k_.startswith("plate_thickness"):
+            tag_plate_fy(c_, _pfy)
+        elif k_.startswith("gusset_"):
+            tag_plate_fy(c_, _sfy)
     if weld_length_mm is not None:
         per = col_perimeter_mm or (2 * col_bf_mm + 2 * col_d_mm - 2 * 0)  # outer outline upper bound
         checks["geometry_weld_length"] = _geom_gate(weld_length_mm, per, clause="geometric feasibility",
@@ -1139,6 +1240,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     out = {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
            "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
            "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+    out["plate_fy"] = _pfy
+    if _sfy is not None:
+        out["stiffener_fy"] = _sfy
     if stiff is not None:
         out["stiffened"] = {k: v for k, v in stiff.items() if k != "checks"}
         if stiff.get("applied"):
@@ -1289,12 +1393,16 @@ def prying_10_4_7(*, Te_N, lv_mm, le_mm, t_mm, be_mm, fo_MPa, fy_MPa, pretension
 
 
 def end_plate_moment_capacity(*, rows, d_mm, grade="8.8", t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
-                              pretensioned=True, bolt_type="HSFG", Anb_mm2=None, fub_MPa=None, fyb_MPa=None):
+                              pretensioned=True, bolt_type="HSFG", Anb_mm2=None, fub_MPa=None, fyb_MPa=None,
+                              plate_grade=None, job_steel_grade=None):
     """Bolted end-plate moment connection: capacity = sum over tension bolt rows of (2 Te_row x h_row) where the
     bolt tension Te per bolt is limited by (i) 10.3.5 Tdb with the 10.4.7 prying force added (Te + Q <= Tdb) and
     (ii) the end-plate bending at the bolt line per pair, M = Te lv - Q le <= 1.2 (be t^2/6) fy/gamma_m0 (8.2.1.2
     cap on a plate strip).  rows = [{h_mm (lever arm from the compression flange centre), n_pairs (default 1)}].
-    The compression side (flange bearing / column continuity / panel zone) is checked at the joint (12.11.2.3-.5)."""
+    The compression side (flange bearing / column continuity / panel zone) is checked at the joint (12.11.2.3-.5).
+    AUD-2: the end-plate fy is the IS 2062 Table 3 value for t_plate_mm (plate_fy_is2062) when the declared is higher."""
+    fy_plate_MPa, _pfy = plate_fy_is2062(fy_plate_MPa, t_plate_mm, plate_grade, job_grade=job_steel_grade,
+                                         what="end plate")
     one = bolt_capacity_is800(d_mm, grade, nn=1, ns=0, e_mm=None, p_mm=None, Anb_mm2=Anb_mm2, fub_MPa=fub_MPa,
                               fyb_MPa=fyb_MPa)
     Tdb = one.get("Tdb_N")
@@ -1323,30 +1431,38 @@ def end_plate_moment_capacity(*, rows, d_mm, grade="8.8", t_plate_mm, fy_plate_M
     out = {"found": True, "capacity_Nmm": Mcap, "Te_per_bolt_N": Te, "Q_per_bolt_N": Q, "Tdb_N": Tdb,
            "governing": "bolt tension + prying" if Te_bolt <= Te_plate else "end-plate bending", "Te_bolt_N": Te_bolt,
            "Te_plate_N": Te_plate, "Mp_strip_Nmm": Mp_strip, "le_used_mm": le, "rows": terms, "cite": cite,
-           "bolt_type": bolt_type, "type": "end_plate"}
+           "bolt_type": bolt_type, "type": "end_plate", "plate_fy": _pfy}
+    if _pfy and _pfy.get("reduced"):
+        out["note"] = _pfy["note"]
+        out["cite"] = cite + "; fy by thickness: " + PLATE_FY_CLAUSE
     g = hsfg_gate(bolt_type)
     out["12.4.1"] = g
     return out
 
 
 def cover_plate_moment_capacity(*, Zp_beam_mm3, fy_beam_MPa, plate_b_mm, plate_t_mm, d_beam_mm, fy_plate_MPa=None,
-                                weld=None):
+                                weld=None, plate_grade=None, job_steel_grade=None):
     """Reinforced (cover-plated) CJP-welded moment connection at the column face: Mcap = (Zp,beam + Zp,plates)
     fy/gamma_m0 with Zp,plates = b t (d + t) (one plate each flange); the plate-to-flange fillet welds must carry the
     plate force b t fy/gamma_m0 (10.5.7) and the plate-to-column welds are CJP (12.4.2).  weld = {size_mm, length_mm
     (per plate, total), fu_MPa, site}."""
-    fyp = float(fy_plate_MPa or fy_beam_MPa)
+    # AUD-2: cover-plate fy = IS 2062 Table 3 value for plate_t_mm when the declared (or beam) fy is higher
+    fyp, _pfy = plate_fy_is2062(float(fy_plate_MPa or fy_beam_MPa), plate_t_mm, plate_grade, job_grade=job_steel_grade,
+                                what="cover plate")
     Zp_pl = float(plate_b_mm) * float(plate_t_mm) * (float(d_beam_mm) + float(plate_t_mm))
     Mcap = (float(Zp_beam_mm3) * float(fy_beam_MPa) + Zp_pl * fyp) / GAMMA_M0
     out = {"found": True, "capacity_Nmm": Mcap, "Zp_plates_mm3": Zp_pl, "Zp_beam_mm3": float(Zp_beam_mm3),
            "cite": "IS 800:2007 8.2.1.2 (plastic section at the column face incl. cover plates) / 10.5.7.1.2 CJP",
-           "type": "welded_cover_plate", "weld_type": "cjp"}
+           "type": "welded_cover_plate", "weld_type": "cjp", "plate_fy": _pfy}
+    if _pfy and _pfy.get("reduced"):
+        out["note"] = _pfy["note"]
+        out["cite"] += "; fy by thickness: " + PLATE_FY_CLAUSE
     if weld:
         Fpl = float(plate_b_mm) * float(plate_t_mm) * fyp / GAMMA_M0
         w = fillet_weld_capacity_is800_N(**weld)
         if w.get("found"):
-            out["plate_weld_check"] = _check(Fpl, w["capacity_N"], clause="IS 800:2007 10.5.7",
-                                             cite="cover-plate fillet welds carry the plate force b t fy/gamma_m0")
+            out["plate_weld_check"] = tag_plate_fy(_check(Fpl, w["capacity_N"], clause="IS 800:2007 10.5.7",
+                                             cite="cover-plate fillet welds carry the plate force b t fy/gamma_m0"), _pfy)
             if out["plate_weld_check"]["dc"] > 1.0:
                 out["capacity_Nmm"] = (float(Zp_beam_mm3) * float(fy_beam_MPa) + Zp_pl * fyp * w["capacity_N"] / Fpl) / GAMMA_M0
                 out["governing"] = "cover-plate welds"
@@ -1356,11 +1472,23 @@ def cover_plate_moment_capacity(*, Zp_beam_mm3, fy_beam_MPa, plate_b_mm, plate_t
 
 
 def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plate_MPa, bolts, weld=None,
-                           block_shear_areas=None, cjp=None):
+                           block_shear_areas=None, cjp=None, plate_grade=None, job_steel_grade=None, n_plates=1):
     """Simple (shear) beam-end connection: bolt group 10.3, plate shear yield 8.4.1 (Av fy/(sqrt3 gamma_m0)),
     block shear 6.4.1 (areas from block_shear_bolted_areas), plate-to-support weld 10.5.7 (fillet) or 10.5.7.1.2
-    (CJP).  Returns {checks{}, capacity_N (minimum), ok, dc}."""
+    (CJP).  Returns {checks{}, capacity_N (minimum), ok, dc}.
+    AUD-2: the plate fy (and the CJP parent fy at its t_mm) is the IS 2062 Table 3 value for the thickness when the
+    declared value is higher (plate_fy_is2062); t_plate_mm is the total of n_plates equal plates (double fin plates:
+    n_plates 2), the band is read at t_plate_mm / n_plates."""
     checks = {}
+    n_pl = max(int(n_plates or 1), 1)
+    fy_plate_MPa, _pfy = plate_fy_is2062(fy_plate_MPa, float(t_plate_mm) / n_pl if _isnum(t_plate_mm) else t_plate_mm,
+                                         plate_grade, job_grade=job_steel_grade,
+                                         what="fin / shear plate" + (" (each of %d)" % n_pl if n_pl > 1 else ""))
+    _cfy = None
+    if cjp and cjp.get("fy_MPa"):
+        cjp = dict(cjp)
+        cjp["fy_MPa"], _cfy = plate_fy_is2062(cjp["fy_MPa"], cjp.get("t_mm"), plate_grade, job_grade=job_steel_grade,
+                                              what="fin plate CJP parent")
     b = dict(bolts)
     n = b.pop("n_bolts")
     g = bolt_group_capacity_is800(n, b.pop("d_mm"), b.pop("grade", "8.8"), V_N=V_N, **b)
@@ -1383,6 +1511,9 @@ def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plat
         checks["support_weld"] = _check(abs(V_N), w["capacity_N"], clause="IS 800:2007 10.5.7", cite=w["cite"]) \
             if w.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None,
                                           reason=str(w.get("required_inputs")))
+    for k_ in ("plate_shear_8_4_1", "block_shear_6_4_1"):
+        tag_plate_fy(checks.get(k_), _pfy)
+    tag_plate_fy(checks.get("support_weld") if cjp else None, _cfy)
     caps = [c["limit"] for c in checks.values() if c.get("limit")]
     oks = [c.get("ok") for c in checks.values()]
     return {"found": bool(caps), "checks": checks, "capacity_N": min(caps) if caps else None,
@@ -1405,7 +1536,7 @@ def _splice_flange_force(P, Mz, My, *, Af, A, d, bf, axial_share, bearing):
 
 def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_mm, splice, My_Nmm=0.0, cases=None,
                          bf_mm=None, tf_mm=None, tw_mm=None, is18168=None, tie_force_N=None, Hc_mm=None,
-                         Zx_lower_mm3=None):
+                         Zx_lower_mm3=None, job_steel_grade=None):
     """Column splice checks of DECLARED geometry.
     IS 800: SFRS columns 12.5.2.2 (each flange splice >= 1.2 fy Af; PJP welds 200 % of required, 12.5.2.1); gravity
     columns for the member forces, per combination with concurrent P, Mz, My (H10): flange force
@@ -1420,7 +1551,22 @@ def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_m
     12.2.4.6 / 12.3.4.7 (SCBF, EBF): >= 0.5 Mp of the smaller connected member and shear > sum Mp / Hc.
     splice = {type: 'flange_plates'|'cjp'|'pjp', plate: {A_mm2, fy_MPa}, bolts: {...}, weld: {...} (fillet for the
     flange plates; CJP record {matching_electrode: bool, electrode, t_mm?}), web_plate: {A_mm2, fy_MPa, Av_mm2?},
-    web_bolts: {...}, bearing: bool, tie_force_N?, Hc_mm?}."""
+    web_bolts: {...}, bearing: bool, tie_force_N?, Hc_mm?}.
+    AUD-2: plate / web_plate {t_mm (or b_mm with A_mm2), grade?} -> fy = IS 2062 Table 3 value for that thickness when
+    the declared fy is higher (plate_fy_is2062; splice['plate_grade'] or the job steel_grade otherwise)."""
+    _pfy = {}
+    splice = dict(splice or {})
+    for key_ in ("plate", "web_plate"):
+        pl_ = splice.get(key_)
+        if isinstance(pl_, dict) and pl_.get("fy_MPa"):
+            pl_ = dict(pl_)
+            t_ = pl_.get("t_mm")
+            if t_ is None and pl_.get("b_mm") and pl_.get("A_mm2"):
+                t_ = float(pl_["A_mm2"]) / float(pl_["b_mm"])
+            pl_["fy_MPa"], _pfy[key_] = plate_fy_is2062(pl_["fy_MPa"], t_, pl_.get("grade") or splice.get("plate_grade"),
+                                                        job_grade=job_steel_grade,
+                                                        what="splice %s" % key_.replace("_", " "))
+            splice[key_] = pl_
     typ = str(splice.get("type") or "").lower()
     A, Af, d = float(A_mm2), float(Af_mm2), float(d_mm)
     bf = float(bf_mm) if bf_mm else None
@@ -1572,6 +1718,9 @@ def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_m
             else:
                 checks["splice_shear_sumMp_Hc"] = _check(Vdem, None, clause=clv, cite="shear > sum Mp / Hc", ok=None,
                                                          reason="web splice plate / web bolts or Hc not declared")
+    tag_plate_fy(checks.get("plate_yield_6_2"), _pfy.get("plate"))
+    for k_ in ("web_plate_6_2", "splice_shear_sumMp_Hc"):
+        tag_plate_fy(checks.get(k_), _pfy.get("web_plate"))
     caps = [c["limit"] for c in checks.values() if isinstance(c.get("limit"), (int, float))]
     oks = [c.get("ok") for c in checks.values()]
     return {"found": bool(caps) or any(c.get("gate") for c in checks.values()), "checks": checks, "demand_N": Ff_dem,

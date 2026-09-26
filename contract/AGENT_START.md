@@ -398,6 +398,19 @@ You:
      the 5.5 demands — plates >= 1.2 Ry x the flange / web strength, and (SCBF / EBF) >= 0.5 Mp of the smaller
      member with shear > sum Mp / Hc. Every combination is checked with concurrent P, Mz, My; the flange force is
      P Af/A + Mz/d + 3 My/bf with a web splice (P/2 + ... without).
+   * Plate yield stress by thickness (AUD-2): every plate check (base plate, base `stiffeners`, gusset, splice
+     `plate` / `web_plate`, cover / end / fin plates and a `shear_key` that states its plate) uses the IS 2062
+     (Part 1):2025 Table 3 ReH of the plate's grade for ITS thickness band (<=16 / >16-40 / >40-100 / >100 mm;
+     E250 250 / 240 / 230 / 210, E350 350 / 330 / 320 / 290). A declared fy above the table value is replaced by it
+     and the row records `plate_fy` {fy_declared_MPa, fy_table_MPa, fy_used_MPa, grade, grade_basis,
+     thickness_band_mm, reduced} with a note and the IS 2062 cite; a lower declared fy is kept. Grade: the plate's own
+     `grade` (gusset, stiffeners, splice plate, shear_key) or the spec's `plate_grade`, else `cfg['plate_grade']`,
+     else `cfg['steel_grade']` when the declared fy does not exceed that grade's designation, else the lowest grade
+     whose designation >= the declared fy (inferred, stated) -- declare `plate_grade` (e.g. 'E350 B0') for a
+     higher-grade plate. Splice plates need `t_mm` (or `b_mm` with A_mm2) for the band; without it the row states
+     that the band was not verified. Fin / shear plates: `t_plate_mm` is the total thickness; with two (or more)
+     equal plates declare `n_plates` so the band is read per plate. `shear_key` may state its plate {t_mm, fy_MPa,
+     grade}: a declared fy above the band scales the declared capacity by fy_table / fy_declared.
    * `column_lateral_support_both_flanges` (12.11.3.3), `sway_frame`, `brace_config` ('X'|'diagonal'),
      `eor_weld_exception`, `apply_is18168` (True / False override of the IS 18168 applicability rule below),
      `section12_inputs` (extra declared Section 12 / IS 18168 detail inputs passed to the checks).

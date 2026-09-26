@@ -50,6 +50,23 @@ def _props(sec, member=None):
     return S.props(sec)
 
 
+def _plate_grades(cfg, sp=None):
+    """AUD-2: (plate_grade, job_steel_grade) for the IS 2062 Table 3 plate fy (india_connections.plate_fy_is2062):
+    the spec's own plate_grade, else cfg['plate_grade'] (both declared plate grades), and the job steel_grade."""
+    cfg = cfg or {}
+    return ((sp or {}).get("plate_grade") or cfg.get("plate_grade")), cfg.get("steel_grade")
+
+
+def _with_grades(d, cfg, sp=None):
+    d = dict(d or {})
+    pg, jg = _plate_grades(cfg, sp)
+    if d.get("plate_grade") is None and pg is not None:
+        d["plate_grade"] = pg
+    if d.get("job_steel_grade") is None and jg is not None:
+        d["job_steel_grade"] = jg
+    return d
+
+
 def _fy(member, p):
     m = I8.material_for_section(p, member.get("grade"), process=member.get("process"))
     return m.get("fy_MPa"), m.get("fu_MPa")
@@ -65,6 +82,11 @@ def brace_end_connection(cfg, member):
         return None
     conn = {"id": "conn-%s" % member["id"], "member_id": member["id"], "kind": "brace_end"}
     conn.update({k: v for k, v in sp.items() if k not in ("welds",)})
+    pg, jg = _plate_grades(cfg, sp)                     # AUD-2: gusset fy by thickness (india_is800_s12)
+    if pg is not None:
+        conn.setdefault("plate_grade", pg)
+    if jg is not None:
+        conn.setdefault("job_steel_grade", jg)
     w = sp.get("welds")
     if w:
         w = dict(w)
@@ -90,14 +112,14 @@ def beam_column_connection(cfg, beam_member, p_beam, fy_beam, *, col_props=None)
     out = {"type": typ, "weld_type": sp.get("weld_type"), "bolt_type": sp.get("bolt_type"), "cite": sp.get("cite"),
            "source": SRC}
     if typ == "end_plate":
-        ep = dict(sp.get("end_plate") or {})
+        ep = _with_grades(sp.get("end_plate"), cfg, sp)
         r = C.end_plate_moment_capacity(**ep)
         out["moment"] = r
         out["moment_capacity_Nmm"] = r.get("capacity_Nmm")
         out["bolt_type"] = out["bolt_type"] or ep.get("bolt_type", "HSFG")
         out["cite"] = out["cite"] or r.get("cite")
     elif typ in ("welded_cover_plate", "cover_plate"):
-        cp = dict(sp.get("cover_plate") or {})
+        cp = _with_grades(sp.get("cover_plate"), cfg, sp)
         r = C.cover_plate_moment_capacity(Zp_beam_mm3=p_beam["Zx"], fy_beam_MPa=fy_beam, d_beam_mm=p_beam["d"], **cp)
         out["moment"] = r
         out["moment_capacity_Nmm"] = r.get("capacity_Nmm")
@@ -108,7 +130,7 @@ def beam_column_connection(cfg, beam_member, p_beam, fy_beam, *, col_props=None)
         out["moment_capacity_Nmm"] = p_beam["Zx"] * fy_beam / C.GAMMA_M0
         out["weld_type"] = out["weld_type"] or "cjp"
         out["cite"] = out["cite"] or "IS 800:2007 10.5.7.1.2 (CJP = parent metal): Zp fy/gamma_m0 at the column face"
-    sh = sp.get("shear")
+    sh = _with_grades(sp.get("shear"), cfg, sp) if sp.get("shear") else None
     if sh:
         out["shear"] = C.fin_plate_shear_checks(V_N=float(sh.pop("V_N", 0.0) or 0.0), **sh) if "V_N" in sh else None
         out["shear_spec"] = sh
@@ -128,8 +150,9 @@ def beam_shear_connection_checks(cfg, beam_member, V_N, *, sfrs=False):
     sp = spec_for(cfg, "beam_shear", beam_member["section"], "beam")
     if not sp:
         return None
-    keys = ("t_plate_mm", "h_plate_mm", "fy_plate_MPa", "fu_plate_MPa", "bolts", "weld", "block_shear_areas", "cjp")
-    sp = {k: v for k, v in sp.items() if k in keys}
+    keys = ("t_plate_mm", "h_plate_mm", "fy_plate_MPa", "fu_plate_MPa", "bolts", "weld", "block_shear_areas", "cjp",
+            "plate_grade", "n_plates")
+    sp = _with_grades({k: v for k, v in sp.items() if k in keys}, cfg, sp)
     r = C.fin_plate_shear_checks(V_N=float(V_N), **sp)
     return r
 
@@ -147,6 +170,11 @@ def base_entry(cfg, col_member, load_cases):
     for k, v in sp.items():
         if k not in ("fixed", "axis"):
             b[k] = v
+    pg, jg = _plate_grades(cfg, sp)                     # AUD-2: IS 2062 Table 3 plate fy by thickness
+    if pg is not None:
+        b.setdefault("plate_grade", pg)
+    if jg is not None:
+        b.setdefault("job_steel_grade", jg)
     return b
 
 
@@ -189,6 +217,8 @@ def column_splice(cfg, col_member, p, fy, records, *, sfrs, tags_of=None, seismi
                                          "clause": "IS 800:2007 12.5.2 (not applicable: no splice)",
                                          "cite": "column continuous over this length (declared)"}}}
     import static_model as SM
+    if sp.get("plate_grade") is None and (cfg or {}).get("plate_grade") is not None:
+        sp["plate_grade"] = cfg["plate_grade"]           # AUD-2
     cases = []
     for lab, r in (records or {}).items():
         d = dict(zip(SM.REC_FIELDS, list(r) + [0.0] * (len(SM.REC_FIELDS) - len(r))))
@@ -210,7 +240,8 @@ def column_splice(cfg, col_member, p, fy, records, *, sfrs, tags_of=None, seismi
     return C.column_splice_checks(sfrs=sfrs, Af_mm2=p["bf"] * p["tf"], fy_MPa=fy, P_N=P, M_Nmm=M, Zx_mm3=p["Zx"],
                                   A_mm2=p["A"], d_mm=p["d"], splice=sp, cases=cases, bf_mm=p["bf"], tf_mm=p["tf"],
                                   tw_mm=p["tw"], is18168=a18, tie_force_N=tie_force_N, Hc_mm=Hc_mm,
-                                  Zx_lower_mm3=Zx_lower_mm3)
+                                  Zx_lower_mm3=Zx_lower_mm3,
+                                  job_steel_grade=(cfg or {}).get("steel_grade"))
 
 
 # ------------------------------------------------------------------------------------------ HSFG slip (10.4.3)

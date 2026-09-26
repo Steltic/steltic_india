@@ -467,7 +467,10 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
         out.append(_na("brace_conn_fasteners", clause="IS 800:2007 10.3/10.5", cite="bolts/welds", member=m["id"],
                        reason="no bolts or welds declared"))
     gus = conn.get("gusset") or {}
-    fyg = gus.get("fy_MPa")
+    # AUD-2: gusset fy = IS 2062:2025 Table 3 ReH for the gusset thickness when the declared fy is higher
+    fyg, _gfy = C.plate_fy_is2062(gus.get("fy_MPa"), gus.get("t_mm"), gus.get("grade") or conn.get("plate_grade"),
+                                  job_grade=conn.get("job_steel_grade"), what="gusset plate")
+    _n0 = len(out)
     fug = gus.get("fu_MPa")
     bs = C.block_shear(Avg_mm2=gus.get("Avg_mm2"), Avn_mm2=gus.get("Avn_mm2"), Atg_mm2=gus.get("Atg_mm2"),
                        Atn_mm2=gus.get("Atn_mm2"), fy_MPa=fyg, fu_MPa=fug)
@@ -504,6 +507,9 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
     else:
         out.append(_na("gusset_out_of_plane_buckling", clause="IS 800:2007 %s.4" % pre, cite="gusset buckling",
                        member=m["id"], reason="Whitmore geometry or brace Pd missing"))
+    for r_ in out[_n0:]:
+        if r_.get("id") in ("brace_conn_block_shear", "gusset_whitmore_yield", "gusset_out_of_plane_buckling"):
+            C.tag_plate_fy(r_, _gfy)
     # 12.x.3.3 1.2 Mp about the (critical) buckling axis (SCBF/OCBF; EBF braces pinned to the link -- 12.3.4.6 needs a
     # fully restrained connection only where the brace resists part of the link end moment)
     if fy and sysn == "EBF":

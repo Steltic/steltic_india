@@ -23,7 +23,10 @@ def box():
 
 
 # ---------------------------------------------------------------- unstiffened model unchanged (golden = pre-X03 code)
-UNSTIFF_KW = dict(B_mm=700, L_mm=750, t_plate_mm=45, fy_plate_MPa=240, fck_MPa=30, col_d_mm=300, col_bf_mm=300,
+# AUD-2: a 45 mm plate is in the IS 2062 Table 3 >40-100 band (E250: 230 MPa); the golden values were computed at
+# fy 240, which is within the band value of E275 (255 MPa) -- the plate grade is declared so the golden stays valid.
+UNSTIFF_KW = dict(B_mm=700, L_mm=750, t_plate_mm=45, fy_plate_MPa=240, plate_grade="E275", fck_MPa=30, col_d_mm=300,
+                  col_bf_mm=300,
                   col_tf_mm=19, anchors={"n_total": 8, "n_tension": 3, "d_mm": 30, "grade": "8.8", "f_mm": 290,
                                          "pitch_mm": 150, "edge_mm": 60, "n_per_row": 3})
 GOLDEN = [  # (P, Mz, My, V) -> (dc, ok, plate key, plate value) from the code before X03 (fix/2026-09-review 98691c4)
@@ -91,9 +94,11 @@ def test_gusset_loads_hand_check_uniform_pressure():
     b_pl = (B - 0.8 * bf) / 2
     assert pt["M_comp_stiffened"] == pytest.approx(Mc, rel=1e-9)
     assert pt["M_side_zone"] == pytest.approx(w * b_pl ** 2 / 2, rel=1e-9)
-    Vd = 250 * 20 * 250 / (math.sqrt(3) * 1.10)
+    # AUD-2: the 20 mm gusset is in the IS 2062 Table 3 >16-40 band -> fy 240 (declared 250 reduced and recorded)
+    Vd = 250 * 20 * 240 / (math.sqrt(3) * 1.10)
     assert r["checks"]["gusset_shear_8_4"]["limit"] == pytest.approx(Vd)
-    eps = 1.0
+    assert r["checks"]["gusset_shear_8_4"]["plate_fy"][0]["reduced"] is True
+    eps = math.sqrt(250.0 / 240.0)                                  # AUD-2: eps at the band fy 240
     assert r["checks"]["gusset_outstand_table2"]["limit"] == pytest.approx(13.6 * eps)
     assert r["checks"]["gusset_outstand_table2"]["dc"] is None                  # a gate, never the governing D/C
 
