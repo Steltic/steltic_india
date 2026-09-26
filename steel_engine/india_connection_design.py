@@ -12,7 +12,12 @@ cfg['connections'] = {
   'beam_shear':   {<beam section> | 'default': fin_plate_shear_checks inputs (gravity beams)},
   'column_base':  {<column section> | 'default': base_plate_design geometry (B_mm, L_mm, t_plate_mm, fy_plate_MPa,
                    fck_MPa, anchors{n_total, n_tension, d_mm, grade, f_mm, pitch_mm, edge_mm, n_per_row},
-                   Ec_MPa? (default IS 456 5000 sqrt fck), embedment{capacity_N, cite}?, fixed (bool), Hc_mm?)},
+                   Ec_MPa? (default IS 456 5000 sqrt fck), embedment{capacity_N, cite}?, fixed (bool), Hc_mm?,
+                   X03 stiffeners?{n_per_side | x_mm, t_mm, h_mm (at the column face), fy_MPa, weld{size_mm, fu_MPa,
+                   site?} | weld_column / weld_plate {type 'fillet'|'cjp', ...}, layout 'flange_extension'|'cross',
+                   n_per_side_y?, y_mm?} (IS 800 7.4.2 gusseted base; anchors.x_mm / y_mm = tension-row anchor
+                   positions across the plate), or type 'embedded' with embedded{capacity_Nmm, capacity_Nmm_y?,
+                   capacity_N (shear), capacity_P_N?, capacity_T_N?, source, cite} (found:false without source+cite))},
   'column_splice': {<upper column section> | 'default': column_splice_checks 'splice' dict | {'none': True, note}},
 }
 Capacities are computed here from that geometry with india_connections (never from the demand).  Missing geometry
