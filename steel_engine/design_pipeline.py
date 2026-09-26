@@ -1005,7 +1005,7 @@ def design_india(name, cfg, outdir):
                                "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
                                                                           {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
                                                                       for k, v in res["capacities"].items()},
-                               "DC": dc, "governing_element_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})})
+                               "DC": dc, "governing_element_result": _governing_result(res)})
 
     # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
     import india_connection_design as CD
@@ -1357,8 +1357,13 @@ def design_india(name, cfg, outdir):
                            "zone": G.zone_of(cfg), "W_engine_kN": round(sum(E.floor_w(cfg, k) for k in range(1, NFlev + 1)) / 1e3, 1),
                            "W_design_kN": ss.get("W_kN"),
                            "W_by_floor_engine_kN": [round(E.floor_w(cfg, k) / 1e3, 1) for k in range(1, NFlev + 1)]}
-    pkg["load_plan"] = {"seismic_summary": ss, "retrieval": plan.get("retrieval"),
-                        "story_forces_units": plan.get("story_forces_units")}
+    # H43: the whole load plan (wind / gravity summaries, member_wind, retrieval, ...) minus the bulky story-force arrays
+    pkg["load_plan"] = _jsonable({k: v for k, v in plan.items() if k != "story_forces"})
+    pkg["load_plan"]["seismic_summary"] = ss
+    pkg["load_plan"]["story_forces_keys"] = sorted((plan.get("story_forces") or {}).keys()) \
+        if isinstance(plan.get("story_forces"), dict) else None
+    if cfg.get("vibration_screen"):
+        pkg["vibration_screen"] = _jsonable(cfg["vibration_screen"])     # H31: structured footfall screen record
     pkg["zero_demand_elements"] = zero
     pkg["beam_deflection"] = run.get("beam_deflection_rows")
     pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
@@ -1372,7 +1377,7 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
-        pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway (WP6-fix: recorded)
+    pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway, every job (H43)
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
@@ -1412,6 +1417,36 @@ def design_india(name, cfg, outdir):
     print("[%s] %d combinations, %d elements, %s -> demands + IS 800 checks written; status %s"
           % (name, len(cases), len(reg), run.get("method"), st["status"]))
     return {"members": len(reg), "combos": len(cases), "outdir": outdir, "status": st["status"]}
+
+
+def _governing_result(res):
+    """H43 (HR-C-08): the member result without the per-combination list, but keeping the governing combination's
+    check record (incl. the LTB Md / chi_LT / lambda_LT that live only in per_combo)."""
+    out = {k: v for k, v in res.items() if k != "per_combo"}
+    pcs = res.get("per_combo")
+    gc = res.get("governing_combo")
+    gov = None
+    if isinstance(pcs, dict):
+        gov = pcs.get(gc)
+        if gov is not None and not isinstance(gov, dict):
+            gov = None
+        if gov is not None:
+            gov = dict(gov, combo=gc)
+    elif isinstance(pcs, list):
+        cand = [p for p in pcs if isinstance(p, dict)]
+        gov = next((p for p in cand if gc is not None and (p.get("combo") == gc or p.get("label") == gc)), None)
+        if gov is None and cand:
+            gov = max(cand, key=lambda p: p.get("dc") if isinstance(p.get("dc"), (int, float)) else -1)
+    if gov is not None:
+        out["governing_combo_record"] = gov
+        ltb = [c for c in (gov.get("checks") or []) if isinstance(c, dict) and c.get("Mdz_LTB_Nmm") is not None]
+        if ltb:
+            g = max(ltb, key=lambda c: c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1)
+            out["governing_ltb"] = {k: g.get(k) for k in ("moment_sign", "LLT_mm", "Mdz_LTB_Nmm", "chi_LT",
+                                                         "lambda_LT", "dc")}
+            out["governing_ltb"]["combo"] = gov.get("combo")
+            out["governing_ltb"]["clause"] = "IS 800:2007 8.2.2 (LTB) in the 9.3 interaction"
+    return _jsonable(out)
 
 
 def _collector_demands(cfg, pkg, run, envt, reg):

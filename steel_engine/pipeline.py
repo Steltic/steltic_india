@@ -116,9 +116,9 @@ def design_and_report(name, cfg=None, do_report=True):
 
     # 2) India load_plan combinations + per-member DEMAND envelope (NO capacities -- agent/RAG)
     import design_pipeline as DP
-    if E._india_job(cfg) and not os.path.exists(os.path.join(root, "load_plan.json")):
-        try:                                     # the resolved load plan is part of the package (provenance hash)
-            json.dump(DP._jsonable(cfg.get("load_plan") or {}), open(os.path.join(root, "load_plan.json"), "w"), indent=1)
+    if E._india_job(E.CFG.get(name)):
+        try:     # the resolved load plan is part of the package (provenance hash); rewritten every run (H43, L-03)
+            json.dump(DP._jsonable(E.CFG[name].get("load_plan") or {}), open(os.path.join(root, "load_plan.json"), "w"), indent=1)
         except Exception:
             pass
     out["demands_written"] = bool(DP.design(name, outdir=os.path.join(root, "design")))
