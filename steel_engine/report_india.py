@@ -250,6 +250,20 @@ def _gravity_table(cfg):
     return _t(["Load", "Value", "Unit"], rows)
 
 
+def _erection_text(pkg):
+    """X07: the braces-after-dead-load assumption as recorded in the package (default: braces carry all gravity)."""
+    er = (pkg or {}).get("erection_sequence")
+    if not er:
+        return "braces present for all gravity loads (default; conservative for the braces)"
+    rel = sorted({t for s in er.get("states") or [] for t in (s.get("braces_released") or [])})
+    held = any(s.get("temporary_lateral_restraint") for s in er.get("states") or [])
+    return ("braces connected after the dead load (cfg braces_after_dead_load = %s; %d brace elements): %s. %s%s "
+            "Basis: %s -- to be shown on the drawings and confirmed by the EOR (verify)."
+            % (er.get("braces_after_dead_load"), len(rel), er.get("pre_brace_loads"), er.get("method"),
+               " The frame needed temporary lateral restraint in the pre-brace state." if held else "",
+               er.get("cite")))
+
+
 def _seismic_table(cfg, pkg, run):
     plan = cfg.get("load_plan") or {}
     ss = plan.get("seismic_summary") or {}
@@ -598,7 +612,8 @@ def build_report_india(name, root):
         ["Joints", str((cfg.get("model") or {}).get("joints", "&mdash;"))],
         ["Diaphragm", "rigid in-plane, master node per level"],
         ["Second order", "P-&Delta; on every gravity state (Newton), laterals as linear increments"],
-        ["Floor load distribution", str(cfg.get("floor_system") or "one-way")]]))
+        ["Floor load distribution", str(cfg.get("floor_system") or "one-way")],
+        ["Erection sequence (braces)", _erection_text(pkg)]]))
     try:
         parts.append(R._img(R._joint_figure(cfg), "Modelled joint and base fixity", full=True))
     except Exception as ex:

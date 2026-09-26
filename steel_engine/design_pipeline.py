@@ -1577,6 +1577,8 @@ def design_india(name, cfg, outdir):
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
     pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway, every job (H43)
+    if (sinfo or {}).get("erection"):          # X07: erection-sequence assumption (braces after the dead load)
+        pkg["erection_sequence"] = _jsonable(sinfo["erection"])
     if ((plan.get("wind_summary") or {}).get("across_wind")):
         try:                                   # X05: IS 875-3 10.3 across-wind patterns + 10.4 rows actually used
             import india_combos as _IC
