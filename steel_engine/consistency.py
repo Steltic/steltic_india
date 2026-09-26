@@ -601,14 +601,16 @@ def _consultancy_issues(cfg, pkg):
         out.append("long-span (>= 12 m) roof framing and NO ponding evaluation in calc_package -- "
                    "check ponding / impounded rain (roof slope + secondary drainage head; IS 875 (Part 4) "
                    "for snow-water) and record it")
-    # A6 footfall vibration: long floor spans or vibration-sensitive occupancy
-    floor_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor"
-                     and _len_m(m) >= 12.0 for m in mem)
+    # A6 footfall vibration: long floor spans or vibration-sensitive occupancy (H31: cfg['roof_levels'] are roofs,
+    # not floors; cleared only by a structured cfg/pkg['vibration_screen'] {basis, result, cite}, never by a keyword)
+    floor_long = _has_floor_levels(cfg) and any(
+        isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor" and _len_m(m) >= 12.0 for m in mem)
     sens = any(k in arch for k in ("lab", "laborator", "hospital", "gym", "assembly", "vibration"))
-    if (floor_long or sens) and "vibration" not in blob:
+    if (floor_long or sens) and not _vibration_screen_ok(cfg, pkg):
         out.append("footfall VIBRATION serviceability not addressed (long floor spans and/or "
                    "vibration-sensitive occupancy) -- IS 800:2007 5.6.4 / Annex (floor vibration) screen: "
-                   "fundamental frequency and acceleration vs occupancy, recorded in the package")
+                   "fundamental frequency and acceleration vs occupancy, recorded as cfg['vibration_screen'] = "
+                   "{'basis', 'result', 'cite'}")
     # A1 composite floors: the cfg declares a composite floor system -> the package must carry the
     # Ch. I essentials (studs + camber + the unshored wet-concrete stage), OR an explicit scope
     # statement (bare-steel lower bound / composite excluded / delegated). Content-clearable.
@@ -647,13 +649,79 @@ def _consultancy_issues(cfg, pkg):
     if float(cfg.get("snow", 0) or 0) > 0 and stepish and "drift" not in blob.replace("drift_", ""):
         out.append("snow present with roof steps/parapets/setbacks and no DRIFT surcharge in the "
                    "package (IS 875 (Part 4) drift / unbalanced cases) -- add it to the step-adjacent members")
-    # B8 delegated-design register
-    if any(k in blob for k in ("joist", "sji", " deck", "brb", "stair", "curtain wall")) and \
-            "delegat" not in blob:
-        out.append("delegated-design components referenced (joists/deck/BRBs/stairs/cladding) but no "
-                   "'delegated_design' register in capacity_design -- list each delegated item, the "
-                   "design criteria handed off, and the interface forces")
+    # B8 delegated-design register (H31): triggered by agent-authored text only (cfg notes / arch / floor_system /
+    # connection notes; engine boilerplate such as "deck restraint" is not a reference), cleared only by a
+    # structured register [{item, criteria, interface_forces}] -- the word "delegated" alone does not clear
+    ablob = " " + _agent_text(cfg, pkg) + " "
+    if any(re.search(r"\b%s" % k, ablob) for k in ("joist", "sji", "deck", "brb", "stair", "curtain wall")):
+        bad = _delegated_register_problems(cfg, pkg)
+        if bad:
+            out.append("delegated-design components referenced (joists/deck/BRBs/stairs/cladding) but %s -- "
+                       "declare cfg['delegated_design'] = [{'item', 'criteria', 'interface_forces'}, ...] listing "
+                       "each delegated item, the design criteria handed off, and the interface forces" % bad)
     return out
+
+
+def _has_floor_levels(cfg):
+    """False when every suspended level below the top is declared a roof (cfg['roof_levels'], e.g. a lean-to)."""
+    try:
+        nf = len(cfg.get("heights") or [])
+    except Exception:
+        nf = 0
+    rl = cfg.get("roof_levels")
+    if not rl or nf <= 1:
+        return True
+    try:
+        roofs = {int(x) for x in rl}
+    except Exception:
+        return True
+    return any(k not in roofs for k in range(1, nf))
+
+
+def _vibration_screen_ok(cfg, pkg):
+    for src in (cfg, pkg):
+        vs = src.get("vibration_screen") if isinstance(src, dict) else None
+        if isinstance(vs, dict) and all(vs.get(k) not in (None, "", [], {}) for k in ("basis", "result", "cite")):
+            return True
+    return False
+
+
+def _agent_text(cfg, pkg):
+    """Agent-authored free text: cfg notes / arch / floor_system and the declared connections' notes."""
+    txt = []
+    for k in ("notes", "note", "arch", "floor_system"):
+        if cfg.get(k):
+            _gather_text(cfg.get(k), txt)
+    def _notes(o):
+        if isinstance(o, dict):
+            for kk, v in o.items():
+                if str(kk).lower() in ("note", "notes") or str(kk).lower().endswith("_note"):
+                    _gather_text(v, txt)
+                else:
+                    _notes(v)
+        elif isinstance(o, list):
+            for v in o:
+                _notes(v)
+    _notes(cfg.get("connections"))
+    return " ".join(t for t in txt if isinstance(t, str)).lower()
+
+
+def _delegated_register_problems(cfg, pkg):
+    reg = cfg.get("delegated_design")
+    if reg is None and isinstance(pkg, dict):
+        reg = (pkg.get("capacity_design") or {}).get("delegated_design") if isinstance(pkg.get("capacity_design"), dict) else None
+    if not reg:
+        return "no cfg['delegated_design'] register"
+    if isinstance(reg, dict):
+        reg = [reg]
+    if not isinstance(reg, list):
+        return "cfg['delegated_design'] is not a list of records"
+    for i, r in enumerate(reg):
+        miss = [k for k in ("item", "criteria", "interface_forces")
+                if not isinstance(r, dict) or r.get(k) in (None, "", [], {})]
+        if miss:
+            return "cfg['delegated_design'][%d] lacks %s" % (i, ", ".join(miss))
+    return ""
 
 
 # =====================================================================================
@@ -820,12 +888,22 @@ def literal_dc_issues(pkg):
             if not isinstance(e, dict):
                 continue
             ch = e.get("checks")
-            recs = [e]
+            kids = []
             if isinstance(ch, list):
-                recs += [c for c in ch if isinstance(c, dict)]
+                kids = [c for c in ch if isinstance(c, dict)]
             elif isinstance(ch, dict):
-                recs += [v for v in ch.values() if isinstance(v, dict)]
+                kids = [v for v in ch.values() if isinstance(v, dict)]
+            # H31: the parent record's DC is its governing child's; when a child check with the same D/C carries
+            # value + limit, the parent is read through that child (no false "literal" flag on the parent)
+            recs = list(kids)
+            pdc = e.get("DC", e.get("dc"))
+            if not (isinstance(pdc, (int, float)) and not isinstance(pdc, bool) and any(
+                    isinstance(k.get("dc", k.get("DC")), (int, float)) and abs(float(k.get("dc", k.get("DC"))) - float(pdc)) < 1e-9
+                    and k.get("value") is not None and k.get("limit") is not None for k in kids)):
+                recs.insert(0, e)
             for c in recs:
+                if c.get("gate") is True:
+                    continue          # geometry fit / boolean detailing gate: no D/C by nature (H31)
                 dc = c.get("DC", c.get("dc"))
                 if isinstance(dc, bool) or not isinstance(dc, (int, float)):
                     continue

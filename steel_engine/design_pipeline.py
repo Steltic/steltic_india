@@ -1261,13 +1261,25 @@ def design_india(name, cfg, outdir):
                 else:
                     for nm, cc in spl["checks"].items():
                         checks.append(_row("column splice: %s" % nm, cc))
-        dcs = [c["dc"] for c in checks if isinstance(c.get("dc"), (int, float))]
-        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
-                                   "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
-                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
-                                                   "india_connection_design; declared geometry in cfg['connections'])",
-                                   "checks": checks, "DC": max(dcs) if dcs else None,
-                                   "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": notes})
+        # H31: gates (geometry fits, boolean detailing) carry no D/C and never govern; the connection record carries
+        # the value / limit / clause of its governing strength check
+        strength = [c for c in checks if isinstance(c.get("dc"), (int, float)) and not isinstance(c.get("dc"), bool)
+                    and c.get("gate") is not True]
+        gov = max(strength, key=lambda c: c["dc"]) if strength else None
+        crec = {"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
+                "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
+                "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
+                                "india_connection_design; declared geometry in cfg['connections'])",
+                "checks": checks, "DC": gov["dc"] if gov else None,
+                "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": gov.get("clause") if gov else None, "notes": notes}
+        if gov is not None:
+            crec["governing_check"] = gov.get("name")
+            crec["clause"] = gov.get("clause")
+            gv, gl = gov.get("value"), gov.get("limit")
+            if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (gv, gl)) and gl and \
+                    abs(abs(gv) / gl - gov["dc"]) <= 0.02 * max(gov["dc"], 1e-3) + 1e-4:
+                crec["value"], crec["limit"] = gv, gl
+        pkg["connections"].append(crec)
 
     # ---- composite floors (WP2.9) ----
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()

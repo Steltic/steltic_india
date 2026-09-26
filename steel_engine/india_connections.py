@@ -48,6 +48,16 @@ def _check(value, limit, *, clause, cite, dc=None, ok=None, **extra):
     return out
 
 
+def _geom_gate(value, limit, *, clause, cite, **extra):
+    """H31: geometric feasibility row (pitch / edge / fit / weld length) -- a gate, not a strength ratio: ok is
+    value <= limit, dc None, gate True, so it never becomes the governing D/C of a connection."""
+    ok = None if (value is None or limit is None) else bool(value <= limit)
+    out = {"value": value, "limit": limit, "dc": None, "ok": ok, "gate": True, "clause": clause, "cite": cite,
+           "source": "steel_engine/india_connections.py"}
+    out.update(extra)
+    return out
+
+
 def bolt_material(grade, fub=None, fyb=None):
     """Property class 'x.y' -> nominal fub = 100x, fyb = 10xy MPa (IS 1367 Part 3 designation); overrides win."""
     if fub and fyb:
@@ -493,15 +503,15 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                                 "anchors_N": V_anchor, "clause": "IS 800:2007 7.4.1 (friction 0.45)",
                                 "cite": "shear by friction, shear key, then anchors", "ok": True}
         if a.get("pitch_mm") is not None:
-            checks["geometry_anchor_pitch"] = _check(2.5 * a["d_mm"], a["pitch_mm"], clause="IS 800:2007 10.2.2",
+            checks["geometry_anchor_pitch"] = _geom_gate(2.5 * a["d_mm"], a["pitch_mm"], clause="IS 800:2007 10.2.2",
                                                      cite="pitch >= 2.5 d")
         if a.get("edge_mm") is not None:
             d0 = a.get("d0_mm") or (a["d_mm"] + (1 if a["d_mm"] <= 14 else 2 if a["d_mm"] <= 24 else 3))  # Table 19
-            checks["geometry_anchor_edge"] = _check(1.5 * d0, a["edge_mm"], clause="IS 800:2007 10.2.4.2",
+            checks["geometry_anchor_edge"] = _geom_gate(1.5 * d0, a["edge_mm"], clause="IS 800:2007 10.2.4.2",
                                                     cite="edge >= 1.5 d0 (min, sheared/rough edge 1.7 d0)")
         if a.get("pitch_mm") and a.get("n_per_row"):
             span = (a["n_per_row"] - 1) * a["pitch_mm"] + 2 * (a.get("edge_mm") or 0)
-            checks["geometry_anchor_fit"] = _check(span, B_mm, clause="geometric feasibility",
+            checks["geometry_anchor_fit"] = _geom_gate(span, B_mm, clause="geometric feasibility",
                                                    cite="anchor row must fit in the plate width")
         if embedment and embedment.get("capacity_N") and embedment.get("cite"):
             checks["anchorage_embedment"] = _check(T_one, embedment["capacity_N"], clause=embedment["cite"],
@@ -555,7 +565,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
             checks["plate_thickness"] = c
     if weld_length_mm is not None:
         per = col_perimeter_mm or (2 * col_bf_mm + 2 * col_d_mm - 2 * 0)  # outer outline upper bound
-        checks["geometry_weld_length"] = _check(weld_length_mm, per, clause="geometric feasibility",
+        checks["geometry_weld_length"] = _geom_gate(weld_length_mm, per, clause="geometric feasibility",
                                                 cite="weld length <= column profile perimeter")
     oks = [c.get("ok") for c in checks.values() if isinstance(c, dict)]
     ok = (None if any(o is None for o in oks) else all(oks))
