@@ -94,11 +94,33 @@ def _hss_area_csv(label):
         except Exception: pass
     return _HSS_AREA_CSV.get(str(label).strip().upper())
 
+def _india_label(name):
+    """H42: an IS 808 / IS 1161 style designation (WPB, NPB, MB, ISMB, CHS, NB, ISA ...)."""
+    try:
+        import sections as _SEC
+        return _SEC._looks_india(name)
+    except Exception:
+        return str(name).upper().startswith(("WPB", "NPB", "MB", "ISMB", "ISHB", "CHS", "NB", "ISA", "ISMC", "SHS", "RHS"))
+
+
+def _unknown_section_msg(name):
+    """H42: India-worded error for an unknown section label (US wording kept for AISC labels in kip-in)."""
+    if _UNIT_SYSTEM == "N-mm" or _india_label(name):
+        return ("IS section label %r not in IS 808 / IS 1161 tables (is808_shapes.csv / is1161_tubes.csv)%s -- use a "
+                "tabulated IS designation (e.g. 'MB300', 'WPB200X200X50.92', 'CHS193.7X6.3')"
+                % (name, "" if _UNIT_SYSTEM == "N-mm" else "; the engine is in kip-in (SI units not active: set "
+                   "cfg['units'] = 'N-mm' or 'm', or call india_units.apply_si_geometry(cfg))"))
+    return None
+
+
 class _HSSArea(dict):
     """HSS gross area lookup with an automatic aisc_shapes.csv fallback (B6)."""
     def __missing__(self, key):
         a = _hss_area_csv(key)
         if a is None:
+            msg = _unknown_section_msg(key)
+            if msg:
+                raise KeyError(msg)
             raise KeyError("HSS %r not in catalog or aisc_shapes.csv -- use a valid AISC HSS label" % (key,))
         self[key] = a
         return a
@@ -195,21 +217,17 @@ def Ipack(name):
             mm = 25.4
             A, Ix, Iy, J = s_in
             return (A * mm**2, Ix * mm**4, Iy * mm**4, J * mm**4)
-        raise KeyError(
-            "section %r not in SI catalog (is808/is1161/aisc) — "
-            "use an IS 808 label (e.g. 'MB300') or valid W-shape" % (name,)
-        )
+        raise KeyError(_unknown_section_msg(name))
     s = SEC.get(key) or (SEC.get(name) if name != key else None)
     if s is None:
         s = SEC.get(str(name).upper().strip())
     if s is None:
         s = _shapes_csv().get(key)
         if s is None:
-            raise KeyError(
+            raise KeyError(_unknown_section_msg(name) or (
                 "section %r not in catalog, is808_shapes.csv, is1161_tubes.csv, or aisc_shapes.csv — "
                 "use an IS 808 label (e.g. 'MB300', 'NPB300X150X36.52') or valid W-shape"
-                % (name,)
-            )
+                % (name,)))
         SEC[key] = s
     return s
 
@@ -264,12 +282,44 @@ def release_args(relz="none", rely="none"):
 _MOMENT_NODES = set()    # B3: nodes a RIGID (moment) beam frames into -> used to auto-role lateral vs gravity columns
 _BEAM_REL = {}           # viewer3d: beam tag -> (relz, rely) end-release codes ("none" = fixed-ended)
 _COL_DIR = {}            # viewer3d: column tag -> strong_dir ("X"/"Y") web orientation
+_SI_UNIT_WORDS = ("n-mm", "n-mm-s", "n-mm-sec", "m", "mm", "si", "metric", "india_metric", "india_si")
+_KIP_UNIT_WORDS = ("kip-in", "kip+inch", "kip_in", "imperial", "usa", "in")
+
+
+def ensure_units(cfg):
+    """H42 (L-05): switch the engine to SI automatically for an N-mm / metre cfg or an India job before building,
+    so esm_from_model / seismic_weights / build never run an SI cfg with kip-in constants (a WPB brace raised an
+    'AISC HSS' error, a CHS brace silently returned W without self-weight).  US jobs (kip-in / force_kip_in / no
+    India marker) are untouched.  Cheap when already converted."""
+    if not isinstance(cfg, dict):
+        return
+    u = str(cfg.get("units") or "").strip().lower()
+    if cfg.get("force_kip_in") or u in _KIP_UNIT_WORDS:
+        return
+    if not u:
+        j = str(cfg.get("jurisdiction") or cfg.get("code_jurisdiction") or "").lower()
+        lp = cfg.get("load_plan") if isinstance(cfg.get("load_plan"), dict) else {}
+        india = j in ("india", "in", "bis", "is", "is_bis") or \
+            str(lp.get("jurisdiction") or "").lower() in ("india", "is", "is_bis", "bis")
+        if not (india or cfg.get("metric") or cfg.get("si_native")):
+            return
+        if india and not (cfg.get("metric") or cfg.get("si_native")):
+            return                  # India job without declared units: preflight refuses it (WP1.12), no guessing
+    elif u not in _SI_UNIT_WORDS:
+        return
+    if _UNIT_SYSTEM == "N-mm" and cfg.get("_units_converted") and str(cfg.get("units")) == "N-mm":
+        return
+    from india_units import apply_si_geometry
+    apply_si_geometry(cfg)
+
+
 def build(cfg,transf="Linear"):
     """Build the OpenSees model; return the standard info dict
     {cm, present, z, NF, ele:[(tag,kind,sec,n1,n2)]}.  The agent supplies its own builder as
     cfg["custom_build"] = f, where f(cfg, transf) builds the model and returns that dict -- see
     engine/example_build.py for a complete worked reference to copy.  When no custom_build is given
     (the built-in B-archetypes and quick self-checks) the model is built by example_build()."""
+    ensure_units(cfg)                                  # H42: SI cfg / India job -> N-mm engine before building
     cb = cfg.get("custom_build")
     if cfg.get("custom_sections"):
         import sections as _SEC
@@ -941,6 +991,7 @@ def VBbar(cfg, direction):
 
 def seismic_weights(cfg):
     """IS 1893 7.4 seismic weight per floor (N) from the model (self-weight included) + components."""
+    ensure_units(cfg)                                  # H42
     build(cfg, "Linear")
     NF = len(cfg["heights"])
     comps = {k: seismic_weight_components(cfg, k) for k in range(1, NF + 1)}
@@ -950,6 +1001,7 @@ def seismic_weights(cfg):
 def esm_from_model(cfg, Ta, soil=None):
     """Convenience: india_seismic.esm_summary with the engine seismic weights."""
     import india_seismic as IS
+    ensure_units(cfg)                                  # H42
     prm = india_seismic_params(dict(cfg, seis=dict(cfg.get("seis") or {}, soil=soil or (cfg.get("seis") or {}).get("soil"))))
     W, comps = seismic_weights(cfg)
     r = IS.esm_summary(W, cfg["heights"], prm["Z"], prm["I"], prm["R"], prm["soil"], prm.get("zone"), Ta)
