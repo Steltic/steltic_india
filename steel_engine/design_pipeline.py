@@ -1577,6 +1577,17 @@ def design_india(name, cfg, outdir):
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
     pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway, every job (H43)
+    if ((plan.get("wind_summary") or {}).get("across_wind")):
+        try:                                   # X05: IS 875-3 10.3 across-wind patterns + 10.4 rows actually used
+            import india_combos as _IC
+            _awp = _IC.across_wind_patterns(plan, cfg)
+            pkg["across_wind"] = _jsonable({"evaluated": _awp["evaluated"], "reason": _awp.get("reason"),
+                                            "patterns": _awp["summary"], "resolved": _awp.get("resolved"),
+                                            "n_combinations": sum(1 for c in cases if "across_wind" in
+                                                                  ((getattr(c, "meta", {}) or {}).get("tags") or [])),
+                                            "cite": _IC.ACROSS_10_4_CITE})
+        except Exception as ex:
+            pkg["across_wind"] = {"evaluated": None, "error": str(ex)}
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):

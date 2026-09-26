@@ -609,6 +609,189 @@ def along_wind_story_forces(heights_m, b_m, Cf, fa_hz, terrain, Vb, k1=1.0, k3=1
     return {"F_N": F, "VB_N": sum(F), "gust": g}
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# X05 (HR-B-09, HR-C-12): IS 875 (Part 3):2015 10.3 across-wind load case.  Corpus text (IS_875_Part_3_2015.md, 10.3,
+# pdf pp. 50-51), legible parts quoted:
+#   "The across wind design peak base bending moment M c for enclosed buildings and towers shall be determined as
+#    follows: M c [=] 0.5 g h p h b h^2 (1.06 - 0.06 k) sqrt(pi C fs / beta)"
+#   "g h = a peak factor, = ( ) 2ln 36 00 c f in cross wind direction" (formula line OCR-broken; the legible fragments
+#    '2ln', '3600', 'fc' are the 10.2 peak factor form gR = sqrt(2 ln(3600 fa)), read here with fc)
+#   "h p = hourly mean wind pressure at height h, in Pa; b = the breadth of the structure normal to the wind, in m;
+#    h = the height of the structure, in m; k = a mode shape power exponent ... Psi(z) = (z/h)^k;
+#    f c = first mode natural frequency of the building/structure in across wind direction, in Hz."
+#   "The across wind load distribution on the building/structure can be obtained from Mc using linear distribution
+#    of loads as given below: F z,c = (3 M c / h^2)(z / h) where F z,c = across wind load per unit height at height z."
+#   "C fs = across wind force spectrum coefficient generalized for a linear mode (see Fig. 10 and Fig. 11).
+#    beta = damping coefficient of the building/structure (see Table 36)."
+#   10.4 "The along wind and across wind loads have to be applied simultaneously on the building/structure during
+#    design."
+# Fig. 10 / Fig. 11 are images (not in the corpus text): Cfs is an EOR reading with its source (ruling R10).
+# ---------------------------------------------------------------------------------------------------------------------
+ACROSS_WIND_CITE = ("IS 875 (Part 3):2015 10.3: Mc = 0.5 gh ph b h^2 (1.06 - 0.06 k) sqrt(pi Cfs / beta); "
+                    "Fz,c = (3 Mc / h^2)(z / h) per unit height; 10.4: along and across wind applied simultaneously")
+ACROSS_WIND_GH_BASIS = ("gh = sqrt(2 ln(3600 fc)): the 10.3 gh line is OCR-broken in the corpus (legible: '2ln', "
+                        "'36 00', 'c f'); read with the legible 10.2 form gR = sqrt(2 ln(3600 fa))")
+
+
+def _num_ok(v):
+    import math
+    try:
+        return v is not None and not isinstance(v, bool) and math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
+
+
+def across_wind_peak_factor(fc_hz):
+    """10.3 gh = sqrt(2 ln(3600 fc)) (see ACROSS_WIND_GH_BASIS)."""
+    import math
+    return math.sqrt(2.0 * math.log(3600.0 * float(fc_hz)))
+
+
+def across_wind_Mc(*, Cfs, beta, fc_hz, b_m, h_m, k, ph_Pa, gh=None):
+    """IS 875-3 10.3 across-wind design peak base bending moment (kN m):
+    Mc = 0.5 gh ph b h^2 (1.06 - 0.06 k) sqrt(pi Cfs / beta), ph in Pa, b and h in m."""
+    import math
+    g = float(gh) if gh is not None else across_wind_peak_factor(fc_hz)
+    Mc_Nm = 0.5 * g * float(ph_Pa) * float(b_m) * float(h_m) ** 2 * (1.06 - 0.06 * float(k)) * \
+        math.sqrt(math.pi * float(Cfs) / float(beta))
+    return {"Mc_kNm": Mc_Nm / 1000.0, "gh": g, "gh_basis": ("declared" if gh is not None else ACROSS_WIND_GH_BASIS),
+            "cite": ACROSS_WIND_CITE}
+
+
+def across_wind_level_forces(z_levels_m, Mc_kNm, h_m=None):
+    """10.3 Fz,c = (3 Mc / h^2)(z / h) (kN/m) lumped to the floor levels by linear (statically equivalent) shape
+    functions over each storey: the level forces reproduce the 10.3 overturning moment exactly (sum F_k z_k = Mc)
+    and the base shear 1.5 Mc / h less the share of the lowest storey that goes straight into the supports.
+
+    z_levels_m: elevations of levels 1..NF above the base (m).  Returns {F_kN: [..], F_ground_kN, V_kN (applied),
+    V_total_kN (= 1.5 Mc / h), M_base_kNm (= sum F z), h_m, w_top_kN_per_m}."""
+    zs = [float(z) for z in z_levels_m]
+    h = float(h_m) if h_m is not None else zs[-1]
+    a = 3.0 * float(Mc_kNm) / h ** 3                     # w(z) = a z  (kN/m)
+    F = [0.0] * len(zs)
+    F0 = 0.0
+    zprev = 0.0
+    for i, z1 in enumerate(zs):
+        L = z1 - zprev
+        if L <= 0:
+            zprev = z1
+            continue
+        w0, w1 = a * zprev, a * z1
+        bot = L * (2.0 * w0 + w1) / 6.0
+        top = L * (w0 + 2.0 * w1) / 6.0
+        if i == 0:
+            F0 += bot
+        else:
+            F[i - 1] += bot
+        F[i] += top
+        zprev = z1
+    return {"F_kN": F, "F_ground_kN": F0, "V_kN": sum(F), "V_total_kN": 1.5 * float(Mc_kNm) / h,
+            "M_base_kNm": sum(f * z for f, z in zip(F, zs)), "h_m": h, "w_top_kN_per_m": a * h,
+            "cite": ACROSS_WIND_CITE + "; linear shape-function lumping to the floor levels"}
+
+
+def resolve_across_wind(aw, ws=None, *, h_m=None, b_m=None):
+    """Across-wind record -> {found, reason, by_dir: {'X': {...}, 'Y': {...}}}; the keys are the ALONG-wind
+    direction (the W_<d> pattern the across-wind load accompanies; the across-wind force acts normal to it).
+
+    Accepted records (ruling R10, X05):
+      * {found: True, Mc_kNm: <number>, cite}                     -- both directions
+      * {found: True, Mc_kNm_X: <number>, Mc_kNm_Y: <number>}      -- per along-wind direction (override Mc_kNm)
+      * {eor: {value, source, cite}}                               -- EOR Mc, both directions
+      * {Cfs: {value, source, cite}, k, beta, fc_hz, ph_Pa | (Vb_mps, terrain_category[, k1, k3, k4]), b_m, h_m[, gh]}
+        with any field overridable per along-wind direction in aw['X'] / aw['Y'] (b and fc differ by direction):
+        Mc computed from the 10.3 formula; Cfs is an EOR reading of Fig. 10 / 11 with its source and cite.
+    h_m / b_m (dict {'X': b normal to wind along X, 'Y': ...}) are defaults from the model when not in the record."""
+    out = {"found": False, "by_dir": {}, "reason": None}
+    if not isinstance(aw, dict) or not aw:
+        out["reason"] = "wind_summary.across_wind missing"
+        return out
+    ws = ws or {}
+    why = []
+    for d in ("X", "Y"):
+        sub = aw.get(d) if isinstance(aw.get(d), dict) else {}
+        rec = dict(aw)
+        rec.pop("X", None), rec.pop("Y", None)
+        rec.update(sub)
+        cfs = rec.get("Cfs")
+        cfs_why = None
+        if cfs is not None:
+            cfs_d = cfs if isinstance(cfs, dict) else {"value": cfs, "source": rec.get("Cfs_source"),
+                                                          "cite": rec.get("Cfs_cite")}
+            miss = []
+            if not _num_ok(cfs_d.get("value")):
+                miss.append("Cfs.value")
+            for kk in ("source", "cite"):
+                if not str(cfs_d.get(kk) or "").strip():
+                    miss.append("Cfs.%s" % kk)
+            inp = {}
+            for kk in ("k", "beta", "fc_hz"):
+                if _num_ok(rec.get(kk)):
+                    inp[kk] = float(rec[kk])
+                else:
+                    miss.append(kk)
+            hh = rec.get("h_m", h_m)
+            bb = rec.get("b_m", (b_m or {}).get(d) if isinstance(b_m, dict) else b_m)
+            for kk, v in (("h_m", hh), ("b_m", bb)):
+                if _num_ok(v):
+                    inp[kk] = float(v)
+                else:
+                    miss.append(kk)
+            ph = rec.get("ph_Pa")
+            ph_basis = "declared ph_Pa"
+            if not _num_ok(ph):
+                Vb = rec.get("Vb_mps", ws.get("Vb_mps"))
+                tc = rec.get("terrain_category", ws.get("terrain_category"))
+                if _num_ok(Vb) and tc is not None and "h_m" in inp:
+                    try:
+                        k1 = float(rec.get("k1", ws.get("k1", 1.0)) or 1.0)
+                        k3 = float(rec.get("k3", ws.get("k3", 1.0)) or 1.0)
+                        k4 = float(rec.get("k4", ws.get("k4", 1.0)) or 1.0)
+                        Vh = float(Vb) * k1 * k2_hourly(inp["h_m"], int(str(tc).strip()[-1])) * k3 * k4
+                        ph = 0.6 * Vh ** 2
+                        ph_basis = ("ph = 0.6 Vh,d^2, hourly mean Vh,d = Vb k1 k2,i(h) k3 k4 = %.2f m/s (6.4, 10.2)"
+                                    % Vh)
+                    except (TypeError, ValueError, KeyError):
+                        ph = None
+            if _num_ok(ph):
+                inp["ph_Pa"] = float(ph)
+            else:
+                miss.append("ph_Pa (or Vb_mps + terrain_category)")
+            if miss:
+                cfs_why = "Cfs path incomplete (%s)" % ", ".join(miss)
+            else:
+                cfs_why = None
+        if cfs is not None and cfs_why is None:
+            gh = rec.get("gh") if _num_ok(rec.get("gh")) else None
+            m = across_wind_Mc(Cfs=float(cfs_d["value"]), gh=gh, **inp)
+            out["by_dir"][d] = {"Mc_kNm": m["Mc_kNm"], "found": True, "basis": "computed (10.3 formula, EOR Cfs)",
+                                "source": "engine: IS 875-3 10.3 Mc from Cfs = %g (%s)" % (float(cfs_d["value"]),
+                                                                                         cfs_d["source"]),
+                                "cite": m["cite"] + "; Cfs: " + str(cfs_d["cite"]),
+                                "Cfs": {"value": float(cfs_d["value"]), "source": cfs_d["source"],
+                                        "cite": cfs_d["cite"]},
+                                "gh": m["gh"], "gh_basis": m["gh_basis"], "ph_basis": ph_basis, "inputs": inp}
+            continue
+        v = rec.get("Mc_kNm_" + d, rec.get("Mc_kNm"))
+        if rec.get("found") is True and _num_ok(v):
+            out["by_dir"][d] = {"Mc_kNm": float(v), "found": True, "basis": "declared (found: true)",
+                                "source": str(rec.get("source") or "wind_summary.across_wind"),
+                                "cite": str(rec.get("cite") or ACROSS_WIND_CITE)}
+            continue
+        eor = rec.get("eor") or rec.get("EOR")
+        if isinstance(eor, dict):
+            ev = eor.get("value_" + d, eor.get("value"))
+            if _num_ok(ev) and str(eor.get("source") or "").strip() and str(eor.get("cite") or "").strip():
+                out["by_dir"][d] = {"Mc_kNm": float(ev), "found": True, "basis": "EOR record",
+                                    "source": str(eor["source"]), "cite": str(eor["cite"])}
+                continue
+        why.append("%s: no numeric Mc (found %r, no EOR {value, source, cite}, %s)"
+                   % (d, rec.get("found"), cfs_why or "no Cfs record"))
+    out["found"] = set(out["by_dir"]) == {"X", "Y"}
+    out["reason"] = "; ".join(why) or None
+    return out
+
+
 def dynamic_wind_required(h_m, b_min_m, f1_hz):
     """9.1: h / min lateral dimension > about 5.0, or first-mode frequency < 1.0 Hz."""
     why = []

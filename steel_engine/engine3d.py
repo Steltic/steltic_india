@@ -1527,31 +1527,51 @@ def india_wind_serviceability(cfg):
     import india_loads as IL
     div_st, div_H, key = _wind_limits(cfg)
     out = {}
+    # X05: IS 875-3 10.4 -- with an evaluated 10.3 across-wind record the along-wind pattern is also run with the
+    # across-wind pattern applied simultaneously (+/-); the drift is then read on both plan axes
+    try:
+        import india_combos as _IC
+        _awp = _IC.across_wind_patterns(cfg.get("load_plan") or {}, cfg)
+        _aw_sc = IL._story_force_scale(cfg.get("load_plan") or {}) if _awp.get("patterns") else 1.0
+    except Exception:
+        _awp, _aw_sc = {"patterns": {}}, 1.0
     for d in ("X", "Y"):
         F = india_story_forces(cfg, d, kind="W")
         if not F:
             continue
-        info = build(cfg, "PDelta"); NF = info["NF"]
-        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
-        _apply_nodal_gravity(cfg, info, 1.0, 1.0)
-        for k in range(1, NF + 1):
-            fx, fy, mz = F.get(k, (0.0, 0.0, 0.0))
-            ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
-        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
-        ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
-        ops.integrator("LoadControl", 1.0); ops.analysis("Static")
-        if ops.analyze(1) != 0:
-            raise RuntimeError("wind serviceability analysis (%s) did not converge" % d)
-        di = 0 if d == "X" else 1
-        disp = {(i, j, k): ops.nodeDisp(ntag(i, j, k), di + 1)
-                for k in range(0, NF + 1) for (i, j) in info["present"][k]}
-        drift = []
-        for k in range(1, NF + 1):
-            lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
-            drift.append(max([abs(disp[(i, j, k)] - disp[(i, j, k - 1)]) / cfg["heights"][k - 1]
-                              for (i, j) in lines] or [0.0]))
+        Fa = {int(k): tuple(float(x) * _aw_sc for x in v)
+              for k, v in ((_awp.get("patterns") or {}).get("W_%s_across" % d) or {}).items()}
+        sets = [(0, F)]
+        if Fa:
+            for sa in (1, -1):
+                sets.append((sa, {k: tuple(a + sa * b for a, b in zip(F.get(k, (0.0, 0.0, 0.0)),
+                                                                        Fa.get(k, (0.0, 0.0, 0.0))))
+                                  for k in set(F) | set(Fa)}))
+        drift, top = None, 0.0
+        for sa, FF in sets:
+            info = build(cfg, "PDelta"); NF = info["NF"]
+            ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+            _apply_nodal_gravity(cfg, info, 1.0, 1.0)
+            for k in range(1, NF + 1):
+                fx, fy, mz = FF.get(k, (0.0, 0.0, 0.0))
+                ops.load(mtag(k), fx, fy, 0.0, 0.0, 0.0, mz)
+            ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+            ops.test("NormDispIncr", 1e-7, 200); ops.algorithm("Newton")
+            ops.integrator("LoadControl", 1.0); ops.analysis("Static")
+            if ops.analyze(1) != 0:
+                raise RuntimeError("wind serviceability analysis (%s) did not converge" % d)
+            dis = [0 if d == "X" else 1] + ([1 if d == "X" else 0] if sa else [])
+            for di in dis:
+                disp = {(i, j, k): ops.nodeDisp(ntag(i, j, k), di + 1)
+                        for k in range(0, NF + 1) for (i, j) in info["present"][k]}
+                dr = []
+                for k in range(1, NF + 1):
+                    lines = [(i, j) for (i, j) in info["present"][k] if (i, j) in info["present"][k - 1]]
+                    dr.append(max([abs(disp[(i, j, k)] - disp[(i, j, k - 1)]) / cfg["heights"][k - 1]
+                                   for (i, j) in lines] or [0.0]))
+                drift = dr if drift is None else [max(a, b) for a, b in zip(drift, dr)]
+                top = max(top, max(abs(disp[(i, j, NF)]) for (i, j) in info["present"][NF]))
         H = float(sum(cfg["heights"]))
-        top = max(abs(disp[(i, j, NF)]) for (i, j) in info["present"][NF])
         rec = {"storey_drift": drift, "top_mm": top, "H_mm": H, "limit_top_mm": H / div_H,
                "ratio_top": top / (H / div_H), "basis": key,
                "cite": "%s: %s -> H/%d%s" % (IL.IS800_TABLE6_CITE, key, div_H,
@@ -1559,6 +1579,9 @@ def india_wind_serviceability(cfg):
         if div_st:
             rec["limit_storey"] = 1.0 / div_st
             rec["ratio_storey"] = max(drift) * div_st
+        if Fa:
+            rec["across_wind"] = {"pattern": "W_%s_across" % d, "signs": [1, -1], "axes": ["X", "Y"],
+                                  "cite": "IS 875 (Part 3):2015 10.3 / 10.4 (along + across applied simultaneously)"}
         out[d] = rec
     return out
 
@@ -1696,7 +1719,7 @@ def india_dynamic_wind_gate(cfg, f1_hz):
                 if have < float(want) * (1 - 0.02):
                     bad.append("W_%s story forces sum %.1f kN < 10.2 gust-factor along-wind base shear %.1f kN"
                                % (d, have, float(want)))
-    aw_ok, aw_why = across_wind_evaluated(ws.get("across_wind"))
+    aw_ok, aw_why = across_wind_evaluated(ws.get("across_wind"), cfg)
     if not aw_ok:
         bad.append("dynamic wind required (%s): the across-wind response (IS 875-3 10.3) is not evaluated -- %s "
                    "(ruling R10: wind_summary.across_wind {found: true, Mc_kNm: <number>, cite} or an EOR record "
@@ -1704,9 +1727,19 @@ def india_dynamic_wind_gate(cfg, f1_hz):
     return not bad, bad, True
 
 
-def across_wind_evaluated(aw):
+def across_wind_evaluated(aw, cfg=None):
     """H12 / ruling R10: the IS 875-3 10.3 across-wind record counts only when evaluated -- found is True with a
-    numeric Mc_kNm, or an EOR record {value (numeric), source, cite}.  Returns (ok, reason)."""
+    numeric Mc_kNm, or an EOR record {value (numeric), source, cite}.  Returns (ok, reason).
+    X05: or a Cfs record {Cfs: {value, source, cite}, k, beta, fc_hz, ph_Pa | Vb_mps + terrain_category, b_m, h_m}
+    (per along-wind direction in aw['X'] / aw['Y']) from which Mc is computed (india_wind_tables.resolve_across_wind;
+    h and b default to the model when cfg is given)."""
+    if isinstance(aw, dict) and (aw.get("Cfs") is not None or isinstance(aw.get("X"), dict)
+                                 or isinstance(aw.get("Y"), dict) or aw.get("Mc_kNm_X") is not None
+                                 or aw.get("Mc_kNm_Y") is not None):
+        import india_wind_tables as WT
+        r = WT.resolve_across_wind(aw, ((cfg or {}).get("load_plan") or {}).get("wind_summary"),
+                                   **(across_wind_model_dims(cfg) if cfg else {}))
+        return (True, None) if r["found"] else (False, r["reason"])
     def _num(v):
         try:
             return v is not None and not isinstance(v, bool) and math.isfinite(float(v))
@@ -1723,6 +1756,19 @@ def across_wind_evaluated(aw):
     if aw.get("found") is True:
         return False, "across_wind.found is true but Mc_kNm is not a number"
     return False, "across_wind is not evaluated (found %r, no numeric Mc_kNm, no EOR {value, source, cite})" % aw.get("found")
+
+
+def across_wind_model_dims(cfg):
+    """X05: model defaults for the 10.3 inputs -- h_m = total height; b_m = {'X': breadth normal to wind along X
+    (plan Y extent of the envelope), 'Y': plan X extent} (m)."""
+    out = {"h_m": float(sum(cfg["heights"])) / 1000.0}
+    try:
+        xs = [_xy_in(cfg, i, j) for (i, j) in envelope_nodes(cfg, 1)]
+        out["b_m"] = {"X": (max(c[1] for c in xs) - min(c[1] for c in xs)) / 1000.0,
+                      "Y": (max(c[0] for c in xs) - min(c[0] for c in xs)) / 1000.0}
+    except Exception:
+        pass
+    return out
 
 
 def _bays_adjacent(present_k, i, j, dirn):

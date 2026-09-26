@@ -178,6 +178,23 @@ def collector_demands(cfg, run=None, reg=None):
     return rows
 
 
+def pattern_collector_forces(cfg, kind, ref):
+    """X05: collector / chord forces {beam_tag: N} per unit factor for a named story-force pattern that is not a plain
+    <kind>_X / <kind>_Y (e.g. the IS 875-3 10.3 across-wind pattern W_X_across, which acts along Y): the pattern is
+    run alone through collector_forces in the force direction it carries."""
+    plan = cfg.get("load_plan") or {}
+    raw = (plan.get("story_forces") or {}).get(ref)
+    if not raw:
+        return {}
+    import india_loads as IL
+    lat = IL._as_lateral(raw)
+    sx = sum(abs(v[0]) for v in lat.values())
+    sy = sum(abs(v[1]) for v in lat.values())
+    dF = "X" if sx >= sy else "Y"
+    cfg2 = dict(cfg, load_plan=dict(plan, story_forces={kind + "_" + dF: raw}))
+    return dict(collector_forces(cfg2, kind).get(dF) or {})
+
+
 def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False):
     """Add fLat x collector/chord N to the beam records of every lateral combination (in place).
 
@@ -199,13 +216,23 @@ def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False):
         res = per_case.get(c[0])
         if not res:
             continue
-        extra = [(t2["ref"][-1], float(t2["f"])) for t2 in (m.get("source") or {}).get("terms") or []
-                 if str(t2.get("ref", "")).startswith(kind + "_")]
+        extra = []
+        for t2 in (m.get("source") or {}).get("terms") or []:
+            ref2 = str(t2.get("ref", ""))
+            if not ref2.startswith(kind + "_"):
+                continue
+            dd = ref2[len(kind) + 1:]
+            if dd in ("X", "Y"):
+                extra.append((cache[kind][dd], float(t2["f"])))
+            else:                                   # X05: e.g. W_X_across -- collectors of that pattern itself
+                if ref2 not in cache:
+                    cache[ref2] = pattern_collector_forces(cfg, kind, ref2)
+                extra.append((cache[ref2], float(t2["f"])))
         for fs, rec in list(res.items()):
             t = tag_of.get(fs)
             if t is None:
                 continue
-            Nc = float(f) * cf.get(t, 0.0) + sum(ff * cache[kind][dd].get(t, 0.0) for dd, ff in extra)
+            Nc = float(f) * cf.get(t, 0.0) + sum(ff * mp.get(t, 0.0) for mp, ff in extra)
             if Nc == 0.0:
                 continue
             rec = list(rec)

@@ -296,6 +296,21 @@ def _wind_table(cfg):
     keys = ["Vb_mps", "Vb_source", "terrain_category", "k1", "k2", "k3", "k4", "Kd", "Ka", "Ka_basis", "Kc",
             "Vz_mps", "pz_kNm2", "pd_kNm2", "Cpe_windward", "Cpe_leeward", "Cpi", "cyclone_belt", "VB_x_kN", "VB_y_kN"]
     rows = [[k, _num(ws.get(k))] for k in keys if ws.get(k) is not None]
+    if ws.get("across_wind"):                  # X05: 10.3 across-wind case and 10.4 combination
+        try:
+            import india_combos as _IC
+            awp = _IC.across_wind_patterns(cfg.get("load_plan") or {}, cfg)
+            if awp["evaluated"]:
+                for ref, sm in sorted(awp["summary"].items()):
+                    rows.append([ref + " (10.3, acts along %s)" % sm["force_dir"],
+                                 "Mc %s kN-m (%s); V %s kN at the levels (+%s kN at the base), M_base %s kN-m; "
+                                 "applied with the along-wind case, both signs (10.4)"
+                                 % (_num(sm["Mc_kNm"], 1), sm.get("basis"), _num(sm["V_kN"], 1),
+                                    _num(sm["F_ground_kN"], 1), _num(sm["M_base_kNm"], 1))])
+            else:
+                rows.append(["across-wind (10.3)", "NOT EVALUATED: %s" % awp.get("reason")])
+        except Exception as ex:
+            rows.append(["across-wind (10.3)", "error: %s" % ex])
     return ("<p>IS 875 (Part 3):2015: V<sub>z</sub> = V<sub>b</sub> k<sub>1</sub> k<sub>2</sub> k<sub>3</sub> "
             "k<sub>4</sub> (6.3); p<sub>z</sub> = 0.6 V<sub>z</sub><sup>2</sup> (7.2); p<sub>d</sub> = K<sub>d</sub> "
             "K<sub>a</sub> K<sub>c</sub> p<sub>z</sub> &ge; 0.7 p<sub>z</sub> (7.2).</p>"
