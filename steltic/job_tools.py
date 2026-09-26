@@ -483,6 +483,7 @@ class JobWorkspace:
         want = self._norm_id(cid)
         if not want or len(str(cid).split()) > 3:
             return False                       # a sentence is not an id
+        tm = re.match(r"(?i)^\s*(?:table|tab\.?|tbl\.?)\s*(\S+)", str(cid or ""))
         for h in res:
             if not isinstance(h, dict):
                 continue
@@ -490,6 +491,9 @@ class JobWorkspace:
                 v = h.get(k)
                 if v not in (None, "") and self._norm_id(v) == want:
                     return True
+            # an adapter that forwards neither `matched` nor `table_id`: the table's own caption as title
+            if tm and re.match(r"(?i)^\s*table\s+" + re.escape(tm.group(1)) + r"(?![\w.])", str(h.get("title") or "")):
+                return True
         return False
 
     def _label_widened(self, out: dict, collection: str) -> None:

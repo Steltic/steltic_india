@@ -75,6 +75,17 @@ def test_exact_table_recognised_by_table_id_when_section_is_the_citing_clause():
     assert len(ws.sent) == 1 and out.get("exact_match") is True
 
 
+def test_exact_table_recognised_by_its_caption_title():
+    # the 2026-09 harness adapter forwarded neither `matched` nor `table_id`
+    ws, out = _run(lambda q, c, cl, n: {"results": [{"id": "t", "section": "5.3.3", "source": "IS_800_2007",
+                                                     "title": "Table 4 Partial Safety Factors for Loads"}] if cl else []},
+                   "Table 4 partial safety factors for loads", coll="engineering_standards_IS800")
+    assert out.get("exact_match") is True and "rung3 exact-id Table 4" in out["escalated"]
+    ws, out = _run(lambda q, c, cl, n: {"results": [{"id": "t", "title": "Table 45 Something"}] if cl else []},
+                   "x", clause="Table 4", coll="engineering_standards_IS800")
+    assert not out.get("exact_match")
+
+
 def test_rung3_exact_hit_beats_a_thin_fts_rung_and_stops_the_ladder():
     # IS 18168 5.6: rung 1 (sentence) finds 1 unrelated chunk, rung 3 exact-id 5.6 finds the clause
     def reply(q, c, cl, n):
