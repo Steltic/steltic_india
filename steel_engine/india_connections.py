@@ -911,7 +911,8 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         if col_Vd_N:
             V_dem = max(V_dem, 1.2 * col_Vd_N)
             checks["12.12.2_shear_demand"] = {"value": 1.2 * col_Vd_N, "clause": "IS 800:2007 12.12.2",
-                                              "cite": "max(full shear, 1.2 x column shear capacity)", "ok": True}
+                                              "cite": "max(full shear, 1.2 x column shear capacity) (owner ruling O1: literal, "
+                                                      "pinned braced-frame bases included)", "ok": True}
         else:
             checks["12.12.2_shear_demand"] = _check(None, None, clause="IS 800:2007 12.12.2", cite="1.2 Vd column",
                                                     ok=None, reason="column Vd missing")

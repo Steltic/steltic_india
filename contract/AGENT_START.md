@@ -352,6 +352,9 @@ You:
      checked per combination with the concurrent (P, Mz, My, V) for 1.2 Mp / 1.2 Vd (IS 800 12.12) and, where
      IS 18168 applies, 1.1 Ry Mpc and 2.2 Ry Mpc/Hc (9.3; pinned 9.4), Mpc by the IS 800 9.3.1.2 form of the
      section (rolled I (c), welded I (b), box / RHS (d), CHS (e)).
+     Owner ruling O1 (2026-09-26): IS 800 12.12.2 stays code-literal on every SFRS base, pinned braced-frame
+     bases included -- the base shear demand is max(case shear, 1.2 x the column's design shear capacity Vd);
+     no reduction for a pinned base or a braced frame (the check cite says "owner ruling O1: literal").
    * `column_splice[<upper section>|'default']`: {`none`: true, note} or {type 'flange_plates' {plate{A_mm2,
      fy_MPa}, bolts | weld (fillet)} | 'cjp' {weld {matching_electrode: true, electrode, t_mm}} | 'pjp'
      {weld{t_mm, length_mm}}}, plus `web_plate` {A_mm2, fy_MPa, Av_mm2}, `web_bolts`, `bearing` (ends machined

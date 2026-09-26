@@ -738,7 +738,7 @@ def base_checks(system, model_data, cfg):
             cl, ct = "IS 800:2007 7.4 / 10.3", "gravity column base: bearing 0.6 fck, anchors, plate (7.4); P, Mz, My per case"
         else:
             cl = "IS 800:2007 12.12 / 7.4 / 10.3"
-            ct = "all SFRS bases: shear max(case, 1.2 Vd) in every case (12.12.2)"
+            ct = "all SFRS bases: shear max(case, 1.2 Vd) in every case (12.12.2; owner ruling O1: literal)"
             if fixed:
                 ct += "; fixed base: %.2f x Mpc (concurrent P, 9.3.1.2) paired with the seismic cases (12.12.1%s)" % (
                     mfac, "; IS 18168:2023 9.3 1.1 Ry Mpc, shear 2.2 Ry Mpc/Hc, %s" % ry_note if use18 else "")
@@ -799,7 +799,8 @@ def base_checks(system, model_data, cfg):
                     subs = [(None, Mz0, My0, max(V0, vmin12), [])]
                 for sub in subs:
                     sub[4].append(("12.12.2_shear_demand", vmin12, "IS 800:2007 12.12.2",
-                                   "full shear under the case or 1.2 x column shear capacity, whichever is higher"))
+                                   "full shear under the case or 1.2 x column shear capacity, whichever is higher "
+                                   "(owner ruling O1: literal, pinned braced-frame bases included)"))
             for ax, mz, my, v, info in subs:
                 g2 = dict(geo)
                 if embedded:
