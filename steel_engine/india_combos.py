@@ -178,6 +178,10 @@ def _lat_label(f, kind, d, extra=""):
     return "%s%s%s_%s%s" % ("+" if f >= 0 else "-", _fmt(f), tok, d, extra)
 
 
+SNOW_NOTE_CITE = ("IS 875 (Part 5):1987 8.1 Note 1 (snow load replaces the roof imposed load when snow is present "
+                  "and exceeds it)")
+
+
 def _grav_label(fD, fL, fLr=0.0, fS=0.0, fC=0.0):
     parts = ["%sDL" % _fmt(fD)]
     if fL:
@@ -234,6 +238,10 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
     has_eq = bool(sf.get("EQ_X") or sf.get("EQ_Y")) and not cfg.get("no_seismic")
     has_w = bool(sf.get("W_X") or sf.get("W_Y"))
     snow = _f(cfg.get("snow"), 0.0) or 0.0
+    # H11 (HR-E-07): IS 875 (Part 5) 8.1 Note 1 -- 'When snow load is present on roofs, replace imposed load by
+    # snow load for the purpose of above load combinations': the roof imposed term of every lateral / member-wind
+    # row is max(Lr, snow), i.e. fS takes the place of fLr when snow > Lr.
+    snow_governs_roof = snow > (_f(cfg.get("Lr"), 0.0) or 0.0) + 1e-12
     crane = cfg.get("crane") or cfg.get("cranes")
     rsa = (method or "").upper() == "RSA" if method else _rsa_required(cfg, plan)
     nonpar = bool(cfg.get("nonparallel") or cfg.get("skew"))
@@ -339,6 +347,9 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                 if kind == "EQ" and fl == 0.6 and not crane:
                     continue
                 fLr = fL          # Table 4 'LL' = every imposed load (floor + roof); 7.3.2 is about mass only
+                fSr = 0.0
+                if snow_governs_roof and fLr:          # H11: IS 875-5 8.1 Note 1
+                    fSr, fLr = fLr, 0.0
                 for s in (1, -1):
                     f = s * fl
                     tvars = (["a", "b"] if (kind == "EQ" and tors.get(d)) else [None])
@@ -372,12 +383,13 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                                     if fam.startswith("IS 800 12.2.3"):
                                         cite_fam += " (= IS 18168:2023 5.5, Omega %.1f)" % is18168["Omega"]
                                 extra += "[col]"
-                            lab = _grav_label(fD, fL, fLr, 0, fC) + _lat_label(f, kind, d, extra)
+                            lab = _grav_label(fD, fL, fLr, fSr, fC) + _lat_label(f, kind, d, extra)
                             cpats = [("L", None), ("R", None)] if fC else [None]
                             for cp in cpats:
                                 c = add(lab + ("[CL:%s]" % cp[0] if cp else ""), fD, fL, fLr, family=fam, cite=cite_fam
-                                        + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015"),
-                                        lateral_kind=kind, direction=d, sign=s, tags=tags, fC=fC)
+                                        + (" + " + IS1893 + " 6.3" if kind == "EQ" else " + IS 875 (Part 3):2015")
+                                        + (" + " + SNOW_NOTE_CITE if fSr else ""),
+                                        lateral_kind=kind, direction=d, sign=s, tags=tags, fC=fC, fS=fSr)
                                 if cp:
                                     c["crane"] = True
                                     c["crane_pattern"] = list(cp)
@@ -406,8 +418,14 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                             f = s * 0.3 * fl
                             lab = _grav_label(fD, fL) + "%s%sEQ_Z" % ("+" if sz > 0 else "-", _fmt(fl)) + \
                                 _lat_label(f, "EQ", d)
-                            c = add(lab, fD, fL, 0.0, family=fam, cite=IS1893 + " 6.3.4.1(c)",
-                                    lateral_kind="EQ", direction=d, sign=s, tags=[])
+                            # H11: the roof imposed term follows the floor factor (Table 4 'LL' = every imposed
+                            # load), as snow when snow > Lr (IS 875-5 8.1 Note 1) -- it was dropped (fLr 0) here
+                            fLrz, fSz = (0.0, fL) if (snow_governs_roof and fL) else (fL, 0.0)
+                            if fSz:
+                                lab = lab.replace(_grav_label(fD, fL), _grav_label(fD, fL, 0.0, fSz), 1)
+                            c = add(lab, fD, fL, fLrz, family=fam, cite=IS1893 + " 6.3.4.1(c)"
+                                    + (" + " + SNOW_NOTE_CITE if fSz else ""),
+                                    lateral_kind="EQ", direction=d, sign=s, tags=[], fS=fSz)
                             c["fE"] = f
                             c["fEv"] = sz * fl * Av
                             c["vertical"] = {"Av": Av, "coef": sz}
@@ -416,18 +434,28 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                             else:
                                 c["lateral_ref"] = ref
     # ---- member-level wind (low-rise / portal: IS 875-3 7.3.1 (Cpe - Cpi) pd patterns) ----
-    for pat in member_wind_patterns(plan):
-        for (fD, fL, fl, fam) in ((1.5, 0.0, 1.5, "T4 DL+WL (member wind)"),
-                                  (0.9, 0.0, 1.5, "T4 0.9DL+WL (member wind, uplift)"),
-                                  (1.2, 1.2, 1.2, "T4 DL+LL+WL (member wind)"),
-                                  (1.2, 1.2, 0.6, "T4 DL+LL+0.6WL (member wind)")):
-            c = add(_grav_label(fD, fL, fL) + "+%s%s" % (_fmt(fl), pat["name"]), fD, fL, fL, family=fam,
-                    cite=IS800_T4 + " + IS 875 (Part 3):2015 7.3.1, Table 5, Table 6",
-                    lateral_kind="W", direction=pat.get("wind_axis"), sign=1, tags=["member_wind"])
-            c["fWM"] = fl
-            c["member_wind"] = {k: pat.get(k) for k in ("name", "direction", "wind_axis", "roof_windward_kNm2",
-                                                        "roof_leeward_kNm2", "wall_windward_kNm2",
-                                                        "wall_leeward_kNm2", "Cpi")}
+    # H14 (HR-A-15, HR-B-12): every pattern is applied from both sides of its axis -- sign +1 (wind towards +axis,
+    # windward = low-coordinate face) and the reversed pattern '<name>R' (sign -1, windward = high-coordinate face),
+    # unless the pattern itself fixes 'sign'.
+    for pat0 in member_wind_patterns(plan):
+        signs = [(-1 if float(pat0["sign"]) < 0 else 1)] if pat0.get("sign") is not None else [1, -1]
+        for sg in signs:
+            pat = dict(pat0, sign=sg)
+            if pat0.get("sign") is None and sg < 0:
+                pat["name"] = str(pat0["name"]) + "R"
+            for (fD, fL, fl, fam) in ((1.5, 0.0, 1.5, "T4 DL+WL (member wind)"),
+                                      (0.9, 0.0, 1.5, "T4 0.9DL+WL (member wind, uplift)"),
+                                      (1.2, 1.2, 1.2, "T4 DL+LL+WL (member wind)"),
+                                      (1.2, 1.2, 0.6, "T4 DL+LL+0.6WL (member wind)")):
+                fLr_, fS_ = (0.0, fL) if (snow_governs_roof and fL) else (fL, 0.0)     # H11: IS 875-5 8.1 Note 1
+                c = add(_grav_label(fD, fL, fLr_, fS_) + "+%s%s" % (_fmt(fl), pat["name"]), fD, fL, fLr_,
+                        family=fam, cite=IS800_T4 + " + IS 875 (Part 3):2015 7.3.1, Table 5, Table 6"
+                        + (" + " + SNOW_NOTE_CITE if fS_ else ""),
+                        lateral_kind="W", direction=pat.get("wind_axis"), sign=sg, tags=["member_wind"], fS=fS_)
+                c["fWM"] = fl
+                c["member_wind"] = {k: pat.get(k) for k in ("name", "direction", "wind_axis", "roof_windward_kNm2",
+                                                            "roof_leeward_kNm2", "wall_windward_kNm2",
+                                                            "wall_leeward_kNm2", "Cpi", "sign")}
     # ---- serviceability (Table 4 cols 7-10): tagged, excluded from the strength envelope ----
     add("SLS:1.0DL+1.0LL", 1.0, 1.0, 1.0, family="T4 SLS DL+LL", cite=IS800_T4 + " serviceability", service=True,
         tags=["service"])

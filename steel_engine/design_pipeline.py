@@ -620,13 +620,58 @@ def provenance_record(job_dir):
                                     "(engine-generated model files excluded)"}
 
 
+_OVERRIDE_FIELDS = ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm", "grade", "process")
+
+
+def _is_tube(sec):
+    return str(sec or "").upper().startswith(("CHS", "NB"))
+
+
+def member_override(cfg, t, kind, sec, role):
+    """H19 (HR-E-15, CFS-A-16, CFS-D-11): cfg['member_overrides'] = {key: {Kz, Ky, LLT_sag_mm, LLT_hog_mm, Lz_mm,
+    Ly_mm, grade, process}} with key 'e<tag>' (one element), '<role>:<SECTION>' (role = brace | roof | floor |
+    lateral_col | gravity_col), '<kind>:<SECTION>' (kind = col | beam | brace, or column) or '<SECTION>'.  The
+    more specific key wins field by field (tag > role:section > kind:section > section).  Returns (fields, keys)."""
+    mo = cfg.get("member_overrides") or {}
+    if not isinstance(mo, dict) or not mo:
+        return {}, []
+    keys = [str(sec), "%s:%s" % (_ROLE_TO_I8.get(kind, kind), sec), "%s:%s" % (kind, sec), "%s:%s" % (role, sec),
+            "e%d" % t]
+    out, used = {}, []
+    for k in keys:
+        v = mo.get(k)
+        if isinstance(v, dict):
+            out.update({f: v[f] for f in _OVERRIDE_FIELDS if v.get(f) is not None})
+            used.append(k)
+    return out, used
+
+
 def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
-    grade = cfg.get("brace_grade") if kind == "brace" else cfg.get("steel_grade")
-    grade = (cfg.get("grade_by_section") or {}).get(sec) or grade      # per-section IS 2062 grade (e.g. E350 columns)
+    # H19 (HR-B-05, HR-E-14): grade / process lookup.  Braces keep cfg['brace_grade'] unless grade_by_section names
+    # 'brace:<SEC>'; other kinds: grade_by_section '<role>:<SEC>' or '<SEC>'.  CHS / NB tubes of any kind take
+    # cfg['tube_grade'] / cfg['tube_process'] (IS 1161), falling back to brace_grade / brace_process.
+    gbs = cfg.get("grade_by_section") or {}
+    tube = _is_tube(sec)
+    if tube:
+        grade = cfg.get("tube_grade") or cfg.get("brace_grade") or (None if kind == "brace" else cfg.get("steel_grade"))
+        process = cfg.get("tube_process") or cfg.get("brace_process")
+    elif kind == "brace":
+        grade, process = cfg.get("brace_grade"), cfg.get("brace_process")
+    else:
+        grade, process = cfg.get("steel_grade"), None
+    gv = gbs.get("brace:%s" % sec) if kind == "brace" else (gbs.get("%s:%s" % (role, sec)) or gbs.get(sec))
+    if isinstance(gv, dict):
+        grade = gv.get("grade") or grade
+        process = gv.get("process") or process
+    elif gv:
+        grade = gv                                     # per-section IS 2062 grade (e.g. E350 columns)
+    ov, used = member_override(cfg, t, kind, sec, role)
+    grade = ov.get("grade") or grade
+    process = ov.get("process") or process
     m = {"id": "e%d" % t, "tag": t, "section": sec, "grade": grade, "role": _ROLE_TO_I8.get(kind, kind),
          "role_group": role, "L_mm": length, "node_i": n1, "node_j": n2}
-    if kind == "brace":
-        m["process"] = cfg.get("brace_process")
+    if kind == "brace" or tube or process:
+        m["process"] = process
     K = cfg.get("K_factors") or {}
     kk = K.get(role) or K.get(kind) or {}
     if kk:
@@ -635,6 +680,12 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
         for key in ("LLT_sag_mm", "LLT_hog_mm"):        # a number, or {role: mm} per member group
             v = cfg.get(key)
             m[key] = (v.get(role) if isinstance(v, dict) else v)
+    # H19: per-member overrides for every kind, including columns (girt / fly-brace restraint -> column LTB length)
+    for f in ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm"):
+        if ov.get(f) is not None:
+            m[f] = float(ov[f])
+    if used:
+        m["overrides"] = used
     if kind == "col":
         m["sway"] = bool(cfg.get("sway_frame"))
     return m
@@ -762,6 +813,13 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
                            default=0.0)
                 rec["L_clear_mm"] = length[t] - dcol
                 bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"]}
+                # H13 (HR-C-03/HR-D-08): the beam's grid position + level footprint give the actual tributary
+                # (edge girder: half bay; beam parallel to the deck span: its secondary strip when declared)
+                n_lo = min(n1, n2)
+                ij = ((n_lo % 100000) // 100, n_lo % 100)
+                pk = (info0.get("present") or {}).get(n1 // 100000)
+                if pk and ij in pk:
+                    bdict.update(i=ij[0], j=ij[1], present_k=pk)
                 rec["V_gravity_N"] = SM.one_way_gravity(cfg, bdict, 1.2, 0.5, 0.5)[1]
                 rec["V_gravity_cite"] = "1.2DL + 0.5LL simple-span end shear (12.11.2.2)"
             except Exception:
