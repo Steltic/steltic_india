@@ -90,9 +90,11 @@ def _na(id_, *, clause, cite, member=None, reason):
 
 
 def is18168_status(system, cfg):
-    """IS 18168:2023 applicability for this job (mandatory Zones III-V for SMRF/SCBF/EBF; Zone II opt-in)."""
+    """IS 18168:2023 applicability for this job (ruling R8, H52): Zones III-V for SMRF/SCBF/EBF when the occupancy
+    (cfg['occupancy']) is in the 1.2 list or not declared; cfg['apply_is18168'] True / False overrides (False is
+    ignored where 1.2 makes it mandatory)."""
     cfg = cfg or {}
-    return I18.applies(system, cfg.get("zone") or cfg.get("Z"), opt_in=bool(cfg.get("apply_is18168")))
+    return I18.applies_for_cfg(system, cfg.get("zone") or cfg.get("Z"), cfg)
 
 
 def _ry(member, p):
@@ -202,9 +204,28 @@ def _member(model_data, mid):
     return None
 
 
-def _brace_compression(model_data, m):
+def _brace_compression(model_data, m, families=None):
+    """Largest brace compression over the member's force records; families=('table4',) restricts it to the IS 800
+    Table 4 / IS 1893 design combinations (H07: OCBF / SCBF brace members -- the 12.2.3 / IS 18168 5.5 rows are for
+    columns and connections, 12.2.3 / 12.7.3.1; 5.5(c) names braces of EBFs only)."""
     fs = _forces(model_data, m["id"])
+    if families is not None:
+        fs = [f for f in fs if (f.get("family") or "table4") in families]
     return max([f.get("P_N", 0.0) for f in fs] + [0.0]) if fs else None
+
+
+def _per_axis_KL(m, p):
+    """(KLz, KLy, KL/r max, basis) with the member's own K per axis (H07): Kz L on rz (rx, major) and Ky L on ry;
+    angles: max(Kz, Ky) L on the minimum radius r_vv."""
+    L = m.get("L_mm")
+    Kz, Ky = (m.get("Kz") or 1.0), (m.get("Ky") or 1.0)
+    if not L:
+        return None, None, None, None
+    KLz, KLy = Kz * L, Ky * L
+    if p.get("section_type") == "angle":
+        r = p.get("rv") or p.get("r_min") or min(p["rx"], p["ry"])
+        return KLz, KLy, max(KLz, KLy) / r, "max(Kz, Ky) L / r_vv (angle)"
+    return KLz, KLy, max(KLz / p["rx"], KLy / p["ry"]), "max(Kz L / rz, Ky L / ry)"
 
 
 # ------------------------------------------------------------------------------------------ braces
@@ -225,9 +246,7 @@ def brace_member_checks(system, m, model_data, cfg):
                        reason="grade not resolved (no default fy)"))
         return out
     L = m.get("L_mm")
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    rmin = p.get("r_min") or min(p["rx"], p["ry"])
-    klr = K * L / rmin if L else None
+    KLz, KLy, klr, klr_basis = _per_axis_KL(m, p)
     lim = 120 if sysn == "OCBF" else 160
     klr_clause = "IS 800:2007 12.7.2.1" if sysn == "OCBF" else "IS 800:2007 12.8.2.2"
     klr_cite = "slenderness of bracing members shall not exceed %d%s" % (
@@ -240,16 +259,18 @@ def brace_member_checks(system, m, model_data, cfg):
         klr_cite += "; " + I18.CITE_10_2 + " (" + I18.PRECEDENCE + ")"
         strict = True
     out.append(_chk("brace_KL_r", klr, lim, clause=klr_clause, member=m["id"], cite=klr_cite,
-                    ok=(klr < lim) if strict else (klr <= lim), K=K, L_mm=L, r_min_mm=rmin) if klr else
+                    ok=(klr < lim) if strict else (klr <= lim), Kz=m.get("Kz") or 1.0, Ky=m.get("Ky") or 1.0,
+                    L_mm=L, KL_r_basis=klr_basis) if klr else
                _na("brace_KL_r", clause=klr_clause, cite="KL/r", member=m["id"], reason="L_mm missing"))
-    comp = I8.compression_capacity(p, fy, KLz_mm=K * L, KLy_mm=K * L, process=m.get("process")) if L else {"found": False}
-    Pc = _brace_compression(model_data, m)
+    comp = I8.compression_capacity(p, fy, KLz_mm=KLz, KLy_mm=KLy, process=m.get("process")) if L else {"found": False}
+    Pc = _brace_compression(model_data, m, families=("table4",))
     fac = 0.8 if sysn == "OCBF" else 1.0
     cl = "IS 800:2007 12.7.2.2" if sysn == "OCBF" else "IS 800:2007 12.8.2.3"
     if comp.get("found") and Pc is not None:
         out.append(_chk("brace_compression", Pc, fac * comp["Pd_N"], clause=cl, member=m["id"],
-                        cite="required compressive strength <= %s Pd (7.1.2)" % ("0.8" if fac < 1 else "1.0"),
-                        Pd_N=comp["Pd_N"]))
+                        cite="required compressive strength <= %s Pd (7.1.2); demand from the IS 800 Table 4 design "
+                             "combinations (12.2.3 rows are for columns / connections)" % ("0.8" if fac < 1 else "1.0"),
+                        Pd_N=comp["Pd_N"], KLz_mm=KLz, KLy_mm=KLy, demand_family="table4"))
     else:
         out.append(_na("brace_compression", clause=cl, cite="P <= %.1f Pd" % fac, member=m["id"],
                        reason="Pd or brace forces missing (%s)" % (comp.get("note") or "")))
@@ -368,16 +389,15 @@ def ebf_brace_checks(m, model_data, cfg):
         return out + [_na("brace_fy", clause="IS 18168:2023 12.3.4.5", cite="fy from grade", member=m["id"],
                           reason="grade not resolved")]
     ry, _ = _ry(m, p)
-    if p.get("section_type") == "I":
+    if p.get("section_type") in I18.TABLE2_SECTION_TYPES:
         out.append(dict(I18.table2_check("brace", p, fy, ry, member=m["id"]),
                         cite="12.3.4.1: braces satisfy the Table 2 (iii) width-to-thickness limits"))
     L = m.get("L_mm")
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    rmin = p.get("r_min") or min(p["rx"], p["ry"])
-    klr = K * L / rmin if L else None
+    _, _, klr, klr_basis = _per_axis_KL(m, p)
     out.append(_chk("brace_KL_r", klr, I18.BRACE_KLR_LIMIT, clause="IS 18168:2023 10.2 (braced frames) / IS 800:2007 Table 3",
                     member=m["id"], cite=I18.CITE_10_2 + " (applied to EBF braces as the braced-frame limit; IS 800 "
-                    "Table 3 gives 180)", ok=(klr < I18.BRACE_KLR_LIMIT) if klr else None, K=K, L_mm=L, r_min_mm=rmin))
+                    "Table 3 gives 180)", ok=(klr < I18.BRACE_KLR_LIMIT) if klr else None, Kz=m.get("Kz") or 1.0,
+                    Ky=m.get("Ky") or 1.0, L_mm=L, KL_r_basis=klr_basis))
     over = _link_overstrength_for_brace(model_data, m["id"])
     fs = [f for f in _forces(model_data, m["id"]) if f.get("P_EL_N") is not None]
     if over and fs:
@@ -461,8 +481,8 @@ def brace_connection_checks(system, m, conn, model_data, cfg):
     # 12.x.3.4 gusset out-of-plane buckling: compression = brace buckling strength (IS 18168:2023 10.4.2 wording)
     p = _props(m)
     fy, _ = _fy(m, p)
-    K = max(m.get("Kz") or 1.0, m.get("Ky") or 1.0)
-    comp = I8.compression_capacity(p, fy, KLz_mm=K * m["L_mm"], KLy_mm=K * m["L_mm"], process=m.get("process")) \
+    KLz_, KLy_, _, _ = _per_axis_KL(m, p)             # H07: brace buckling strength with its own K per axis
+    comp = I8.compression_capacity(p, fy, KLz_mm=KLz_, KLy_mm=KLy_, process=m.get("process")) \
         if (fy and m.get("L_mm")) else {"found": False}
     if wm.get("found") and comp.get("found"):
         gb = C.whitmore_buckling(whitmore_width_mm=wm["whitmore_width_mm"], t_gusset_mm=gus.get("t_mm"),
@@ -627,9 +647,43 @@ def column_checks(system, model_data, cfg):
     return out
 
 
+def _column_frame_axes(m, model_data):
+    """Column axes ('z' major / 'y' minor) in which the column belongs to an SFRS frame (H08): the frame directions of
+    the SFRS braces and rigid-ended SFRS beams meeting its end nodes, mapped through major_axis_plane.  None when
+    model_data carries no connectivity (callers then use the base's declared axis)."""
+    ends = {n for n in (m.get("node_i"), m.get("node_j")) if n is not None}
+    if not ends:
+        return None
+    dirs = set()
+    for o in model_data.get("members") or []:
+        if o.get("role") not in ("brace", "beam") or not o.get("sfrs", True) or not o.get("frame_dir"):
+            continue
+        ni, nj = o.get("node_i"), o.get("node_j")
+        if o.get("role") == "beam":
+            rel = o.get("release_major") or "none"
+            rigid = {n for n, r in ((ni, "I"), (nj, "J")) if rel not in ("both", r)}
+            if not (rigid & ends):
+                continue
+        elif not ({ni, nj} & ends):
+            continue
+        dirs.add(o["frame_dir"])
+    if not dirs:
+        return None
+    mp = m.get("major_axis_plane")
+    if mp is None:
+        return {"z", "y"} if len(dirs) > 1 else {"z"}
+    return {"z" if d == mp else "y" for d in dirs}
+
+
 def base_checks(system, model_data, cfg):
-    """12.12: fixed bases for 1.2 Mp of the column (+ anchors for shear+tension+prying); all bases for
-    max(full shear, 1.2 x column shear capacity)."""
+    """12.12 / IS 18168 9 column bases, per load case (H08):
+    - every SFRS base (fixed or pinned): shear max(case, 1.2 Vd) (IS 800 12.12.2) in every case;
+    - fixed SFRS base: the capacity moment mfac x Mpc (IS 800 12.12.1 1.2; IS 18168 9.3 1.1 Ry, Mpc reduced for the
+      concurrent P per IS 800 9.3.1.2) and the 9.3 shear 2.2 Ry Mpc / Hc are paired only with the seismic cases (EL,
+      12.2.3, 5.5), about each column axis in which the column belongs to an SFRS frame (one sub-case per axis);
+    - pinned SFRS base (IS 18168): the 9.4 minimum moment 0.5 Ry Myc (Sy for the minor axis) inside each case;
+    - Mz and My kept per case: plate / anchors checked about both axes with the combined corner-anchor tension;
+    - governing case ordered (fails, not evaluated, dc); per_case records the moments actually checked."""
     out = []
     sysn = normalize_system(system)
     cols = {m["id"]: m for m in (model_data.get("members") or []) if m.get("role") == "column"}
@@ -644,13 +698,10 @@ def base_checks(system, model_data, cfg):
         sfrs = bool(m.get("sfrs", True))
         p = _props(m)
         fy, _ = _fy(m, p)
-        ax = b.get("axis", "z")
-        Zp = p["Zx"] if ax == "z" else p["Zy"]
-        Vd = I8.shear_capacity(p, fy, axis=ax).get("Vd_N") if fy else None
         import inspect as _insp
         _allowed = set(_insp.signature(C.base_plate_design).parameters) | {"load_cases", "Hc_mm"}
         geo = {k: v for k, v in b.items() if k in _allowed and k not in ("sfrs_fixed_base", "col_Zp_mm3", "col_fy_MPa",
-                                                                       "col_Vd_N", "sfrs_moment_factor")}
+                                                                       "col_Vd_N", "sfrs_moment_factor", "col_A_mm2")}
         need = ("B_mm", "L_mm", "t_plate_mm", "fy_plate_MPa", "fck_MPa") + (() if geo.get("load_cases") else ("P_N",))
         if not all(geo.get(k) is not None for k in need):
             out.append(_na("12.12_base", clause="IS 800:2007 12.12 / 7.4", cite="base plate + anchors",
@@ -659,49 +710,98 @@ def base_checks(system, model_data, cfg):
             continue
         geo.setdefault("col_d_mm", p["d"]); geo.setdefault("col_bf_mm", p["bf"]); geo.setdefault("col_tf_mm", p["tf"])
         Hc = geo.pop("Hc_mm", None) or m.get("L_mm")
-        if not sfrs:
-            # gravity column base: IS 800 7.4 / 10.3 under its own (P, M, V); no 12.12 / IS 18168 9 demands
-            mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 7.4 / 10.3", "gravity column base: bearing 0.6 fck, anchors, plate (7.4)"
-            b = dict(b, fixed=False)
-            Vd = None
-        else:
-            mfac, vmin, cl, ct = 1.2, None, "IS 800:2007 12.12 / 7.4 / 10.3", "fixed base 1.2 Mp (12.12.1); shear max(full, 1.2 Vd) (12.12.2)"
+        fixed = bool(b.get("fixed")) and sfrs
+        axes = _column_frame_axes(m, model_data) if sfrs else None
+        if not axes:
+            axes = {"z" if b.get("axis", "z") == "z" else "y"}
+        Vd = {}
+        if sfrs and fy:
+            for ax in ("z", "y"):
+                Vd[ax] = I8.shear_capacity(p, fy, axis=ax).get("Vd_N")
         a18 = is18168_status(sysn, cfg)
-        if sfrs and a18["applies"] and fy:
-            ry, ry_note = _ry(m, p)
-            if b.get("fixed"):
-                # IS 18168 9.3: M = 1.1 Ry Mpc (1.54 Mpc for E250 > IS 800's 1.2 Mp -> governs), V = 2.2 Ry Mpc/Hc
-                mfac = max(1.2, 1.1 * ry)
-                vmin = (2.2 * ry * Zp * fy / Hc) if Hc else None
-                cl += " + IS 18168:2023 9.3"
-                ct += "; IS 18168:2023 9.3 (pdf p. 13): fixed base 1.1 Ry Mpc, shear 2.2 Ry Mpc/Hc (%s; stricter governs)" % ry_note
-            else:
-                vmin = (1.1 * ry * Zp * fy / Hc) if Hc else None
+        use18 = bool(sfrs and a18["applies"] and fy)
+        ry, ry_note = _ry(m, p) if use18 else (None, None)
+        mfac = max(1.2, 1.1 * ry) if (fixed and use18) else 1.2
+        if not sfrs:
+            cl, ct = "IS 800:2007 7.4 / 10.3", "gravity column base: bearing 0.6 fck, anchors, plate (7.4); P, Mz, My per case"
+        else:
+            cl = "IS 800:2007 12.12 / 7.4 / 10.3"
+            ct = "all SFRS bases: shear max(case, 1.2 Vd) in every case (12.12.2)"
+            if fixed:
+                ct += "; fixed base: %.2f x Mpc (concurrent P, 9.3.1.2) paired with the seismic cases (12.12.1%s)" % (
+                    mfac, "; IS 18168:2023 9.3 1.1 Ry Mpc, shear 2.2 Ry Mpc/Hc, %s" % ry_note if use18 else "")
+                if use18:
+                    cl += " + IS 18168:2023 9.3"
+            elif use18:
                 cl += " + IS 18168:2023 9.4"
-                ct += "; IS 18168:2023 9.4 (pdf p. 13): pinned base min moment 0.5 Ry Myc, shear 1.1 Ry Mpc/Hc (%s)" % ry_note
-                geo["M_Nmm"] = max(float(geo.get("M_Nmm") or 0.0), 0.5 * ry * p["Sx"] * fy)
-        cases = geo.pop("load_cases", None) or [{"combo": "declared", "P_N": geo.get("P_N"), "M_Nmm": geo.get("M_Nmm", 0.0),
-                                                 "V_N": geo.get("V_N", 0.0)}]
+                ct += "; IS 18168:2023 9.4: pinned base minimum moment 0.5 Ry Myc (Sy about y) in each case, shear " \
+                      "1.1 Ry Mpc/Hc (%s)" % ry_note
+        ct += "; frame axes %s" % sorted(axes)
+        cases = geo.pop("load_cases", None) or [{"combo": "declared", "P_N": geo.get("P_N"),
+                                                 "M_Nmm": geo.get("M_Nmm", 0.0), "V_N": geo.get("V_N", 0.0),
+                                                 "My_Nmm": b.get("My_Nmm", 0.0), "seismic": b.get("seismic", True)}]
+        for k in ("P_N", "M_Nmm", "V_N"):
+            geo.pop(k, None)
         worst, per_case = None, []
         for lc in cases:
-            g2 = dict(geo, P_N=float(lc.get("P_N") or 0.0), M_Nmm=abs(float(lc.get("M_Nmm") or 0.0)),
-                      V_N=abs(float(lc.get("V_N") or 0.0)))
-            if vmin:
-                g2["V_N"] = max(g2["V_N"], vmin)
-            r = C.base_plate_design(sfrs_fixed_base=bool(b.get("fixed")), col_Zp_mm3=Zp, col_fy_MPa=fy, col_Vd_N=Vd,
-                                    sfrs_moment_factor=mfac, **g2)
-            if not b.get("fixed") and Vd:
-                r["demands"]["V_N"] = max(r["demands"]["V_N"], 1.2 * Vd)
-            r["combo"] = lc.get("combo")
-            per_case.append({"combo": lc.get("combo"), "dc": r.get("dc"), "ok": r.get("ok"), "P_N": g2["P_N"],
-                             "M_Nmm": g2["M_Nmm"], "V_N": g2["V_N"]})
-            key = (r.get("ok") is None, r.get("dc") if r.get("dc") is not None else -1)
-            if worst is None or key > worst[0]:
-                worst = (key, r)
+            P = float(lc.get("P_N") or 0.0)
+            Mz0 = abs(float(lc.get("Mz_Nmm", lc.get("M_Nmm")) or 0.0))
+            My0 = abs(float(lc.get("My_Nmm") or 0.0))
+            if b.get("axis", "z") == "y" and "Mz_Nmm" not in lc and not lc.get("My_Nmm"):
+                Mz0, My0 = 0.0, Mz0                         # a declared single moment about the minor axis
+            V0 = abs(float(lc.get("V_N") or 0.0))
+            if "seismic" in lc:
+                seismic = bool(lc["seismic"])
+            else:                                           # label: Table 4 EL / 12.2.3 / 5.5 rows carry 'EQ' / 'EL'
+                lab_ = str(lc.get("combo") or "")
+                seismic = lab_ == "declared" or "EQ" in lab_ or "EL" in lab_
+            subs = [(None, Mz0, My0, V0, [])]
+            if sfrs and fy:
+                vmin12 = max([1.2 * Vd[ax] for ax in axes if Vd.get(ax)] or [0.0])
+                if fixed and seismic:
+                    subs = []
+                    for ax in sorted(axes):
+                        Mpc, n = _mpc_reduced(p, fy, P, ax)
+                        Mcap = mfac * Mpc
+                        Vcap = (2.2 * ry * Mpc / Hc) if (use18 and Hc) else 0.0
+                        mz, my = (max(Mz0, Mcap), My0) if ax == "z" else (Mz0, max(My0, Mcap))
+                        subs.append((ax, mz, my, max(V0, vmin12, Vcap),
+                                     [("12.12.1_moment_demand", Mcap, "IS 800:2007 12.12.1" + (" + IS 18168:2023 9.3" if use18 else ""),
+                                       "%.2f x Mpc about %s (n = P/Py = %.3f, IS 800 9.3.1.2)" % (mfac, ax, n))]
+                                     + ([("is18168_9_3_shear_demand", Vcap, "IS 18168:2023 9.3", "2.2 Ry Mpc/Hc")] if Vcap else [])))
+                elif not fixed and use18:
+                    subs = []
+                    for ax in sorted(axes):
+                        Mmin = 0.5 * ry * (p["Sx"] if ax == "z" else p["Sy"]) * fy
+                        Mpc, _n = _mpc_reduced(p, fy, P, ax)
+                        Vmin = (1.1 * ry * Mpc / Hc) if Hc else 0.0
+                        mz, my = (max(Mz0, Mmin), My0) if ax == "z" else (Mz0, max(My0, Mmin))
+                        subs.append((ax, mz, my, max(V0, vmin12, Vmin),
+                                     [("is18168_9_4_min_moment", Mmin, "IS 18168:2023 9.4",
+                                       "0.5 Ry Myc about %s (%s)" % (ax, "Sx" if ax == "z" else "Sy"))]))
+                else:
+                    subs = [(None, Mz0, My0, max(V0, vmin12), [])]
+                for sub in subs:
+                    sub[4].append(("12.12.2_shear_demand", vmin12, "IS 800:2007 12.12.2",
+                                   "full shear under the case or 1.2 x column shear capacity, whichever is higher"))
+            for ax, mz, my, v, info in subs:
+                g2 = dict(geo)
+                r = C.base_plate_design_biaxial(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v, **g2)
+                for nm, val, cl_, ct_ in info:
+                    r["checks"][nm] = {"value": val, "clause": cl_, "cite": ct_, "ok": True, "dc": None}
+                r["combo"] = lc.get("combo") + ("" if ax is None else " [capacity/minimum about %s]" % ax)
+                per_case.append({"combo": r["combo"], "seismic": seismic, "axis": ax, "dc": r.get("dc"), "ok": r.get("ok"),
+                                 "P_N": P, "Mz_Nmm": r["demands"].get("Mz_Nmm", mz), "My_Nmm": my,
+                                 "M_Nmm": r["demands"].get("M_Nmm", mz), "V_N": r["demands"].get("V_N", v),
+                                 "T_corner_anchor_N": r["demands"].get("T_corner_anchor_N")})
+                key = (r.get("ok") is False, r.get("ok") is None, r.get("dc") if r.get("dc") is not None else -1)
+                if worst is None or key > worst[0]:
+                    worst = (key, r)
         r = worst[1]
+        not_eval = [c["combo"] for c in per_case if c["ok"] is None]
         out.append(_chk("12.12_base" if sfrs else "7.4_base", r.get("dc"), 1.0, clause=cl, member=b.get("id"), cite=ct,
                         ok=r.get("ok"), dc=r.get("dc"), detail=r, governing_combo=r.get("combo"), n_cases=len(per_case),
-                        per_case=per_case, sfrs=sfrs))
+                        per_case=per_case, not_evaluated_cases=not_eval, sfrs=sfrs, frame_axes=sorted(axes)))
     return out
 
 
@@ -766,6 +866,15 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
     IS 800 12.11.3.2 (1.2, no Ry) -> governs where IS 18168 applies (both records kept)."""
     cols, beams = joint.get("columns") or [], joint.get("beams") or []
     cid = "is18168_8_2_SCWB"
+    # ruling R3 / H46: Pu = maximum factored axial compression over ALL design combinations (8.2 literal, default);
+    # cfg['scwb_pu_basis'] = 'seismic' restricts it to the IS 800 Table 4 earthquake combinations
+    basis = str((cfg or {}).get("scwb_pu_basis") or "all").lower()
+    if basis not in ("all", "seismic"):
+        return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                   reason="cfg['scwb_pu_basis'] = %r (allowed: 'all', 'seismic')" % basis)
+    pu_cite = ("Pu = max factored axial compression over all design combinations (8.2 literal; ruling R3)"
+               if basis == "all" else "Pu = max factored axial compression over the IS 800 Table 4 earthquake "
+                                      "combinations (cfg['scwb_pu_basis'] = 'seismic', ruling R3 option)")
     if joint.get("roof") or not any(c.get("position") == "above" for c in cols):
         return _chk(cid, None, None, clause="IS 18168:2023 8.2.1", cite="need not be satisfied at the roof level",
                     member=joint.get("id"), ok=True, dc=None, note="roof joint")
@@ -782,6 +891,8 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
                        reason="column grade / L_mm not resolved")
         axis = "z" if (m.get("major_axis_plane") in (None, joint.get("frame_dir"))) else "y"
         fs = _forces(model_data, m["id"])
+        if basis == "seismic":
+            fs = [f for f in fs if (f.get("family") or "table4") == "table4" and "EQ" in str(f.get("combo") or "")]
         Pu = max([f.get("P_N", 0.0) for f in fs] + [0.0])
         comp = I8.compression_capacity(p, fy, KLz_mm=(m.get("Kz") or 1.0) * m["L_mm"],
                                        KLy_mm=(m.get("Ky") or 1.0) * m["L_mm"], process=m.get("process"))
@@ -807,9 +918,9 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
         terms_b.append({"member": m["id"], "section": m["section"], "Ry": ry, "Ry_basis": ry_note, "Mbo_Nmm": Mbo})
     ratio = sMpc / sMbo
     return _chk(cid, ratio, I18.SCWB_MIN, clause="IS 18168:2023 8.2", member=joint.get("id"),
-                cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry)",
+                cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry); " + pu_cite,
                 dc=I18.SCWB_MIN / ratio if ratio else None, ok=ratio > I18.SCWB_MIN, level=joint.get("level"),
-                columns=terms_c, beams=terms_b)
+                columns=terms_c, beams=terms_b, Pu_basis=basis)
 
 
 def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
@@ -871,18 +982,27 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
         cp = _props(cm)
         fyc, _ = _fy(cm, cp)
         strong = cm.get("major_axis_plane") in (None, joint.get("frame_dir"))
-        if strong and fyc:
+        is_box = cp.get("section_type") == "box"
+        if (strong or is_box) and fyc:
             bp0 = Mp_list[0][2]
             Vcol = below.get("V_N") or 0.0
             Vpz = panel_zone_design_shear([x[4] for x in Mp_list], bp0["d"], bp0["tf"], Vcol)
-            pz = I8.panel_zone_check(d_col_mm=cp["d"], tw_mm=cp["tw"], bf_mm=cp["bf"], tf_mm=cp["tf"],
-                                     d_beam_mm=bp0["d"], tf_beam_mm=None, V_design_N=Vpz, fy_MPa=fyc,
+            if strong:
+                geo = dict(d_col_mm=cp["d"], tw_mm=cp["tw"], bf_mm=cp["bf"], tf_mm=cp["tf"])
+            else:
+                # H09: a box column framed in its second direction -- the panel is bounded by the flange plates,
+                # which act as the two webs (d_col = B, web t = tf, 'flange' t = tw)
+                geo = dict(d_col_mm=cp["bf"], tw_mm=cp["tf"], bf_mm=cp["d"], tf_mm=cp["tw"])
+            pz = I8.panel_zone_check(d_beam_mm=bp0["d"], tf_beam_mm=None, V_design_N=Vpz, fy_MPa=fyc,
                                      doubler_t_mm=joint.get("doubler_t_mm") or 0.0,
-                                     continuity_plates=bool(joint.get("continuity_plates")))
+                                     continuity_plates=bool(joint.get("continuity_plates")),
+                                     n_webs=2 if is_box else 1, **geo)
             out.append(_chk("12.11.2.3_panel_zone", pz.get("dc"), 1.0, clause="IS 800:2007 12.11.2.3 / 12.11.2.4",
                             member=joint.get("id"), ok=pz.get("pass"), dc=pz.get("dc"),
-                            cite="panel zone shear buckling (8.4.2) at the 12.11.2.2 shear; individual t >= (dp+bp)/90",
-                            detail=pz))
+                            cite="panel zone shear buckling (8.4.2) at the 12.11.2.2 shear; individual t >= (dp+bp)/90"
+                                 + ("; built-up box: both web plates" if is_box else "")
+                                 + ("" if strong else " (box panel in the second frame direction: flange plates as webs)"),
+                            detail=pz, frame_dir=joint.get("frame_dir"), column_axis="major" if strong else "minor"))
         elif not strong:
             out.append(_chk("12.11.2.3_panel_zone", None, None, clause="IS 800:2007 12.11.2.3", member=joint.get("id"),
                             cite="column strong-axis connections only", ok=True, note="weak-axis joint"))
@@ -998,7 +1118,7 @@ def ebf_link_checks(link, model_data=None, cfg=None):
     Sh = IS18168_SH["I"] if st == "I" else IS18168_SH["box"]
     gm0 = 1.1
     d, tf, tw = p["d"], p["tf"], p["tw"]
-    if Ry and st == "I":
+    if Ry and st in I18.TABLE2_SECTION_TYPES:
         out.append(dict(I18.table2_check("link", p, fy, Ry, member=lid),
                         cite="11.1: flange and web width-to-thickness less than Table 2 (iv) links"))
     AwL = (d - 2 * tf) * tw
@@ -1122,10 +1242,38 @@ def ebf_beam_column_checks(links, model_data, cfg):
         beam_ids.update(ln.get("beam_ids") or [])
     if not beam_ids:
         return out
-    joints = [j for j in (model_data.get("joints") or []) if any(b["member_id"] in beam_ids for b in j.get("beams") or [])]
-    if not joints:
-        return [_na("12.3.4.4_beam_column", clause="IS 18168:2023 12.3.4.4", cite="brace-gusset beam-column joints",
-                    reason="no beam-column joints found for the beams outside the links (rigid joints expected)")]
+    # H36 (CFS-D-05): the clause applies only 'where a brace or gusset plate connects to both members at a
+    # beam-to-column connection' -> joints at which an EBF brace end node coincides with the beam-column node
+    brace_nodes = set()
+    for m in (model_data.get("members") or []):
+        if m.get("role") == "brace":
+            brace_nodes.update(n for n in (m.get("node_i"), m.get("node_j")) if n is not None)
+    joints = [j for j in (model_data.get("joints") or []) if any(b["member_id"] in beam_ids for b in j.get("beams") or [])
+              and (j.get("brace_at_joint") or (j.get("node") is not None and j.get("node") in brace_nodes))]
+    # a brace node at a beam-outside-link end that is also a column node, but no (rigid) joint was built there:
+    # the clause applies and the joint is missing -> not evaluated (never 'not applicable')
+    col_nodes = set()
+    beam_nodes = set()
+    for m in (model_data.get("members") or []):
+        ends = {n for n in (m.get("node_i"), m.get("node_j")) if n is not None}
+        if m.get("role") == "column":
+            col_nodes |= ends
+        elif m.get("id") in beam_ids:
+            beam_nodes |= ends
+    have = {j.get("node") for j in joints}
+    missing = sorted(n for n in (brace_nodes & beam_nodes & col_nodes) if n not in have)
+    if missing:
+        out.append(_na("12.3.4.4_beam_column", clause="IS 18168:2023 12.3.4.4", member="nodes %s" % missing,
+                       cite="1.1 Ry fyb Zpb connection assembly where a brace / gusset connects at the beam-column joint",
+                       reason="a brace frames into the beam-to-column connection at node(s) %s but no rigid joint is "
+                              "modelled there (12.3.4.4 needs the connection assembly and column strengths)" % missing))
+    if not joints and not missing:
+        return [_chk("12.3.4.4_beam_column", None, None, clause="IS 18168:2023 12.3.4.4", ok=True, dc=None,
+                     applies=False, gate=True,
+                     cite="12.3.4.4 applies 'where a brace or gusset plate connects to both members at a beam-to-column "
+                          "connection'",
+                     reason="not applicable: no EBF brace / gusset frames into a beam-to-column connection (e.g. a "
+                            "centre-link chevron with the braces at the link ends)")]
     for j in joints:
         bl = [b for b in j.get("beams") or [] if b["member_id"] in beam_ids]
         mb = _member(model_data, bl[0]["member_id"])
@@ -1217,24 +1365,40 @@ def section12_checks(system, model_data, cfg=None):
     checks += column_checks(sysn, model_data, cfg)
     checks += base_checks(sysn, model_data, cfg)
     conns = {c.get("member_id"): c for c in (model_data.get("connections") or []) if c.get("kind") == "brace_end"}
-    if a18["applies"] and sysn in ("SCBF", "SMF") and not cfg.get("is18168_table2"):
-        advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": False,
-                           "note": "width-to-thickness limits of the SFRS sections (Table 2 x eps/sqrt(Ry): beams 9.0/44.5, columns "
-                                   "9.0/72.7(1-1.04Ca), braces 11.3/44.4) are NOT enforced on this job -- set cfg['is18168_table2'] = "
-                                   "True to run them as live checks (rolled NPB webs d/tw > ~38 and WPB flanges b/tf > ~7.8 fail; WP6)"})
-    if a18["applies"] and sysn in ("SCBF", "SMF") and cfg.get("is18168_table2"):
-        # IS 18168:2023 5.3 / Table 2: width-to-thickness limits of the lateral load resisting system's sections
-        # (braces (iii), columns (ii) with Ca, SFRS beams (i)); EBF members are checked in their own branch (WP6).
-        # Opt-in on SCBF / SMF jobs (cfg['is18168_table2']) so the wave-2 fixtures keep their status; EBF always.
+    # H05 (E4, HR-C-14): IS 18168:2023 5.3 / Table 2 width-to-thickness limits are LIVE whenever IS 18168 applies
+    # (braces (iii), columns (ii) with Ca, SFRS beams (i)); built-up boxes are checked with the closed-box rows.
+    # cfg['is18168_table2'] = False is honoured only outside Zones III-V (Zone II opt-in jobs); EBF members are
+    # checked in their own branch (links, braces, beams outside links, columns), without duplicates.
+    t2_done = set()
+    link_ids = {ln.get("member_id") for ln in (model_data.get("links") or [])}
+    zone_r = _zone_roman(cfg.get("zone") or cfg.get("Z"))
+    t2_live = bool(a18["applies"])
+    if t2_live and cfg.get("is18168_table2") is False:
+        if zone_r in ("III", "IV", "V"):
+            advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": True,
+                               "note": "cfg['is18168_table2'] = False ignored: IS 18168 5.3 is mandatory in Zone %s "
+                                       "(the opt-out is honoured only outside Zones III-V)" % zone_r})
+        else:
+            t2_live = False
+            advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": False,
+                               "note": "Table 2 width-to-thickness checks switched off by cfg['is18168_table2'] = False "
+                                       "(Zone %s, IS 18168 applied by opt-in)" % zone_r})
+    t2_skipped = []
+    if t2_live and any(c in ("SCBF", "SMF") for c in comps):
         for m in _members(model_data):
             if m.get("role") not in ("brace", "column", "beam") or (m.get("role") == "beam" and not m.get("sfrs")):
                 continue
+            if m.get("id") in link_ids or (m.get("role") == "brace" and "EBF" in comps and "SCBF" not in comps):
+                continue                               # EBF links / braces: IS 18168 11.1 / 12.3.4.1 in the EBF branch
             try:
                 pm = _props(m)
             except KeyError:
                 continue
             fym, _ = _fy(m, pm)
-            if not fym or pm.get("section_type") != "I":
+            if not fym:
+                continue
+            if pm.get("section_type") not in I18.TABLE2_SECTION_TYPES:
+                t2_skipped.append("%s (%s, %s)" % (m.get("id"), m.get("section"), pm.get("section_type")))
                 continue
             comp = {"brace": "brace", "column": "column", "beam": "beam"}[m["role"]]
             Ca = None
@@ -1244,6 +1408,10 @@ def section12_checks(system, model_data, cfg=None):
             checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
                                cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
                                     % {"brace": "iii", "column": "ii", "beam": "i"}[comp]))
+            t2_done.add(m["id"])
+    if t2_skipped:
+        advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True,
+                           "note": "no Table 2 row for these SFRS section types (not checked): %s" % ", ".join(t2_skipped)})
     if has_braces:
         sysn_b = sys_br
         cfgb = str(cfg.get("brace_config") or "").lower()
@@ -1277,19 +1445,21 @@ def section12_checks(system, model_data, cfg=None):
         seen = set()
         for ln in links:
             for bid in ln.get("beam_ids") or []:
-                if bid in seen:
+                if bid in seen or bid in t2_done:
                     continue
                 seen.add(bid)
                 mb = _member(model_data, bid)
                 if not mb:
                     continue
                 pb = _props(mb); fyb, _ = _fy(mb, pb)
-                if fyb and pb.get("section_type") == "I":
+                if fyb and pb.get("section_type") in I18.TABLE2_SECTION_TYPES:
                     checks.append(dict(I18.table2_check("beam", pb, fyb, _ry(mb, pb)[0], member=bid),
                                        cite="12.3.4.1: beams outside the links satisfy Table 2 (i)"))
         for mc in _members(model_data, "column"):
+            if mc["id"] in t2_done:
+                continue
             pc = _props(mc); fyc, _ = _fy(mc, pc)
-            if fyc and pc.get("section_type") == "I":
+            if fyc and pc.get("section_type") in I18.TABLE2_SECTION_TYPES:
                 Py = fyc * pc["A"] / I8.GAMMA_M0_DEFAULT
                 Pu = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, mc["id"])] + [0.0])
                 checks.append(dict(I18.table2_check("column", pc, fyc, _ry(mc, pc)[0], Ca=Pu / Py, member=mc["id"]),
@@ -1313,7 +1483,12 @@ def section12_checks(system, model_data, cfg=None):
         advisories.append({"clause": "IS 18168:2023 1.2 / Foreword", "applies": True, "mandatory": a18["mandatory"],
                            "note": I18.PRECEDENCE, "live_checks": ["is18168_1_3_system", "is18168_5_5_combinations",
                            "is18168_7_2_column_KL_r", "brace_KL_r (10.2)", "brace_connection_force (10.4.1)",
-                           "is18168_8_2_SCWB", "12.12_base (9.3/9.4)", "EBF links (11, 12.3)"]})
+                           "is18168_8_2_SCWB", "12.12_base (9.3/9.4)", "EBF links (11, 12.3)",
+                           "is18168_table2 (5.3)", "column splices (7.5, 12.2.4.6 / 12.3.4.7)"],
+                           "occupancy_basis": a18.get("occupancy_basis"), "applicability_note": a18.get("note")})
+    elif sysn in ("SCBF", "SMF", "EBF") and zone in ("III", "IV", "V"):
+        advisories.append({"clause": "IS 18168:2023 1.2", "applies": False, "occupancy_basis": a18.get("occupancy_basis"),
+                           "note": a18.get("note") or "IS 18168 not applied (ruling R8)"})
     elif sysn in ("SCBF", "SMF", "EBF") and zone == "II":
         advisories.append({"clause": "IS 18168:2023 1.2", "applies": False,
                            "note": "Zone II: IS 18168 optional (set cfg['apply_is18168'] to apply it); Omega "

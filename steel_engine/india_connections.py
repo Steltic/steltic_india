@@ -137,9 +137,23 @@ def bolt_capacity_is800(d_mm, grade="8.8", *, nn=1, ns=0, t_mm=None, fu_plate_MP
     return out
 
 
+BOLT_SPEC_ONLY_KEYS = ("n_e", "Kh", "mu_f", "slip_surface", "bolt_type", "slip_at_ultimate")
+
+
+def bolt_kwargs(spec):
+    """The subset of a declared bolts dict that bolt_capacity_is800 accepts (H37).  The same dict also carries the
+    10.4.3 slip keys (n_e effective interfaces, Kh hole factor, mu_f / slip_surface Table 20) read by the HSFG
+    slip check, which are not bearing-bolt arguments; they are dropped here instead of raising TypeError."""
+    import inspect
+    allowed = set(inspect.signature(bolt_capacity_is800).parameters) - {"d_mm", "grade"}
+    return {k: v for k, v in (spec or {}).items() if k in allowed}
+
+
 def bolt_group_capacity_is800(n_bolts, d_mm, grade="8.8", *, V_N=None, **kw):
-    """n x min(Vdsb, Vdpb) for a concentrically loaded bolt group (10.3.2). Long-joint beta_lj via lj_mm."""
-    one = bolt_capacity_is800(d_mm, grade, **kw)
+    """n x min(Vdsb, Vdpb) for a concentrically loaded bolt group (10.3.2). Long-joint beta_lj via lj_mm.
+    Keys that are not bolt_capacity_is800 arguments (n_e, Kh, mu_f, slip_surface: the 10.4.3 slip inputs) are
+    ignored (H37)."""
+    one = bolt_capacity_is800(d_mm, grade, **bolt_kwargs(kw))
     if not one.get("found") or not n_bolts:
         return {"found": False, "capacity_N": None, "per_bolt": one, "cite": one.get("cite"),
                 "required_inputs": one.get("required_inputs") or ["n_bolts"]}
@@ -379,6 +393,44 @@ def _bearing_linear(P, M, B, L, f_anchor, As_t, n_mod):
     return {"Y_mm": Y, "C_N": C, "T_N": T, "fp_max_MPa": fp, "e_mm": e}
 
 
+def _anchor_equilibrium_uplift(P, M, B, L, f_anchor, As_t, n_mod):
+    """Net uplift / zero axial (P <= 0, H08, HR-E-11): equilibrium of the plate on the anchors (rows at +/- f) and, when
+    the moment lifts the far row, linear bearing at the compression edge (plane sections: bearing block Y with peak
+    fp, tension anchors As_t at f from the centre, modular ratio n).  Returns {T_N (tension-side row), C_N (bearing
+    resultant, 0 when all anchors are in tension), T_other_N, Y_mm, fp_max_MPa, method}."""
+    P, M = float(P), abs(float(M))
+    Pt = -P                                                  # net uplift >= 0
+    if f_anchor is None or f_anchor <= 0:
+        return None
+    T_other = Pt / 2.0 - M / (2.0 * f_anchor)
+    if T_other >= 0.0:
+        # every anchor row in tension: statics of two rows (T + T_o = uplift, (T - T_o) f = M)
+        return {"T_N": Pt / 2.0 + M / (2.0 * f_anchor), "T_other_N": T_other, "C_N": 0.0, "Y_mm": 0.0,
+                "fp_max_MPa": 0.0, "method": "net uplift: both anchor rows in tension (statics)"}
+    if not (As_t and n_mod):
+        return None
+    g = lambda y: B * y / 2.0                                # C / fp
+    h = lambda y: n_mod * As_t * (L / 2.0 + f_anchor - y) / y   # T / fp (strain compatibility)
+    F = lambda y: M * (g(y) - h(y)) - P * (g(y) * (L / 2.0 - y / 3.0) + h(y) * f_anchor)
+    lo, hi = 1e-6, min(L, L / 2.0 + f_anchor)
+    if F(lo) * F(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if F(lo) * F(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    Y = 0.5 * (lo + hi)
+    den = g(Y) * (L / 2.0 - Y / 3.0) + h(Y) * f_anchor
+    if den <= 0:
+        return None
+    fp = M / den
+    return {"T_N": h(Y) * fp, "T_other_N": 0.0, "C_N": g(Y) * fp, "Y_mm": Y, "fp_max_MPa": fp,
+            "method": "net uplift / zero axial with moment: linear bearing + anchor tension (equilibrium and plane "
+                      "sections)"}
+
+
 IS456_EC_CITE = "IS 456:2000 6.2.3.1: Ec = 5000 sqrt(fck) (short-term static modulus, MPa)"
 
 
@@ -391,7 +443,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                       col_d_mm, col_bf_mm, col_tf_mm, anchors=None, Ec_MPa=None, modular_ratio=None,
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
                       friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
-                      sfrs_moment_factor=1.2, Ec_source=None):
+                      sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
@@ -405,7 +457,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     - thickness: compression-side cantilever per 7.4.3.1 form (M = 0.2 t^2 fy/gamma_m0 per unit width, the
       1.2 Ze cap of 8.2.1.2 - equivalent to 7.4.3.1 with b = 0), tension-side anchor-line moment; ts > tf.
     - 12.12: for SFRS fixed bases M_dem = max(M, sfrs_moment_factor x Mp_col) (1.2 per IS 800 12.12.1; 1.1 Ry per
-      IS 18168 9.3 when it governs), V_dem = max(V, 1.2 Vd_col).
+      IS 18168 9.3 when it governs), V_dem = max(V, 1.2 Vd_col); with col_A_mm2 the column moment is Mpc reduced for
+      the concurrent P (IS 800 9.3.1.2, H08).  india_is800_s12.base_checks assembles these demands per case itself.
+    - net uplift (P <= 0): anchor / bearing equilibrium (_anchor_equilibrium_uplift, H08), not |P| + 2M/L.
     - geometric feasibility: anchor pitch >= 2.5 d (10.2.2), edge >= 1.5 d0 (10.2.4.2 min edge), weld length <=
       column perimeter.
     """
@@ -414,10 +468,15 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     M_dem, V_dem = abs(float(M_Nmm or 0.0)), abs(float(V_N or 0.0))
     if sfrs_fixed_base:
         if col_Zp_mm3 and col_fy_MPa:
-            M12 = float(sfrs_moment_factor) * col_Zp_mm3 * col_fy_MPa
+            Mp_ = col_Zp_mm3 * col_fy_MPa
+            if col_A_mm2:
+                n_ = max(float(P_N or 0.0), 0.0) / (float(col_A_mm2) * col_fy_MPa)
+                Mp_ = min(1.11 * Mp_ * (1.0 - n_), Mp_)             # IS 800 9.3.1.2 (major axis) Mpc
+            M12 = float(sfrs_moment_factor) * Mp_
             checks["12.12.1_moment_demand"] = {"value": M12, "clause": "IS 800:2007 12.12.1" + (
                 " + IS 18168:2023 9.3" if sfrs_moment_factor > 1.2 else ""),
-                                               "cite": "%.2f x full plastic moment of the column" % sfrs_moment_factor,
+                                               "cite": "%.2f x %s of the column" % (sfrs_moment_factor,
+                                                   "Mpc (9.3.1.2, concurrent P)" if col_A_mm2 else "full plastic moment"),
                                                "ok": True}
             M_dem = max(M_dem, M12)
         else:
@@ -432,7 +491,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                                                     ok=None, reason="column Vd missing")
     fb = 0.6 * float(fck_MPa)
     P = float(P_N)
-    e = M_dem / P if P > 0 else float("inf")
+    e = M_dem / P if P > 0 else None                       # None (not inf) under net uplift: JSON-safe
     T_anchor = 0.0
     a = anchors or {}
     As_t = None
@@ -467,8 +526,26 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                 T_anchor = sol["T_N"]
                 checks["bearing"] = _check(sol["fp_max_MPa"], fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     else:
-        bearing.update(method="net uplift: no bearing")
-        T_anchor = abs(P) + (2 * M_dem / L_mm if M_dem else 0.0)
+        # H08 (HR-E-11): net uplift / zero axial -> anchor and bearing equilibrium (was |P| + 2M/L on n_tension)
+        if not modular_ratio and not Ec_MPa:
+            Ec_MPa, Ec_source = ec_is456(fck_MPa), IS456_EC_CITE
+        n = modular_ratio or ((E_MPA / Ec_MPa) if Ec_MPa else None)
+        sol = _anchor_equilibrium_uplift(P, M_dem, B_mm, L_mm, a.get("f_mm"), As_t, n) \
+            if a.get("f_mm") is not None else None
+        if sol is None and M_dem == 0 and P <= 0:
+            sol = {"T_N": -P / 2.0, "T_other_N": -P / 2.0, "C_N": 0.0, "Y_mm": 0.0, "fp_max_MPa": 0.0,
+                   "method": "net uplift, no moment: shared by the anchor rows"}
+        if sol is None:
+            bearing.update(method="net uplift: anchor rows (n_tension, d, f_mm) and Ec needed for equilibrium")
+            T_anchor = abs(P) + (2 * M_dem / L_mm if M_dem else 0.0)
+            checks["anchor_tension_demand"] = _check(None, None, clause="IS 800:2007 7.4.1 / 12.12.1",
+                                                     cite="anchor tension by equilibrium", ok=None,
+                                                     reason="net uplift: anchor geometry (f_mm, n_tension, d) missing")
+        else:
+            bearing.update(sol, modular_ratio=n, Ec_MPa=Ec_MPa, Ec_source=Ec_source)
+            T_anchor = sol["T_N"]
+            if sol["C_N"] > 0:
+                checks["bearing"] = _check(sol["fp_max_MPa"], fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     # anchors
     if a.get("d_mm") and a.get("n_total"):
         one = bolt_capacity_is800(a["d_mm"], a.get("grade", "4.6"), nn=1, ns=0, e_mm=None, p_mm=None,
@@ -480,8 +557,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         V_fric = friction_mu * C_bear
         V_anchor = max(V_dem - V_fric - (shear_key_N or 0.0), 0.0)
         V_one = V_anchor / a["n_total"]
-        checks["anchor_tension_demand"] = {"value": T_anchor, "clause": "IS 800:2007 7.4.1 / 12.12.1",
-                                           "cite": "equilibrium of the bearing block", "ok": True}
+        if not (isinstance(checks.get("anchor_tension_demand"), dict) and checks["anchor_tension_demand"].get("ok") is None):
+            checks["anchor_tension_demand"] = {"value": T_anchor, "clause": "IS 800:2007 7.4.1 / 12.12.1",
+                                               "cite": "equilibrium of the bearing block", "ok": True}
         if Tdb:
             checks["anchor_tension_10_3_5"] = _check(T_one, Tdb, clause="IS 800:2007 10.3.5", cite="Tb <= Tdb")
         if Vdsb:
@@ -539,9 +617,11 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                 Mcomp = fp * Y / 2 * (m - Y / 3)
         Mten = None
         if T_anchor > 0 and a.get("f_mm") is not None:
+            # anchor line inside the column flange line -> zero lever -> zero tension-side plate moment (H08)
             lever = max(a["f_mm"] - col_d_mm / 2.0 + col_tf_mm / 2.0, 0.0)
             Mten = T_anchor * lever / B_mm
-        Mu = max([v for v in (Mcomp, Mten) if v is not None] or [None]) if (Mcomp or Mten) else None
+        vals = [v for v in (Mcomp, Mten) if v is not None]
+        Mu = max(vals) if vals else None
         if Mu is None:
             checks["plate_thickness"] = _check(None, t_plate_mm, clause="IS 800:2007 7.4.3.2", cite="plate bending",
                                                ok=None, reason="bearing / anchor solution missing")
@@ -563,6 +643,114 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     return {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
             "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
             "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+
+
+def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_mm, col_d_mm, col_bf_mm, col_tf_mm,
+                              anchors=None, **kw):
+    """Column base under concurrent P, Mz and My (H08, HR-B-15): base_plate_design about the major axis (L along
+    the column depth) and, when My != 0, about the minor axis (plate and column dimensions swapped, anchors
+    f_y_mm / n_tension_y; a square plate without them assumes the same pattern, flagged).  The corner anchor carries
+    the sum of the two tension-side shares, the concurrent axial counted once:
+    T_corner = max(Tz(P)/nz + Ty(0)/ny, Tz(0)/nz + Ty(P)/ny), checked for 10.3.5 / 10.3.6 (and the EOR embedment)."""
+    a = dict(anchors or {})
+    Mz, My = abs(float(Mz_Nmm or 0.0)), abs(float(My_Nmm or 0.0))
+    common = {k: v for k, v in kw.items() if k not in ("weld_length_mm", "col_perimeter_mm")}
+    rz = base_plate_design(P_N=P_N, M_Nmm=Mz, V_N=V_N, B_mm=B_mm, L_mm=L_mm, col_d_mm=col_d_mm, col_bf_mm=col_bf_mm,
+                           col_tf_mm=col_tf_mm, anchors=anchors, **kw)
+    rz["demands"].update(Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My)
+    if My <= 0.0:
+        rz["biaxial"] = False
+        return rz
+    ay = dict(a)
+    note = None
+    if a.get("f_y_mm") is not None:
+        ay["f_mm"] = a["f_y_mm"]
+        ay["n_tension"] = a.get("n_tension_y") or a.get("n_tension")
+    elif abs(float(B_mm) - float(L_mm)) < 1e-6:
+        note = "minor-axis anchors: square plate, the major-axis pattern (f_mm, n_tension) assumed about y (flag)"
+    else:
+        ay = {}
+    out = {"found": True, "biaxial": True, "checks": dict(rz["checks"]), "bearing": rz.get("bearing"),
+           "clause": rz.get("clause"), "policy": rz.get("policy")}
+    if not ay:
+        out["checks"]["y:anchors"] = _check(None, None, clause="IS 800:2007 7.4.1 / 10.3.5",
+                                            cite="minor-axis moment on the base", ok=None,
+                                            reason="anchors.f_y_mm / n_tension_y needed for My on a B != L plate")
+        T_corner = None
+    else:
+        ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
+                               col_tf_mm=col_tf_mm, anchors=ay, **common)
+        for k, v in ry["checks"].items():
+            if k.startswith(("geometry_", "shear_path", "anchor_shear", "anchorage_embedment")):
+                continue
+            out["checks"]["y:" + k] = v
+        out["bearing_y"] = ry.get("bearing")
+        nz, ny = a.get("n_tension") or 0, ay.get("n_tension") or 0
+        T_corner = None
+        if nz and ny and a.get("d_mm"):
+            def _T(P, M, geo_z):
+                if M <= 0:
+                    return 0.0 if P >= 0 else -P / 2.0
+                if geo_z:
+                    r = base_plate_design(P_N=P, M_Nmm=M, V_N=0.0, B_mm=B_mm, L_mm=L_mm, col_d_mm=col_d_mm,
+                                          col_bf_mm=col_bf_mm, col_tf_mm=col_tf_mm, anchors=a, **common)
+                else:
+                    r = base_plate_design(P_N=P, M_Nmm=M, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm,
+                                          col_bf_mm=col_d_mm, col_tf_mm=col_tf_mm, anchors=ay, **common)
+                return max(float(r["demands"]["T_anchor_N"]), 0.0)
+            P = float(P_N)
+            in_kern = P > 0 and (Mz / P) / (float(L_mm) / 6.0) + (My / P) / (float(B_mm) / 6.0) <= 1.0
+            if in_kern:
+                # resultant inside the rhombic kern of the rectangle: the whole plate bears, no anchor tension
+                T_corner = 0.0
+            else:
+                Tz_P, Ty_P = max(float(rz["demands"]["T_anchor_N"]), 0.0), max(float(ry["demands"]["T_anchor_N"]), 0.0)
+                Tz_0, Ty_0 = _T(0.0, Mz, True), _T(0.0, My, False)
+                T_corner = max(Tz_P / nz + Ty_0 / ny, Tz_0 / nz + Ty_P / ny)
+            one = bolt_capacity_is800(a["d_mm"], a.get("grade", "4.6"), nn=1, ns=0, e_mm=None, p_mm=None,
+                                      fub_MPa=a.get("fub_MPa"), fyb_MPa=a.get("fyb_MPa"), Anb_mm2=a.get("Anb_mm2"))
+            Tdb, Vdsb = one.get("Tdb_N"), one.get("Vdsb_N")
+            V_one = float((rz["checks"].get("anchor_shear_10_3_3") or {}).get("value") or 0.0)
+            cite = ("corner anchor: sum of the major- and minor-axis tension-side shares, axial counted once: "
+                    "max(Tz(P)/nz + Ty(0)/ny, Tz(0)/nz + Ty(P)/ny)")
+            if Tdb:
+                out["checks"]["anchor_tension_biaxial_10_3_5"] = _check(T_corner, Tdb, clause="IS 800:2007 10.3.5",
+                                                                        cite=cite + "; Tb <= Tdb")
+            if Tdb and Vdsb:
+                out["checks"]["anchor_combined_biaxial_10_3_6"] = _check(
+                    (V_one / Vdsb) ** 2 + (T_corner / Tdb) ** 2, 1.0, clause="IS 800:2007 10.3.6",
+                    cite=cite + "; (V/Vdb)^2 + (T/Tdb)^2 <= 1")
+            fb = 0.6 * float(kw["fck_MPa"])
+            if in_kern:
+                fmax = P / (B_mm * L_mm) + 6.0 * Mz / (B_mm * L_mm ** 2) + 6.0 * My / (L_mm * B_mm ** 2)
+                out["checks"]["bearing_biaxial"] = _check(fmax, fb, clause="IS 800:2007 7.4.1",
+                                                          cite="corner bearing P/A + 6Mz/(B L^2) + 6My/(L B^2) <= 0.6 fck "
+                                                               "(resultant within the kern)")
+            else:
+                fz = (rz.get("bearing") or {}).get("fp_max_MPa")
+                fyp = (ry.get("bearing") or {}).get("fp_max_MPa")
+                if fz is not None and fyp is not None:
+                    fmax = fz + fyp - max(P, 0.0) / (B_mm * L_mm)
+                    out["checks"]["bearing_biaxial"] = _check(fmax, fb, clause="IS 800:2007 7.4.1",
+                                                              cite="corner bearing approximated as fp_z + fp_y - P/A "
+                                                                   "(superposition of the two uniaxial solutions)")
+            emb = kw.get("embedment")
+            if emb and emb.get("capacity_N") and emb.get("cite"):
+                out["checks"]["anchorage_embedment"] = _check(T_corner, emb["capacity_N"], clause=emb["cite"],
+                                                              cite="EOR/product anchorage capacity (outside IS 800), "
+                                                                   "biaxial corner anchor")
+            elif T_corner > 0:
+                out["checks"]["anchorage_embedment"] = _check(T_corner, None, clause="outside IS 800 (IS 456 / product data)",
+                                                              cite="concrete breakout/pull-out", ok=None,
+                                                              reason="found:false - EOR anchorage basis not supplied")
+    if note:
+        out["note"] = note
+    oks = [c.get("ok") for c in out["checks"].values() if isinstance(c, dict)]
+    out["ok"] = None if any(o is None for o in oks) else all(oks)
+    dcs = [c.get("dc") for c in out["checks"].values() if isinstance(c, dict) and c.get("dc") is not None]
+    out["dc"] = max(dcs) if dcs else None
+    out["demands"] = dict(rz["demands"], Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My, T_corner_anchor_N=T_corner)
+    return out
 
 
 # ------------------------------------------------------------------- HR-INTEGRATE: connection capacities used by
@@ -696,22 +884,100 @@ def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plat
             "cite": "IS 800:2007 10.3 / 8.4.1 / 6.4.1 / 10.5.7 (simple beam-end connection)"}
 
 
-def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_mm, splice):
-    """Column splice: SFRS columns per 12.5.2.2 (each flange splice >= 1.2 fy Af; PJP welds 200 % of required,
-    12.5.2.1); gravity columns for the member forces.  splice = {type: 'flange_plates'|'cjp'|'pjp',
-    plate: {A_mm2, fy_MPa}, bolts: {n_bolts, d_mm, grade, ...} | weld: {t_mm, length_mm, n_sides}}."""
-    Ff_dem = 1.2 * float(fy_MPa) * float(Af_mm2) if sfrs else max(abs(float(P_N)) / 2.0 + abs(float(M_Nmm)) / float(d_mm),
-                                                                   0.0)
+def _splice_flange_force(P, Mz, My, *, Af, A, d, bf, axial_share, bearing):
+    """Flange-plate force of one flange for concurrent (P, Mz, My) (H41 / H10): axial share P Af/A when the web is
+    spliced (web plates) - P/2 otherwise; with machined bearing ends (IS 800 7.3.4.1) compression is carried by
+    bearing and only the tension side remains; Mz/d; minor-axis moment My at the flange tips 3 My/bf (the elastic
+    peak stress of My/2 on one flange, tf bf^2/6, times Af)."""
+    Pax = P * (Af / A if axial_share else 0.5)
+    Mterm = abs(Mz) / d + (3.0 * abs(My) / bf if (bf and My) else 0.0)
+    if bearing:
+        return max(Mterm - max(Pax, 0.0), 0.0) + max(-Pax, 0.0)    # tension: M/d - P Af/A (P > 0), or uplift share
+    return abs(Pax) + Mterm
+
+
+def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_mm, splice, My_Nmm=0.0, cases=None,
+                         bf_mm=None, tf_mm=None, tw_mm=None, is18168=None, tie_force_N=None, Hc_mm=None,
+                         Zx_lower_mm3=None):
+    """Column splice checks of DECLARED geometry.
+    IS 800: SFRS columns 12.5.2.2 (each flange splice >= 1.2 fy Af; PJP welds 200 % of required, 12.5.2.1); gravity
+    columns for the member forces, per combination with concurrent P, Mz, My (H10): flange force
+    P Af/A + Mz/d + 3 My/bf when the web is spliced (web_plate), P/2 + ... otherwise (H41).
+    Bearing option (H41): splice['bearing'] = True (ends machined for bearing, IS 800 7.3.4.1): compression by bearing;
+    the splice resists the tension side and the IS 800 5.1.2 tie force (largest factored DL + LL reaction of one
+    floor, tie_force_N from the pipeline or splice['tie_force_N']).
+    CJP (ruling R4, H41): a complete-penetration butt weld with matching electrode develops the parent metal
+    (IS 800 10.5.7.1.2) -> deemed-to-comply gate for 12.5.2.2 / IS 18168 7.5; the weld record is required.
+    IS 18168 (is18168 = {applies, system, Ry}; H10): 7.5 (12.1.4.6 SMRF, 12.2.4.6 SCBF, 12.3.4.7 EBF) - demand from
+    the 5.5 combinations (cases with family '5.5'), flange and web splice plates >= 1.2 Ry x the flange / web strength;
+    12.2.4.6 / 12.3.4.7 (SCBF, EBF): >= 0.5 Mp of the smaller connected member and shear > sum Mp / Hc.
+    splice = {type: 'flange_plates'|'cjp'|'pjp', plate: {A_mm2, fy_MPa}, bolts: {...}, weld: {...} (fillet for the
+    flange plates; CJP record {matching_electrode: bool, electrode, t_mm?}), web_plate: {A_mm2, fy_MPa, Av_mm2?},
+    web_bolts: {...}, bearing: bool, tie_force_N?, Hc_mm?}."""
     typ = str(splice.get("type") or "").lower()
-    cl = "IS 800:2007 12.5.2.2" if sfrs else "IS 800:2007 10 (member forces)"
-    cite = ("each flange splice >= 1.2 fy Af (Fig. 20, smaller column)" if sfrs else
-            "flange force P/2 + M/d from the governing combination")
+    A, Af, d = float(A_mm2), float(Af_mm2), float(d_mm)
+    bf = float(bf_mm) if bf_mm else None
+    fy = float(fy_MPa)
+    web_spliced = bool(splice.get("web_plate"))
+    bearing = bool(splice.get("bearing"))
+    if cases is None:
+        cases = [{"combo": "governing", "P_N": P_N, "Mz_Nmm": M_Nmm, "My_Nmm": My_Nmm, "V_N": 0.0}]
+    ff = []
+    for c in cases:
+        f = _splice_flange_force(float(c.get("P_N") or 0.0), float(c.get("Mz_Nmm", c.get("M_Nmm")) or 0.0),
+                                 float(c.get("My_Nmm") or 0.0), Af=Af, A=A, d=d, bf=bf,
+                                 axial_share=web_spliced or bearing, bearing=bearing)
+        ff.append((f, c))
+    f_t4, c_t4 = max(ff, key=lambda x: x[0]) if ff else (0.0, {})
+    comps = {"member forces (concurrent P, Mz, My: %s)" % c_t4.get("combo"): f_t4}
+    notes = []
+    tie = tie_force_N if tie_force_N is not None else splice.get("tie_force_N")
+    if bearing:
+        notes.append("ends machined for bearing (IS 800 7.3.4.1): compression by bearing, splice for tension / bending")
+    if tie is not None:
+        # IS 800 5.1.2: 'All column splices should be capable of resisting a tensile force equal to the largest of a
+        # factored dead and live load reaction from a single floor level ...' (flange plates: T/2 per flange)
+        comps["IS 800 5.1.2 tie force (one flange: T/2)"] = float(tie) / 2.0
+    elif bearing:
+        notes.append("IS 800 5.1.2 splice tie force not supplied (splice.tie_force_N)")
+    a18 = is18168 or {}
+    use18 = bool(sfrs and a18.get("applies"))
+    Ry = float(a18.get("Ry") or 1.0)
+    if sfrs:
+        comps["1.2 fy Af (IS 800 12.5.2.2)"] = 1.2 * fy * Af
+        cl = "IS 800:2007 12.5.2.2"
+        cite = "each flange splice >= 1.2 fy Af (Fig. 20, smaller column)"
+    else:
+        cl = "IS 800:2007 10 (member forces)" + (" / 7.3.4.1" if bearing else "")
+        cite = "flange force %s + Mz/d + 3 My/bf per combination (concurrent)" % ("P Af/A" if (web_spliced or bearing) else "P/2")
+    Mp = None
+    sys18 = str(a18.get("system") or "")
+    if use18:
+        comps["1.2 Ry fy Af (IS 18168 7.5)"] = 1.2 * Ry * fy * Af
+        f55 = [x for x in ff if str(x[1].get("family") or "") in ("5.5", "12.2.3")]
+        if f55:
+            f, c = max(f55, key=lambda x: x[0])
+            comps["IS 18168 5.5 combination %s (7.5)" % c.get("combo")] = f
+        cl += " + IS 18168:2023 7.5"
+        cite += "; IS 18168 7.5: 5.5 demand, flange / web splice plates >= 1.2 Ry x their strengths"
+        if sys18 in ("SCBF", "EBF"):
+            Zmin = min([z for z in (Zx_mm3, Zx_lower_mm3) if z] or [Zx_mm3])
+            Mp = float(Zmin) * fy
+            comps["0.5 Mp / d of the smaller member (IS 18168 %s)" % ("12.2.4.6" if sys18 == "SCBF" else "12.3.4.7")] = \
+                0.5 * Mp / d
+            cl += " + %s" % ("12.2.4.6" if sys18 == "SCBF" else "12.3.4.7")
+    Ff_dem = max(comps.values()) if comps else 0.0
+    gov = max(comps, key=comps.get) if comps else None
     checks = {}
     if typ == "flange_plates":
         pl = splice.get("plate") or {}
         if pl.get("A_mm2") and pl.get("fy_MPa"):
             checks["plate_yield_6_2"] = _check(Ff_dem, float(pl["A_mm2"]) * float(pl["fy_MPa"]) / GAMMA_M0,
-                                               clause=cl + " / 6.2", cite=cite + "; plate Ag fy/gamma_m0")
+                                               clause=cl + " / 6.2", cite=cite + "; plate Ag fy/gamma_m0",
+                                               governing_demand=gov, demand_components=comps)
+        else:
+            checks["plate_yield_6_2"] = _check(None, None, clause=cl + " / 6.2", cite="flange splice plate", ok=None,
+                                               reason="splice.plate {A_mm2, fy_MPa} not declared")
         b = splice.get("bolts")
         if b:
             b = dict(b)
@@ -721,23 +987,88 @@ def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_m
                                                                              reason=str(g.get("required_inputs")))
         w = splice.get("weld")
         if w:
-            wc = fillet_weld_capacity_is800_N(**w)
+            wc = fillet_weld_capacity_is800_N(**{k: v for k, v in w.items() if k in (
+                "size_mm", "length_mm", "fu_MPa", "n_sides", "angle_deg", "site", "lj_mm", "throat_mm", "gamma_mw")})
             checks["plate_weld_10_5_7"] = _check(Ff_dem, wc["capacity_N"], clause="IS 800:2007 10.5.7", cite=wc["cite"]) \
-                if wc.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None)
-    elif typ in ("cjp", "pjp"):
+                if wc.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None,
+                                               reason=str(wc.get("required_inputs")))
+    elif typ == "cjp":
+        w = splice.get("weld")
+        gate_cl = "IS 800:2007 10.5.7.1.2 (ruling R4)" + (" / 12.5.2.2" if sfrs else "") + (" / IS 18168:2023 7.5" if use18 else "")
+        if not w:
+            checks["cjp_parent_metal"] = _check(None, None, clause=gate_cl, cite="CJP butt weld = parent metal", ok=None,
+                                                reason="CJP splice declared without its weld record: add splice.weld = "
+                                                       "{matching_electrode: true, electrode, t_mm} (IS 800 10.5.7.1.2)")
+        elif w.get("matching_electrode") is True or w.get("matching") is True:
+            checks["cjp_parent_metal"] = _check(True, True, clause=gate_cl, ok=True, dc=None, gate=True,
+                                                electrode=w.get("electrode"),
+                                                cite="complete-penetration butt weld with matching electrode develops the "
+                                                     "parent metal (IS 800 10.5.7.1.2): the flange splice develops the "
+                                                     "flange -> deemed to comply with the flange-force requirement "
+                                                     "(ruling R4); flange plates remain the alternative")
+        elif w.get("matching_electrode") is False or w.get("matching") is False:
+            checks["cjp_parent_metal"] = _check(False, True, clause=gate_cl, ok=False, dc=None, gate=True,
+                                                cite="an undermatched CJP does not develop the parent metal",
+                                                reason="weld electrode declared not matching")
+        else:
+            checks["cjp_parent_metal"] = _check(None, None, clause=gate_cl, cite="CJP butt weld = parent metal", ok=None,
+                                                reason="state splice.weld.matching_electrode (true for a matching "
+                                                       "electrode, IS 800 10.5.7.1.2)")
+    elif typ == "pjp":
         w = splice.get("weld") or {}
         t = w.get("t_mm") or (Af_mm2 / w["length_mm"] if w.get("length_mm") else None)
         wc = cjp_weld_capacity_N(t_mm=t, length_mm=w.get("length_mm"), fy_MPa=fy_MPa, n_sides=1, action="tension")
-        fac = 0.5 if typ == "pjp" else 1.0                   # 12.5.2.1: PJP joint strength >= 200 % of required
-        checks["flange_weld"] = _check(Ff_dem, fac * wc["capacity_N"], clause=cl + (" / 12.5.2.1" if typ == "pjp" else
-                                       " / 10.5.7.1.2"), cite=cite + "; butt weld = parent metal" +
-                                       (" x 0.5 (PJP 200 %)" if typ == "pjp" else "")) if wc.get("found") else \
+        checks["flange_weld"] = _check(Ff_dem, 0.5 * wc["capacity_N"], clause=cl + " / 12.5.2.1",
+                                       cite=cite + "; butt weld = parent metal x 0.5 (PJP 200 %)") if wc.get("found") else \
             _check(None, None, clause=cl, cite="weld", ok=None, reason=str(wc.get("required_inputs")))
     else:
         checks["splice"] = _check(None, None, clause=cl, cite=cite, ok=None, reason="splice type not declared")
-    caps = [c["limit"] for c in checks.values() if c.get("limit")]
+    # web splice (IS 18168 7.5; the web share when the web is spliced) and the 12.2.4.6 / 12.3.4.7 shear
+    if typ != "cjp" and (use18 or web_spliced):
+        wp = splice.get("web_plate") or {}
+        Aw = (d - 2.0 * float(tf_mm)) * float(tw_mm) if (tf_mm and tw_mm) else None
+        wd = {}
+        if Aw:
+            if use18:
+                wd["1.2 Ry fy Aw (IS 18168 7.5)"] = 1.2 * Ry * fy * Aw
+            Pw = max([abs(float(c.get("P_N") or 0.0)) for c in cases] + [0.0]) * Aw / A
+            if web_spliced and not bearing:
+                wd["web share P Aw/A"] = Pw
+        if wp.get("A_mm2") and wp.get("fy_MPa") and wd:
+            checks["web_plate_6_2"] = _check(max(wd.values()), float(wp["A_mm2"]) * float(wp["fy_MPa"]) / GAMMA_M0,
+                                             clause=("IS 18168:2023 7.5 / " if use18 else "") + "IS 800:2007 6.2",
+                                             cite="web splice plate Ag fy/gamma_m0 >= %s" % max(wd, key=wd.get),
+                                             demand_components=wd)
+        elif use18:
+            checks["web_plate_6_2"] = _check(None, None, clause="IS 18168:2023 7.5", cite="web splice plates >= 1.2 Ry x "
+                                             "web strength", ok=None,
+                                             reason="splice.web_plate {A_mm2, fy_MPa} not declared (IS 18168 7.5 web "
+                                                    "splice)" if Aw else "column tf / tw not supplied")
+        if use18 and sys18 in ("SCBF", "EBF") and Mp:
+            Hc = Hc_mm or splice.get("Hc_mm")
+            Vdem = 2.0 * Mp / float(Hc) if Hc else None
+            caps = []
+            if wp.get("A_mm2") and wp.get("fy_MPa"):
+                Av = float(wp.get("Av_mm2") or wp["A_mm2"])
+                caps.append(Av * float(wp["fy_MPa"]) / (math.sqrt(3.0) * GAMMA_M0))
+            wb = splice.get("web_bolts")
+            if wb:
+                wb = dict(wb)
+                g = bolt_group_capacity_is800(wb.pop("n_bolts"), wb.pop("d_mm"), wb.pop("grade", "8.8"), **wb)
+                if g.get("found"):
+                    caps.append(g["capacity_N"])
+            clv = "IS 18168:2023 %s" % ("12.2.4.6" if sys18 == "SCBF" else "12.3.4.7")
+            if Vdem is not None and caps:
+                checks["splice_shear_sumMp_Hc"] = _check(Vdem, min(caps), clause=clv,
+                                                         cite="splice shear strength > sum Mp / Hc (Mp top + bottom of "
+                                                              "the smaller member, Hc clear height %.0f mm)" % float(Hc))
+            else:
+                checks["splice_shear_sumMp_Hc"] = _check(Vdem, None, clause=clv, cite="shear > sum Mp / Hc", ok=None,
+                                                         reason="web splice plate / web bolts or Hc not declared")
+    caps = [c["limit"] for c in checks.values() if isinstance(c.get("limit"), (int, float))]
     oks = [c.get("ok") for c in checks.values()]
-    return {"found": bool(caps), "checks": checks, "demand_N": Ff_dem, "capacity_N": min(caps) if caps else None,
+    return {"found": bool(caps) or any(c.get("gate") for c in checks.values()), "checks": checks, "demand_N": Ff_dem,
+            "demand_components": comps, "governing_demand": gov, "capacity_N": min(caps) if caps else None,
             "ok": None if any(o is None for o in oks) else all(oks),
             "dc": max([c["dc"] for c in checks.values() if c.get("dc") is not None] or [None]) if caps else None,
-            "clause": cl, "cite": cite}
+            "clause": cl, "cite": cite, "notes": notes, "bearing": bearing, "n_cases": len(cases)}

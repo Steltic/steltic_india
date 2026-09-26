@@ -337,6 +337,7 @@ def panel_zone_check(
     Av_override_mm2: Optional[float] = None,
     continuity_plates: bool = True,
     tf_beam_mm: Optional[float] = None,
+    n_webs: int = 1,
 ) -> Dict[str, Any]:
     """Panel zone - IS 800:2007 12.11.2.3 / 12.11.2.4 (HR800-17).
 
@@ -345,6 +346,7 @@ def panel_zone_check(
     12.11.2.3: shear buckling per 8.4.2 at the 12.11.2.2 design shear: each plate's tau_b from 8.4.2.2(a)
     (Kv from c/d with c = dp when continuity plates bound the panel, else 5.35); Vd = sum(bp t_i tau_b_i)/gamma_m0.
     V_design_N = panel shear (see india_is800_s12.panel_zone_design_shear). Missing inputs -> found:false.
+    n_webs = number of column web plates in the panel (2 for a built-up box, H09); each is checked individually.
     """
     missing = []
     for name, val in (("column_d_mm", d_col_mm), ("column_tw_mm", tw_mm), ("column_bf_mm", bf_mm),
@@ -389,7 +391,9 @@ def panel_zone_check(
             tb = fy / (math.sqrt(3.0) * lw ** 2)
         return tb, dt, Kv, True
 
-    plates = [("column web", tw)] + ([("doubler", t_dbl)] if t_dbl > 0 else [])
+    n_webs = max(int(n_webs or 1), 1)
+    plates = ([("column web", tw)] if n_webs == 1 else [("column web %d" % (i + 1), tw) for i in range(n_webs)]) + \
+        ([("doubler", t_dbl)] if t_dbl > 0 else [])
     detail = []
     Vn = 0.0
     for name, t in plates:
@@ -404,7 +408,7 @@ def panel_zone_check(
     shear_ok = dc is not None and dc <= 1.0
     t_need_shear = 0.0
     if dc is not None and dc > 1.0:
-        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - tw)
+        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - n_webs * tw)
     # A doubler (if needed for shear) must itself be >= t_min (12.11.2.4); a web thinner than t_min cannot be
     # cured by a doubler -> doubler_required None (change the column section).
     if not web_ok:
@@ -416,7 +420,8 @@ def panel_zone_check(
     return {
         "found": True, "pass": bool(thickness_ok and shear_ok), "ok": bool(thickness_ok and shear_ok),
         "thickness_ok": bool(thickness_ok), "web_thickness_ok": web_ok, "doubler_thickness_ok": dbl_ok,
-        "shear_ok": shear_ok, "t_provided_mm": tw + t_dbl, "t_min_mm": t_min, "dp_mm": dp, "bp_mm": bp,
+        "shear_ok": shear_ok, "t_provided_mm": n_webs * tw + t_dbl, "t_min_mm": t_min, "dp_mm": dp, "bp_mm": bp,
+        "n_webs": n_webs,
         "plates": detail, "Vd_N": Vd, "V_design_N": V, "DC_shear": dc, "dc": max(dc or 0.0, (t_min / tw) if tw else 0.0),
         "doubler_required_mm": doubler_req,
         "doubler_provided_mm": t_dbl,
@@ -2442,10 +2447,19 @@ def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None
         base.update(ltb="not applicable (8.2.2 a/b: minor-axis bending or hollow section)", lambda_LT=None,
                     chi_LT=1.0, cite=cite)
         return base
-    if st in ("angle", "channel"):
+    if st == "angle":
         return {"found": False, "Md_Nmm": None, "cite": cite,
                 "note": "%s major-axis LTB: Annex E-1.2 covers sections symmetric about the minor axis only; "
                         "not coded (found:false)" % st}
+    ch_note = None
+    if st == "channel":
+        # H38: a channel bent about its major axis (its axis of symmetry) -> IS 800 Annex E-1.1 general Mcr with
+        # yj = 0 (symmetric about the bending axis), It = J and Iw = Cw of the IS 808 row, the load assumed to act
+        # through the shear centre (no torsion from the load; yg measured from the shear centre, default 0)
+        cite = cite + "; channel: Annex E-1.1 general Mcr (yj = 0), load through the shear centre assumed"
+        ch_note = ("channel major-axis LTB via IS 800 Annex E-1.1 (general Mcr, It = J, Iw = Cw, yj = 0): the load is "
+                   "assumed to act through the shear centre (purlin / girt cleats or sag rods restraining twist); a "
+                   "load at the web face adds torsion that this check does not cover")
     if not LLT_mm:
         return {"found": False, "Md_Nmm": None, "cite": cite,
                 "required_inputs": ["LLT_mm (unbraced compression-flange length for this moment sign)"]}
@@ -2455,6 +2469,8 @@ def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None
     if not mcr["found"]:
         mcr["Md_Nmm"] = None
         return mcr
+    if ch_note:
+        mcr["cite"] = "IS 800:2007 Annex E-1.1 (general Mcr, yj = 0) with Table 42 c1/c2"
     Mcr = mcr["Mcr_Nmm"]
     bb = base["beta_b"]
     lam = min(math.sqrt(bb * Zp * fy_MPa / Mcr), math.sqrt(1.2 * Ze * fy_MPa / Mcr))
@@ -2462,6 +2478,8 @@ def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None
     out = {"found": True, "Mcr_Nmm": Mcr, "lambda_LT": lam, "alpha_LT": aLT, "beta_b": bb, "LLT_mm": float(LLT_mm),
            "section_class": section_class, "c1": c1, "welded": welded, "cite": cite,
            "Md_8_2_1_Nmm": base["Md_Nmm"]}
+    if ch_note:
+        out.update(note=ch_note, mcr_basis="Annex E-1.1 general Mcr (channel, load through the shear centre)")
     if lam <= 0.4:
         out.update(chi_LT=1.0, phi_LT=None, Md_Nmm=base["Md_Nmm"], ltb="lambda_LT <= 0.4: 8.2.2(c) no LTB reduction")
         return out
@@ -2719,15 +2737,22 @@ def interaction_9_3(*, P_N=0.0, Mz_Nmm=0.0, My_Nmm=0.0, Nd_N=None, Pdz_N=None, P
             Mndz = min(1.11 * Mdzs * (1 - n), Mdzs)
             Mndy = Mdys if n <= 0.2 else 1.56 * Mdys * (1 - n) * (n + 0.6)
             a1, a2 = max(5.0 * n, 1.0), 2.0
+        over = None
         if Mndz <= 0 or Mndy <= 0:
-            sec = float("inf")
+            # H33: P >= Nd -- the 9.3.1.2 reduced moment capacity vanishes; report a finite ratio (never inf, which
+            # json writes as Infinity): n = P/Nd itself governs, plus the moment terms against the unreduced Md
+            sec = max(n, n + My / Mdys + Mz / Mdzs)
+            over = "P >= Nd (n = P/Nd = %.3f): 9.3.1.2 reduced capacity is zero; D/C = n + My/Mdy + Mz/Mdz (finite)" % n
         else:
             sec = (My / Mndy) ** a1 + (Mz / Mndz) ** a2
         out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.1 (Mndy/Mndz per 9.3.1.2, alpha per Table 17)",
-                                "n": n, "Mndz_Nmm": Mndz, "Mndy_Nmm": Mndy, "alpha1": a1, "alpha2": a2}
+                                "n": n, "P_over_Nd": n, "Mndz_Nmm": Mndz, "Mndy_Nmm": Mndy, "alpha1": a1, "alpha2": a2}
+        if over:
+            out["section_9_3_1"]["note"] = over
+            out["note"] = over
     else:
         sec = abs(P) / Nd_N + My / Mdys + Mz / Mdzs
-        out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.3 semi-compact linear", "n": n}
+        out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.3 semi-compact linear", "n": n, "P_over_Nd": n}
     dcs = [sec]
     if P > 0:
         if not (Pdz_N and Pdy_N and Mdz_Nmm and Mdy_Nmm and lambda_z is not None and lambda_y is not None):
@@ -2752,9 +2777,13 @@ def interaction_9_3(*, P_N=0.0, Mz_Nmm=0.0, My_Nmm=0.0, Nd_N=None, Pdz_N=None, P
             out["tension_Td"] = {"dc": abs(P) / Td_N}
             dcs.append(abs(P) / Td_N)
     else:
-        dcs.append(Mz / Mdz_Nmm if Mdz_Nmm else float("inf"))
+        if Mdz_Nmm:
+            dcs.append(Mz / Mdz_Nmm)
+        elif Mz > 0:
+            out.update(found=False, dc=None, required_inputs=["Mdz (LTB)"])
+            return out
         dcs.append(My / Mdy_Nmm if Mdy_Nmm else 0.0)
-    out.update(found=True, dc=max(dcs), ok=max(dcs) <= 1.0)
+    out.update(found=True, dc=max(dcs), ok=max(dcs) <= 1.0, n=n, P_over_Nd=n)
     return out
 
 
@@ -2885,12 +2914,20 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         is_beam = str(member.get("role") or "").lower() == "beam"
         comp_only_lat = Pmax > 1e-6 and all(P <= 1e-6 or ("EQ" in lab or "W_" in lab or "WL" in lab or "EL" in lab)
                                             for P, lab in Ps)
-        if is_beam and Pmax <= 1e-6:
+        # H34: a beam whose axial compression is negligible (<= 0.05 Pd, e.g. a small collector / chord force) is not
+        # a 'member carrying compressive loads' in the Table 3 sense and stays on row (iv); the 0.05 threshold is an
+        # engineering basis stated in the record (member / cfg 'beam_axial_negligible_ratio' changes it)
+        neg_ratio = float(member.get("axial_negligible_ratio") or (cfg or {}).get("beam_axial_negligible_ratio") or 0.05)
+        P_neg = neg_ratio * comp["Pd_N"] if comp.get("Pd_N") else 1e-6
+        if is_beam and Pmax <= max(P_neg, 1e-6):
             ry = comp.get("axes", {}).get("y", {}).get("r_mm") or p.get("ry") or p.get("r_min")
             LLTs = [v for v in (member.get("LLT_sag_mm"), member.get("LLT_hog_mm")) if v]
             v3 = (max(LLTs) if LLTs else L) / float(ry) if ry else None
             lim = TABLE3_LIMITS["beam_compression_flange_LTB"]
             row = "(iv) compression flange of a beam against LTB: LLT / ry"
+            if Pmax > 1e-6:
+                row += (" (axial compression %.1f kN <= %.2f Pd = %.1f kN treated as negligible; engineering basis, "
+                        "H34)" % (Pmax / 1e3, neg_ratio, P_neg / 1e3))
         elif comp_only_lat or member.get("compression_only_from_WL_EL"):
             v3, lim, row = klr, TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
         else:
@@ -2908,8 +2945,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         return res
     worst = max(per, key=lambda r: r["dc"])
     dc = worst["dc"]
-    if res.get("table3_slenderness") and not res["table3_slenderness"]["ok"]:
-        dc = max(dc, res["table3_slenderness"]["dc"])
+    if res.get("table3_slenderness") and res["table3_slenderness"].get("dc") is not None:
+        dc = max(dc, res["table3_slenderness"]["dc"])          # H34: the Table 3 ratio always enters the member D/C
     res.update(found=True, governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0,
                value=dc, limit=1.0, cite="IS 800:2007 9.3.2.2 / 9.3.1 per combination (concurrent P, Mz, My)")
     return res
