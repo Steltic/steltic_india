@@ -113,7 +113,7 @@ column splices, and an optional erection sequence (braces after the dead load).
 ### Engine cfg keys outside the India contract
 
 The engine is shared with the USA heritage code and still reads a few keys that India jobs must not use (the
-contract lint `tests/test_fix_D05_contract_lint.py` lists them): `sdc`, `rho`, `drift_relief_16_1_2`,
+contract lint `tests/test_fix_D05_contract_lint.py` checks that they are named here): `sdc`, `rho`, `drift_relief_16_1_2`,
 `use_asce7_engine_loads`, `force_kip_in`, `metric` / `si_native`, `code_jurisdiction` / `code_region` (aliases of
 `jurisdiction`), `Fy` (the viewer's legacy yield default), `L_roof` (legacy report label; India uses `Lr`),
 `Omega0` / `Om0` / `Omega0_source` / `Omega0_cite` / `Omega0_found` (the legacy overstrength provenance API — India
