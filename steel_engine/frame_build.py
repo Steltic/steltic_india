@@ -38,7 +38,12 @@ gold = {
   "free_nodes": {"2": [[i, j], ...]},                   # nodes of level k kept out of that level's rigid diaphragm
   "plan_area_m2": 1200.0 | {"1": 800.0, "2": 1200.0},   # declared floor / roof plan area per level (CFS framed-area check)
   "voids_m2": {"1": 40.0},                              # declared voids (stair / lift / double height) per level
-  "gravity_base": "pinned" | "fixed", "default_strong": "X" }
+  "gravity_base": "pinned" | "fixed", "default_strong": "X",
+  "roof_planes": [{"axis": "X", "eave_coords_m": [0, 24], "ridge_coord_m": 12, "eave_z_m": 8, "ridge_z_m": 11,
+                   "lines": [0, 1, 2], "rafter_sec": sec, "ridge_sec": sec}],   # X02: true-slope pitched roof (apex
+                                                        # nodes, rafters, eave spread free) -> cfg['roof_planes'] in mm;
+                                                        # *_mm keys are taken as they are
+  "roof_regions": {"1": [[i, j], ...]} }                # X02: roof bays of an intermediate level -> cfg['roof_regions']
 Columns run between the consecutive levels at which their node exists (a high-bay column passes a level where the
 node is absent).  Node tags: engine3d.ntag(i, j, k) / mtag(k); EBF link-end nodes k*100000 + 50000/60000 + i*100 + j (X)
 and 70000/80000 + j*100 + i (Y).  Returns the standard info dict + 'links', 'bases', 'framed_area_m2'.
@@ -179,11 +184,34 @@ def make_gold(spec):
     return out
 
 
+_M_KEYS = {"eave_coords_m": "eave_coords_mm", "ridge_coord_m": "ridge_coord_mm", "eave_z_m": "eave_z_mm",
+           "ridge_z_m": "ridge_z_mm", "extent_m": "extent_mm"}
+
+
+def roof_planes_mm(raw):
+    """X02: CFS / gold roof planes with metre keys (eave_coords_m, ridge_coord_m, eave_z_m, ridge_z_m, extent_m) -> the
+    HR cfg['roof_planes'] (mm keys); *_mm keys and the other fields pass through unchanged."""
+    out = []
+    for r in raw or []:
+        d = {}
+        for k, v in dict(r).items():
+            if k in _M_KEYS:
+                d[_M_KEYS[k]] = [float(x) * 1000.0 for x in v] if isinstance(v, (list, tuple)) else float(v) * 1000.0
+            else:
+                d[k] = v
+        out.append(d)
+    return out
+
+
 def attach(cfg, spec):
     """Wire the builder into an HR cfg from a spec (the CFS lateral spec; hr_vendor_runner calls it after build_cfg).
     The cfg must already be in N-mm (xcoords_m / ycoords_m are converted to mm here).  HR jobs use attach_gold."""
     g = spec["gold"]
     gold = make_gold(spec)
+    if g.get("roof_planes"):
+        cfg["roof_planes"] = roof_planes_mm(g["roof_planes"])          # X02
+    if g.get("roof_regions"):
+        cfg["roof_regions"] = {int(k): [tuple(b) for b in v] for k, v in dict(g["roof_regions"]).items()}
     cfg["_gold"] = gold
     cfg["custom_build"] = frame_build
     cfg["plan"] = lambda k, NX_, NY_: gold["present"](k)
@@ -265,9 +293,14 @@ def frame_build(cfg, transf="PDelta"):
     pres = {k: set(g["present"](k)) for k in range(NF + 1)}          # floor plates (areas / masses / diaphragms)
     stepped = g.get("stepped_bases") or {}
     node_sets = {k: pres[k] | (stepped.get(k) or set()) for k in range(NF + 1)}   # + grade supports of a split-level site
+    rp = cfg.get("roof_planes")                                     # X02: true-slope pitched roof (HR roof_geometry)
+    if rp:
+        import roof_geometry as RG
     for k in range(NF + 1):
         for (i, j) in node_sets[k]:
-            x, y = XY(i, j); ops.node(E.ntag(i, j, k), x, y, z[k])
+            x, y = XY(i, j)
+            zl = RG.lifted_z(cfg, k, x, y) if (rp and k) else None   # grid node under a roof plane -> on the slope
+            ops.node(E.ntag(i, j, k), x, y, z[k] if zl is None else zl)
     bases = {}
     def _is_fixed(i, j):
         # C11: SFRS columns take gold.sfrs_base / lateral_frame.base (per line), gravity columns gravity_base
@@ -328,6 +361,8 @@ def frame_build(cfg, transf="PDelta"):
                     span = (XY(*b_)[0] - XY(*a_)[0]) if dirn == "X" else (XY(*b_)[1] - XY(*a_)[1])
                     if span > max_span + 1e-6:
                         continue
+                    if rp and RG.plane_spans_segment(cfg, z[k], XY(*a_), XY(*b_)):
+                        continue                                    # X02: no tie across a pitched roof
                     pairs.append((a_, b_))
             for ((i, j), b) in pairs:
                 A, B = E.ntag(i, j, k), E.ntag(*b, k)
@@ -368,6 +403,9 @@ def frame_build(cfg, transf="PDelta"):
                     sec = g["beam_sec"](i, j, k, dirn)
                     rel = g["releases"](i, j, k, dirn)
                     E.add_beam(et, A, B, sec, releases=rel); eles.append((et, "beam", sec, A, B)); et += 1
+        if rp:                                                      # X02: rafters (eave -> apex -> eave) + ridge members
+            et = RG.add_plane_members(cfg, k, XY, node_sets[k], et, eles,
+                                      beam_sec=lambda q, kk, d: g["beam_sec"](0 if d == "X" else q, q if d == "X" else 0, kk, d))
         for (dirn, i, j) in sorted(xbays):          # deterministic element tags (set order is hash-seed dependent)
             a = (i, j); b = (i + 1, j) if dirn == "X" else (i, j + 1)
             brs = g["brace_sec"](k); brA = S.props(brs)["A"]
@@ -388,7 +426,12 @@ def frame_build(cfg, transf="PDelta"):
         # grade-level support nodes of a split-level site stay out of the diaphragm constraint (they are fixed)
         freek = (g.get("free_nodes") or {}).get(k) or set()          # C11: declared free nodes stay out of the diaphragm
         sl = [E.ntag(i, j, k) for (i, j) in pres[k] if E.ntag(i, j, k) not in grade_nodes and (i, j) not in freek] + link_nodes.get(k, [])
-        ops.rigidDiaphragm(3, E.mtag(k), *sl)
+        # X01: the flexible-diaphragm variant (india_flexible_diaphragm.build_flexible) intercepts the rigidDiaphragm
+        # call -- the slave list is the floor plate that gets the deck membrane (free / grade nodes stay out of it)
+        if rp:
+            RG.tie_diaphragm(cfg, k, E.mtag(k), sl, z[k])          # X02: eave spread free (roof_geometry)
+        else:
+            ops.rigidDiaphragm(3, E.mtag(k), *sl)
         w = E.floor_w(cfg, k); m = w / E.g
         pts = pres[k]; xs = [XY(i, j)[0] for i, j in pts]; ys = [XY(i, j)[1] for i, j in pts]
         # rotational inertia of the floor plate: the plan extents between the perimeter columns (the +SX / +SY of the HR
