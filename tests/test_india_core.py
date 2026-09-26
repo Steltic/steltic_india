@@ -108,10 +108,11 @@ def test_ex1_generated_combinations_and_rsa(ex1_job):
 
 def test_ex1_demands(ex1_job):
     _, _, pkg = ex1_job
-    floor = next(m for m in pkg["members"] if m["inputs"]["role"] == "floor")
-    assert floor["inputs"]["V_N"] / 1e3 >= 148.0                     # one-way girder shear (WP2.1)
+    floors = [m for m in pkg["members"] if m["inputs"]["role"] == "floor"]
+    # interior one-way girder shear (WP2.1); edge girders carry half a bay since H13 (nb * bay / 2)
+    assert max(m["inputs"]["V_N"] for m in floors) / 1e3 >= 148.0
     assert pkg["collectors"]["applied_to_member_checks"]
-    assert floor["inputs"]["P_comp_N"] > 0                           # collector / chord axial (WP2.6)
+    assert any(m["inputs"]["P_comp_N"] > 0 for m in floors)          # collector / chord axial (WP2.6)
     assert all(r["ok"] for r in pkg["drift_table"])
     assert pkg["seismic_calc"]["W_engine_kN"] == pytest.approx(pkg["seismic_calc"]["W_design_kN"], rel=0.02)
 
