@@ -239,7 +239,49 @@ def hsfg_slip_checks(bolts, bolt_type, V_service_N, V_ultimate_N=None, *, slip_s
 
 
 # ------------------------------------------------------------------------------------------ composite (WP2.9)
-def composite_design_record(cfg, pkg_members, beam_dirs=None):
+def construction_stage_elements(cfg, beam_elems):
+    """H40 (HR-C-05, HR-D-06, NEW): the unshored wet-concrete check per floor-beam ELEMENT (role 'floor' only -- not
+    keyed by section, so a section used as floor-X and roof-Y is not skipped), per direction (with cfg['deck_span'] a
+    beam parallel to the deck span carries no wet deck), with the tributary of the bays actually present (nb = 1 on
+    an edge beam: half a bay) and the element's own grade (grade_by_section).
+    beam_elems = [{tag, section, role, dir 'X'|'Y', L_mm, nb (bays present beside the beam, 0-2), grade}].
+    Returns the worst {DC, ...} or None."""
+    cs = cfg.get("construction_stage") or {}
+    ds = str(cfg.get("deck_span") or "").upper()
+    worst = None
+    cache = {}
+    for e in beam_elems or []:
+        if e.get("role") != "floor":
+            continue
+        d = str(e.get("dir") or "").upper()
+        if ds in ("X", "Y") and d == ds:
+            continue                                    # parallel to the deck span: no wet-deck load
+        S_across = float(cfg["SY"] if ds == "Y" else cfg["SX"]) if ds in ("X", "Y") else min(float(cfg["SX"]), float(cfg["SY"]))
+        nb = max(min(int(e.get("nb") if e.get("nb") is not None else 2), 2), 1)
+        trib = float(cs.get("trib_mm") or nb * S_across / 2.0)
+        L = float(e["L_mm"])
+        grade = e.get("grade") or cfg.get("steel_grade")
+        LLT = float(cs.get("LLT_mm") or L)
+        key = (e["section"], grade, round(L, 1), round(trib, 1), LLT)
+        if key not in cache:
+            w = (1.5 * float(cs["D_wet_kNm2"]) + 1.5 * float(cs.get("L_const_kNm2") or 0.0)) * trib / 1000.0
+            M = w * L * L / 8.0
+            res = I8.member_check_is800({"id": "wet-e%s" % e.get("tag"), "section": e["section"], "grade": grade,
+                                         "role": "beam", "L_mm": L, "LLT_sag_mm": LLT},
+                                        [{"combo": "1.5Dwet+1.5Lconst", "P_N": 0.0, "Mz_i_Nmm": 0.0, "Mz_j_Nmm": 0.0,
+                                          "Mz_mid_Nmm": M, "Vy_N": w * L / 2.0}])
+            cache[key] = (res, M)
+        res, M = cache[key]
+        if res.get("dc") is not None and (worst is None or res["dc"] > worst["DC"]):
+            worst = {"DC": res["dc"], "section": e["section"], "element": e.get("tag"), "dir": d, "nb": nb,
+                     "trib_mm": trib, "grade": grade, "M_Nmm": M, "combo": "1.5Dwet+1.5Lconst", "LLT_mm": LLT,
+                     "capacity": res.get("capacities", {}).get("Mdz_section"),
+                     "basis": "per element and direction; tributary nb x bay/2 (edge beam: half a bay); "
+                              "element grade (H40)"}
+    return worst
+
+
+def composite_design_record(cfg, pkg_members, beam_dirs=None, beam_elems=None):
     """WP2.9: IS 11384 is not in the corpus -> found:false slots; scope 'bare_steel' is satisfied by the IS 800 8.2 /
     9.3 member checks already in the package plus a construction-stage (unshored wet concrete) check of the floor
     beams with the compression flange unrestrained until the deck is fixed (cfg['construction_stage']).
@@ -264,7 +306,9 @@ def composite_design_record(cfg, pkg_members, beam_dirs=None):
                 continue
             worst = None
             ds = str(cfg.get("deck_span") or "").upper()
-            for m in pkg_members:
+            if beam_elems is not None:
+                worst = construction_stage_elements(cfg, beam_elems)
+            for m in ([] if beam_elems is not None else pkg_members):
                 if m["inputs"].get("role") != "floor":
                     continue
                 sec = m["inputs"]["section"]

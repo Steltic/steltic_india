@@ -1372,12 +1372,37 @@ def design_india(name, cfg, outdir):
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()
     if "composite" in _blob or cfg.get("composite") or cfg.get("composite_scope"):
         try:
-            _bdirs = {}
+            # H40: construction stage per floor-beam element and direction (role 'floor' only), with the bays
+            # present beside each beam (edge beam: half a bay) and the element's own grade
+            _bel = []
             for (t_, k_, s_, n1_, n2_) in info0["ele"]:
                 if k_ == "beam":
                     c1_, c2_ = ops.nodeCoord(n1_), ops.nodeCoord(n2_)
-                    _bdirs.setdefault(s_, set()).add("X" if abs(c2_[0] - c1_[0]) >= abs(c2_[1] - c1_[1]) else "Y")
-            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"], beam_dirs=_bdirs),
+                    _bel.append({"tag": t_, "section": s_, "role": role_of.get(t_),
+                                 "dir": "X" if abs(c2_[0] - c1_[0]) >= abs(c2_[1] - c1_[1]) else "Y",
+                                 "L_mm": length[t_], "c1": c1_, "c2": c2_,
+                                 "grade": _member_input_record(cfg, t_, "beam", s_, n1_, n2_, length[t_],
+                                                               role_of.get(t_)).get("grade")})
+            try:
+                _dmax = 1.5 * max(float(cfg["SX"]), float(cfg["SY"]))
+            except Exception:
+                _dmax = float("inf")
+            for e_ in _bel:
+                ax_, pr_ = (0, 1) if e_["dir"] == "X" else (1, 0)
+                lo_, hi_ = sorted((e_["c1"][ax_], e_["c2"][ax_]))
+                sides_ = set()
+                for o_ in _bel:
+                    if o_ is e_ or o_["dir"] != e_["dir"] or abs(o_["c1"][2] - e_["c1"][2]) > 1.0:
+                        continue
+                    olo_, ohi_ = sorted((o_["c1"][ax_], o_["c2"][ax_]))
+                    if min(hi_, ohi_) - max(lo_, olo_) <= 1.0:
+                        continue
+                    dp_ = o_["c1"][pr_] - e_["c1"][pr_]
+                    if 1.0 < abs(dp_) <= _dmax:
+                        sides_.add(1 if dp_ > 0 else -1)
+                e_["nb"] = len(sides_)
+            _bel = [{k: v for k, v in e_.items() if k not in ("c1", "c2")} for e_ in _bel]
+            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"], beam_elems=_bel),
                                        "note": "WP2.9: IS 11384 not in the corpus; scope per COMPOSITE_INDIA.md"}
             pkg["composite_design"]["blocks_complete"] = pkg["composite_design"]["chI_worksheet"].get("blocks_complete")
         except Exception as ex:
