@@ -1132,8 +1132,12 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             if RC is not RG:
                 lat = _lateral_axial_shear(model, {t: RC[t] - RG[t] for t in RG})
                 recs = {fs: tuple(r) + lat.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
-            if N_LL:
-                # IS 875-2 3.2.1: column axial = N - r x N_imposed (tension-positive records; only the axial force)
+            _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
+                        or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
+            if N_LL and not _eq_case:
+                # IS 875-2 3.2.1: column axial = N - r x N_imposed (tension-positive records; only the axial force).
+                # H17: never in a combination with earthquake -- IS 875 (Part 5) 8.1: "Reduced imposed load (IL)
+                # specified in Part 2 ... should not be applied in combination with earthquake forces".
                 for col in model["cols"]:
                     r_ = llr.get(col["tag"], 0.0)
                     fs = frozenset((col["n1"], col["n2"]))
