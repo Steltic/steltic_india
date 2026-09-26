@@ -249,6 +249,10 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
             is18168 = I18.applies_for_cfg(cfg.get("system"), _zone(cfg, plan), cfg)
             if is18168["applies"]:
                 is18168["Omega"] = I18.omega(cfg.get("system"))["Omega"]
+                # H46: 5.5 gamma_LL = 0.25 for an imposed-load class <= 3.0 kN/m2, 0.50 above (0.50 when undeclared)
+                _lls = [_f(cfg.get("L_floor"), None)] + [_f(v, None) for v in (cfg.get("L_by_level") or {}).values()]
+                _lls = [v for v in _lls if v is not None]
+                is18168["gamma_LL"] = I18.gamma_LL(max(_lls)) if _lls else 0.50
                 is18168["members"] = I18.overstrength_members(cfg.get("system"))
                 is18168["cite"] = I18.CITE_5_5
         except Exception:
@@ -311,16 +315,22 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                 rows.insert(1, (1.2, 1.2, 0.6, "T4 DL+LL+0.6WL"))
             if kind == "EQ" and s12:
                 rows += [(1.2, 0.5, 2.5, "IS 800 12.2.3(a)"), (0.9, 0.0, 2.5, "IS 800 12.2.3(b)")]
+                gll = is18168.get("gamma_LL", 0.50)
                 if is18168.get("applies") and (is18168.get("Omega") or 0) > 2.5:
                     om = is18168["Omega"]          # SMRF 3.0: stricter than 12.2.3, both families kept
-                    rows += [(1.2, 0.5, om, "IS 18168 5.5(1)"), (0.9, 0.0, om, "IS 18168 5.5(2)")]
+                    rows += [(1.2, gll, om, "IS 18168 5.5(1)"), (0.9, 0.0, om, "IS 18168 5.5(2)")]
+                elif is18168.get("applies") and abs(gll - 0.50) > 1e-9:
+                    # Omega 2.5 (SCBF / EBF) with gamma_LL 0.25: 5.5(1) differs from 12.2.3(a) (0.5 LL) -> own row;
+                    # 5.5(2) = 12.2.3(b) (no LL) keeps both cites (H46)
+                    rows += [(1.2, gll, is18168["Omega"], "IS 18168 5.5(1)")]
             if crane:
                 rows += [(1.2, 1.2, 0.6, "T4 DL+LL+CL+0.6%s" % ("EL" if kind == "EQ" else "WL")),
                          (1.2, 1.2, 1.2, "T4 DL+LL+0.53CL+1.2%s" % ("EL" if kind == "EQ" else "WL"))]
             for (fD, fL, fl, fam) in rows:
                 is1223 = fam.startswith("IS 800 12.2.3") or fam.startswith("IS 18168 5.5")
                 is5_5 = fam.startswith("IS 18168 5.5") or (fam.startswith("IS 800 12.2.3") and is18168.get("applies")
-                                                          and abs((is18168.get("Omega") or 0) - fl) < 1e-9)
+                                                          and abs((is18168.get("Omega") or 0) - fl) < 1e-9
+                                                          and (fam.endswith("(b)") or abs(fL - is18168.get("gamma_LL", 0.5)) < 1e-9))
                 fC = 0.0
                 if fam.startswith("T4 DL+LL+CL+0.6"):
                     fC = 1.05
@@ -349,6 +359,9 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                                     cite_fam = "IS 800:2007 12.2.3"
                                 else:
                                     cite_fam = "IS 18168:2023 5.5"
+                                    if fD == 1.2:
+                                        cite_fam += (" (gamma_LL = %.2f: 0.25 for imposed load <= 3.0 kN/m2, 0.50 "
+                                                     "above or when undeclared)" % fL)
                                 if is5_5:
                                     tags.append("is18168_5_5")
                                     mem = is18168.get("members") or {}

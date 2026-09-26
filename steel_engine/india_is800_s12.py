@@ -786,6 +786,15 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
     IS 800 12.11.3.2 (1.2, no Ry) -> governs where IS 18168 applies (both records kept)."""
     cols, beams = joint.get("columns") or [], joint.get("beams") or []
     cid = "is18168_8_2_SCWB"
+    # ruling R3 / H46: Pu = maximum factored axial compression over ALL design combinations (8.2 literal, default);
+    # cfg['scwb_pu_basis'] = 'seismic' restricts it to the IS 800 Table 4 earthquake combinations
+    basis = str((cfg or {}).get("scwb_pu_basis") or "all").lower()
+    if basis not in ("all", "seismic"):
+        return _na(cid, clause="IS 18168:2023 8.2", cite=I18.CITE_8_2, member=joint.get("id"),
+                   reason="cfg['scwb_pu_basis'] = %r (allowed: 'all', 'seismic')" % basis)
+    pu_cite = ("Pu = max factored axial compression over all design combinations (8.2 literal; ruling R3)"
+               if basis == "all" else "Pu = max factored axial compression over the IS 800 Table 4 earthquake "
+                                      "combinations (cfg['scwb_pu_basis'] = 'seismic', ruling R3 option)")
     if joint.get("roof") or not any(c.get("position") == "above" for c in cols):
         return _chk(cid, None, None, clause="IS 18168:2023 8.2.1", cite="need not be satisfied at the roof level",
                     member=joint.get("id"), ok=True, dc=None, note="roof joint")
@@ -802,6 +811,8 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
                        reason="column grade / L_mm not resolved")
         axis = "z" if (m.get("major_axis_plane") in (None, joint.get("frame_dir"))) else "y"
         fs = _forces(model_data, m["id"])
+        if basis == "seismic":
+            fs = [f for f in fs if (f.get("family") or "table4") == "table4" and "EQ" in str(f.get("combo") or "")]
         Pu = max([f.get("P_N", 0.0) for f in fs] + [0.0])
         comp = I8.compression_capacity(p, fy, KLz_mm=(m.get("Kz") or 1.0) * m["L_mm"],
                                        KLy_mm=(m.get("Ky") or 1.0) * m["L_mm"], process=m.get("process"))
@@ -827,9 +838,9 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
         terms_b.append({"member": m["id"], "section": m["section"], "Ry": ry, "Ry_basis": ry_note, "Mbo_Nmm": Mbo})
     ratio = sMpc / sMbo
     return _chk(cid, ratio, I18.SCWB_MIN, clause="IS 18168:2023 8.2", member=joint.get("id"),
-                cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry)",
+                cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry); " + pu_cite,
                 dc=I18.SCWB_MIN / ratio if ratio else None, ok=ratio > I18.SCWB_MIN, level=joint.get("level"),
-                columns=terms_c, beams=terms_b)
+                columns=terms_c, beams=terms_b, Pu_basis=basis)
 
 
 def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
