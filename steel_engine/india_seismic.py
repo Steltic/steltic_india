@@ -1028,7 +1028,10 @@ def floating_columns(cfg) -> dict:
             bots.append((t, n1, n2))
         if kind == "brace":
             brace_nodes |= {n1, n2}
-    fl = [t for (t, n1, n2) in bots if (n1 // 100000) > 0 and n1 not in tops]
+    # H35: a column whose lower end is a support (restrained foundation / declared stepped base) is not floating
+    sup = E.support_nodes() | {E.ntag(i, j, k) for k, v in E.declared_node_sets(cfg, info, "stepped_bases").items()
+                               for (i, j) in v}
+    fl = [t for (t, n1, n2) in bots if (n1 // 100000) > 0 and n1 not in tops and n1 not in sup]
     lat = [t for (t, n1, n2) in bots if t in fl and (n1 in brace_nodes or n2 in brace_nodes or n1 in lateral or n2 in lateral)]
     return {"irregular": bool(fl), "columns": fl, "in_lateral_system": lat, "clause": "IS 1893 Table 6(vi) (Amd 2)",
             "verdict": ("not permitted: floating columns part of / supporting the lateral system %s" % lat) if lat else

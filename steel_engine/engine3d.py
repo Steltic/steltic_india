@@ -2199,6 +2199,36 @@ def _model_gate(cfg):
     return True, True, None
 
 
+def declared_node_sets(cfg, info, key):
+    """H35: {k: {(i, j)}} for a node-set declaration ('omit_beams_at' / 'stepped_bases') read from the builder
+    info, cfg and cfg['_gold'] (CFS india_cfs_frame_build schema {k: [(i, j), ...]}); a flat list of (i, j, k)
+    triples is also accepted."""
+    out = {}
+    for src in ((info or {}).get(key), cfg.get(key), (cfg.get("_gold") or {}).get(key)
+                if isinstance(cfg.get("_gold"), dict) else None):
+        if isinstance(src, dict):
+            for k, v in src.items():
+                out.setdefault(int(k), set()).update(tuple(p)[:2] for p in (v or []))
+        elif isinstance(src, (list, tuple, set)):
+            for p in src:
+                p = tuple(p)
+                if len(p) == 3:
+                    out.setdefault(int(p[2]), set()).add(p[:2])
+    return out
+
+
+def support_nodes():
+    """H35: nodes of the live model restrained in all three translations (foundations, stepped bases)."""
+    out = set()
+    try:
+        for t in ops.getFixedNodes():
+            if {1, 2, 3} <= set(ops.getFixedDOFs(t)):
+                out.add(t)
+    except Exception:
+        pass
+    return out
+
+
 def floor_beam_gaps(cfg, transf="Linear"):
     """Column-line floor-grid beam positions that have NO beam element in the model = the un-modelled
     gravity girders. Coordinate-based, so it works for the parametric builder AND any custom_build.
@@ -2253,6 +2283,15 @@ def floor_beam_gaps(cfg, transf="Linear"):
                     continue
                 seen.add(m); stack.append(m)
         return False
+    # H35: a declared 'no beams into these nodes' (omit_beams_at) and a pair of supports (stepped bases on the grade)
+    # are not missing floor beams
+    omit = declared_node_sets(cfg, info, "omit_beams_at")
+    sup = support_nodes() | {ntag(i, j, k) for k, v in declared_node_sets(cfg, info, "stepped_bases").items()
+                             for (i, j) in v}
+
+    def _omitted(t):
+        k = t // 100000; r = t % 100000
+        return (r // 100, r % 100) in omit.get(k, set())
     gaps = []
     for z, pts in byz.items():
         xs = sorted({round(p[0], 3) for p in pts}); ys = sorted({round(p[1], 3) for p in pts})
@@ -2261,7 +2300,8 @@ def floor_beam_gaps(cfg, transf="Linear"):
         for (gi, gj), (x, y, t) in at.items():
             for (di, dj) in ((1, 0), (0, 1)):
                 nb = at.get((gi+di, gj+dj))
-                if nb and frozenset((t, nb[2])) not in modelled and not _chained(t, nb[2]):
+                if nb and frozenset((t, nb[2])) not in modelled and not _chained(t, nb[2]) \
+                        and not (_omitted(t) or _omitted(nb[2])) and not (t in sup and nb[2] in sup):
                     gaps.append((z, (x, y), (nb[0], nb[1])))
     return gaps
 
