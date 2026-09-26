@@ -235,6 +235,33 @@ def grid(cfg,k):
         return {(i,j) for i in range(NX+1) for j in range(NY+1)}
     return f(kk,NX,NY)
 
+def plan_extent(cfg, k, pts=None):
+    """(Bx, By): true plan extent (engine length units) of level k's footprint -- max - min of the present
+    grid-node coordinates (xcoords / ycoords / skew honoured), NOT extent + one bay (H04)."""
+    pts = grid(cfg, k) if pts is None else pts
+    xy = [_xy_in(cfg, i, j) for i, j in pts]
+    if not xy:
+        return 0.0, 0.0
+    return (max(c[0] for c in xy) - min(c[0] for c in xy), max(c[1] for c in xy) - min(c[1] for c in xy))
+
+
+def floor_plan_inertia(cfg, k, m, pts=None, info=None):
+    """H04: the ONE floor mass moment of inertia about the vertical axis used by modal_props, _modal_impl,
+    example_build and the static accidental torque.  Returns (J, basis).
+    Priority: cfg['Jm_by_level'][k] (engine units: mass x length^2, t.mm^2 on the SI path) > a J the builder
+    declared in its info dict (info['Jm'][k]) > m (Bx^2 + By^2) / 12 with the TRUE plan extent of the level."""
+    by = cfg.get("Jm_by_level") or {}
+    v = by.get(k, by.get(str(k)))
+    if v is not None:
+        return float(v), "cfg['Jm_by_level']"
+    bj = (info or {}).get("Jm") or {}
+    v = bj.get(k, bj.get(str(k)))
+    if v is not None:
+        return float(v), "builder info['Jm']"
+    Bx, By = plan_extent(cfg, k, pts)
+    return m * (Bx ** 2 + By ** 2) / 12.0, "m (Bx^2 + By^2) / 12, true plan extent of the level's footprint"
+
+
 def zlevels(cfg):
     h=cfg["heights"]; z=[0.0]
     for hi in h: z.append(z[-1]+hi)
@@ -646,7 +673,9 @@ def _model_key(cfg):
            cfg.get("clad"), cfg.get("L_floor"), cfg.get("Lr"), cfg.get("snow"),
            bool(cfg.get("storage")), tuple(cfg.get("storage_levels") or ()),   # 12.7.2 storage live in W
            tuple(sorted((cfg.get("extra_mass_floors") or {}).items())),
-           tuple(sorted((cfg.get("seis") or {}).items())))
+           tuple(sorted((cfg.get("seis") or {}).items())),
+           repr([cfg.get(k_) for k_ in ("Jm_by_level", "nodal_masses", "partition_load_kNm2",       # H04/H16/H22/H50
+                                        "partition_seismic_kNm2", "roof_levels", "crane", "envelope")]))
     return hashlib.md5(repr(sig).encode()).hexdigest()
 
 def modal(cfg, nm):
@@ -663,11 +692,7 @@ def _modal_impl(cfg,nm):
     info=build(cfg,"Linear"); NF=info["NF"]
     nm_req=min(nm,3*NF)
     masses={k:floor_w(cfg,k)/g for k in range(1,NF+1)}
-    Jm={}
-    for k in range(1,NF+1):
-        pts=info["present"][k]; SX,SY=cfg["SX"],cfg["SY"]
-        xs=[i*SX for i,j in pts]; ys=[j*SY for i,j in pts]
-        Bx=max(xs)-min(xs)+SX; By=max(ys)-min(ys)+SY; Jm[k]=masses[k]*(Bx**2+By**2)/12.0
+    Jm={k:floor_plan_inertia(cfg,k,masses[k],info["present"][k],info)[0] for k in range(1,NF+1)}   # H04
     Mtot=sum(masses.values()); maxmodes=max(1,3*NF)
     # Regularize the (singular) mass matrix: the rigid diaphragm leaves mass only on the floor masters,
     # so most DOF are massless and -genBandArpack fails to converge beyond ~6 modes -- silently falling
@@ -891,12 +916,10 @@ def modal_props(cfg):
     (ux, uy, rz), floor masses (tonne) and mass moments of inertia.  All 3*NF diaphragm modes."""
     info = build(cfg, "Linear"); NF = info["NF"]
     masses = {k: floor_w(cfg, k) / g for k in range(1, NF + 1)}
-    Jm = {}
+    Jm, Jb = {}, {}
     for k in range(1, NF + 1):
-        pts = info["present"][k]
-        xs = [_xy_in(cfg, i, j)[0] for i, j in pts]; ys = [_xy_in(cfg, i, j)[1] for i, j in pts]
-        Bx = max(xs) - min(xs) + cfg["SX"]; By = max(ys) - min(ys) + cfg["SY"]
-        Jm[k] = masses[k] * (Bx ** 2 + By ** 2) / 12.0
+        # H04: one helper (true plan extent); a builder-declared info['Jm'] or cfg['Jm_by_level'] is kept
+        Jm[k], Jb[k] = floor_plan_inertia(cfg, k, masses[k], info["present"][k], info)
     tm = 1e-8 * min(masses.values())
     for t in ops.getNodeTags():
         ops.mass(t, tm, tm, tm, tm, tm, tm)
@@ -920,7 +943,7 @@ def modal_props(cfg):
         modes.append({"mode": n + 1, "T": T[n], "mass_x": Lx * Lx / Mn / Mt, "mass_y": Ly * Ly / Mn / Mt,
                       "rot": sum(Jm[k] * ph[k][2] ** 2 for k in ph) / Mn})
     return {"w2": list(w2), "T": T, "phi": phi, "modes": modes,
-            "m": masses, "J": Jm, "Mtot": Mt, "NF": NF, "cm": info.get("cm") or {}}
+            "m": masses, "J": Jm, "J_basis": Jb, "Mtot": Mt, "NF": NF, "cm": info.get("cm") or {}}
 
 
 def india_story_forces(cfg, direction, kind="EQ"):
@@ -1591,9 +1614,8 @@ def static_lateral(cfg,Fx,direction,accidental=False):
     for k in range(1,NF+1):
         f=[0.0]*6; f[di]=Fx[k]
         if accidental:
-            pts=info["present"][k]                       # real coords (xcoords/ycoords safe)
-            xs=[_xy_in(cfg,i,j)[0] for i,j in pts]; ys=[_xy_in(cfg,i,j)[1] for i,j in pts]
-            B=(max(ys)-min(ys)+SY) if direction=="X" else (max(xs)-min(xs)+SX)
+            Bx_,By_=plan_extent(cfg,k,info["present"][k])   # H04: true plan extent (xcoords/ycoords safe)
+            B=By_ if direction=="X" else Bx_
             f[5]=Fx[k]*0.05*B
         ops.load(mtag(k),*f)
     ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")

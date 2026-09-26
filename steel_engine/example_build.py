@@ -132,7 +132,6 @@ def example_build(cfg, transf="PDelta"):
         sl = [eng.ntag(i, j, k) for (i, j) in present[k]]
         ops.rigidDiaphragm(3, eng.mtag(k), *sl)
         w = eng.floor_w(cfg, k); m = w/eng.g
-        pts = present[k]; xs = [XY(i, j)[0] for i, j in pts]; ys = [XY(i, j)[1] for i, j in pts]
-        Bx = max(xs)-min(xs)+SX; By = max(ys)-min(ys)+SY
-        ops.mass(eng.mtag(k), m, m, 0.0, 0.0, 0.0, m*(Bx**2+By**2)/12.0)
+        Jz = eng.floor_plan_inertia(cfg, k, m, present[k])[0]   # H04: true plan extent (engine helper)
+        ops.mass(eng.mtag(k), m, m, 0.0, 0.0, 0.0, Jz)
     return info
