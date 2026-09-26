@@ -360,7 +360,10 @@ You:
      shear, the panel zone (12.11.2.3/.4) and SCWB (12.11.3.2 >= 1.2; IS 18168 8.2 > 1.4 with Ry).
    * `beam_shear[<beam section>|'default']` (pinned beams, braced-bay beams): t_plate_mm, h_plate_mm,
      fy/fu_plate_MPa, bolts, `block_shear_areas`, `weld` (fillet) or `cjp` {t_mm, length_mm, fy_MPa, site},
-     `bolt_type`, `slip_surface`.
+     `bolt_type`, `slip_surface`. A beam end that carries axial force (collector / chord of the diaphragm load path,
+     flexible-deck axial) is checked for R = sqrt(V^2 + N^2) per combination (IS 1893 7.6.4 load path; the IS 18168
+     5.5 / 12.2.3 overstrength rows where IS 18168 applies or `collector_basis` is 'is800_12_2_3', IS 18168 12.2.4.5
+     / 6.4); the demand records `P_end_N`, `V_P_resultant_N` and the combination.
    * `column_base[<column section>|'default']`: B_mm, L_mm, t_plate_mm, fy_plate_MPa (IS 2062 by thickness),
      fck_MPa, `fixed`, `anchors` {n_total, n_tension, d_mm, grade, f_mm (tension-anchor line from the plate
      centre), pitch_mm, edge_mm, n_per_row, Anb_mm2 when not in IS 4000 Table 2}, optional `Ec_MPa` /
