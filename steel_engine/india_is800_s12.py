@@ -1151,10 +1151,38 @@ def ebf_beam_column_checks(links, model_data, cfg):
         beam_ids.update(ln.get("beam_ids") or [])
     if not beam_ids:
         return out
-    joints = [j for j in (model_data.get("joints") or []) if any(b["member_id"] in beam_ids for b in j.get("beams") or [])]
-    if not joints:
-        return [_na("12.3.4.4_beam_column", clause="IS 18168:2023 12.3.4.4", cite="brace-gusset beam-column joints",
-                    reason="no beam-column joints found for the beams outside the links (rigid joints expected)")]
+    # H36 (CFS-D-05): the clause applies only 'where a brace or gusset plate connects to both members at a
+    # beam-to-column connection' -> joints at which an EBF brace end node coincides with the beam-column node
+    brace_nodes = set()
+    for m in (model_data.get("members") or []):
+        if m.get("role") == "brace":
+            brace_nodes.update(n for n in (m.get("node_i"), m.get("node_j")) if n is not None)
+    joints = [j for j in (model_data.get("joints") or []) if any(b["member_id"] in beam_ids for b in j.get("beams") or [])
+              and (j.get("brace_at_joint") or (j.get("node") is not None and j.get("node") in brace_nodes))]
+    # a brace node at a beam-outside-link end that is also a column node, but no (rigid) joint was built there:
+    # the clause applies and the joint is missing -> not evaluated (never 'not applicable')
+    col_nodes = set()
+    beam_nodes = set()
+    for m in (model_data.get("members") or []):
+        ends = {n for n in (m.get("node_i"), m.get("node_j")) if n is not None}
+        if m.get("role") == "column":
+            col_nodes |= ends
+        elif m.get("id") in beam_ids:
+            beam_nodes |= ends
+    have = {j.get("node") for j in joints}
+    missing = sorted(n for n in (brace_nodes & beam_nodes & col_nodes) if n not in have)
+    if missing:
+        out.append(_na("12.3.4.4_beam_column", clause="IS 18168:2023 12.3.4.4", member="nodes %s" % missing,
+                       cite="1.1 Ry fyb Zpb connection assembly where a brace / gusset connects at the beam-column joint",
+                       reason="a brace frames into the beam-to-column connection at node(s) %s but no rigid joint is "
+                              "modelled there (12.3.4.4 needs the connection assembly and column strengths)" % missing))
+    if not joints and not missing:
+        return [_chk("12.3.4.4_beam_column", None, None, clause="IS 18168:2023 12.3.4.4", ok=True, dc=None,
+                     applies=False, gate=True,
+                     cite="12.3.4.4 applies 'where a brace or gusset plate connects to both members at a beam-to-column "
+                          "connection'",
+                     reason="not applicable: no EBF brace / gusset frames into a beam-to-column connection (e.g. a "
+                            "centre-link chevron with the braces at the link ends)")]
     for j in joints:
         bl = [b for b in j.get("beams") or [] if b["member_id"] in beam_ids]
         mb = _member(model_data, bl[0]["member_id"])
