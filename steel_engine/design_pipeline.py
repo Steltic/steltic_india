@@ -1139,7 +1139,7 @@ def design_india(name, cfg, outdir):
                     for c in s12_by_member.get("e%d" % t, []):
                         if c["id"] in ids:
                             w = worst.get(c["id"])
-                            k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                            k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                             if w is None or k_ > w[0]:
                                 worst[c["id"]] = (k_, c)
                 for cid, (_, c) in worst.items():
@@ -1207,7 +1207,7 @@ def design_india(name, cfg, outdir):
                 for c in s12_by_member.get("e%d" % t, []):
                     if c["id"] in ids:
                         w = worst.get(c["id"])
-                        k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                        k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                         if w is None or k_ > w[0]:
                             worst[c["id"]] = (k_, c)
             for cid, (_, c) in worst.items():
@@ -1233,7 +1233,7 @@ def design_india(name, cfg, outdir):
             for t in base_tags:
                 for c in s12_by_member.get("base-e%d" % t, []):
                     w = bchecks.get(c["id"])
-                    k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                    k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                     if w is None or k_ > w[0]:
                         bchecks[c["id"]] = (k_, c)
             for cid, (_, c) in bchecks.items():

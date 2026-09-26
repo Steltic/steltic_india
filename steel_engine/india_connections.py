@@ -393,6 +393,44 @@ def _bearing_linear(P, M, B, L, f_anchor, As_t, n_mod):
     return {"Y_mm": Y, "C_N": C, "T_N": T, "fp_max_MPa": fp, "e_mm": e}
 
 
+def _anchor_equilibrium_uplift(P, M, B, L, f_anchor, As_t, n_mod):
+    """Net uplift / zero axial (P <= 0, H08, HR-E-11): equilibrium of the plate on the anchors (rows at +/- f) and, when
+    the moment lifts the far row, linear bearing at the compression edge (plane sections: bearing block Y with peak
+    fp, tension anchors As_t at f from the centre, modular ratio n).  Returns {T_N (tension-side row), C_N (bearing
+    resultant, 0 when all anchors are in tension), T_other_N, Y_mm, fp_max_MPa, method}."""
+    P, M = float(P), abs(float(M))
+    Pt = -P                                                  # net uplift >= 0
+    if f_anchor is None or f_anchor <= 0:
+        return None
+    T_other = Pt / 2.0 - M / (2.0 * f_anchor)
+    if T_other >= 0.0:
+        # every anchor row in tension: statics of two rows (T + T_o = uplift, (T - T_o) f = M)
+        return {"T_N": Pt / 2.0 + M / (2.0 * f_anchor), "T_other_N": T_other, "C_N": 0.0, "Y_mm": 0.0,
+                "fp_max_MPa": 0.0, "method": "net uplift: both anchor rows in tension (statics)"}
+    if not (As_t and n_mod):
+        return None
+    g = lambda y: B * y / 2.0                                # C / fp
+    h = lambda y: n_mod * As_t * (L / 2.0 + f_anchor - y) / y   # T / fp (strain compatibility)
+    F = lambda y: M * (g(y) - h(y)) - P * (g(y) * (L / 2.0 - y / 3.0) + h(y) * f_anchor)
+    lo, hi = 1e-6, min(L, L / 2.0 + f_anchor)
+    if F(lo) * F(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if F(lo) * F(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    Y = 0.5 * (lo + hi)
+    den = g(Y) * (L / 2.0 - Y / 3.0) + h(Y) * f_anchor
+    if den <= 0:
+        return None
+    fp = M / den
+    return {"T_N": h(Y) * fp, "T_other_N": 0.0, "C_N": g(Y) * fp, "Y_mm": Y, "fp_max_MPa": fp,
+            "method": "net uplift / zero axial with moment: linear bearing + anchor tension (equilibrium and plane "
+                      "sections)"}
+
+
 IS456_EC_CITE = "IS 456:2000 6.2.3.1: Ec = 5000 sqrt(fck) (short-term static modulus, MPa)"
 
 
@@ -405,7 +443,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                       col_d_mm, col_bf_mm, col_tf_mm, anchors=None, Ec_MPa=None, modular_ratio=None,
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
                       friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
-                      sfrs_moment_factor=1.2, Ec_source=None):
+                      sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
@@ -419,7 +457,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     - thickness: compression-side cantilever per 7.4.3.1 form (M = 0.2 t^2 fy/gamma_m0 per unit width, the
       1.2 Ze cap of 8.2.1.2 - equivalent to 7.4.3.1 with b = 0), tension-side anchor-line moment; ts > tf.
     - 12.12: for SFRS fixed bases M_dem = max(M, sfrs_moment_factor x Mp_col) (1.2 per IS 800 12.12.1; 1.1 Ry per
-      IS 18168 9.3 when it governs), V_dem = max(V, 1.2 Vd_col).
+      IS 18168 9.3 when it governs), V_dem = max(V, 1.2 Vd_col); with col_A_mm2 the column moment is Mpc reduced for
+      the concurrent P (IS 800 9.3.1.2, H08).  india_is800_s12.base_checks assembles these demands per case itself.
+    - net uplift (P <= 0): anchor / bearing equilibrium (_anchor_equilibrium_uplift, H08), not |P| + 2M/L.
     - geometric feasibility: anchor pitch >= 2.5 d (10.2.2), edge >= 1.5 d0 (10.2.4.2 min edge), weld length <=
       column perimeter.
     """
@@ -428,10 +468,15 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     M_dem, V_dem = abs(float(M_Nmm or 0.0)), abs(float(V_N or 0.0))
     if sfrs_fixed_base:
         if col_Zp_mm3 and col_fy_MPa:
-            M12 = float(sfrs_moment_factor) * col_Zp_mm3 * col_fy_MPa
+            Mp_ = col_Zp_mm3 * col_fy_MPa
+            if col_A_mm2:
+                n_ = max(float(P_N or 0.0), 0.0) / (float(col_A_mm2) * col_fy_MPa)
+                Mp_ = min(1.11 * Mp_ * (1.0 - n_), Mp_)             # IS 800 9.3.1.2 (major axis) Mpc
+            M12 = float(sfrs_moment_factor) * Mp_
             checks["12.12.1_moment_demand"] = {"value": M12, "clause": "IS 800:2007 12.12.1" + (
                 " + IS 18168:2023 9.3" if sfrs_moment_factor > 1.2 else ""),
-                                               "cite": "%.2f x full plastic moment of the column" % sfrs_moment_factor,
+                                               "cite": "%.2f x %s of the column" % (sfrs_moment_factor,
+                                                   "Mpc (9.3.1.2, concurrent P)" if col_A_mm2 else "full plastic moment"),
                                                "ok": True}
             M_dem = max(M_dem, M12)
         else:
@@ -446,7 +491,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                                                     ok=None, reason="column Vd missing")
     fb = 0.6 * float(fck_MPa)
     P = float(P_N)
-    e = M_dem / P if P > 0 else float("inf")
+    e = M_dem / P if P > 0 else None                       # None (not inf) under net uplift: JSON-safe
     T_anchor = 0.0
     a = anchors or {}
     As_t = None
@@ -481,8 +526,26 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                 T_anchor = sol["T_N"]
                 checks["bearing"] = _check(sol["fp_max_MPa"], fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     else:
-        bearing.update(method="net uplift: no bearing")
-        T_anchor = abs(P) + (2 * M_dem / L_mm if M_dem else 0.0)
+        # H08 (HR-E-11): net uplift / zero axial -> anchor and bearing equilibrium (was |P| + 2M/L on n_tension)
+        if not modular_ratio and not Ec_MPa:
+            Ec_MPa, Ec_source = ec_is456(fck_MPa), IS456_EC_CITE
+        n = modular_ratio or ((E_MPA / Ec_MPa) if Ec_MPa else None)
+        sol = _anchor_equilibrium_uplift(P, M_dem, B_mm, L_mm, a.get("f_mm"), As_t, n) \
+            if a.get("f_mm") is not None else None
+        if sol is None and M_dem == 0 and P <= 0:
+            sol = {"T_N": -P / 2.0, "T_other_N": -P / 2.0, "C_N": 0.0, "Y_mm": 0.0, "fp_max_MPa": 0.0,
+                   "method": "net uplift, no moment: shared by the anchor rows"}
+        if sol is None:
+            bearing.update(method="net uplift: anchor rows (n_tension, d, f_mm) and Ec needed for equilibrium")
+            T_anchor = abs(P) + (2 * M_dem / L_mm if M_dem else 0.0)
+            checks["anchor_tension_demand"] = _check(None, None, clause="IS 800:2007 7.4.1 / 12.12.1",
+                                                     cite="anchor tension by equilibrium", ok=None,
+                                                     reason="net uplift: anchor geometry (f_mm, n_tension, d) missing")
+        else:
+            bearing.update(sol, modular_ratio=n, Ec_MPa=Ec_MPa, Ec_source=Ec_source)
+            T_anchor = sol["T_N"]
+            if sol["C_N"] > 0:
+                checks["bearing"] = _check(sol["fp_max_MPa"], fb, clause="IS 800:2007 7.4.1", cite=cite_b)
     # anchors
     if a.get("d_mm") and a.get("n_total"):
         one = bolt_capacity_is800(a["d_mm"], a.get("grade", "4.6"), nn=1, ns=0, e_mm=None, p_mm=None,
@@ -494,8 +557,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         V_fric = friction_mu * C_bear
         V_anchor = max(V_dem - V_fric - (shear_key_N or 0.0), 0.0)
         V_one = V_anchor / a["n_total"]
-        checks["anchor_tension_demand"] = {"value": T_anchor, "clause": "IS 800:2007 7.4.1 / 12.12.1",
-                                           "cite": "equilibrium of the bearing block", "ok": True}
+        if not (isinstance(checks.get("anchor_tension_demand"), dict) and checks["anchor_tension_demand"].get("ok") is None):
+            checks["anchor_tension_demand"] = {"value": T_anchor, "clause": "IS 800:2007 7.4.1 / 12.12.1",
+                                               "cite": "equilibrium of the bearing block", "ok": True}
         if Tdb:
             checks["anchor_tension_10_3_5"] = _check(T_one, Tdb, clause="IS 800:2007 10.3.5", cite="Tb <= Tdb")
         if Vdsb:
@@ -553,9 +617,11 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                 Mcomp = fp * Y / 2 * (m - Y / 3)
         Mten = None
         if T_anchor > 0 and a.get("f_mm") is not None:
+            # anchor line inside the column flange line -> zero lever -> zero tension-side plate moment (H08)
             lever = max(a["f_mm"] - col_d_mm / 2.0 + col_tf_mm / 2.0, 0.0)
             Mten = T_anchor * lever / B_mm
-        Mu = max([v for v in (Mcomp, Mten) if v is not None] or [None]) if (Mcomp or Mten) else None
+        vals = [v for v in (Mcomp, Mten) if v is not None]
+        Mu = max(vals) if vals else None
         if Mu is None:
             checks["plate_thickness"] = _check(None, t_plate_mm, clause="IS 800:2007 7.4.3.2", cite="plate bending",
                                                ok=None, reason="bearing / anchor solution missing")
@@ -577,6 +643,95 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     return {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
             "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
             "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+
+
+def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_mm, col_d_mm, col_bf_mm, col_tf_mm,
+                              anchors=None, **kw):
+    """Column base under concurrent P, Mz and My (H08, HR-B-15): base_plate_design about the major axis (L along
+    the column depth) and, when My != 0, about the minor axis (plate and column dimensions swapped, anchors
+    f_y_mm / n_tension_y; a square plate without them assumes the same pattern, flagged).  The corner anchor carries
+    the sum of the two tension-side shares, the concurrent axial counted once:
+    T_corner = max(Tz(P)/nz + Ty(0)/ny, Tz(0)/nz + Ty(P)/ny), checked for 10.3.5 / 10.3.6 (and the EOR embedment)."""
+    a = dict(anchors or {})
+    Mz, My = abs(float(Mz_Nmm or 0.0)), abs(float(My_Nmm or 0.0))
+    common = {k: v for k, v in kw.items() if k not in ("weld_length_mm", "col_perimeter_mm")}
+    rz = base_plate_design(P_N=P_N, M_Nmm=Mz, V_N=V_N, B_mm=B_mm, L_mm=L_mm, col_d_mm=col_d_mm, col_bf_mm=col_bf_mm,
+                           col_tf_mm=col_tf_mm, anchors=anchors, **kw)
+    rz["demands"].update(Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My)
+    if My <= 0.0:
+        rz["biaxial"] = False
+        return rz
+    ay = dict(a)
+    note = None
+    if a.get("f_y_mm") is not None:
+        ay["f_mm"] = a["f_y_mm"]
+        ay["n_tension"] = a.get("n_tension_y") or a.get("n_tension")
+    elif abs(float(B_mm) - float(L_mm)) < 1e-6:
+        note = "minor-axis anchors: square plate, the major-axis pattern (f_mm, n_tension) assumed about y (flag)"
+    else:
+        ay = {}
+    out = {"found": True, "biaxial": True, "checks": dict(rz["checks"]), "bearing": rz.get("bearing"),
+           "clause": rz.get("clause"), "policy": rz.get("policy")}
+    if not ay:
+        out["checks"]["y:anchors"] = _check(None, None, clause="IS 800:2007 7.4.1 / 10.3.5",
+                                            cite="minor-axis moment on the base", ok=None,
+                                            reason="anchors.f_y_mm / n_tension_y needed for My on a B != L plate")
+        T_corner = None
+    else:
+        ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
+                               col_tf_mm=col_tf_mm, anchors=ay, **common)
+        for k, v in ry["checks"].items():
+            if k.startswith(("geometry_", "shear_path", "anchor_shear", "anchorage_embedment")):
+                continue
+            out["checks"]["y:" + k] = v
+        out["bearing_y"] = ry.get("bearing")
+        nz, ny = a.get("n_tension") or 0, ay.get("n_tension") or 0
+        T_corner = None
+        if nz and ny and a.get("d_mm"):
+            def _T(P, M, geo_z):
+                if M <= 0:
+                    return 0.0 if P >= 0 else -P / 2.0
+                if geo_z:
+                    r = base_plate_design(P_N=P, M_Nmm=M, V_N=0.0, B_mm=B_mm, L_mm=L_mm, col_d_mm=col_d_mm,
+                                          col_bf_mm=col_bf_mm, col_tf_mm=col_tf_mm, anchors=a, **common)
+                else:
+                    r = base_plate_design(P_N=P, M_Nmm=M, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm,
+                                          col_bf_mm=col_d_mm, col_tf_mm=col_tf_mm, anchors=ay, **common)
+                return max(float(r["demands"]["T_anchor_N"]), 0.0)
+            P = float(P_N)
+            Tz_P, Ty_P = max(float(rz["demands"]["T_anchor_N"]), 0.0), max(float(ry["demands"]["T_anchor_N"]), 0.0)
+            Tz_0, Ty_0 = _T(0.0, Mz, True), _T(0.0, My, False)
+            T_corner = max(Tz_P / nz + Ty_0 / ny, Tz_0 / nz + Ty_P / ny)
+            one = bolt_capacity_is800(a["d_mm"], a.get("grade", "4.6"), nn=1, ns=0, e_mm=None, p_mm=None,
+                                      fub_MPa=a.get("fub_MPa"), fyb_MPa=a.get("fyb_MPa"), Anb_mm2=a.get("Anb_mm2"))
+            Tdb, Vdsb = one.get("Tdb_N"), one.get("Vdsb_N")
+            V_one = float((rz["checks"].get("anchor_shear_10_3_3") or {}).get("value") or 0.0)
+            cite = ("corner anchor: sum of the major- and minor-axis tension-side shares, axial counted once: "
+                    "max(Tz(P)/nz + Ty(0)/ny, Tz(0)/nz + Ty(P)/ny)")
+            if Tdb:
+                out["checks"]["anchor_tension_biaxial_10_3_5"] = _check(T_corner, Tdb, clause="IS 800:2007 10.3.5",
+                                                                        cite=cite + "; Tb <= Tdb")
+            if Tdb and Vdsb:
+                out["checks"]["anchor_combined_biaxial_10_3_6"] = _check(
+                    (V_one / Vdsb) ** 2 + (T_corner / Tdb) ** 2, 1.0, clause="IS 800:2007 10.3.6",
+                    cite=cite + "; (V/Vdb)^2 + (T/Tdb)^2 <= 1")
+            emb = kw.get("embedment")
+            if emb and emb.get("capacity_N") and emb.get("cite"):
+                out["checks"]["anchorage_embedment"] = _check(T_corner, emb["capacity_N"], clause=emb["cite"],
+                                                              cite="EOR/product anchorage capacity (outside IS 800), "
+                                                                   "biaxial corner anchor")
+            elif T_corner > 0:
+                out["checks"]["anchorage_embedment"] = _check(T_corner, None, clause="outside IS 800 (IS 456 / product data)",
+                                                              cite="concrete breakout/pull-out", ok=None,
+                                                              reason="found:false - EOR anchorage basis not supplied")
+    if note:
+        out["note"] = note
+    oks = [c.get("ok") for c in out["checks"].values() if isinstance(c, dict)]
+    out["ok"] = None if any(o is None for o in oks) else all(oks)
+    dcs = [c.get("dc") for c in out["checks"].values() if isinstance(c, dict) and c.get("dc") is not None]
+    out["dc"] = max(dcs) if dcs else None
+    out["demands"] = dict(rz["demands"], Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My, T_corner_anchor_N=T_corner)
+    return out
 
 
 # ------------------------------------------------------------------- HR-INTEGRATE: connection capacities used by

@@ -145,17 +145,28 @@ def base_entry(cfg, col_member, load_cases):
     return b
 
 
-def base_load_cases(records, *, kind="col", major_plane_is_frame=True):
-    """(P, M, V) per combination for the base of a column from its per-combination records
-    (N tension +; Mmaj_i is the moment at the i end = base end for columns built bottom-up)."""
+def is_seismic_combo(label, tags=None):
+    """A combination that carries the earthquake load (IS 800 Table 4 EL rows, 12.2.3, IS 18168 5.5): the only cases
+    the 12.12.1 / IS 18168 9.3 capacity moment is paired with (H08)."""
+    t = set(tags or [])
+    return bool(t & {"is800_12_2_3", "is18168_5_5"}) or ("EQ" in str(label or "") and not str(label).startswith("SLS"))
+
+
+def base_load_cases(records, *, kind="col", major_plane_is_frame=True, tags_of=None):
+    """(P, Mz, My, V) per combination for the base of a column from its per-combination records (N tension +;
+    Mmaj_i / Mmin_i are the moments at the i end = base end for columns built bottom-up).  H08: the major and minor
+    moments are kept separately (the base is checked about both axes); M_Nmm = |Mz| (major axis); V_N is the
+    resultant of the two shears; 'seismic' marks the combinations with EL (12.2.3 / 5.5 / Table 4 EL)."""
     import static_model as SM
     out = []
     for lab, r in (records or {}).items():
         r = list(r) + [0.0] * (len(SM.REC_FIELDS) - len(r))
         d = dict(zip(SM.REC_FIELDS, r))
-        M = max(abs(d["Mmaj_i"]), abs(d["Mmin_i"]))
-        V = max(abs(d["Vmaj"]), abs(d["Vmin"]))
-        out.append({"combo": lab, "P_N": -d["N"], "M_Nmm": M, "V_N": V})
+        Mz, My = abs(d["Mmaj_i"]), abs(d["Mmin_i"])
+        V = math.hypot(d["Vmaj"], d["Vmin"])
+        out.append({"combo": lab, "P_N": -d["N"], "M_Nmm": Mz, "Mz_Nmm": Mz, "My_Nmm": My, "V_N": V,
+                    "V_maj_N": abs(d["Vmaj"]), "V_min_N": abs(d["Vmin"]),
+                    "seismic": is_seismic_combo(lab, (tags_of or {}).get(lab))})
     return out
 
 
