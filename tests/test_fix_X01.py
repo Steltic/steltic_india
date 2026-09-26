@@ -27,8 +27,11 @@ CORPUS_T5II = ("In a building with re-entrant corners, three-dimensional dynamic
 
 
 def test_quotes_are_corpus_verbatim():
-    md = Path(__file__).resolve().parents[3] / "engineering_rag_india" / "documents" / "standards" / \
-        "IS_1893_Part_1_2016" / "markdown" / "IS_1893_Part_1_2016.search.md"
+    rel = Path("documents") / "standards" / "IS_1893_Part_1_2016" / "markdown" / "IS_1893_Part_1_2016.search.md"
+    here = Path(__file__).resolve()
+    roots = [Path(os.environ["INDIA_CORPUS_ROOT"])] if os.environ.get("INDIA_CORPUS_ROOT") else []
+    roots += [here.parents[i] / "engineering_rag_india" for i in (2, 3)]
+    md = next((r / rel for r in roots if (r / rel).exists()), roots[-1] / rel)
     if not md.exists():
         pytest.skip("corpus checkout not beside the worktree")
     txt = " ".join(md.read_text(encoding="utf-8").split())
