@@ -387,7 +387,9 @@ You:
      `eor_weld_exception`, `apply_is18168` (True / False override of the IS 18168 applicability rule below),
      `section12_inputs` (extra declared Section 12 / IS 18168 detail inputs passed to the checks).
    Each check is written as `{value, limit, dc, ok, clause, cite, source}`; boolean detailing gates
-   (12.4.1/12.4.2/12.4.3) carry `gate: true`.
+   (12.4.1/12.4.2/12.4.3) carry `gate: true`. Minimum-type rows (value >= limit: IS 1893 7.7.5.2 modal mass and
+   7.7.3.1 scaled base shear of the flexible run, SCWB 12.11.3.2 / IS 18168 8.2, 12.10.2.5 continuity plates) carry
+   `sense: '>='` (`'>'` when strict) and dc = limit / value; a row without `sense` is maximum-type (dc = value / limit).
 4. **IS 18168:2023** is applied as LIVE checks with the stricter-governs rule (both clauses cited).
    Applicability (ruling R8): SMRF / SCBF / EBF in Zones III-V whose occupancy is in the 1.2 list (residential,
    educational, institutional, office / business, community / lifeline); an occupancy outside it (warehouse,

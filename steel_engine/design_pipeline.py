@@ -1200,9 +1200,10 @@ def design_india(name, cfg, outdir):
         s12 = S12.section12_checks(cfg.get("system"), md, s12_cfg)
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12": _jsonable(s12),
                                   "checks": {c.get("id", "c%d" % i) + ("@" + str(c.get("member")) if c.get("member") else ""):
-                                             {"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
-                                              "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
-                                              "cite": c.get("cite"), "found": c.get("ok") is not None}
+                                             dict({"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
+                                                   "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
+                                                   "cite": c.get("cite"), "found": c.get("ok") is not None},
+                                                  **({"sense": c["sense"]} if c.get("sense") else {}))
                                              for i, c in enumerate(s12.get("checks") or [])}}
     except ImportError as ex:
         s12 = {"checks": []}
@@ -1223,6 +1224,8 @@ def design_india(name, cfg, outdir):
     def _row(name, c, **extra):
         r = {"name": name, "value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"), "ok": c.get("ok"),
              "clause": c.get("clause"), "cite": c.get("cite"), "source": c.get("source", CD.SRC)}
+        if c.get("sense"):
+            r["sense"] = c["sense"]
         if c.get("reason"):
             r["reason"] = c["reason"]
         if c.get("ok") is None:
@@ -1583,13 +1586,13 @@ def design_india(name, cfg, outdir):
             for d in ("X", "Y"):
                 mp_ = flex[d]["mass_participation"]
                 chks.append({"name": "7.7.5.2 modal mass %s (flexible run)" % d, "value": round(mp_, 4), "limit": 0.90,
-                             "dc": round(0.90 / mp_, 4) if mp_ > 0 else None, "ok": mp_ >= 0.90,
+                             "dc": round(0.90 / mp_, 4) if mp_ > 0 else None, "ok": mp_ >= 0.90, "sense": ">=",
                              "clause": "IS 1893 7.7.5.2", "cite": "sum of modal masses >= 90 % of the seismic mass",
                              "source": "india_flexible_diaphragm.rsa_flexible"})
                 vs, vb = flex[d]["VB_scaled_N"], flex[d]["VBbar_N"]
                 chks.append({"name": "7.7.3.1 scaled base shear %s (flexible run)" % d, "value": round(vs / 1e3, 2),
                              "limit": round(vb / 1e3, 2), "dc": round(vb / vs, 4) if vs > 0 else None,
-                             "ok": vs >= vb * 0.999, "clause": "IS 1893 7.7.3.1",
+                             "ok": vs >= vb * 0.999, "sense": ">=", "clause": "IS 1893 7.7.3.1",
                              "cite": "force responses x V-bar_B / VB when VB < V-bar_B",
                              "source": "india_flexible_diaphragm.rsa_flexible"})
             frec["checks"] = chks

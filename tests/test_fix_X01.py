@@ -207,6 +207,10 @@ def test_lplan_engine_run_sets_the_flag(lplan_job):
         assert b["VB_scaled_kN"] == pytest.approx(b["VBbar_kN"], rel=1e-3)
         assert b["rigid_VB_rsa_kN"] > 0 and b["mass_participation"] >= 0.9
     assert all(c["ok"] is True for c in fd["checks"])
+    # IN-MIN-SENSE: the 7.7.5.2 / 7.7.3.1 rows are minimum-type (value >= limit, dc = limit / value)
+    for c in fd["checks"]:
+        if c["name"].startswith(("7.7.5.2", "7.7.3.1")):
+            assert c["sense"] == ">=" and abs(c["dc"] - c["limit"] / c["value"]) <= 1e-3 * c["dc"] + 1e-4
     assert not [r for r in pkg["design_status"]["reasons"] if "Table 5(ii)" in r or "flexible" in r]
     assert pkg["diaphragm_7_6_4"]["flexible_run"]["levels"]["X"][0]["limit"] == 1.2
 

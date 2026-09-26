@@ -910,7 +910,7 @@ def scwb_joint(joint, model_data):
     ratio = sMpc / sMpb
     return _chk("12.11.3.2_SCWB", ratio, 1.2, clause="IS 800:2007 12.11.3.2", member=joint.get("id"),
                 cite="sum Mpc (above + below, axial-reduced per 9.3.1.2) / sum Mpb >= 1.2", dc=1.2 / ratio,
-                ok=ratio >= 1.2, level=joint.get("level"), columns=terms_c, beams=terms_b)
+                ok=ratio >= 1.2, sense=">=", level=joint.get("level"), columns=terms_c, beams=terms_b)
 
 
 def scwb_joint_is18168(joint, model_data, cfg=None):
@@ -972,7 +972,7 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
     ratio = sMpc / sMbo
     return _chk(cid, ratio, I18.SCWB_MIN, clause="IS 18168:2023 8.2", member=joint.get("id"),
                 cite=I18.CITE_8_2 + " (" + I18.PRECEDENCE + "; IS 800 12.11.3.2 gives 1.2 without Ry); " + pu_cite,
-                dc=I18.SCWB_MIN / ratio if ratio else None, ok=ratio > I18.SCWB_MIN, level=joint.get("level"),
+                dc=I18.SCWB_MIN / ratio if ratio else None, ok=ratio > I18.SCWB_MIN, sense=">", level=joint.get("level"),
                 columns=terms_c, beams=terms_b, Pu_basis=basis)
 
 
@@ -1080,7 +1080,7 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
             dc_cp = (float(tfb) / float(tcp)) if (tcp and tfb) else None
             out.append(_chk("12.10.2.5_continuity_plates", tcp, tfb, clause="IS 800:2007 12.10.2.5",
                             member=joint.get("id"), cite="continuity plates t >= beam flange t (rigid welded)",
-                            ok=None if (tcp is None or tfb is None) else tcp >= tfb, dc=dc_cp))
+                            ok=None if (tcp is None or tfb is None) else tcp >= tfb, dc=dc_cp, sense=">="))
     if conn:
         out.append(dict(C.cjp_weld_gate(conn.get("weld_type"), location="beam_column",
                                         eor_exception=(cfg or {}).get("eor_weld_exception")),
