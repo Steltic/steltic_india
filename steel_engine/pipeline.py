@@ -176,8 +176,7 @@ def design_and_report(name, cfg=None, do_report=True):
                 cp = os.path.join(root, "design", "calc_package.json")
                 pkg = json.load(open(cp))
                 st = G.design_status(cfg, pkg, job_dir=root)
-                new_st = {"status": st["status"], "n_reasons": len(st["reasons"]), "reasons": st["reasons"][:200],
-                          "authority": st["authority"]}
+                new_st = G.status_record(st)    # RR-BUG-4: ordered by class, element rows grouped, no class dropped
                 if new_st != pkg.get("design_status"):
                     pkg["design_status"] = new_st
                     json.dump(pkg, open(cp, "w"), indent=1)
@@ -185,9 +184,16 @@ def design_and_report(name, cfg=None, do_report=True):
                 out["design_status"] = new_st
                 # H44 (E9): the engine writes STATUS.engine.md; STATUS.md belongs to the package and is only
                 # (re)written when absent or itself engine-generated
+                # RR-BUG-4: the ordered / grouped summary first (every reason class), then every reason in class order
+                sm = G.summarize_reasons(st["reasons"], limit=None)
                 body = ("%s\n# %s -- design status: %s\n\nAuthority: %s\n\n" % (ENGINE_STATUS_MARK, name,
                                                                            st["status"].upper(), st["authority"])
-                        + "Open reasons (%d):\n" % len(st["reasons"]) + "".join("- %s\n" % r for r in st["reasons"]))
+                        + "Open reasons (%d; classes %s):\n" % (len(st["reasons"]), ", ".join(
+                            "%s %d" % kv for kv in sm["classes_raw"].items()))
+                        + "".join("- %s\n" % r for r in sm["reasons"]))
+                if len(sm["reasons"]) < len(st["reasons"]):
+                    body += "\nAll open reasons, ungrouped (%d):\n" % len(st["reasons"]) + "".join(
+                        "- %s\n" % r for c in G.REASON_CLASSES for r in st["reasons"] if G.reason_class(r) == c)
                 with open(os.path.join(root, "STATUS.engine.md"), "w") as f:
                     f.write(body)
                 out["status_file"] = os.path.join(root, "STATUS.engine.md")

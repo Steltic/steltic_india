@@ -1065,6 +1065,115 @@ def _screen_findings(pkg, cfg_hint=None) -> list:
 # ---------------------------------------------------------------------------
 # THE authority
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------
+# RR-BUG-4: reasons ordered by class and per-check element rows grouped, so a cap never drops a blocking class
+# ---------------------------------------------------------------------------------------------------------------
+REASON_CLASSES = ("analysis", "irregularity", "gates", "evidence", "system", "other", "elements")
+_RC_ELEM_AT = re.compile(r"^(?P<pre>.*?)@(?P<el>(?:base-|conn-)?e\d+)\b(?P<post>.*)$")
+_RC_ELEM_ENTRY = re.compile(r"^(?P<kind>member|connection|anchorage|hold_down|collector|schedule|secondary_member|"
+                            r"gantry girder|7\.11\.2/7\.11\.3) '(?P<id>[^']*)' / (?P<name>.*?): (?P<msg>.*)$")
+_RC_GROUPED = re.compile(r"^check .* on \d+ \S+ \(e\.g\. ")      # a row summarize_reasons already grouped
+_RC_RULES = (
+    ("irregularity", re.compile(r"Table 5|Table 6|irregular|re-?entrant|flexible.diaphragm|7\.6\.4|torsion", re.I)),
+    ("gates", re.compile(r"\bgate\b|capacity_design|FAILS|across.wind|dynamic_wind|ponding|composite_design", re.I)),
+    ("analysis", re.compile(r"analysis|7\.7\.1|\bRSA\b|\bESM\b|modal|drift|calc_package|collector / chord|"
+                            r"crane present|deformation.compatibility|combination|cases absent|reversal", re.I)),
+    ("evidence", re.compile(r"consistency|retrieval|provenance|grounding|EOR|evidence|found:false without|"
+                            r"US-residue|residue|example/placeholder|rag\b", re.I)),
+    ("system", re.compile(r"Table 9|Table 8|system|zone|\bR\b|\bI\b = |occupancy|banned|importance", re.I)),
+)
+
+
+def reason_class(r) -> str:
+    """RR-BUG-4: class of one design_status reason (REASON_CLASSES); per-element rows are 'elements'."""
+    s = str(r)
+    if _RC_ELEM_AT.match(s) or _RC_ELEM_ENTRY.match(s) or _RC_GROUPED.match(s):
+        return "elements"
+    for cls, rx in _RC_RULES:
+        if rx.search(s):
+            return cls
+    return "other"
+
+
+def summarize_reasons(reasons, limit=200) -> dict:
+    """RR-BUG-4: design_status reasons -> {reasons, n_reasons, n_listed, classes, truncated}.
+
+    Order: analysis / irregularity / gates / evidence / system / other first (in their original order within a
+    class), then the per-check element rows grouped as 'check X fails on N elements (e.g. e12, e40, e41, ...)'.
+    n_reasons is the full (ungrouped) count; a cap at ``limit`` never drops a class -- every class keeps at least its
+    first row, and the cut is reported in a closing line."""
+    reasons = [str(r) for r in (reasons or [])]
+    heads = {c: [] for c in REASON_CLASSES}
+    groups, order = {}, []
+    for r in reasons:
+        cls = reason_class(r)
+        if cls != "elements":
+            if r not in heads[cls]:
+                heads[cls].append(r)
+            continue
+        m = _RC_ELEM_AT.match(r)
+        if _RC_GROUPED.match(r):
+            key, el, m = ("grouped", r), None, None
+            groups.setdefault(key, {"first": r, "els": [None], "msg": None})
+            if key not in order:
+                order.append(key)
+            continue
+        if m:
+            key = ("at", m.group("pre"), m.group("post"))
+            el = m.group("el")
+        else:
+            m = _RC_ELEM_ENTRY.match(r)
+            key = ("entry", m.group("kind"), m.group("name"), re.sub(r"-?\d+(\.\d+)?(e[-+]?\d+)?", "#", m.group("msg")))
+            el = m.group("id")
+        if key not in groups:
+            groups[key] = {"first": r, "els": [], "msg": (m.group("msg") if key[0] == "entry" else None)}
+            order.append(key)
+        if el not in groups[key]["els"]:
+            groups[key]["els"].append(el)
+    elem_rows = []
+    for key in order:
+        g = groups[key]
+        n = len(g["els"])
+        if n == 1:
+            elem_rows.append(g["first"])
+            continue
+        eg = ", ".join(g["els"][:3]) + (", ..." if n > 3 else "")
+        if key[0] == "at":
+            elem_rows.append("check %s%s on %d elements (e.g. %s)" % (key[1], key[2], n, eg))
+        else:
+            elem_rows.append("check %s / %s fails on %d %ss (e.g. %s): %s" % (key[1], key[2], n, key[1], eg, g["msg"]))
+    heads["elements"] = elem_rows
+    ordered = [r for c in REASON_CLASSES for r in heads[c]]
+    classes = {c: len(heads[c]) for c in REASON_CLASSES if heads[c]}
+    n_raw = {c: 0 for c in REASON_CLASSES}
+    for r in reasons:
+        n_raw[reason_class(r)] += 1
+    out, truncated = ordered, False
+    if limit is not None and len(ordered) > limit:
+        truncated = True
+        keep = set(id(heads[c][0]) for c in REASON_CLASSES if heads[c])   # the first row of every class survives
+        room = max(limit - len(keep), 0)
+        sel = []
+        for r in ordered:
+            if id(r) in keep:
+                sel.append(r)
+            elif room > 0:
+                sel.append(r)
+                room -= 1
+        out = sel + ["... %d more reason rows not listed here (n_reasons = %d; see STATUS.engine.md)"
+                     % (len(ordered) - len(sel), len(reasons))]
+    return {"reasons": out, "n_reasons": len(reasons), "n_listed": len(out), "truncated": truncated,
+            "classes": classes, "classes_raw": {c: v for c, v in n_raw.items() if v}}
+
+
+def status_record(st, limit=200) -> dict:
+    """RR-BUG-4: the design_status record stored in the package / returned by the pipeline -- ordered and grouped
+    reasons (summarize_reasons), the full count and the reason classes."""
+    sm = summarize_reasons(st.get("reasons") or [], limit=limit)
+    return {"status": st["status"], "n_reasons": sm["n_reasons"], "reasons": sm["reasons"],
+            "reason_classes": sm["classes_raw"], "reasons_truncated": sm["truncated"], "authority": st["authority"]}
+
+
 def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
     """Single COMPLETE authority (spec 0.2).  Returns
     {status: complete|partial|example_only, complete_allowed, reasons, example_hits, ...}."""

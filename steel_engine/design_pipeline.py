@@ -1728,8 +1728,7 @@ def design_india(name, cfg, outdir):
     pkg["provenance"] = provenance_record(job_dir)
     json.dump(cfg_snapshot(cfg), open(os.path.join(outdir, "cfg_snapshot.json"), "w"), indent=1, default=str)
     st = G.design_status(cfg, pkg, job_dir=job_dir)
-    pkg["design_status"] = {"status": st["status"], "n_reasons": len(st["reasons"]), "reasons": st["reasons"][:200],
-                            "authority": st["authority"]}
+    pkg["design_status"] = G.status_record(st)      # RR-BUG-4: ordered by class, element rows grouped, no class dropped
     json.dump(_jsonable(pkg), open(os.path.join(outdir, "calc_package.json"), "w"), indent=1)
 
     # ---- member_demands.md / connection_demands.csv / design_report.md ----
