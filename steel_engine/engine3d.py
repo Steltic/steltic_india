@@ -1980,7 +1980,9 @@ def beam_deflection_si(cfg):
         pk = info.get("present", {}).get(k_, set())
         nb = _bays_adjacent(pk, i_, j_, dirn)
         other = cfg["SY"] if dirn == "X" else cfg["SX"]
-        trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (nb * other / 2.0 if nb else other)
+        # GOLD-6: a beam that bounds no present bay of a known footprint (grade tie, stepped base) carries no floor
+        # imposed load -- as in the gravity analysis (static_model: nb = 0 -> width 0) -- not a full bay
+        trib = 0.0 if (ds in ("X", "Y") and dirn == ds) else (nb * other / 2.0 if (nb or pk) else other)
         if ds in ("X", "Y"):
             tw = _SM.one_way_trib_mm(cfg, pk, i_, j_, dirn)          # H13: actual bays + secondary strips
             if tw is not None:
