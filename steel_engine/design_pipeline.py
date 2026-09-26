@@ -1503,7 +1503,8 @@ def design_india(name, cfg, outdir):
             pkg["drift_table"].append({"storey": i + 1, "dir": d, "drift": round(x, 6), "limit": lim,
                                        "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
                                        "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
-    pkg["irregularity"] = run.get("irregularity") or {"error": "irregularity screens not run"}
+    pkg["unit_displacements"] = _unit_displacements(cfg, run)       # X04: per-level input of the multi-unit 7.11.3 driver
+    pkg["irregularity"] =run.get("irregularity") or {"error": "irregularity screens not run"}
     # IS 1893 7.6.4 diaphragm classification (rigid: 7.8.2 torsion in the model; flexible: tributary distribution)
     try:
         import india_diaphragm as DIA
@@ -2043,6 +2044,31 @@ def _separation_D1(u, disp_max):
             return dm[lev - 1], "displacement at the matching level %d (same_floor_levels)" % lev, lev
         return max(dm), "max over levels: declare adjacent_units[].level (or n_levels) for the matching level", None
     return max(dm), "max over levels (R x (D1 + D2))", None
+
+
+def _unit_displacements(cfg, run):
+    """X04 (HR-D-13): per direction, the 7.11.1 storey displacement of every level (the larger of the two extreme plan
+    edges, lateral part only, of the governing drift run: design lateral force, gamma 1.0, 7.8.2 eccentricity) with the
+    level elevations above the base and the R of that direction -- what multi_unit.design_units reads to compute the
+    IS 1893 7.11.3 separation between seismically separated units of one job."""
+    out = {}
+    try:
+        prm = E.india_seismic_params(cfg)
+    except Exception:
+        prm = {}
+    for d, rec in ((run or {}).get("drift") or {}).items():
+        hs = [float(h) for h in (rec.get("heights") or cfg.get("heights") or [])]
+        z, acc = [], 0.0
+        for h in hs:
+            acc += h
+            z.append(acc)
+        R = prm.get("R_" + d.lower(), prm.get("R"))
+        out[d] = {"disp_max_mm": [float(x) for x in (rec.get("disp_max") or [])], "z_mm": z,
+                  "R": float(R) if R is not None else None,
+                  "basis": "IS 1893 7.11.1: larger extreme-edge lateral displacement per level, design lateral force "
+                           "(gamma 1.0) with the 7.8.2 eccentricity, governing drift run (%s %s)"
+                           % (rec.get("variant") or "no ecc.", rec.get("sign") or "")}
+    return out
 
 
 def _separation_7_11_3(cfg, run, R, out):

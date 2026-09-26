@@ -220,6 +220,17 @@ def design_and_report(name, cfg=None, do_report=True):
     return out
 
 
+def design_units(name, cfg_units, joints=None, do_report=True):
+    """X04 (HR-D-13): several seismically separated units in one job.  Each unit runs as its own sub-job
+    <jobs root>/<name>/units/<unit>/ (design_and_report); the IS 1893 7.11.3 separation of every declared joint is
+    computed from the two units' 7.11.1 displacements at the matching levels; one combined STATUS (worst unit status +
+    joint checks), units_index.html and units_summary.json are written in <jobs root>/<name>/.
+    joints = [{"units": [u1, u2], "direction": "X"|"Y", "gap_mm": ..., "same_floor_levels": None|True|False,
+    "levels": {u: k}, "base_mm": {u: mm}, "level_tol_mm": 50}] -- see multi_unit.py."""
+    import multi_unit as MU
+    return MU.design_units(name, cfg_units, joints, do_report=do_report)
+
+
 if __name__ == "__main__":
     for nm in (sys.argv[1:] or ["B02"]):
         print(design_and_report(nm))
