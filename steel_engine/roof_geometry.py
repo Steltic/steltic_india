@@ -44,7 +44,7 @@ import math
 
 APEX_BASE = 98000          # apex_tag(k, p, line) = k*100000 + 98000 + p*100 + line  (p 0..9, line 0..99)
 AUX_BASE = 99000           # aux diaphragm nodes k*100000 + 99000 + n (n 0..998; mtag = k*100000 + 99999)
-AUX_ELE_BASE = 8_000_000   # zeroLength spring tags 8_000_000 + k*1000 + n
+AUX_ELE_BASE = 7_000_000   # zeroLength spring tags 7_000_000 + k*1000 + n (8M = X01 deck, 9M = sub-elements)
 AUX_MAT_BASE = 990_000     # uniaxialMaterial Elastic tags 990_000 + k
 AUX_K = 1.0e9              # N/mm: spring stiffness across the span (rigid compared with any frame, F/K ~ 1e-4 mm)
 TOL = 2.0                  # mm
