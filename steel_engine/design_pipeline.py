@@ -820,7 +820,8 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
                 dcol = max((S.props(reg[tc][1])["d"] for tc in reg if reg[tc][0] == "col" and reg[tc][3] in (n1, n2)),
                            default=0.0)
                 rec["L_clear_mm"] = length[t] - dcol
-                bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"]}
+                bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"],
+                         "etag": t, "sec": sec}                  # O2: self_weight_in_nodal_loads by tag / section
                 # H13 (HR-C-03/HR-D-08): the beam's grid position + level footprint give the actual tributary
                 # (edge girder: half bay; beam parallel to the deck span: its secondary strip when declared)
                 n_lo = min(n1, n2)

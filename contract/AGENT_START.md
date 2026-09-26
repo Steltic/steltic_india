@@ -156,7 +156,9 @@ Before `pipeline.design_and_report`:
   My_Nmm, level}] (full dead load in W unless the node is in `nodal_masses`), `extra_mass_floors`, and the crane
   bridge + crab at 100 % at the level nearest the rail (`crane.include_in_W: False` to exclude; the lifted load is
   excluded — EOR to confirm). `Jm_by_level` {k: mass moment of inertia, t.mm^2} overrides the floor rotational
-  inertia (else the builder's `info['Jm']`, else the true plan extent).
+  inertia (else the builder's `info['Jm']`, else the true plan extent). Elements listed in
+  `self_weight_in_nodal_loads` (owner ruling O2, see Cranes) carry no self-weight in W, the modal mass or any
+  gravity state — their weight is the declared `nodal_dead_loads`.
 * **Torsion and modes (ruling R9):** the torsional mode is the longest-period mode whose rotational participation
   exceeds both its X and Y mass participation; Tx / Ty are the longest-period X- / Y-dominant modes (distinct).
   Table 5(i) uses the lateral edge displacements under +F and -F (`torsion_ratio` = delta_max / delta_min overrides
@@ -219,7 +221,9 @@ Before `pipeline.design_and_report`:
   them with the 12.2.3 rows).
 * Cranes: `cfg['crane']` with capacity, crab and bridge weights, span, hook approach, wheel base, gantry
   span, class, type, `bracket_nodes`, `span_axis`, `bracket_eccentricity_mm`, `operation`
-  ('pendant' | 'cab') and `rail_height_mm`.
+  ('pendant' | 'cab') and `rail_height_mm`. Gantry weight per owner ruling O2 (MODEL FEATURES, Cranes): girder +
+  rail + cap weight as `nodal_dead_loads` at the brackets with its eccentricity moment, never also as element
+  self-weight.
 * Secondary members (joists, purlins, girts): `cfg['secondary_members']` with span, spacing and uplift.
 
 ## Model — write `cfg["custom_build"]` (reference: `example_build.py`)
@@ -266,6 +270,19 @@ Before `pipeline.design_and_report`:
 * **Cranes:** `crane` (or `cranes`) as under DESIGN BASIS plus `include_in_W` (default True) and `sway_model`
   'building' | 'single_frame' (default single_frame — surge on the loaded bracket frame alone — unless the roof is
   a rigid diaphragm AND `roof_bracing` is declared); `roof_bracing` (truthy when roof plan bracing exists).
+* **Gantry weight — owner ruling O2 (2026-09-26):** declare the gantry girder + rail + cap weight in
+  `nodal_dead_loads` at the bracket nodes with its eccentricity (Fz_N, My_Nmm / Mx_Nmm = e x W), NOT as element
+  self-weight. Gantry girders modelled for strut action (pinned longitudinal struts at rail level, off-diaphragm
+  node tags k > NF, or any beam of `crane.gantry_section`) go under
+  `self_weight_in_nodal_loads` = {'tags': [builder element tags] | 'sections': [section names], 'cite', 'note'};
+  a listed element (by tag, or every element of a listed section) gets no self-weight anywhere — gravity states,
+  W, modal mass, one-way beam gravity shears (the gantry module still designs the girder for its own weight).
+  Preflight: ERROR when an off-diaphragm beam or a gantry-section beam with `nodal_dead_loads` at an end node
+  still carries self-weight (weight counted twice); ERROR when a listed element has no nodal dead load at either
+  end (weight lost) or a listed section also matches columns / braces (e.g. IN_Ex14, where the gantry and the
+  portal columns are one section: list the gantry element tags); WARN when gantry-section beams carry
+  their own self-weight without nodal loads (accepted: the self-weight is then the gantry weight, but the ruling
+  prefers nodal loads) or a listed tag / section matches no element.
 * **Erection sequence (X07, optional):** `braces_after_dead_load` = True or selectors (element tag / 'e<tag>',
   section, 'vertical' | 'plan', 'X' | 'Y'): the dead load acts on the frame without those braces (IS 800 3.3
   temporary bracing) and the braces carry the rest; `superimposed_dead_kNm2` (number or {floor, roof}) is placed

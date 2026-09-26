@@ -192,7 +192,8 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
                 # coordinates so it carries its share of the floor load like any other beam (WP6)
                 i, j, k = grid_ijk_from_coords(cfg, min(x1, x2), min(y1, y2), z1, dirn)
             bd = {"i": i, "j": j, "k": k, "dir": dirn, "L": L, "A": n1, "B": n2,
-                  "nodes": chain, "segs": segs, "sec": sec, "relz": relz, "rely": rely}
+                  "nodes": chain, "segs": segs, "sec": sec, "relz": relz, "rely": rely,
+                  "etag": a[1]}                            # O2: builder element tag (self_weight_in_nodal_loads)
             if _planes:
                 bd["vecxz"] = _vecxz.get(ttag, (0.0, 0.0, 1.0))
                 if _rp is not None:                        # X02: roof-plane member -- level / direction from the plane
@@ -778,7 +779,7 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
         if not (1 <= k <= NF):
             # RR-BUG-2: off-diaphragm beam (crane-bracket gantry girder, tag level > NF): no floor, roof or cladding
             # load; its self-weight is applied like a column's (it is counted in W by z, H16)
-            if self_weight and b.get("rp") is None:
+            if self_weight and b.get("rp") is None and not eng.self_weight_excluded(cfg, b.get("etag"), b.get("sec")):
                 A_sw = b.get("_A")
                 if A_sw is None:
                     try:
@@ -793,7 +794,9 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
             continue
         if b.get("rp") is not None:
             # X02: roof-plane member -- plan-area load in global -Z (see _plane_member_gravity)
-            lev[k] += _plane_member_gravity(cfg, b, fD, fLr, fS, fEv, fdead, self_weight, (sp_axis, sp_side, sp_mid),
+            lev[k] += _plane_member_gravity(cfg, b, fD, fLr, fS, fEv, fdead,
+                                            self_weight and not eng.self_weight_excluded(cfg, b.get("etag"), b.get("sec")),
+                                            (sp_axis, sp_side, sp_mid),
                                             model["present"].get(k, set()))
             continue
         D, Lf, Lr, S = floor_pressures(cfg, k)
@@ -820,7 +823,8 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
             except Exception:
                 A_sw = 0.0
             b["_A"] = A_sw
-        wsw = fdead * A_sw * STEEL_UNIT_WEIGHT_N_PER_MM3 if self_weight else 0.0
+        wsw = fdead * A_sw * STEEL_UNIT_WEIGHT_N_PER_MM3 if (
+            self_weight and not eng.self_weight_excluded(cfg, b.get("etag"), b.get("sec"))) else 0.0      # O2
         for s_, tag in enumerate(segs):
             s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
             if ds is None:
@@ -860,6 +864,8 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
     for c in model["cols"]:
         if not self_weight:
             break
+        if eng.self_weight_excluded(cfg, c["tag"], c.get("sec")):           # O2: weight is a declared nodal load
+            continue
         try:
             A = c.get("_A") or eng.Ipack(c["sec"])[0]
         except Exception:
@@ -877,6 +883,8 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
     for br in model["braces"]:
         if not self_weight:
             break
+        if eng.self_weight_excluded(cfg, br["tag"], br.get("sec")):         # O2
+            continue
         try:
             A = br.get("_A") or eng.Ipack(br["sec"])[0]
         except Exception:
@@ -1358,7 +1366,8 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
     if not on_diaphragm_level(cfg, k):
         # RR-BUG-2: a beam whose node-tag level is not a floor / roof level 1..NF (crane-bracket gantry girder, tag
         # level > NF) carries no floor, roof or cladding load -- self-weight only, as apply_gravity_state skips it
-        w = (fD + fEv) * (b.get("_A") or 0.0) * STEEL_UNIT_WEIGHT_N_PER_MM3
+        w = 0.0 if eng.self_weight_excluded(cfg, b.get("etag"), b.get("sec")) else \
+            (fD + fEv) * (b.get("_A") or 0.0) * STEEL_UNIT_WEIGHT_N_PER_MM3              # O2: listed -> none
         return w * L * L / 8.0, w * L / 2.0
     D, Lf, Lr, S = floor_pressures(cfg, k)
     p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
@@ -1380,7 +1389,7 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
         NF = len(cfg["heights"])                     # perimeter beam: cladding line load, as apply_gravity_state
         th = cfg["heights"][k - 1] / 2.0 if k == NF else cfg["heights"][k - 1]
         w += (fD + fEv) * float(cfg["clad"]) * th / 1000.0
-    A = b.get("_A") or 0.0
+    A = 0.0 if eng.self_weight_excluded(cfg, b.get("etag"), b.get("sec")) else (b.get("_A") or 0.0)     # O2
     w += (fD + fEv) * A * STEEL_UNIT_WEIGHT_N_PER_MM3
     return w * L * L / 8.0, w * L / 2.0
 
@@ -1805,6 +1814,9 @@ def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rs
                         # X07 erection sequence
                         repr(cfg.get("braces_after_dead_load")), cfg.get("braces_after_superimposed_dead"),
                         repr(cfg.get("superimposed_dead_kNm2")),
+                        # O2: nodal dead loads and the elements whose weight they carry
+                        repr(cfg.get("nodal_dead_loads")), repr(cfg.get("self_weight_in_nodal_loads")),
+                        cfg.get("self_weight", True),
                         floor_system, nseg, [(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
                                               sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
                                               .__repr__()) for c in cases],

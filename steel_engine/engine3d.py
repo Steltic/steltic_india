@@ -378,7 +378,7 @@ def build(cfg,transf="Linear"):
         # builder read cfg['_sw_by_level'], so rebuild once when it was missing / changed.
         sw = self_weight_by_level(cfg, info)
         old = cfg.get("_sw_by_level")
-        if sw and (not old or set(old) != set(sw)
+        if (sw or old) and (not old or set(old) != set(sw)
                    or any(abs(float(old.get(k, 0.0)) - v) > 1e-6 * max(v, 1.0) for k, v in sw.items())):
             cfg["_sw_by_level"] = sw
             return build(cfg, transf)
@@ -671,15 +671,130 @@ def nearest_level(cfg, z):
     return min(range(len(zl)), key=lambda k: (abs(float(z) - zl[k]), -k))
 
 
+SW_NODAL_KEY = "self_weight_in_nodal_loads"
+SW_NODAL_RULING = ("owner ruling O2 (2026-09-26): gantry / crane-girder (girder + rail + cap) weight is declared as "
+                   "cfg['nodal_dead_loads'] at the brackets (with its eccentricity moment), never also as element "
+                   "self-weight; gantry elements modelled for strut action are listed under "
+                   "cfg['self_weight_in_nodal_loads'] and get no self-weight in the gravity state, W or the modal mass")
+
+
+def sw_in_nodal_loads(cfg):
+    """O2: (element tags, section names) whose weight the job declares in cfg['nodal_dead_loads'] --
+    cfg['self_weight_in_nodal_loads'] = {'tags': [builder element tags], 'sections': [section names], 'cite', 'note'}.
+    A listed element (by tag, or every element of a listed section) gets NO self-weight anywhere: gravity states
+    (static_model), W and the modal mass (self_weight_by_level), one-way beam gravity shears.  Malformed -> ValueError."""
+    d = (cfg or {}).get("self_weight_in_nodal_loads") if isinstance(cfg, dict) else None
+    if not d:
+        return frozenset(), frozenset()
+    if not isinstance(d, dict):
+        raise ValueError("cfg['self_weight_in_nodal_loads'] must be {'tags': [...], 'sections': [...], 'cite', 'note'}")
+    tags, secs = d.get("tags") or [], d.get("sections") or []
+    if isinstance(tags, (int, str)) or isinstance(secs, str):
+        raise ValueError("cfg['self_weight_in_nodal_loads']: 'tags' and 'sections' are lists")
+    return frozenset(int(t) for t in tags), frozenset(str(x) for x in secs)
+
+
+def self_weight_excluded(cfg, tag=None, sec=None):
+    """O2: True when element `tag` (builder tag) / of section `sec` is listed in cfg['self_weight_in_nodal_loads']."""
+    tags, secs = sw_in_nodal_loads(cfg)
+    if not (tags or secs):
+        return False
+    try:
+        if tag is not None and int(tag) in tags:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return sec is not None and str(sec) in secs
+
+
+def self_weight_nodal_findings(cfg, info=None):
+    """O2 preflight (owner ruling O2): [(severity, message)].
+    * ERROR: an off-diaphragm beam (node-tag level > NF, RR-BUG-2) or an element of a declared crane gantry_section
+      carries self-weight while its end node carries cfg['nodal_dead_loads'] -> the gantry weight is double-counted
+      (element self-weight in the gravity state, W and modal mass + the nodal load): list it under
+      cfg['self_weight_in_nodal_loads'].
+    * ERROR: an element listed under the key has no nodal_dead_loads at either end node -> its weight would be lost;
+      a listed section that also matches columns / braces (e.g. gantry and portal columns of one section, IN_Ex14)
+      -> list the gantry element tags instead.
+    * WARN: gantry-section elements modelled with neither nodal loads nor the key (self-weight is then the gantry
+      weight; accepted) -- the ruling prefers nodal loads; listed tags / sections that match no element."""
+    out = []
+    key = cfg.get("self_weight_in_nodal_loads")
+    crs = cfg.get("cranes") if isinstance(cfg.get("cranes"), list) else (
+        [cfg["crane"]] if isinstance(cfg.get("crane"), dict) else [])
+    gsecs = {str(c["gantry_section"]) for c in crs if isinstance(c, dict) and c.get("gantry_section")}
+    if not (key or cfg.get("nodal_dead_loads") or gsecs):
+        return out
+    try:
+        tags, secs = sw_in_nodal_loads(cfg)
+    except (TypeError, ValueError) as ex:
+        return [("ERROR", "O2: %s" % ex)]
+    if info is None:
+        info = build(cfg, "Linear")
+    NF = len(cfg["heights"])
+    loaded = set()
+    for e in (cfg.get("nodal_dead_loads") or []):
+        try:
+            if float(e.get("Fz_N") or 0.0) < 0.0:
+                loaded.add(int(e["node"]))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    dbl, lost, gnone, shared, seen_t, seen_s = [], [], [], [], set(), set()
+    for (t, kind, sec, n1, n2) in (info.get("ele") or []):
+        ex_ = self_weight_excluded(cfg, t, sec)
+        if ex_:
+            seen_t.add(int(t)); seen_s.add(str(sec))
+        at = sorted(n for n in (n1, n2) if int(n) in loaded)
+        off = kind == "beam" and (int(n1) // 100000 > NF or int(n2) // 100000 > NF)
+        gan = kind == "beam" and str(sec) in gsecs
+        if ex_:
+            if kind != "beam" and int(t) not in tags:
+                shared.append((t, sec))
+            elif not at:
+                lost.append(t)
+        elif (off or gan) and at:
+            dbl.append((t, sec, at))
+        elif gan:
+            gnone.append(t)
+    if dbl:
+        out.append(("ERROR", "O2: element(s) %s (%s) are %s with cfg['nodal_dead_loads'] at their end node(s) %s but "
+                             "still carry self-weight -- the gantry weight is double-counted (element self-weight in "
+                             "the gravity state, W and the modal mass + the nodal load).  List them under "
+                             "cfg['self_weight_in_nodal_loads'] = {'tags': [...] | 'sections': [...], 'cite', 'note'} "
+                             "(%s)" % ([d[0] for d in dbl][:60], ", ".join(sorted({str(d[1]) for d in dbl})),
+                                       "off-diaphragm beams / crane gantry members",
+                                       sorted({n for d in dbl for n in d[2]})[:24], SW_NODAL_RULING)))
+    if lost:
+        out.append(("ERROR", "O2: element(s) %s are listed in cfg['self_weight_in_nodal_loads'] but no "
+                             "cfg['nodal_dead_loads'] entry sits at either end node -- their weight would be lost; "
+                             "declare it as nodal dead loads or remove them from the key" % lost[:12]))
+    if shared:
+        out.append(("ERROR", "O2: cfg['self_weight_in_nodal_loads'] 'sections' %s also match non-beam element(s) %s "
+                             "(columns / braces) -- their self-weight would be dropped; list the gantry element 'tags' "
+                             "instead" % (sorted({str(x[1]) for x in shared}), [x[0] for x in shared][:12])))
+    if gnone:
+        out.append(("WARN", "O2: crane gantry section element(s) %s are modelled with their own self-weight as the "
+                            "gantry weight (accepted); %s" % (gnone[:12], SW_NODAL_RULING)))
+    miss = sorted(set(tags) - seen_t) + sorted(set(secs) - seen_s)
+    if miss:
+        out.append(("WARN", "O2: cfg['self_weight_in_nodal_loads'] lists %s that match no model element (no effect)"
+                            % miss[:12]))
+    return out
+
+
 def self_weight_by_level(cfg, info=None):
     """Member self-weight apportioned to the floor levels (N): beams at their level, columns and
     braces half to each end level (IS 1893 7.4.1).  Needs the live model (called right after build).
     H16: each piece is binned to the diaphragm level NEAREST its elevation z (a crane-bracket node or a
-    beam at an intermediate height no longer lands on a level the seismic weight never reads)."""
+    beam at an intermediate height no longer lands on a level the seismic weight never reads).
+    O2: elements listed in cfg['self_weight_in_nodal_loads'] are skipped (their weight is a nodal dead load)."""
     out = {}
+    sw_in_nodal_loads(cfg)                           # O2: a malformed key raises here, never a silent W = 0
     try:
         eles = (info or {}).get("ele") or []
         for (t, kind, sec, n1, n2) in eles:
+            if self_weight_excluded(cfg, t, sec):
+                continue
             try:
                 A = Ipack(sec)[0]
                 c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)

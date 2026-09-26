@@ -303,6 +303,15 @@ def india_checks(cfg):
         pass
     for sev, msg in _IL.crane_findings(cfg):
         say(sev, msg)
+    # O2 (owner ruling 2026-09-26): gantry weight as nodal dead loads, never also as element self-weight
+    if cfg.get("self_weight_in_nodal_loads") or cfg.get("nodal_dead_loads") or cfg.get("crane") or cfg.get("cranes"):
+        import engine3d as E
+        try:
+            _o2 = E.self_weight_nodal_findings(cfg)
+        except Exception as ex:
+            _o2 = [("ERROR", "O2 gantry self-weight / nodal-load check failed (%s: %s)" % (type(ex).__name__, ex))]
+        for sev, msg in _o2:
+            say(sev, msg)
     return out
 
 
