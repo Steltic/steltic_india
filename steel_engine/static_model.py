@@ -1469,6 +1469,151 @@ def column_imposed_load_reduction_factors(cfg):
     return out
 
 
+# =====================================================================================================
+# X07 (HR-C-19): optional erection sequence -- braces connected after the dead load.
+# cfg['braces_after_dead_load'] = True (every brace) or a list of selectors (brace element tag / 'e<tag>', section
+# name, 'vertical' | 'plan' (braces in a storey | in a floor plane), 'X' | 'Y' (plan direction)).  The pre-brace
+# dead-load state is solved on the model with those braces removed (when that frame is unstable on its own, the storeys
+# are held laterally at the diaphragm masters = the temporary erection bracing of IS 800 3.3); the braces then carry the rest of the gravity (imposed, snow, crane,
+# vertical EQ, superimposed dead) and every lateral load.  Member forces of every combination:
+#     R = R_full(all gravity + lateral) - R_full(fD x pre-brace dead) + R_no-brace(fD x pre-brace dead)
+# so the lateral increments are exactly those of the default analysis.  Pre-brace dead = member self-weight + the
+# floor / roof dead pressures less cfg['superimposed_dead_kNm2'] (number or {'floor', 'roof'}); the superimposed
+# dead, the cladding line load (cfg['clad']), cfg['nodal_dead_loads'] and cfg['extra_mass_floors'] are placed after
+# the braces unless cfg['braces_after_superimposed_dead'] is True.  Default: False (braces carry all gravity).
+# =====================================================================================================
+ERECTION_CITE = ("EOR erection sequence (HR-C-19): braces connected after the dead load -- IS 800:2007 1.7.1.1 "
+                 "(special precautions in erection from the design consideration shall be indicated in the drawing) "
+                 "and 3.3 (temporary bracing to take care of all stresses developed during erection)")
+
+
+def erection_brace_selector(cfg):
+    """None (default behaviour) or a predicate brace-dict -> bool for cfg['braces_after_dead_load']."""
+    v = cfg.get("braces_after_dead_load")
+    if v is None or v is False:
+        return None
+    if v is True:
+        return lambda br: True
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, (list, tuple, set)):
+        raise ValueError("cfg['braces_after_dead_load'] must be True/False or a list of brace selectors "
+                         "(tag, 'e<tag>', section, 'vertical', 'plan', 'X', 'Y'); got %r" % (v,))
+    sel = [str(s).strip() for s in v]
+
+    def _pred(br):
+        c1, c2 = ops.nodeCoord(br["n1"]), ops.nodeCoord(br["n2"])
+        vert = abs(c2[2] - c1[2]) > 1.0
+        dirn = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
+        for s in sel:
+            su = s.upper()
+            if s in (str(br["tag"]), "e%s" % br["tag"]) or (br.get("sec") is not None and s == str(br["sec"])):
+                return True
+            if (su == "VERTICAL" and vert) or (su == "PLAN" and not vert) or su == dirn:
+                return True
+        return False
+    return _pred
+
+
+def erection_pre_brace_cfg(cfg):
+    """(cfg for the pre-brace dead state, description).  Only the fD terms are applied with it."""
+    after_sdl = bool(cfg.get("braces_after_superimposed_dead"))
+    sdl = cfg.get("superimposed_dead_kNm2") or 0.0
+    if isinstance(sdl, dict):
+        s_f, s_r = float(sdl.get("floor") or 0.0), float(sdl.get("roof") or 0.0)
+    else:
+        s_f = s_r = float(sdl)
+    if after_sdl:
+        return cfg, ("all dead load (member self-weight, floor / roof dead incl. superimposed dead, cladding, "
+                     "nodal dead loads) before the braces (cfg['braces_after_superimposed_dead'])")
+    NF = len(cfg["heights"])
+    roofs = roof_level_set(cfg, NF)
+    c2 = dict(cfg, clad=0.0, nodal_dead_loads=[], extra_mass_floors={})
+    for key, s in (("D_floor", s_f), ("D_roof", s_r)):
+        if cfg.get(key) is not None:
+            if s > float(cfg[key]) + 1e-9:
+                raise ValueError("superimposed_dead_kNm2 (%s) exceeds %s = %s" % (s, key, cfg[key]))
+            c2[key] = float(cfg[key]) - s
+    if cfg.get("D_by_level"):
+        dbl = {}
+        for k, v in dict(cfg["D_by_level"]).items():
+            s = s_r if (int(k) >= NF or int(k) in roofs) else s_f
+            if s > float(v) + 1e-9:
+                raise ValueError("superimposed_dead_kNm2 (%s) exceeds D_by_level[%s] = %s" % (s, k, v))
+            dbl[k] = float(v) - s
+        c2["D_by_level"] = dbl
+    return c2, ("member self-weight + floor / roof dead pressure less the superimposed dead (%.3g floor / %.3g roof "
+                "kN/m2) before the braces; superimposed dead, cladding, nodal dead loads and extra floor mass after "
+                "the braces" % (s_f, s_r))
+
+
+def erection_corrections(cfg, fD, nseg, pred, cfg_pre):
+    """{element tag: R_no-brace - R_full} under fD x pre-brace dead (same element tags in both models), and a record."""
+    sw = cfg.get("self_weight", True)
+    model = build_static(cfg, "PDelta", nseg)
+    ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+    apply_gravity_state(cfg_pre, model, fD, 0.0, 0.0, 0.0, 0.0, 0.0, self_weight=sw)
+    if _solve_newton() != 0:
+        raise RuntimeError("erection: pre-brace dead state (full model, fD %s) did not converge" % fD)
+    Rf = _responses(model)
+    ops.wipe()
+
+    def _no_brace(restrain):
+        model = build_static(cfg, "PDelta", nseg)
+        off = [br for br in model["braces"] if pred(br)]
+        off_tags = {br["tag"] for br in off}
+        for t in off_tags:
+            ops.remove("element", int(t))
+        live = {n for t in ops.getEleTags() for n in ops.eleNodes(t)}
+        for br in off:                                  # work points left without any element (X-brace crossings)
+            for nd in (br["n1"], br["n2"]):
+                if nd not in live:
+                    try:
+                        ops.fix(int(nd), 1, 1, 1, 1, 1, 1)
+                    except Exception:
+                        pass
+        masters = [mtag(k) for k in range(1, model["NF"] + 1) if mtag(k) in set(ops.getNodeTags())]
+        if restrain:                                    # temporary erection bracing: storeys held laterally
+            for m in masters:
+                ops.fix(int(m), 1, 1, 0, 0, 0, 1)
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        apply_gravity_state(cfg_pre, model, fD, 0.0, 0.0, 0.0, 0.0, 0.0, self_weight=sw)
+        ok = _solve_newton() == 0
+        return model, off_tags, masters, ok
+
+    model, off_tags, masters, ok = _no_brace(False)
+    rec = {"fD": fD, "braces_released": sorted(int(t) for t in off_tags)}
+    if not off_tags:
+        ops.wipe()
+        rec["note"] = "no brace matched cfg['braces_after_dead_load']: default analysis"
+        return None, rec
+    restrained = False
+    if not ok:                                          # frame without the braces is not stable on its own
+        ops.wipe()
+        model, off_tags, masters, ok = _no_brace(True)
+        restrained = True
+        if not ok:
+            raise RuntimeError("erection: pre-brace dead state without the braces (fD %s) did not converge even "
+                               "with the storeys held laterally" % fD)
+    m2 = dict(model, braces=[br for br in model["braces"] if br["tag"] not in off_tags])
+    Rn = _responses(m2)
+    for t in off_tags:
+        Rn[t] = _np.zeros(1)
+    rec["temporary_lateral_restraint"] = restrained
+    if restrained:
+        ops.reactions()
+        rec["temporary_restraint_max_N"] = round(max([max(abs(ops.nodeReaction(int(m), 1)),
+                                                         abs(ops.nodeReaction(int(m), 2))) for m in masters] or [0.0]), 1)
+        rec["note"] = ("the frame without the released braces is unstable under the dead load: storeys held laterally "
+                       "at the diaphragm masters (temporary erection bracing, IS 800 3.3)")
+    else:
+        rec["max_storey_sway_mm"] = round(max([max(abs(ops.nodeDisp(int(m), 1)), abs(ops.nodeDisp(int(m), 2)))
+                                               for m in masters] or [0.0]), 3)
+    ops.wipe()
+    corr = {t: Rn[t] - Rf[t] for t in Rf}
+    return corr, rec
+
+
 def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_responses=False, service=False):
     """Run every strength case (service=False) or every serviceability case (service=True; used for the IS 800
     10.4.3 service-load slip check of HSFG connections).  Returns ({label: {fset: rec}}, kinds, info).
@@ -1484,8 +1629,24 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
         groups.setdefault(_grav_state_key(c), []).append(c)
     kinds = None
     llr = column_imposed_load_reduction_factors(cfg)          # IS 875-2 3.2.1 (opt-in), {column tag: r}
+    ere_pred = erection_brace_selector(cfg)                    # X07 (opt-in): braces after the dead load
+    ere_corr = {}
+    if ere_pred is not None:
+        ere_cfg, ere_desc = erection_pre_brace_cfg(cfg)
+        info["erection"] = {"braces_after_dead_load": cfg.get("braces_after_dead_load"),
+                            "braces_after_superimposed_dead": bool(cfg.get("braces_after_superimposed_dead")),
+                            "pre_brace_loads": ere_desc, "states": [], "cite": ERECTION_CITE,
+                            "method": "R = R_full(all) - R_full(fD x pre-brace dead) + R_no-brace(fD x pre-brace "
+                                      "dead); lateral increments unchanged; storeys held laterally in the pre-brace "
+                                      "state only when the frame without the braces is unstable", "verify": True}
     for gk, cs in groups.items():
         fD, fL, fLr, fS, fC, fEv, cpat, spat = gk
+        corr = None
+        if ere_pred is not None and fD:
+            if fD not in ere_corr:
+                ere_corr[fD], _rec = erection_corrections(cfg, fD, nseg, ere_pred, ere_cfg)
+                info["erection"]["states"].append(_rec)
+            corr = ere_corr[fD]
         model = build_static(cfg, "PDelta", nseg)
         if kinds is None:
             kinds = _member_kinds(model)
@@ -1512,6 +1673,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
         info["gravity_states"] += 1
         info["levels"][gk] = lev
         RG = _responses(model)
+        RGe = RG if corr is None else {t: RG[t] + corr[t] for t in RG}     # X07: DL share without the braces
         _to_linear_increments()
         ptag = 1000
         for c in cs:
@@ -1534,9 +1696,9 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                 R1 = _responses(model)
                 ops.remove("loadPattern", ptag)
                 ops.analyze(1)                            # linear step back to the gravity state
-                RC = {t: RG[t] + (R1[t] - RG[t]) for t in RG}
+                RC = {t: RGe[t] + (R1[t] - RG[t]) for t in RG}
             else:
-                RC = RG
+                RC = RGe
             rs = m.get("rsa") or {}
             if rs:
                 if not rsa:
@@ -1550,8 +1712,8 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                         if t in E_:
                             RC[t] = RC[t] + float(f) * E_[t]
             recs = member_records(model, RC, cfg, gk, floor_system)
-            if RC is not RG:
-                lat = _lateral_axial_shear(model, {t: RC[t] - RG[t] for t in RG})
+            if RC is not RGe:
+                lat = _lateral_axial_shear(model, {t: RC[t] - RGe[t] for t in RG})
                 recs = {fs: tuple(r) + lat.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
             _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
                         or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
@@ -1607,6 +1769,9 @@ def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rs
                         repr(cfg.get("roof_planes")), repr(cfg.get("roof_regions")),        # X02
                         cfg.get("snow_partial"), cfg.get("nodal_imposed_loads"), cfg.get("xcoords"),
                         cfg.get("ycoords"),
+                        # X07 erection sequence
+                        repr(cfg.get("braces_after_dead_load")), cfg.get("braces_after_superimposed_dead"),
+                        repr(cfg.get("superimposed_dead_kNm2")),
                         floor_system, nseg, [(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
                                               sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
                                               .__repr__()) for c in cases],

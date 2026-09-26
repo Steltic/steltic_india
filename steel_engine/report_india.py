@@ -250,6 +250,20 @@ def _gravity_table(cfg):
     return _t(["Load", "Value", "Unit"], rows)
 
 
+def _erection_text(pkg):
+    """X07: the braces-after-dead-load assumption as recorded in the package (default: braces carry all gravity)."""
+    er = (pkg or {}).get("erection_sequence")
+    if not er:
+        return "braces present for all gravity loads (default; conservative for the braces)"
+    rel = sorted({t for s in er.get("states") or [] for t in (s.get("braces_released") or [])})
+    held = any(s.get("temporary_lateral_restraint") for s in er.get("states") or [])
+    return ("braces connected after the dead load (cfg braces_after_dead_load = %s; %d brace elements): %s. %s%s "
+            "Basis: %s -- to be shown on the drawings and confirmed by the EOR (verify)."
+            % (er.get("braces_after_dead_load"), len(rel), er.get("pre_brace_loads"), er.get("method"),
+               " The frame needed temporary lateral restraint in the pre-brace state." if held else "",
+               er.get("cite")))
+
+
 def _seismic_table(cfg, pkg, run):
     plan = cfg.get("load_plan") or {}
     ss = plan.get("seismic_summary") or {}
@@ -323,6 +337,21 @@ def _wind_table(cfg):
     keys = ["Vb_mps", "Vb_source", "terrain_category", "k1", "k2", "k3", "k4", "Kd", "Ka", "Ka_basis", "Kc",
             "Vz_mps", "pz_kNm2", "pd_kNm2", "Cpe_windward", "Cpe_leeward", "Cpi", "cyclone_belt", "VB_x_kN", "VB_y_kN"]
     rows = [[k, _num(ws.get(k))] for k in keys if ws.get(k) is not None]
+    if ws.get("across_wind"):                  # X05: 10.3 across-wind case and 10.4 combination
+        try:
+            import india_combos as _IC
+            awp = _IC.across_wind_patterns(cfg.get("load_plan") or {}, cfg)
+            if awp["evaluated"]:
+                for ref, sm in sorted(awp["summary"].items()):
+                    rows.append([ref + " (10.3, acts along %s)" % sm["force_dir"],
+                                 "Mc %s kN-m (%s); V %s kN at the levels (+%s kN at the base), M_base %s kN-m; "
+                                 "applied with the along-wind case, both signs (10.4)"
+                                 % (_num(sm["Mc_kNm"], 1), sm.get("basis"), _num(sm["V_kN"], 1),
+                                    _num(sm["F_ground_kN"], 1), _num(sm["M_base_kNm"], 1))])
+            else:
+                rows.append(["across-wind (10.3)", "NOT EVALUATED: %s" % awp.get("reason")])
+        except Exception as ex:
+            rows.append(["across-wind (10.3)", "error: %s" % ex])
     return ("<p>IS 875 (Part 3):2015: V<sub>z</sub> = V<sub>b</sub> k<sub>1</sub> k<sub>2</sub> k<sub>3</sub> "
             "k<sub>4</sub> (6.3); p<sub>z</sub> = 0.6 V<sub>z</sub><sup>2</sup> (7.2); p<sub>d</sub> = K<sub>d</sub> "
             "K<sub>a</sub> K<sub>c</sub> p<sub>z</sub> &ge; 0.7 p<sub>z</sub> (7.2).</p>"
@@ -610,7 +639,8 @@ def build_report_india(name, root):
         ["Joints", str((cfg.get("model") or {}).get("joints", "&mdash;"))],
         ["Diaphragm", "rigid in-plane, master node per level"],
         ["Second order", "P-&Delta; on every gravity state (Newton), laterals as linear increments"],
-        ["Floor load distribution", str(cfg.get("floor_system") or "one-way")]]))
+        ["Floor load distribution", str(cfg.get("floor_system") or "one-way")],
+        ["Erection sequence (braces)", _erection_text(pkg)]]))
     try:
         parts.append(R._img(R._joint_figure(cfg), "Modelled joint and base fixity", full=True))
     except Exception as ex:
