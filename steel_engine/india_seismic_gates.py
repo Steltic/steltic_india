@@ -695,16 +695,16 @@ def _walk_strings(o, path="", acc=None):
 
 
 def example_label_hits(*objs) -> list:
-    """(path, text) of cite/_label/source strings matching the EXAMPLE regex."""
+    """(path, text) of cite/_label/source/basis strings matching the EXAMPLE regex.  H32: free-text note leaves
+    ('note', 'notes', '*_note', '*_notes') are exempt -- a note may say "EXAMPLE EOR json not used"; only the
+    provenance leaves (cite, label, source, basis) are scanned."""
     hits = []
     for o in objs:
         for p, s in _walk_strings(o):
-            leaf = p.rsplit(".", 1)[-1].lower()
-            if any(t in leaf for t in ("cite", "cited", "_label", "label", "source", "basis", "note")) \
-                    and EXAMPLE_RE.search(s):
-                # "found:false ... example" free notes are allowed only when not a cite/label/source
-                if leaf in ("note",) and "cite" not in p.lower():
-                    continue
+            leaf = re.sub(r"(\[\d+\])+$", "", p.rsplit(".", 1)[-1]).lower()
+            if leaf in ("note", "notes") or leaf.endswith("_note") or leaf.endswith("_notes"):
+                continue
+            if any(t in leaf for t in ("cite", "label", "source", "basis")) and EXAMPLE_RE.search(s):
                 hits.append((p, s[:120]))
     return hits
 
