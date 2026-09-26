@@ -710,7 +710,9 @@ def base_checks(system, model_data, cfg):
         _allowed = set(_insp.signature(C.base_plate_design).parameters) | {"load_cases", "Hc_mm"}
         geo = {k: v for k, v in b.items() if k in _allowed and k not in ("sfrs_fixed_base", "col_Zp_mm3", "col_fy_MPa",
                                                                        "col_Vd_N", "sfrs_moment_factor", "col_A_mm2")}
-        need = ("B_mm", "L_mm", "t_plate_mm", "fy_plate_MPa", "fck_MPa") + (() if geo.get("load_cases") else ("P_N",))
+        embedded = str(b.get("type") or "").lower() == "embedded"         # X03: socket base, EOR capacity
+        need = (() if embedded else ("B_mm", "L_mm", "t_plate_mm", "fy_plate_MPa", "fck_MPa")) + \
+            (() if geo.get("load_cases") else ("P_N",))
         if not all(geo.get(k) is not None for k in need):
             out.append(_na("12.12_base", clause="IS 800:2007 12.12 / 7.4", cite="base plate + anchors",
                            member=b.get("id"), reason="base geometry/forces missing: %s" %
@@ -745,6 +747,10 @@ def base_checks(system, model_data, cfg):
                 ct += "; IS 18168:2023 9.4: pinned base minimum moment 0.5 Ry Myc (Sy about y) in each case, shear " \
                       "1.1 Ry Mpc/Hc (%s)" % ry_note
         ct += "; frame axes %s" % sorted(axes)
+        if embedded:
+            ct += "; embedded/socket base checked against the EOR capacity record (source + cite, VERIFY)"
+        elif b.get("stiffeners"):
+            ct += "; gusseted base (IS 800 7.4.2): plate panels by the strip method (EOR method, VERIFY), gussets, welds"
         cases = geo.pop("load_cases", None) or [{"combo": "declared", "P_N": geo.get("P_N"),
                                                  "M_Nmm": geo.get("M_Nmm", 0.0), "V_N": geo.get("V_N", 0.0),
                                                  "My_Nmm": b.get("My_Nmm", 0.0), "seismic": b.get("seismic", True)}]
@@ -769,19 +775,19 @@ def base_checks(system, model_data, cfg):
                 if fixed and seismic:
                     subs = []
                     for ax in sorted(axes):
-                        Mpc, n = _mpc_reduced(p, fy, P, ax)
+                        Mpc, n, mform = mpc_9_3_1_2(p, fy, P, ax, welded=m.get("welded"))
                         Mcap = mfac * Mpc
                         Vcap = (2.2 * ry * Mpc / Hc) if (use18 and Hc) else 0.0
                         mz, my = (max(Mz0, Mcap), My0) if ax == "z" else (Mz0, max(My0, Mcap))
                         subs.append((ax, mz, my, max(V0, vmin12, Vcap),
                                      [("12.12.1_moment_demand", Mcap, "IS 800:2007 12.12.1" + (" + IS 18168:2023 9.3" if use18 else ""),
-                                       "%.2f x Mpc about %s (n = P/Py = %.3f, IS 800 9.3.1.2)" % (mfac, ax, n))]
+                                       "%.2f x Mpc about %s (n = P/Py = %.3f, %s)" % (mfac, ax, n, mform))]
                                      + ([("is18168_9_3_shear_demand", Vcap, "IS 18168:2023 9.3", "2.2 Ry Mpc/Hc")] if Vcap else [])))
                 elif not fixed and use18:
                     subs = []
                     for ax in sorted(axes):
                         Mmin = 0.5 * ry * (p["Sx"] if ax == "z" else p["Sy"]) * fy
-                        Mpc, _n = _mpc_reduced(p, fy, P, ax)
+                        Mpc, _n, _f = mpc_9_3_1_2(p, fy, P, ax, welded=m.get("welded"))
                         Vmin = (1.1 * ry * Mpc / Hc) if Hc else 0.0
                         mz, my = (max(Mz0, Mmin), My0) if ax == "z" else (Mz0, max(My0, Mmin))
                         subs.append((ax, mz, my, max(V0, vmin12, Vmin),
@@ -794,7 +800,13 @@ def base_checks(system, model_data, cfg):
                                    "full shear under the case or 1.2 x column shear capacity, whichever is higher"))
             for ax, mz, my, v, info in subs:
                 g2 = dict(geo)
-                r = C.base_plate_design_biaxial(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v, **g2)
+                if embedded:
+                    r = C.embedded_base_checks(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v,
+                                               embedded=b.get("embedded") or {k: b.get(k) for k in (
+                                                   "capacity_Nmm", "capacity_Nmm_y", "capacity_N", "capacity_P_N",
+                                                   "capacity_T_N", "source", "cite") if b.get(k) is not None})
+                else:
+                    r = C.base_plate_design_biaxial(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v, **g2)
                 for nm, val, cl_, ct_ in info:
                     r["checks"][nm] = {"value": val, "clause": cl_, "cite": ct_, "ok": True, "dc": None}
                 r["combo"] = lc.get("combo") + ("" if ax is None else " [capacity/minimum about %s]" % ax)
@@ -809,7 +821,9 @@ def base_checks(system, model_data, cfg):
         not_eval = [c["combo"] for c in per_case if c["ok"] is None]
         out.append(_chk("12.12_base" if sfrs else "7.4_base", r.get("dc"), 1.0, clause=cl, member=b.get("id"), cite=ct,
                         ok=r.get("ok"), dc=r.get("dc"), detail=r, governing_combo=r.get("combo"), n_cases=len(per_case),
-                        per_case=per_case, not_evaluated_cases=not_eval, sfrs=sfrs, frame_axes=sorted(axes)))
+                        per_case=per_case, not_evaluated_cases=not_eval, sfrs=sfrs, frame_axes=sorted(axes),
+                        base_type="embedded" if embedded else ("stiffened" if b.get("stiffeners") else "slab"),
+                        found=r.get("found", True)))
     return out
 
 
@@ -830,6 +844,34 @@ def _mpc_reduced(p, fy, P, axis):
         return min(1.11 * Mp * (1 - n), Mp), n
     Mp = p["Zy"] * fy
     return (Mp if n <= 0.2 else 1.56 * Mp * (1 - n) * (n + 0.6)), n
+
+
+def mpc_9_3_1_2(p, fy, P, axis, welded=None):
+    """X03: column plastic moment reduced for axial force by the IS 800 9.3.1.2 form of the section (Mp = Zp fy,
+    n = P/(A fy); the base capacity moment of IS 800 12.12.1 / IS 18168 9.3).  Returns (Mpc, n, form):
+    (b) welded I/H: Mndz = Mdz (1-n)/(1-0.5a) <= Mdz, Mndy = Mdy [1 - ((n-a)/(1-a))^2] for n >= a, a = (A-2btf)/A <= 0.5;
+    (c) standard (rolled) I/H: Mndz = 1.11 Mdz (1-n) <= Mdz, Mndy = Mdy (n <= 0.2) else 1.56 Mdy (1-n)(n+0.6);
+    (d) RHS / welded box: Mndz = Mdz (1-n)/(1-0.5aw) <= Mdz, Mndy = Mdy (1-n)/(1-0.5af) <= Mdy, aw = (A-2btf)/A,
+        af = (A-2htw)/A (each <= 0.5);  (e) CHS: Mnd = 1.04 Md (1-n^1.7) <= Md.
+    Other shapes keep form (c) (as _mpc_reduced)."""
+    st = str(p.get("section_type") or "")
+    A = float(p["A"])
+    n = min(max(float(P or 0.0), 0.0) / (A * fy), 1.0)
+    Mp = (p["Zx"] if axis == "z" else p["Zy"]) * fy
+    if st == "box" or st.upper() == "RHS":
+        aw = min((A - 2.0 * p["bf"] * p["tf"]) / A, 0.5)
+        af = min((A - 2.0 * p["d"] * p["tw"]) / A, 0.5)
+        a_ = aw if axis == "z" else af
+        return min(Mp * (1.0 - n) / (1.0 - 0.5 * a_), Mp), n, "IS 800 9.3.1.2(d) box/RHS"
+    if st == "CHS":
+        return min(1.04 * Mp * (1.0 - n ** 1.7), Mp), n, "IS 800 9.3.1.2(e) CHS"
+    if st == "I" and (welded if welded is not None else p.get("welded")):
+        a_ = min((A - 2.0 * p["bf"] * p["tf"]) / A, 0.5)
+        if axis == "z":
+            return min(Mp * (1.0 - n) / (1.0 - 0.5 * a_), Mp), n, "IS 800 9.3.1.2(b) welded I"
+        return (Mp if n <= a_ else Mp * (1.0 - ((n - a_) / (1.0 - a_)) ** 2)), n, "IS 800 9.3.1.2(b) welded I"
+    Mpc, n_ = _mpc_reduced(p, fy, P, axis)
+    return max(Mpc, 0.0), n_, "IS 800 9.3.1.2(c) standard I/H"
 
 
 def scwb_joint(joint, model_data):

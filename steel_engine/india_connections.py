@@ -449,11 +449,423 @@ def ec_is456(fck_MPa):
     return 5000.0 * math.sqrt(float(fck_MPa))
 
 
+# ------------------------------------------------------------------- X03: stiffened (gusseted) and embedded bases
+CITE_7_4_2 = ("IS 800:2007 7.4.2: 'For stanchion with gusseted bases, the gusset plates, angle cleats, stiffeners, "
+              "fastenings, etc, in combination with the bearing area of the shaft, shall be sufficient to take the loads, "
+              "bending moments and reactions to the base plate without exceeding specified strength.'; 7.4.2.1: 'Where the "
+              "ends of the column shaft and the gusset plates are not faced for complete bearing, the weldings, fastenings "
+              "connecting them to the base plate shall be sufficient to transmit all the forces to which the base is "
+              "subjected.'")
+CITE_7_4_3_2 = ("IS 800:2007 7.4.3.2: 'When the slab does not distribute the column load uniformly, due to eccentricity of "
+                "the load etc, special calculation shall be made to show that the base is adequate to resist the moment "
+                "due to the non-uniform pressure from below.'")
+STIFF_PLATE_BASIS = (
+    "EOR method, VERIFY: IS 800 7.4.2 gives no plate formula for a gusseted base.  Plate panels by the Hillerborg simple "
+    "strip method (lower-bound theorem of plasticity; A. Hillerborg, Strip Method of Design, 1975; Park & Gamble, "
+    "Reinforced Concrete Slabs, ch. 9): the load w is split between strips spanning between the gussets and strips "
+    "cantilevering from the column face / gussets so that both carry the same moment -- 3-edge panel (column face + "
+    "2 gussets, outer edge free) M = w s^2 m^2 / (2 (s^2 + 4 m^2)); 2-adjacent-edge panel M = w c^2 m^2 / (2 (c^2 + "
+    "m^2)); 2 opposite edges (gussets only) w s^2/8; 1 edge (cantilever) w c^2/2; w = the peak bearing pressure "
+    "applied uniformly (conservative); resistance 0.2 t^2 fy/gamma_m0 per mm (1.2 Ze, 7.4.3.1 / 8.2.1.2 form).  The "
+    "governing moment per side is the smaller of this field and the unstiffened cantilever field (each is statically "
+    "admissible on its own).")
+STIFF_ANCHOR_BASIS = (
+    "EOR method, VERIFY: tension-side anchor pull on the plate between gussets = point load on a strip simply supported "
+    "on the two gussets (M = T a (s - a)/s; cantilever beyond the outer gusset M = T c), spread over the effective "
+    "width b_eff = 2.48 a (1 - a/s) + 2 d (cantilever 1.2 c + 2 d), capped at the gusset length (the one-way slab "
+    "effective-width form of IS 456:2000 24.3.2, not in the corpus); the smaller of this and the unstiffened "
+    "anchor-line cantilever T lever / B is used")
+STIFF_WELD_CITE = ("IS 800:2007 10.5.7.1.1 fwd = fu/(sqrt3 gamma_mw), 10.5.3.2 + Table 22 throat K s, 10.5.4.1 effective "
+                   "length = overall - 2 s; resultant force per mm on the throat (vector sum, 10.5.7.1.1); the 10.5.10.1.1 "
+                   "combined-stress formula is an image not transcribed in the corpus -> VERIFY")
+
+
+def _stiffener_spec(stiffeners):
+    """Validate cfg column_base 'stiffeners'; returns (spec, layout, missing inputs)."""
+    s = dict(stiffeners or {})
+    miss = []
+    layout = str(s.get("layout") or "flange_extension").lower()
+    if layout not in ("flange_extension", "cross"):
+        miss.append("layout ('flange_extension' | 'cross')")
+    if not (s.get("x_mm") or (s.get("n_per_side") and int(s["n_per_side"]) >= 1)):
+        miss.append("n_per_side (>= 1) or x_mm")
+    for k in ("t_mm", "h_mm", "fy_MPa"):
+        if not s.get(k):
+            miss.append(k)
+    for key in ("weld_column", "weld_plate"):
+        w = s.get(key) or s.get("weld") or {}
+        if str(w.get("type") or "fillet").lower() == "cjp":
+            continue
+        for k in ("size_mm", "fu_MPa"):
+            if not w.get(k):
+                miss.append("%s.%s" % ("weld" if not s.get(key) else key, k))
+    return s, layout, sorted(set(miss), key=miss.index)
+
+
+def _gusset_positions(n, explicit, coverage_mm, t_mm):
+    """Gusset centre lines across the zone (mm from the plate centre line): declared, else n evenly spaced across the
+    column face (outer ones flush with the face edges: +/-(coverage - t)/2; n = 1 on the centre line)."""
+    if explicit:
+        return sorted(float(x) for x in explicit)
+    n = int(n or 0)
+    if n <= 0:
+        return []
+    if n == 1:
+        return [0.0]
+    half = coverage_mm / 2.0 - t_mm / 2.0
+    return [-half + i * 2.0 * half / (n - 1) for i in range(n)]
+
+
+def _stiffener_layout(spec, layout, axis, col_d_mm, col_bf_mm):
+    """Gusset positions in the LOCAL frame of one base_plate_design call (L along the moment, B across; col_bf across
+    B, col_d along L).  axis 'z' (major): main zones (the L-projections) carry the flange-extension gussets; the
+    side zones carry the side gussets of a 'cross' layout.  axis 'y' (the swapped minor-axis call): the roles swap."""
+    t = float(spec["t_mm"])
+    n_fl, x_fl = spec.get("n_per_side"), spec.get("x_mm")
+    n_sd, y_sd = spec.get("n_per_side_y") or spec.get("n_per_side"), spec.get("y_mm")
+    cross = layout == "cross"
+    if axis == "y":
+        main = _gusset_positions(n_sd, y_sd, col_bf_mm, t) if cross else []
+        side = _gusset_positions(n_fl, x_fl, col_d_mm, t)
+    else:
+        main = _gusset_positions(n_fl, x_fl, col_bf_mm, t)
+        side = _gusset_positions(n_sd, y_sd, col_d_mm, t) if cross else []
+    corner = bool(side) and max(abs(y) for y in side) + t / 2.0 >= col_d_mm / 2.0 - 1.0
+    return main, side, corner
+
+
+def _panel_moments(w, W, wc, m, pos, corner_supported, tol=1.0):
+    """Hillerborg simple-strip moments per unit width (N-mm/mm) of the panels of one projection zone: zone width W
+    (across), column-face coverage wc (centred), depth m (face to plate edge), gusset centre lines pos."""
+    if not pos:
+        return [{"panel": "1-edge (column face) cantilever", "span_mm": m, "M_per_mm": w * m * m / 2.0}]
+    out = []
+    for a, b in zip(pos, pos[1:]):
+        s = b - a
+        if a >= -wc / 2.0 - tol and b <= wc / 2.0 + tol:
+            out.append({"panel": "3-edge (column face + 2 gussets, outer edge free)", "s_mm": s, "m_mm": m,
+                        "M_per_mm": w * s * s * m * m / (2.0 * (s * s + 4.0 * m * m))})
+        else:
+            out.append({"panel": "2 opposite edges (gussets), one-way", "s_mm": s, "M_per_mm": w * s * s / 8.0})
+    for c in (pos[0] + W / 2.0, W / 2.0 - pos[-1]):
+        if c <= tol:
+            continue
+        if W / 2.0 <= wc / 2.0 + tol or corner_supported:
+            out.append({"panel": "2-adjacent-edge (gusset + column face / orthogonal gusset)", "c_mm": c, "m_mm": m,
+                        "M_per_mm": w * c * c * m * m / (2.0 * (c * c + m * m))})
+        else:
+            out.append({"panel": "1-edge (outer gusset) cantilever", "c_mm": c, "M_per_mm": w * c * c / 2.0})
+    return out
+
+
+def _pressure_fn(bearing, P, B, L):
+    """Bearing pressure p(s) at distance s from the compression edge (linear, 7.4.1): cracked block fp (1 - s/Y), or
+    the full-contact trapezoid fmax -> fmin."""
+    fp = float((bearing or {}).get("fp_max_MPa") or 0.0)
+    Y = (bearing or {}).get("Y_mm")
+    if fp <= 0.0:
+        return lambda s: 0.0
+    if Y is not None and float(Y) < L - 1e-6:
+        Y = float(Y)
+        return lambda s: fp * (1.0 - s / Y) if s < Y else 0.0
+    fmin = 2.0 * max(float(P), 0.0) / (B * L) - fp
+    return lambda s: max(fp - (fp - fmin) * s / L, 0.0)
+
+
+def _integrate(fn, a, b, n=400):
+    """Simpson rule on [a, b]."""
+    if b <= a:
+        return 0.0
+    h = (b - a) / n
+    s = fn(a) + fn(b)
+    for i in range(1, n):
+        s += (4 if i % 2 else 2) * fn(a + i * h)
+    return s * h / 3.0
+
+
+def _anchor_positions(a, nt, key="x_mm"):
+    """x of the tension-row anchors across the plate: declared anchors[key], else n_per_row at pitch centred (rows =
+    n_tension / n_per_row stacked at the same x).  None when neither is declared."""
+    if a.get(key):
+        xs = [float(x) for x in a[key]]
+        rows = max(float(nt) / len(xs), 1.0) if nt else 1.0
+        return xs, rows
+    n_row = int(a.get("n_per_row") or 0)
+    if a.get("pitch_mm") and n_row:
+        p = float(a["pitch_mm"])
+        return [-(n_row - 1) * p / 2.0 + i * p for i in range(n_row)], max(float(nt) / n_row, 1.0) if nt else 1.0
+    return None, None
+
+
+def stiffened_base_checks(*, stiffeners, axis, P_N, bearing, T_anchor_N, anchors, B_mm, L_mm, t_plate_mm,
+                          fy_plate_MPa, col_d_mm, col_bf_mm, col_tf_mm, M_unstiff_comp=None, M_unstiff_ten=None,
+                          uniform_w=None):
+    """IS 800 7.4.2 gusseted base (X03): plate panels, gussets and gusset welds for one axis of base_plate_design
+    (local frame: L along the moment).  Returns {'applied', 'checks', 'plate' (governing M per mm), 'detail'};
+    applied False (no gussets in this axis' zones) leaves the unstiffened model in force."""
+    spec, layout, miss = _stiffener_spec(stiffeners)
+    if miss:
+        return {"applied": False, "checks": {"stiffeners_input": _check(
+            None, None, clause="IS 800:2007 7.4.2", cite=CITE_7_4_2, ok=None,
+            reason="found:false - stiffener inputs missing: %s" % miss)}, "missing": miss}
+    main, side, corner = _stiffener_layout(spec, layout, axis, col_d_mm, col_bf_mm)
+    if not main:
+        return {"applied": False, "checks": {}, "note": "no gussets in the %s-axis projection zones (%s layout): "
+                                                        "unstiffened model about this axis" % (axis, layout)}
+    B, L, P = float(B_mm), float(L_mm), float(P_N)
+    t_g, h_g, fy_g = float(spec["t_mm"]), float(spec["h_mm"]), float(spec["fy_MPa"])
+    w_col = dict(spec.get("weld_column") or spec.get("weld") or {})
+    w_pl = dict(spec.get("weld_plate") or spec.get("weld") or {})
+    s_w = float(w_pl.get("size_mm") or 0.0) if str(w_pl.get("type") or "fillet").lower() != "cjp" else 0.0
+    m_pl = (L - 0.95 * col_d_mm) / 2.0             # plate cantilever convention of the unstiffened model
+    b_pl = (B - 0.8 * col_bf_mm) / 2.0
+    m_g = (L - col_d_mm) / 2.0                      # gusset length: column face to plate edge
+    a = anchors or {}
+    checks, det = {}, {"layout": layout, "axis": axis, "gussets_main_mm": main, "gussets_side_mm": side,
+                       "corner_panels_supported": corner, "gusset_length_mm": m_g}
+    # ---- compression side: plate panels and gusset loads from the bearing distribution
+    pfn = (lambda s: float(uniform_w)) if uniform_w is not None else _pressure_fn(bearing, P, B, L)
+    w_peak = pfn(0.0)
+    M_comp_st, M_side = None, None
+    Vg_c = Mg_c = q_plate_c = 0.0
+    if w_peak > 0.0:
+        panels = _panel_moments(w_peak, B, col_bf_mm, m_pl, main, corner)
+        M_comp_st = max(p_["M_per_mm"] for p_ in panels)
+        w_face = pfn(m_g) if uniform_w is None else float(uniform_w)
+        if side:
+            sp_ = _panel_moments(w_face, col_d_mm, col_d_mm, b_pl, side, False)
+        else:
+            sp_ = [{"panel": "side zone 1-edge (column side) cantilever", "span_mm": b_pl,
+                    "M_per_mm": w_face * b_pl * b_pl / 2.0}]
+        M_side = max(p_["M_per_mm"] for p_ in sp_)
+        det.update(panels_comp=panels, panels_side=sp_, w_peak_MPa=w_peak, w_face_MPa=w_face)
+        F = _integrate(pfn, 0.0, m_g)                                   # N/mm across
+        Mf = _integrate(lambda s: pfn(s) * (m_g - s), 0.0, m_g)         # N-mm/mm about the column face
+        # gusset share of each panel = the strip-method split used for the plate (x-strips to the gussets)
+        eff = [0.0] * len(main)
+        for k in range(len(main) - 1):
+            s_ = main[k + 1] - main[k]
+            cov = main[k] >= -col_bf_mm / 2.0 - 1.0 and main[k + 1] <= col_bf_mm / 2.0 + 1.0
+            al = 4.0 * m_pl ** 2 / (s_ ** 2 + 4.0 * m_pl ** 2) if cov else 1.0
+            eff[k] += al * s_ / 2.0
+            eff[k + 1] += al * s_ / 2.0
+        for k, c_ in ((0, main[0] + B / 2.0), (len(main) - 1, B / 2.0 - main[-1])):
+            if c_ > 1.0:
+                two = B / 2.0 <= col_bf_mm / 2.0 + 1.0 or corner
+                eff[k] += (m_pl ** 2 / (c_ ** 2 + m_pl ** 2) if two else 1.0) * c_
+        trib = max(eff)
+        Vg_c, Mg_c = F * trib, Mf * trib
+        q_plate_c = w_peak * trib                                        # N/mm along the gusset (peak)
+        det.update(gusset_share_width_mm=eff, F_per_mm=F, Mf_per_mm=Mf)
+    # ---- tension side: anchor pulls into the panels
+    M_ten_st, Vg_t, Mg_t, q_plate_t = None, 0.0, 0.0, 0.0
+    nt = a.get("n_tension") or 0
+    if T_anchor_N and T_anchor_N > 0 and a.get("f_mm") is not None and nt:
+        lever = float(a["f_mm"]) - col_d_mm / 2.0
+        T_one = float(T_anchor_N) / nt
+        xs, rows = _anchor_positions(a, nt, "x_mm" if axis == "z" else "y_mm")
+        dA = float(a.get("d_mm") or 0.0)
+        if lever <= 0.0:
+            M_ten_st = 0.0
+        elif xs is None:
+            det["tension_note"] = ("anchor positions across the plate (anchors.x_mm or n_per_row + pitch_mm) not "
+                                   "declared: tension side kept on the unstiffened anchor-line cantilever; gusset "
+                                   "load by tributary width")
+            edges = [-B / 2.0] + [(x0 + x1) / 2.0 for x0, x1 in zip(main, main[1:])] + [B / 2.0]
+            trib = max(edges[i + 1] - edges[i] for i in range(len(main)))
+            Vg_t = float(T_anchor_N) * trib / B
+            Mg_t = Vg_t * lever
+            q_plate_t = Vg_t / max(min(trib, m_g - 2 * s_w), 1.0) / 2.0
+        else:
+            reac = [0.0] * len(main)
+            worst, qmax = 0.0, 0.0
+            pan = []
+            for x in xs:
+                T = T_one * rows
+                if x <= main[0] or x >= main[-1]:
+                    k = 0 if x <= main[0] else len(main) - 1
+                    c = abs(x - main[k])
+                    b_eff = min(1.2 * c + 2.0 * dA, m_g)
+                    M = T * c
+                    reac[k] += T
+                    q = T / max(min(b_eff, m_g - 2 * s_w), 1.0) / 2.0
+                    pan.append({"x_mm": x, "panel": "cantilever beyond gusset", "c_mm": c, "b_eff_mm": b_eff,
+                                "M_per_mm": M / b_eff})
+                else:
+                    k = max(i for i in range(len(main) - 1) if main[i] <= x)
+                    s = main[k + 1] - main[k]
+                    a_ = x - main[k]
+                    b_eff = min(2.48 * a_ * (1.0 - a_ / s) + 2.0 * dA, m_g)
+                    M = T * a_ * (s - a_) / s
+                    reac[k] += T * (s - a_) / s
+                    reac[k + 1] += T * a_ / s
+                    q = T / max(min(b_eff, m_g - 2 * s_w), 1.0) / 2.0
+                    pan.append({"x_mm": x, "panel": "between gussets", "s_mm": s, "a_mm": a_, "b_eff_mm": b_eff,
+                                "M_per_mm": M / b_eff})
+                worst = max(worst, M / b_eff)
+                qmax = max(qmax, q)
+            M_ten_st = worst
+            Vg_t = max(reac)
+            Mg_t = Vg_t * lever
+            q_plate_t = qmax
+            det.update(panels_tension=pan, anchor_rows_at_x=rows, T_one_N=T_one)
+    # ---- plate: governing moment per unit width (min of the stiffened and unstiffened fields per side)
+    def _mn(st, un):
+        v = [x for x in (st, un) if x is not None]
+        return min(v) if v else None
+    comp = _mn(M_comp_st, M_unstiff_comp)
+    ten = _mn(M_ten_st, M_unstiff_ten)
+    vals = [x for x in (comp, ten, M_side) if x is not None]
+    Mu = max(vals) if vals else None
+    if Mu is None:
+        checks["plate_thickness"] = _check(None, t_plate_mm, clause="IS 800:2007 7.4.2 / 7.4.3.2", cite=CITE_7_4_2,
+                                           ok=None, reason="bearing / anchor solution missing")
+    else:
+        t_req = math.sqrt(5.0 * Mu * GAMMA_M0 / fy_plate_MPa)
+        Mcap = 0.2 * t_plate_mm ** 2 * fy_plate_MPa / GAMMA_M0
+        c = _check(Mu, Mcap, dc=Mu / Mcap, clause="IS 800:2007 7.4.2 (gusseted base) / 7.4.3.2",
+                   cite="plate moment per unit width (N-mm/mm) <= 0.2 t^2 fy/gamma_m0; DC=(t_req/t)^2; " + STIFF_PLATE_BASIS,
+                   basis="EOR method, VERIFY", verify=True, M_per_mm=Mu, M_comp_side=comp, M_tension_side=ten,
+                   M_side_zone=M_side, M_comp_stiffened=M_comp_st, M_comp_unstiffened=M_unstiff_comp,
+                   M_ten_stiffened=M_ten_st, M_ten_unstiffened=M_unstiff_ten, t_req_mm=t_req, t_prov_mm=t_plate_mm,
+                   quote_7_4_3_2=CITE_7_4_3_2, anchor_basis=STIFF_ANCHOR_BASIS if M_ten_st else None)
+        c["ok"] = c["dc"] <= 1.0 and t_plate_mm > col_tf_mm
+        checks["plate_thickness"] = c
+    # ---- gusset: outstand (Table 2), shear (8.4.1), bending (8.2.1.2 / 9.2.2) at the column face
+    eps = math.sqrt(250.0 / fy_g)
+    ratio = h_g / t_g
+    lims = (8.4 * eps, 9.4 * eps, 13.6 * eps)
+    cls = "plastic" if ratio <= lims[0] else "compact" if ratio <= lims[1] else "semi-compact" if ratio <= lims[2] \
+        else "slender"
+    checks["gusset_outstand_table2"] = _geom_gate(
+        ratio, lims[2], clause="IS 800:2007 Table 2 (3.7.2) / 7.4.2",
+        cite="gusset = outstanding welded element h/t (one edge on the base plate, the far edge free): plastic 8.4 eps, "
+             "compact 9.4 eps, semi-compact 13.6 eps; slender gussets are outside this model (stiffen the free edge, "
+             "8.7.1.2)", section_class=cls, eps=eps)
+    Vg, Mg = max(Vg_c, Vg_t), max(Mg_c, Mg_t)
+    Vd = h_g * t_g * fy_g / (math.sqrt(3.0) * GAMMA_M0)
+    checks["gusset_shear_8_4"] = _check(Vg, Vd, clause="IS 800:2007 8.4.1 / 7.4.2",
+                                        cite="gusset at the column face: V <= h t fy/(sqrt3 gamma_m0) (Av = h t)",
+                                        V_comp_N=Vg_c, V_ten_N=Vg_t)
+    Ze, Zp = t_g * h_g ** 2 / 6.0, t_g * h_g ** 2 / 4.0
+    Md = (Zp if cls in ("plastic", "compact") else Ze) * fy_g / GAMMA_M0
+    cite_b = "gusset alone (base plate not counted as a flange) at the column face: Md = %s fy/gamma_m0 (8.2.1.2, %s)" % (
+        "Zp" if cls in ("plastic", "compact") else "Ze", cls)
+    if Vg > 0.6 * Vd:
+        beta = (2.0 * Vg / Vd - 1.0) ** 2
+        Md = min(Md, Zp * fy_g / GAMMA_M0 * (1.0 - beta)) if cls != "slender" else Md
+        cite_b += "; high shear V > 0.6 Vd: Mdv = Md (1 - beta), beta = (2V/Vd - 1)^2, Mfd = 0 for a plate (9.2.2)"
+    if cls == "slender":
+        checks["gusset_bending"] = _check(Mg, None, clause="IS 800:2007 7.4.2 / 8.2.1.2", cite=cite_b, ok=False,
+                                          reason="slender gusset (h/t > 13.6 eps)")
+    else:
+        checks["gusset_bending"] = _check(Mg, Md, clause="IS 800:2007 8.2.1.2 / 9.2.2 / 7.4.2", cite=cite_b,
+                                          M_comp_Nmm=Mg_c, M_ten_Nmm=Mg_t)
+    # ---- welds (10.5.7): gusset-to-column (2 lines, length h) and gusset-to-plate (2 lines, length m_g)
+    def _fillet_per_mm(w):
+        return fillet_weld_capacity_is800_N(size_mm=float(w["size_mm"]), length_mm=1.0, fu_MPa=float(w["fu_MPa"]),
+                                            n_sides=1, site=bool(w.get("site")), gamma_mw=w.get("gamma_mw"))
+
+    def _gmw(w):
+        return w.get("gamma_mw") or (GAMMA_MW_SITE if w.get("site") else GAMMA_MW_SHOP)
+    if str(w_col.get("type") or "fillet").lower() == "cjp":
+        fb, qs = 6.0 * Mg / (t_g * h_g ** 2), Vg / (t_g * h_g)
+        checks["gusset_weld_to_column_10_5_7"] = _check(
+            math.sqrt(fb ** 2 + 3.0 * qs ** 2), fy_g / _gmw(w_col), clause="IS 800:2007 10.5.7.1.2 / 10.5.10.2.2 / 7.4.2.1",
+            cite="CJP butt weld = parent metal (10.5.7.1.2: 'Butt welds shall be treated as parent metal with a "
+                 "thickness equal to the throat thickness'); fe = sqrt(fb^2 + 3 q^2) <= fy/gamma_mw (10.5.10.2.2, "
+                 "fbr = 0), fb = 6M/(t h^2), q = V/(t h)", weld_type="cjp", fb_MPa=fb, q_MPa=qs)
+    else:
+        per_mm = _fillet_per_mm(w_col)
+        Lc = h_g - 2.0 * float(w_col["size_mm"])
+        qv, qm = Vg / (2.0 * Lc), 6.0 * Mg / (2.0 * Lc ** 2)
+        checks["gusset_weld_to_column_10_5_7"] = _check(
+            math.hypot(qv, qm), per_mm.get("capacity_N"), clause="IS 800:2007 10.5.7.1.1 / 7.4.2.1",
+            cite="2 fillet lines along the column face, effective length h - 2s; force per mm = sqrt((V/2L)^2 + "
+                 "(6M/2L^2)^2); " + STIFF_WELD_CITE, weld_type="fillet", q_shear_N_per_mm=qv, q_moment_N_per_mm=qm,
+            L_eff_mm=Lc, weld=per_mm)
+    q_pl = max(q_plate_c / 2.0, q_plate_t)                              # per line (2 lines)
+    cite_pl = ("gusset to base plate carrying all the bearing / anchor load (not faced for bearing, 7.4.2.1): "
+               "compression side peak pressure x gusset share width; tension side anchor reaction over its "
+               "effective width")
+    if str(w_pl.get("type") or "fillet").lower() == "cjp":
+        checks["gusset_weld_to_plate_10_5_7"] = _check(
+            2.0 * q_pl / t_g, fy_g / (math.sqrt(3.0) * _gmw(w_pl)), clause="IS 800:2007 10.5.7.1.2 / 7.4.2.1",
+            cite="CJP butt weld = parent metal: shear stress (line load / t) <= fy/(sqrt3 gamma_mw); " + cite_pl,
+            weld_type="cjp", q_comp_N_per_mm=q_plate_c, q_ten_N_per_mm=2.0 * q_plate_t)
+    else:
+        per_mm = _fillet_per_mm(w_pl)
+        checks["gusset_weld_to_plate_10_5_7"] = _check(
+            q_pl, per_mm.get("capacity_N"), clause="IS 800:2007 10.5.7.1.1 / 7.4.2.1",
+            cite="2 fillet lines, force per mm per line; " + cite_pl + "; " + STIFF_WELD_CITE, weld_type="fillet",
+            q_comp_N_per_mm=q_plate_c / 2.0, q_ten_N_per_mm=q_plate_t, L_eff_mm=m_g - 2.0 * s_w, weld=per_mm)
+    det.update(V_gusset_N=Vg, M_gusset_Nmm=Mg, not_checked=[
+        "column wall local bending under gussets not in line with the webs/flanges (EOR)",
+        "gusset sloped free edge / taper (the section at the column face governs by declaration)",
+        "composite gusset + base-plate T-section (conservatively ignored)"])
+    return {"applied": True, "checks": checks, "plate": Mu, "detail": det, "basis": STIFF_PLATE_BASIS,
+            "clause": "IS 800:2007 7.4.2", "cite": CITE_7_4_2}
+
+
+def embedded_base_checks(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, embedded=None):
+    """Embedded / socket column base (X03): the socket (IS 456 concrete, outside IS 800 and the corpus) is checked
+    against EOR capacities {capacity_Nmm (moment; capacity_Nmm_y for the minor axis), capacity_N (horizontal shear),
+    capacity_P_N (compression, optional), capacity_T_N (uplift), source, cite}.  found:true only with source + cite
+    (VERIFY); otherwise every row is not evaluated (found:false) and the base cannot be COMPLETE."""
+    e = dict(embedded or {})
+    Mz, My, V, P = abs(float(Mz_Nmm or 0.0)), abs(float(My_Nmm or 0.0)), abs(float(V_N or 0.0)), float(P_N or 0.0)
+    found = bool(e.get("source") and e.get("cite") and e.get("capacity_Nmm"))
+    cl = str(e.get("cite") or "EOR embedded-base capacity (outside IS 800)")
+    base = {"verify": True, "basis": "EOR capacity (embedded/socket base), VERIFY", "eor_source": e.get("source")}
+    checks = {}
+    if not found:
+        miss = [k for k in ("capacity_Nmm", "source", "cite") if not e.get(k)]
+        checks["embedded_base_capacity"] = _check(None, None, clause="IS 800:2007 7.4.1 (base transfers P, M, V) / EOR",
+                                                  cite="embedded/socket base: EOR capacity record", ok=None,
+                                                  reason="found:false - EOR embedded-base capacity needs %s" % miss, **base)
+    else:
+        Mcz = float(e["capacity_Nmm"])
+        if e.get("capacity_Nmm_y"):
+            Mcy = float(e["capacity_Nmm_y"])
+            checks["embedded_moment"] = _check(Mz / Mcz + My / Mcy, 1.0, clause=cl,
+                                               cite="Mz/Mcz + My/Mcy <= 1 (linear interaction, EOR capacities)",
+                                               Mz_Nmm=Mz, My_Nmm=My, Mcz_Nmm=Mcz, Mcy_Nmm=Mcy, **base)
+        else:
+            checks["embedded_moment"] = _check(math.hypot(Mz, My), Mcz, clause=cl,
+                                               cite="resultant moment sqrt(Mz^2 + My^2) <= EOR capacity", Mz_Nmm=Mz,
+                                               My_Nmm=My, **base)
+        if e.get("capacity_N"):
+            checks["embedded_shear"] = _check(V, float(e["capacity_N"]), clause=cl, cite="V <= EOR shear capacity",
+                                              **base)
+        else:
+            checks["embedded_shear"] = _check(V, None, clause=cl, cite="V <= EOR shear capacity", ok=None,
+                                              reason="capacity_N (shear) not given", **base)
+        if P > 0 and e.get("capacity_P_N"):
+            checks["embedded_compression"] = _check(P, float(e["capacity_P_N"]), clause=cl,
+                                                    cite="P <= EOR compression capacity", **base)
+        if P < 0:
+            if e.get("capacity_T_N"):
+                checks["embedded_uplift"] = _check(-P, float(e["capacity_T_N"]), clause=cl,
+                                                   cite="uplift <= EOR tension capacity", **base)
+            else:
+                checks["embedded_uplift"] = _check(-P, None, clause=cl, cite="uplift <= EOR tension capacity", ok=None,
+                                                   reason="net uplift and capacity_T_N not given", **base)
+    oks = [c.get("ok") for c in checks.values()]
+    dcs = [c.get("dc") for c in checks.values() if c.get("dc") is not None]
+    return {"found": found, "base_type": "embedded", "ok": None if any(o is None for o in oks) else all(oks),
+            "dc": max(dcs) if dcs else None, "checks": checks, "bearing": None, "verify": True,
+            "demands": {"P_N": P, "M_Nmm": Mz, "Mz_Nmm": Mz, "My_Nmm": My, "V_N": V, "T_anchor_N": None,
+                        "T_corner_anchor_N": None},
+            "clause": "IS 800:2007 7.4.1 + EOR embedded-base capacity", "source_record": e.get("source"),
+            "policy": "EOR capacity with source + cite (found:false otherwise); VERIFY"}
+
+
 def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_plate_MPa, fck_MPa,
                       col_d_mm, col_bf_mm, col_tf_mm, anchors=None, Ec_MPa=None, modular_ratio=None,
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
                       friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
-                      sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None):
+                      sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None, stiffeners=None,
+                      stiffener_axis="z"):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
@@ -472,6 +884,10 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     - net uplift (P <= 0): anchor / bearing equilibrium (_anchor_equilibrium_uplift, H08), not |P| + 2M/L.
     - geometric feasibility: anchor pitch >= 2.5 d (10.2.2), edge >= 1.5 d0 (10.2.4.2 min edge), weld length <=
       column perimeter.
+    - stiffeners (X03, opt-in): {n_per_side | x_mm, t_mm, h_mm, fy_MPa, weld{size_mm, fu_MPa, site?}, layout
+      'flange_extension' | 'cross', n_per_side_y?, y_mm?} -> IS 800 7.4.2 gusseted base (stiffened_base_checks):
+      plate panels (strip method, EOR method VERIFY), gusset outstand / shear / bending, gusset welds; bearing and
+      anchors unchanged.  Without stiffeners the result is the unstiffened model, unchanged.
     """
     checks = {}
     cite_b = "IS 800:2007 7.4.1 (linear bearing, 0.6 fck)"
@@ -643,6 +1059,28 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                        M_per_mm=Mu, M_comp_side=Mcomp, M_tension_side=Mten, t_req_mm=t_req, t_prov_mm=t_plate_mm)
             c["ok"] = c["dc"] <= 1.0 and t_plate_mm > col_tf_mm
             checks["plate_thickness"] = c
+    stiff = None
+    if stiffeners:
+        # X03: IS 800 7.4.2 gusseted base -- replaces the plate row (the smaller of the stiffened and unstiffened
+        # fields per side), adds the gusset and gusset-weld rows; bearing (7.4.1) and anchors are unchanged
+        pt = checks.get("plate_thickness") or {}
+        p7 = checks.get("plate_thickness_7_4_3_1")
+        uw = None
+        if p7 is not None:
+            uw = P / (B_mm * L_mm)
+            Mc_un = 0.2 * float(p7.get("ts_mm") or 0.0) ** 2 * fy_plate_MPa / GAMMA_M0
+            Mt_un = None
+        else:
+            Mc_un, Mt_un = pt.get("M_comp_side"), pt.get("M_tension_side")
+        stiff = stiffened_base_checks(stiffeners=stiffeners, axis=stiffener_axis, P_N=P, bearing=bearing,
+                                      T_anchor_N=T_anchor, anchors=a, B_mm=B_mm, L_mm=L_mm, t_plate_mm=t_plate_mm,
+                                      fy_plate_MPa=fy_plate_MPa, col_d_mm=col_d_mm, col_bf_mm=col_bf_mm,
+                                      col_tf_mm=col_tf_mm, M_unstiff_comp=Mc_un, M_unstiff_ten=Mt_un, uniform_w=uw)
+        if stiff.get("applied"):
+            checks.pop("plate_thickness_7_4_3_1", None)
+            if p7 is not None:
+                stiff["checks"]["plate_thickness"]["t_req_unstiffened_7_4_3_1_mm"] = p7.get("t_req_mm")
+        checks.update(stiff["checks"])
     if weld_length_mm is not None:
         per = col_perimeter_mm or (2 * col_bf_mm + 2 * col_d_mm - 2 * 0)  # outer outline upper bound
         checks["geometry_weld_length"] = _geom_gate(weld_length_mm, per, clause="geometric feasibility",
@@ -650,9 +1088,14 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     oks = [c.get("ok") for c in checks.values() if isinstance(c, dict)]
     ok = (None if any(o is None for o in oks) else all(oks))
     dcs = [c.get("dc") for c in checks.values() if isinstance(c, dict) and c.get("dc") is not None]
-    return {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
-            "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
-            "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+    out = {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
+           "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
+           "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+    if stiff is not None:
+        out["stiffened"] = {k: v for k, v in stiff.items() if k != "checks"}
+        if stiff.get("applied"):
+            out["clause"] = "IS 800:2007 7.4 (7.4.2 gusseted base), 10.3, 10.5.7, 12.12"
+    return out
 
 
 def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_mm, col_d_mm, col_bf_mm, col_tf_mm,
@@ -664,7 +1107,9 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
     T_corner = max(Tz(P)/nz + Ty(0)/ny, Tz(0)/nz + Ty(P)/ny), checked for 10.3.5 / 10.3.6 (and the EOR embedment)."""
     a = dict(anchors or {})
     Mz, My = abs(float(Mz_Nmm or 0.0)), abs(float(My_Nmm or 0.0))
+    kw.pop("stiffener_axis", None)
     common = {k: v for k, v in kw.items() if k not in ("weld_length_mm", "col_perimeter_mm")}
+    common_y = dict(common, stiffener_axis="y") if common.get("stiffeners") else common
     rz = base_plate_design(P_N=P_N, M_Nmm=Mz, V_N=V_N, B_mm=B_mm, L_mm=L_mm, col_d_mm=col_d_mm, col_bf_mm=col_bf_mm,
                            col_tf_mm=col_tf_mm, anchors=anchors, **kw)
     rz["demands"].update(Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My)
@@ -682,6 +1127,8 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
         ay = {}
     out = {"found": True, "biaxial": True, "checks": dict(rz["checks"]), "bearing": rz.get("bearing"),
            "clause": rz.get("clause"), "policy": rz.get("policy")}
+    if rz.get("stiffened") is not None:
+        out["stiffened"] = rz["stiffened"]
     if not ay:
         out["checks"]["y:anchors"] = _check(None, None, clause="IS 800:2007 7.4.1 / 10.3.5",
                                             cite="minor-axis moment on the base", ok=None,
@@ -689,12 +1136,14 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
         T_corner = None
     else:
         ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
-                               col_tf_mm=col_tf_mm, anchors=ay, **common)
+                               col_tf_mm=col_tf_mm, anchors=ay, **common_y)
         for k, v in ry["checks"].items():
             if k.startswith(("geometry_", "shear_path", "anchor_shear", "anchorage_embedment")):
                 continue
             out["checks"]["y:" + k] = v
         out["bearing_y"] = ry.get("bearing")
+        if ry.get("stiffened") is not None:
+            out["stiffened_y"] = ry["stiffened"]
         nz, ny = a.get("n_tension") or 0, ay.get("n_tension") or 0
         T_corner = None
         if nz and ny and a.get("d_mm"):
@@ -706,7 +1155,7 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
                                           col_bf_mm=col_bf_mm, col_tf_mm=col_tf_mm, anchors=a, **common)
                 else:
                     r = base_plate_design(P_N=P, M_Nmm=M, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm,
-                                          col_bf_mm=col_d_mm, col_tf_mm=col_tf_mm, anchors=ay, **common)
+                                          col_bf_mm=col_d_mm, col_tf_mm=col_tf_mm, anchors=ay, **common_y)
                 return max(float(r["demands"]["T_anchor_N"]), 0.0)
             P = float(P_N)
             in_kern = P > 0 and (Mz / P) / (float(L_mm) / 6.0) + (My / P) / (float(B_mm) / 6.0) <= 1.0
