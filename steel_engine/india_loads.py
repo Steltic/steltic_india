@@ -664,10 +664,10 @@ def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> 
 
 
 def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
-                      corpus_hit=None, *, allow_fallback: bool = True) -> dict:
-    """Prefer corpus exact_table 5; fallback to in-repo Cpe only if found:false."""
+                      corpus_hit=None, *, allow_fallback: bool = True, eor_cpe=None) -> dict:
+    """Prefer corpus exact_table 5; fallback to in-repo Cpe only if found:false; EOR Cpe outside the table (H15)."""
     from india_wind_tables import resolve_cpe_walls as _resolve
-    return _resolve(h_over_w, l_over_w, theta_deg, corpus_hit, allow_fallback=allow_fallback)
+    return _resolve(h_over_w, l_over_w, theta_deg, corpus_hit, allow_fallback=allow_fallback, eor_cpe=eor_cpe)
 
 
 

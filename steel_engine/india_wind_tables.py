@@ -134,18 +134,18 @@ TABLE_5_CPE_WALLS = {
         # h/w ≤ 1/2
         _row("<=0.5", "1<l/w<=1.5", 0, +0.7, -0.2, -0.5, -0.5, -0.8),
         _row("<=0.5", "1<l/w<=1.5", 90, -0.5, -0.5, +0.7, -0.2, -0.8),
-        _row("<=0.5", "1.5<l/w<=4", 0, +0.7, -0.25, -0.6, -0.6, -1.0),
-        _row("<=0.5", "1.5<l/w<=4", 90, -0.5, -0.5, +0.7, -0.1, -1.0),
+        _row("<=0.5", "1.5<l/w<4", 0, +0.7, -0.25, -0.6, -0.6, -1.0),
+        _row("<=0.5", "1.5<l/w<4", 90, -0.5, -0.5, +0.7, -0.1, -1.0),
         # 1/2 < h/w ≤ 3/2
         _row("0.5<h/w<=1.5", "1<=l/w<=1.5", 0, +0.7, -0.25, -0.6, -0.6, -1.1),
         _row("0.5<h/w<=1.5", "1<=l/w<=1.5", 90, -0.6, -0.6, +0.7, -0.25, -1.1),
         _row("0.5<h/w<=1.5", "1.5<=l/w<4", 0, +0.7, -0.3, -0.7, -0.7, -1.1),
         _row("0.5<h/w<=1.5", "1.5<=l/w<4", 90, -0.5, -0.5, +0.7, -0.1, -1.1),
-        # 3/2 < h/w ≤ 6
-        _row("1.5<h/w<=6", "1<l/w<=1.5", 0, +0.8, -0.25, -0.8, -0.8, -1.2),
-        _row("1.5<h/w<=6", "1<l/w<=1.5", 90, -0.8, -0.8, +0.8, -0.25, -1.2),
-        _row("1.5<h/w<=6", "1.5<=l/w<=4", 0, +0.7, -0.4, -0.7, -0.7, -1.2),
-        _row("1.5<h/w<=6", "1.5<=l/w<=4", 90, -0.5, -0.5, +0.8, -0.1, -1.2),
+        # 3/2 < h/w < 6 (printed strict upper bound; h/w = 6 belongs to the h/w >= 6 rows)
+        _row("1.5<h/w<6", "1<l/w<=1.5", 0, +0.8, -0.25, -0.8, -0.8, -1.2),
+        _row("1.5<h/w<6", "1<l/w<=1.5", 90, -0.8, -0.8, +0.8, -0.25, -1.2),
+        _row("1.5<h/w<6", "1.5<=l/w<4", 0, +0.7, -0.4, -0.7, -0.7, -1.2),
+        _row("1.5<h/w<6", "1.5<=l/w<4", 90, -0.5, -0.5, +0.8, -0.1, -1.2),
         # h/w ≥ 6 (discrete plan ratios in the printed table)
         _row(">=6", "l/w=1.0", 0, +0.95, -1.25, -0.7, -0.7, -1.25),
         _row(">=6", "l/w=1.0", 90, -0.7, -0.7, +0.95, -1.25, -1.25),
@@ -158,39 +158,31 @@ TABLE_5_CPE_WALLS = {
 
 
 def _hw_band(h_over_w: float) -> str | None:
+    """H15: band edges as printed (IS 875-3 Table 5): h/w <= 1/2; 1/2 < h/w <= 3/2; 3/2 < h/w < 6; h/w >= 6."""
     r = float(h_over_w)
     if r <= 0.5:
         return "<=0.5"
     if r <= 1.5:
         return "0.5<h/w<=1.5"
-    if r <= 6.0:
-        return "1.5<h/w<=6"
+    if r < 6.0:
+        return "1.5<h/w<6"
     return ">=6"
 
 
 def _lw_band(h_band: str, l_over_w: float) -> str | None:
-    """Map plan ratio into the printed Table 5 band for the given height band."""
+    """Map plan ratio into the printed Table 5 band for the given height band (H15: printed inequalities).
+
+    Printed: h/w <= 1/2: '1 < l/w <= 3/2', '3/2 < l/w < 4'; 1/2 < h/w <= 3/2: '1 <= l/w <= 3/2', '3/2 <= l/w < 4';
+    3/2 < h/w < 6: '1 < l/w <= 3/2', '3/2 <= l/w < 4'.  l/w >= 4 has no row (an EOR Cpe is required, see
+    resolve_cpe_walls(eor_cpe=...)).  WP6-fix kept: a square plan (l/w = 1.0) belongs to the first band (the lower
+    bound is read as inclusive everywhere -- no other row could apply to a square building).  Where two printed rows
+    both contain l/w = 3/2 (middle and upper bands), the first printed row is used."""
     r = float(l_over_w)
-    # WP6-fix: a square plan (l/w = 1.0) belongs to the first band.  The printed Table 5 writes '1 < l/w <= 3/2' for
-    # h/w <= 1/2 and 3/2 < h/w < 6 but '1 <= l/w <= 3/2' for the middle band; the lower bound is read as inclusive
-    # everywhere (no other row could apply to a square building).
-    if h_band == "<=0.5":
+    if h_band in ("<=0.5", "0.5<h/w<=1.5", "1.5<h/w<6"):
         if 1.0 <= r <= 1.5:
-            return "1<l/w<=1.5"
-        if 1.5 < r <= 4.0:
-            return "1.5<l/w<=4"
-        return None
-    if h_band == "0.5<h/w<=1.5":
-        if 1.0 <= r <= 1.5:
-            return "1<=l/w<=1.5"
-        if 1.5 <= r < 4.0:
-            return "1.5<=l/w<4"
-        return None
-    if h_band == "1.5<h/w<=6":
-        if 1.0 <= r <= 1.5:
-            return "1<l/w<=1.5"
-        if 1.5 <= r <= 4.0:
-            return "1.5<=l/w<=4"
+            return {"<=0.5": "1<l/w<=1.5", "0.5<h/w<=1.5": "1<=l/w<=1.5", "1.5<h/w<6": "1<l/w<=1.5"}[h_band]
+        if 1.5 < r < 4.0:
+            return {"<=0.5": "1.5<l/w<4", "0.5<h/w<=1.5": "1.5<=l/w<4", "1.5<h/w<6": "1.5<=l/w<4"}[h_band]
         return None
     # h/w >= 6: discrete printed plan ratios only — no invention
     if abs(r - 1.0) < 1e-9:
@@ -306,9 +298,47 @@ def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> 
     return fb
 
 
+EOR_CPE_OK_SOURCES = frozenset({
+    "eor", "eor_documented", "eor_explicit", "wind_tunnel", "specialist_literature", "documented",
+})
+EOR_CPE_REFUSED = frozenset({"assumed", "assumption", "silent", "invented", "guess", "placeholder", "todo", "tbd"})
+
+
+def eor_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float, eor_cpe) -> dict:
+    """H15: EOR Cpe input path for geometry outside IS 875-3 Table 5 (e.g. l/w >= 4, h/w >= 6 off the printed
+    plan ratios).  The Table 5 NOTE leaves such buildings to the engineer; the engine never extrapolates.  Accepts
+    ``{"Cpe": {"A":..,"B":..,"C":..,"D":..}, "source": "eor_documented"|"wind_tunnel"|..., "cite"|"basis": str,
+    "verify": True}`` and returns a found:true record flagged VERIFY; anything less is found:false with the missing
+    inputs listed."""
+    rec = dict(eor_cpe or {})
+    cpe = rec.get("Cpe") if isinstance(rec.get("Cpe"), dict) else rec.get("value")
+    src = str(rec.get("source") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    cite = rec.get("cite") or rec.get("basis")
+    missing = []
+    if not (isinstance(cpe, dict) and all(isinstance(cpe.get(f), (int, float)) for f in ("A", "B", "C", "D"))):
+        missing.append("Cpe {A, B, C, D} (numbers)")
+    if src not in EOR_CPE_OK_SOURCES or src in EOR_CPE_REFUSED:
+        missing.append("source in {%s}" % ", ".join(sorted(EOR_CPE_OK_SOURCES)))
+    if not cite:
+        missing.append("cite / basis")
+    if rec.get("verify") is not True:
+        missing.append("verify: True")
+    base = {"h_over_w": float(h_over_w), "l_over_w": float(l_over_w), "theta_deg": float(theta_deg)}
+    if missing:
+        return dict(base, found=False, Cpe=None, source="refused_eor", resolved_via="refused",
+                    required_inputs=missing,
+                    cite="IS 875 (Part 3):2015 Table 5 has no row for this geometry -- an EOR Cpe record "
+                         "{Cpe, source, cite, verify: True} is required (do not reshape the building to fit the table)")
+    return dict(base, found=True, Cpe={f: float(cpe[f]) for f in ("A", "B", "C", "D")},
+                Cpe_local=rec.get("Cpe_local"), source=src, resolved_via="eor", verify=True, cite=str(cite),
+                note="Geometry outside IS 875-3 Table 5 bands: EOR-declared Cpe (VERIFY before issue)")
+
+
 def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
-                      corpus_hit=None, *, allow_fallback: bool = True) -> dict:
-    """Prefer corpus exact_table 5; demote in-repo wall Cpe to fallback when corpus found:false."""
+                      corpus_hit=None, *, allow_fallback: bool = True, eor_cpe=None) -> dict:
+    """Prefer corpus exact_table 5; demote in-repo wall Cpe to fallback when corpus found:false.
+    H15: when the geometry is outside the printed table (fallback refused_band) an ``eor_cpe`` record
+    (see eor_cpe_walls) is used instead of refusing -- never an extrapolated table value."""
     if _corpus_found(corpus_hit):
         out = dict(corpus_hit)
         out.setdefault("found", True)
@@ -332,6 +362,10 @@ def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
             "corpus_found": False,
         }
     fb = cpe_walls(h_over_w, l_over_w, theta_deg)
+    if not fb.get("found") and fb.get("source") == "refused_band" and eor_cpe is not None:
+        eo = eor_cpe_walls(h_over_w, l_over_w, theta_deg, eor_cpe)
+        eo["corpus_found"] = False
+        return eo
     fb["resolved_via"] = "fallback" if fb.get("found") else fb.get("source", "refused")
     fb["corpus_found"] = False
     return fb
@@ -459,16 +493,17 @@ Z0 = {1: 0.002, 2: 0.02, 3: 0.2, 4: 2.0}                                        
 DAMPING_TABLE36 = {"welded_steel": 0.010, "bolted_steel": 0.020, "rcc": 0.020, "prestressed": 0.016}
 
 # Table 6 (7.3.3.2) pitched roofs, overall coefficients: {h/w band: {alpha: (EF, GH, EG, FH)}}
-# read from the PDF p.16 scan (400 dpi); the mid band rows 45/60 (+0.2/-0.5/-0.8/-0.8, +0.6/-0.5/-0.8/-0.6) and
-# the bottom band rows 30/40/50/60 (-1.0/-0.5/-0.8/-0.7, -0.2/-0.5/-0.8/-0.7, +0.2/-0.5/-0.8/-0.7,
+# read from the PDF p.16 scan (400 dpi); H15 (HR-E-25): the mid band (1/2 < h/w <= 3/2) FH cells at 30/45/60 deg are
+# -0.8 (corpus IS_875_Part_3_2015/markdown/pages_recovered/page_016.md, settled by the 400-ppi 2015 scan and the
+# 1987 print); the bottom band rows 30/40/50/60 (-1.0/-0.5/-0.8/-0.7, -0.2/-0.5/-0.8/-0.7, +0.2/-0.5/-0.8/-0.7,
 # +0.5/-0.5/-0.8/-0.7) were re-read from a 300 dpi crop on 2026-09-20 (HR-INTEGRATE) and match the values below.
 TABLE_6_CPE_PITCHED = {
     "le_0.5": {0: (-0.8, -0.4, -0.8, -0.4), 5: (-0.9, -0.4, -0.8, -0.4), 10: (-1.2, -0.4, -0.8, -0.6),
                20: (-0.4, -0.4, -0.7, -0.6), 30: (0.0, -0.4, -0.7, -0.6), 45: (0.3, -0.5, -0.7, -0.6),
                60: (0.7, -0.6, -0.7, -0.6)},
     "0.5_1.5": {0: (-0.8, -0.6, -1.0, -0.6), 5: (-0.9, -0.6, -0.9, -0.6), 10: (-1.1, -0.6, -0.8, -0.6),
-                20: (-0.7, -0.5, -0.8, -0.6), 30: (-0.2, -0.5, -0.8, -0.6), 45: (0.2, -0.5, -0.8, -0.8),
-                60: (0.6, -0.5, -0.8, -0.6)},
+                20: (-0.7, -0.5, -0.8, -0.6), 30: (-0.2, -0.5, -0.8, -0.8), 45: (0.2, -0.5, -0.8, -0.8),
+                60: (0.6, -0.5, -0.8, -0.8)},
     "1.5_6": {0: (-0.7, -0.6, -0.9, -0.7), 5: (-0.7, -0.6, -0.8, -0.8), 10: (-0.7, -0.6, -0.8, -0.8),
               20: (-0.8, -0.6, -0.8, -0.8), 30: (-1.0, -0.5, -0.8, -0.7), 40: (-0.2, -0.5, -0.8, -0.7),
               50: (0.2, -0.5, -0.8, -0.7), 60: (0.5, -0.5, -0.8, -0.7)},
