@@ -1059,6 +1059,10 @@ def pitched_roof_findings(cfg, info=None) -> list:
         if not (0 <= i <= NX and 0 <= j <= NY) or (i, j) not in pk:
             continue                                   # off-grid work point (EBF link piece): not screened here
         dirn = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
+        cg, co = (c1, c2) if nlo == n1 else (c2, c1)
+        ax = 0 if dirn == "X" else 1
+        if co[ax] < cg[ax] - 1.0:                     # X06: the grid node is the FAR end of an EBF beam piece (link
+            i, j = (i - 1, j) if dirn == "X" else (i, j - 1)   # end -> column): the bay starts one grid line back
         if _bays_adjacent(pk, i, j, dirn) == 0:
             zero.append(t)
     if sloped and not _planes:
