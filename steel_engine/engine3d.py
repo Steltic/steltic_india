@@ -1676,27 +1676,92 @@ def _footprint_at(cfg,k,NX,NY):
         except Exception: pass
     return {(i,j) for i in range(NX+1) for j in range(NY+1)}
 
+TABLE5_II_TEXT = ("IS 1893 (Part 1):2016 Table 5(ii): 'A building is said to have a re-entrant corner in any plan "
+                  "direction, when its structural configuration in plan has a projection of size greater than 15 "
+                  "percent of its overall plan dimension in that direction.'")
+
+
+def reentrant_projections(cfg, fp, trigger=0.15):
+    """IS 1893 Table 5(ii) projection test on one level's footprint (set of present (i, j) grid nodes).
+
+    The framed bays (4 corners present) are compared with their bounding box; every missing region that
+    reaches the bounding-box edge is a notch.  A notch reaching an edge normal to X gives the projection
+    beyond the re-entrant corner in X = its X depth; likewise in Y.  Re-entrant when any projection exceeds
+    15 % of the overall plan dimension in that direction ("in any plan direction" -- each direction is tested
+    on its own, the conservative reading).  Missing regions that do not reach the edge are openings (Table
+    5(iii)), not re-entrant corners.  Coordinates honour xcoords / ycoords."""
+    X = lambda i: _xy_in(cfg, i, 0)[0]
+    Y = lambda j: _xy_in(cfg, 0, j)[1]
+    NX, NY = cfg["NX"], cfg["NY"]
+    cells = {(i, j) for i in range(NX) for j in range(NY)
+             if all(c in fp for c in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)))}
+    rec = {"notches": [], "openings": 0, "reentrant": False, "max_ratio": 0.0, "trigger": trigger}
+    if not cells:
+        return rec
+    i0 = min(i for i, j in cells); i1 = max(i for i, j in cells) + 1
+    j0 = min(j for i, j in cells); j1 = max(j for i, j in cells) + 1
+    Lx = abs(X(i1) - X(i0)); Ly = abs(Y(j1) - Y(j0))
+    miss = {(i, j) for i in range(i0, i1) for j in range(j0, j1)} - cells
+    seen = set()
+    for c0 in sorted(miss):
+        if c0 in seen:
+            continue
+        comp, stack = [], [c0]
+        seen.add(c0)
+        while stack:
+            c = stack.pop(); comp.append(c)
+            for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = (c[0] + d[0], c[1] + d[1])
+                if n in miss and n not in seen:
+                    seen.add(n); stack.append(n)
+        ci = [c[0] for c in comp]; cj = [c[1] for c in comp]
+        edge_x = min(ci) == i0 or max(ci) == i1 - 1
+        edge_y = min(cj) == j0 or max(cj) == j1 - 1
+        if not (edge_x or edge_y):
+            rec["openings"] += 1
+            continue
+        n = {"cells": len(comp)}
+        if edge_x and Lx > 0:
+            n["projection_x_mm"] = abs(X(max(ci) + 1) - X(min(ci))); n["L_x_mm"] = Lx
+            n["ratio_x"] = n["projection_x_mm"] / Lx
+        if edge_y and Ly > 0:
+            n["projection_y_mm"] = abs(Y(max(cj) + 1) - Y(min(cj))); n["L_y_mm"] = Ly
+            n["ratio_y"] = n["projection_y_mm"] / Ly
+        r = max(n.get("ratio_x", 0.0), n.get("ratio_y", 0.0))
+        n["reentrant"] = r > trigger
+        rec["notches"].append(n)
+        rec["max_ratio"] = max(rec["max_ratio"], r)
+        rec["reentrant"] = rec["reentrant"] or n["reentrant"]
+    return rec
+
+
 def plan_irregularities(cfg):
     """Geometric footprint screen + IS 1893 Part 1:2016 Table 5/6 classification hooks.
 
     Geometric flags (reentrant/setback/nonparallel/nonrect) still come from the ACTUAL
     per-level footprint. India classification (cites, triggers) is attached under
     out['is1893'] via india_seismic — do not treat ASCE Table 12.3-1/-2 as authoritative.
+    H01: 're-entrant' applies the Table 5(ii) 15 % projection test (reentrant_projections), so a
+    one-bay notch in a ten-bay plan is not re-entrant.
     """
     NX,NY=cfg["NX"],cfg["NY"]; NF=len(cfg.get("heights",[1]))
     full={(i,j) for i in range(NX+1) for j in range(NY+1)}
-    reentrant=setback=nonrect=False; prev=None
+    reentrant=setback=nonrect=False; prev=None; proj={}; openings=False
     for k in range(1,NF+1):
         fp=_footprint_at(cfg,k,NX,NY)
         if not fp: continue
         if fp!=full: nonrect=True
-        xs=[i for i,j in fp]; ys=[j for i,j in fp]
-        bbox={(i,j) for i in range(min(xs),max(xs)+1) for j in range(min(ys),max(ys)+1)}
-        if len(fp)<len(bbox): reentrant=True
+        pr=reentrant_projections(cfg,fp)
+        proj[k]=pr
+        if pr["reentrant"]: reentrant=True
+        if pr["openings"]: openings=True
         if prev is not None and len(fp)<len(prev): setback=True
         prev=fp
     out=dict(reentrant=reentrant, setback=setback,
-             nonparallel=bool(cfg.get("skew")), nonrect=nonrect)
+             nonparallel=bool(cfg.get("skew")), nonrect=nonrect, openings=openings,
+             reentrant_projection={"levels": proj, "trigger": 0.15,
+                                   "max_ratio": max([p["max_ratio"] for p in proj.values()] or [0.0]),
+                                   "clause": "IS 1893 Table 5(ii) (Amd 2)", "cite": TABLE5_II_TEXT})
     if setback:
         cfg["_vertical_setback"]=True
     try:

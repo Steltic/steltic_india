@@ -1337,8 +1337,24 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["ponding"] = {"clause": "IS 875 (Part 4):2021 4.4", "ok": None, "error": str(ex)}
     if (pkg["irregularity"].get("reentrant") or {}).get("irregular"):
-        pkg["seismic_analysis"]["reentrant_flexible_required"] = True
-        pkg["seismic_analysis"]["flexible_diaphragm_run"] = bool(cfg.get("_flexible_diaphragm_run"))
+        _sa = pkg["seismic_analysis"]
+        _sa["reentrant_flexible_required"] = True
+        # H01: never from a cfg flag.  True only when (a) an engine flexible-diaphragm run recorded it in
+        # pkg['seismic_analysis'] (hook: flexible_diaphragm_run True + basis 'engine'; no engine function sets it
+        # yet) or (b) a complete EOR record cfg['flexible_diaphragm_eor'] = {analysis_ref, results, source, cite}.
+        if not (_sa.get("flexible_diaphragm_run") is True and _sa.get("flexible_diaphragm_basis") == "engine"):
+            _feor, _fmiss = G.flexible_diaphragm_eor(cfg)
+            _sa["flexible_diaphragm_run"] = _feor is not None
+            if _feor is not None:
+                _sa["flexible_diaphragm_basis"] = "EOR-documented"
+                _sa["flexible_diaphragm_eor"] = _jsonable(_feor)
+            else:
+                _sa.pop("flexible_diaphragm_basis", None)
+                if _fmiss:
+                    _sa["flexible_diaphragm_eor_missing"] = _fmiss
+            if cfg.get("_flexible_diaphragm_run"):
+                _sa["flexible_diaphragm_note"] = ("cfg['_flexible_diaphragm_run'] is not evidence of the Table 5(ii) "
+                                                  "analysis and is ignored (H01)")
     plan = cfg.get("load_plan") or {}
     ss = plan.get("seismic_summary") or {}
     pkg["seismic_calc"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "Z": ss.get("Z"), "I": G.importance_of(cfg),

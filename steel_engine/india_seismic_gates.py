@@ -799,6 +799,25 @@ def irregularity_reasons(cfg, pkg=None) -> list:
     return out
 
 
+FLEX_EOR_KEYS = ("analysis_ref", "results", "source", "cite")
+
+
+def flexible_diaphragm_eor(cfg):
+    """H01: a verified EOR record of the Table 5(ii) flexible-diaphragm 3D dynamic analysis.
+    cfg['flexible_diaphragm_eor'] = {analysis_ref, results, source, cite}, all four non-empty.
+    Returns (record | None, missing keys).  The private cfg key '_flexible_diaphragm_run' is NOT evidence."""
+    rec = (cfg or {}).get("flexible_diaphragm_eor")
+    if not isinstance(rec, dict):
+        return None, list(FLEX_EOR_KEYS) if rec is not None else []
+
+    def _empty(v):
+        return v is None or (isinstance(v, (str, list, tuple, dict)) and not (v.strip() if isinstance(v, str) else v))
+    miss = [k for k in FLEX_EOR_KEYS if _empty(rec.get(k))]
+    if miss:
+        return None, miss
+    return dict(rec, basis="EOR-documented"), []
+
+
 def analysis_findings(cfg, pkg) -> list:
     out = []
     ok_esm, why = esm_permitted(cfg, pkg)
@@ -818,9 +837,16 @@ def analysis_findings(cfg, pkg) -> list:
                            % (d, _f(s["VB_scaled_kN"]), _f(s["VBbar_kN"])))
             if isinstance(s, dict) and _f(s.get("mass_participation")) is not None and _f(s["mass_participation"]) < 0.90:
                 out.append("RSA %s: modal mass %.1f %% < 90 %% (7.7.5.2)" % (d, 100 * _f(s["mass_participation"])))
-    if an.get("reentrant_flexible_required") and not an.get("flexible_diaphragm_run"):
-        out.append("Amd 2 Table 5(ii): re-entrant plan requires a flexible-diaphragm 3D dynamic analysis in "
-                   "addition to the rigid case -- not performed")
+    if an.get("reentrant_flexible_required"):
+        # H01: the flag counts only when an engine flexible-diaphragm run recorded it, or with a complete EOR record
+        basis = an.get("flexible_diaphragm_basis")
+        eor = an.get("flexible_diaphragm_eor") if isinstance(an.get("flexible_diaphragm_eor"), dict) else {}
+        ok_flex = an.get("flexible_diaphragm_run") is True and (
+            basis == "engine" or (basis == "EOR-documented" and all(eor.get(k) for k in FLEX_EOR_KEYS)))
+        if not ok_flex:
+            out.append("Amd 2 Table 5(ii): re-entrant plan requires a flexible-diaphragm 3D dynamic analysis in "
+                       "addition to the rigid case -- not performed (no engine run and no complete "
+                       "cfg['flexible_diaphragm_eor'] {analysis_ref, results, source, cite})")
     return out
 
 

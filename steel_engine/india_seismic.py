@@ -489,13 +489,18 @@ def classify_plan_irregularities(cfg, footprint_flags: dict | None = None) -> di
             "note": "No δmax/δmin ratio in cfg — agent must compute from accidental-torsion analysis.",
         })
 
+    _rp = flags.get("reentrant_projection") or {}
     out["items"].append({
         "type": "Re-entrant Corners",
         "triggered": bool(flags.get("reentrant")),
         "cite": "IS 1893 Table 5 (ii)",
         "trigger": "projection > 15% of plan dimension",
         "found": True,
-        "note": "Geometric proxy from footprint non-convexity; confirm projection ratio vs 15%.",
+        "max_projection_ratio": _rp.get("max_ratio"),
+        "note": ("Table 5(ii) projection test per direction on each level's framed footprint "
+                 "(max projection / plan dimension = %.3f vs 0.15)" % float(_rp["max_ratio"])
+                 if _rp.get("max_ratio") is not None else
+                 "Geometric proxy from footprint non-convexity; confirm projection ratio vs 15%."),
     })
     out["items"].append({
         "type": "Non-Parallel Lateral Force System",
@@ -946,7 +951,9 @@ def irregularity_screens(cfg, run) -> dict:
                                      "requires_dynamic_analysis": bool(vg) and z in ("III", "IV", "V"),
                                      "verdict": "LFRS plan dimension > 125 %% of the storey below at %s" % vg if vg else "none"}
         pir = E.plan_irregularities(cfg)
+        _rp = pir.get("reentrant_projection") or {}
         out["reentrant"] = {"irregular": bool(pir.get("reentrant")), "clause": "IS 1893 Table 5(ii) (Amd 2)",
+                            "max_projection_ratio": _rp.get("max_ratio"), "trigger": 0.15, "cite": _rp.get("cite"),
                             "requires_flexible_diaphragm_analysis": bool(pir.get("reentrant")),
                             "verdict": "re-entrant corners: 3D dynamic analysis with a flexible diaphragm in addition "
                                        "to the rigid case" if pir.get("reentrant") else "none"}
