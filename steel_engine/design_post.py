@@ -32,6 +32,9 @@ def _beam_grav(cfg, n1, n2, fD, fL, fLr):
     """
     a = ops.nodeCoord(n1); b = ops.nodeCoord(n2); NF = len(cfg["heights"])
     k = n1 // 100000; roof = (k == NF)
+    if not (1 <= k <= NF):
+        # RR-BUG-2: beam between off-diaphragm nodes (tag level > NF, crane bracket) -- no floor / cladding load
+        return 0.0, 0.0
     Lx = abs(a[0]-b[0]); Ly = abs(a[1]-b[1]); L = max(Lx, Ly)
     try:
         si = (E.unit_system() == "N-mm") or str(cfg.get("units") or "").upper().startswith("N-MM")

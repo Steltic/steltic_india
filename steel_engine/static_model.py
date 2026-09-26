@@ -473,6 +473,8 @@ def _one_way_grav(cfg, b, fD, fL, fLr):
         # WP2.1: kN/m2 x trib[mm] / 1000 = N/mm (the old /1000/144 was a psf->ksi factor: 144x low)
         return one_way_gravity(cfg, b, fD, fL, fLr)
     k = b["k"]; NF = len(cfg["heights"]); roof = (k >= NF); L = b["L"]
+    if not on_diaphragm_level(cfg, k):                   # RR-BUG-2: off-diaphragm beam, no floor / roof load
+        return 0.0, 0.0
     trib = cfg["SY"] if b["dir"] == "X" else cfg["SX"]
     Dp = cfg["D_roof"] if roof else cfg["D_floor"]; Lp = 0.0 if roof else cfg["L_floor"]
     LrS = ((cfg.get("snow", 0.0) or cfg.get("Lr", 20.0)) if roof else 0.0)
@@ -774,6 +776,20 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
     for b in model["beams"]:
         i, j, k, dirn, L = b["i"], b["j"], b["k"], b["dir"], b["L"]
         if not (1 <= k <= NF):
+            # RR-BUG-2: off-diaphragm beam (crane-bracket gantry girder, tag level > NF): no floor, roof or cladding
+            # load; its self-weight is applied like a column's (it is counted in W by z, H16)
+            if self_weight and b.get("rp") is None:
+                A_sw = b.get("_A")
+                if A_sw is None:
+                    try:
+                        A_sw = eng.Ipack(b["sec"])[0] if b.get("sec") else 0.0
+                    except Exception:
+                        A_sw = 0.0
+                    b["_A"] = A_sw
+                wsw = fdead * A_sw * STEEL_UNIT_WEIGHT_N_PER_MM3
+                if wsw:
+                    for tag in b["segs"]:
+                        ops.eleLoad("-ele", tag, "-type", "-beamUniform", 0.0, -wsw, 0.0)
             continue
         if b.get("rp") is not None:
             # X02: roof-plane member -- plan-area load in global -Z (see _plane_member_gravity)
@@ -1152,6 +1168,8 @@ def member_wind_loads(cfg, model, pat, f):
                 # length over the rafter strip; across-ridge wind splits windward / leeward at the plane's ridge
                 tot["roof_N"] += _plane_member_wind(b, pat, f, ax, split, wside, pw, pl)
                 continue
+            if not on_diaphragm_level(cfg, b["k"]):
+                continue                                   # RR-BUG-2: off-diaphragm beam (crane bracket), no roof wind
             pres_k = model["present"].get(b["k"], set())
             if b["k"] not in roofs:
                 # X02 (HR-B-16): roof bays of an intermediate level (cfg['roof_regions'] / a lower roof plane)
@@ -1319,6 +1337,16 @@ def _grav_state_key(c):
             tuple(m.get("snow_pattern") or ()))
 
 
+def on_diaphragm_level(cfg, k) -> bool:
+    """RR-BUG-2: True when the beam level k (node-tag level) is a floor / roof level 1..NF.  Beams between off-diaphragm
+    nodes (contract tag convention k*100000 + 100 i + j with a k-part above NF, e.g. crane-bracket gantry girders)
+    keep their tag level and must not pick up floor, roof or cladding load (apply_gravity_state skips them)."""
+    try:
+        return 1 <= int(k) <= len(cfg["heights"])
+    except (TypeError, ValueError):
+        return False
+
+
 def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
     """One-way girder gravity (Mg = w L^2/8, Vg = w L/2) in N-mm (WP2.1: kN/m2 x mm / 1000 = N/mm).
     With cfg['deck_span'] declared, beams parallel to the deck span get no deck load, or their secondary strip when
@@ -1327,6 +1355,11 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
     (b['i'], b['j']) and the level footprint (``present`` = {k: {(i, j)}}, or b['present_k']) are known; otherwise
     the legacy full bay width."""
     k = b["k"]; L = b["L"]
+    if not on_diaphragm_level(cfg, k):
+        # RR-BUG-2: a beam whose node-tag level is not a floor / roof level 1..NF (crane-bracket gantry girder, tag
+        # level > NF) carries no floor, roof or cladding load -- self-weight only, as apply_gravity_state skips it
+        w = (fD + fEv) * (b.get("_A") or 0.0) * STEEL_UNIT_WEIGHT_N_PER_MM3
+        return w * L * L / 8.0, w * L / 2.0
     D, Lf, Lr, S = floor_pressures(cfg, k)
     p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
     ds = _deck_span(cfg)
