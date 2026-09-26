@@ -230,6 +230,13 @@ def india_checks(cfg):
                 say("ERROR", "engine seismic weight %.1f kN differs from design W %.1f kN by %.1f %% (> 2 %%): W must be "
                              "full DL + self-weight + partitions (7.3.6) + Table 10 IL + 7.3.5 snow (WP1.6)"
                              % (We, W, 100 * (We - W) / W))
+            # H22 / ruling R1: partitions in W not below the IS 875-2 3.1.2 design allowance
+            _pp, _pa = cfg.get("partition_seismic_kNm2"), float(cfg.get("partition_load_kNm2") or 0.0)
+            if cfg.get("partitions", True) and _pp is not None and float(_pp) < _pa - 1e-9:
+                say("WARN", "partition_seismic_kNm2 = %.2f kN/m2 is below the partition design allowance "
+                            "partition_load_kNm2 = %.2f kN/m2 -- IS 1893 7.3.6: 'In case the minimum values of seismic "
+                            "weights corresponding to partitions given in parts of IS 875 are higher, the higher values "
+                            "shall be used' (ruling R1: W uses max(0.5, allowance) when not declared)" % (float(_pp), _pa))
             if abs(VB - float(ss["Ah"]) * We) > 0.15 * VB:
                 say("ERROR", "|VB - Ah x W_engine| > 15 %% (VB %.1f kN, Ah x W_engine %.1f kN) -- units? (WP1.12)"
                     % (VB, float(ss["Ah"]) * We))

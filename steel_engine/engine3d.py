@@ -225,8 +225,11 @@ def grid(cfg,k):
     # perimeters, masses, wind widths and ELF weights consistent with the ACTUAL framed footprint for
     # non-rectangular / setback buildings instead of silently assuming the full plate.
     NX,NY=cfg["NX"],cfg["NY"]
-    kk=1 if k==0 else k
     pr=cfg.get("present")
+    if pr and k==0:                                   # H16: a declared / captured base footprint wins
+        P = pr.get(0, pr.get("0"))
+        if P: return {tuple(p) for p in P}
+    kk=1 if k==0 else k
     if pr:
         P = pr.get(kk, pr.get(str(kk)))
         if P: return {tuple(p) for p in P}
@@ -325,8 +328,17 @@ def build(cfg,transf="Linear"):
         # builder read cfg['_sw_by_level'], so rebuild once when it was missing / changed.
         sw = self_weight_by_level(cfg, info)
         old = cfg.get("_sw_by_level")
-        if sw and (not old or any(abs(float(old.get(k, 0.0)) - v) > 1e-6 * max(v, 1.0) for k, v in sw.items())):
+        if sw and (not old or set(old) != set(sw)
+                   or any(abs(float(old.get(k, 0.0)) - v) > 1e-6 * max(v, 1.0) for k, v in sw.items())):
             cfg["_sw_by_level"] = sw
+            return build(cfg, transf)
+    if _UNIT_SYSTEM == "N-mm" and (cfg.get("nodal_masses") or cfg.get("nodal_dead_loads")
+                                   or cfg.get("crane") or cfg.get("cranes")):
+        # H16: point weights (nodal_masses, nodal_dead_loads, crane bridge + crab) binned to the diaphragm levels
+        # by z on the live model; rebuild once when they change (the builder's masses read floor_w)
+        pm = point_weights_by_level(cfg, info)
+        if pm != cfg.get("_pw_by_level"):
+            cfg["_pw_by_level"] = pm
             return build(cfg, transf)
     info["moment_nodes"] = set(_MOMENT_NODES)   # snapshot: nodes with a rigid (moment) beam framing in
     info["beam_rel"] = dict(_BEAM_REL)          # snapshot: per-beam end releases (viewer3d)
@@ -446,7 +458,41 @@ def floor_area_mm2(cfg,k):
 
 def perim_mm(cfg,k):
     """Exposed floor-edge length (mm) when unit_system is N-mm."""
-    P=grid(cfg,k)
+    return _perim_nodes_mm(cfg, grid(cfg,k))
+
+
+def envelope_nodes(cfg, k):
+    """H16: the building envelope at level k for cladding -- cfg['envelope'] (list of (i, j) for every level, or
+    {k: [(i, j)]}) when declared, else the union of the footprints at and above level k (a mezzanine's interior
+    free edge is not clad; the outer walls around it are)."""
+    env = cfg.get("envelope")
+    if isinstance(env, dict):
+        e = env.get(k, env.get(str(k)))
+        if e:
+            return {tuple(p) for p in e}
+    elif env:
+        return {tuple(p) for p in env}
+    U = set()
+    for kk in range(k, len(cfg["heights"]) + 1):
+        U |= set(grid(cfg, kk))
+    return U
+
+
+def envelope_perim_mm(cfg, k):
+    """Perimeter (mm) of the building envelope at level k (see envelope_nodes)."""
+    return _perim_nodes_mm(cfg, envelope_nodes(cfg, k))
+
+
+def roof_levels(cfg):
+    """H50: levels treated as roofs in the seismic weight -- cfg['roof_levels'] (lower / lean-to roofs) plus the top
+    level NF.  A roof level carries no partitions and no Table 10 imposed share (IS 1893 7.3.2: imposed load on roof
+    need not be considered) and 20 % snow when snow > 1.5 kN/m2 (7.3.5)."""
+    NF = len(cfg["heights"])
+    return {int(k) for k in (cfg.get("roof_levels") or [])} | {NF}
+
+
+def _perim_nodes_mm(cfg, P):
+    """Boundary length (mm) of the framed bays of a node set P."""
     def framed(i,j):
         return (0<=i<cfg["NX"] and 0<=j<cfg["NY"] and (i,j) in P and (i+1,j) in P
                 and (i,j+1) in P and (i+1,j+1) in P)
@@ -540,28 +586,104 @@ def floor_w(cfg,k):
 STEEL_N_PER_MM3 = 7850.0 * 9.81 * 1e-9      # 78.5 kN/m3 (IS 875 Part 1) in N/mm3
 
 
+def nearest_level(cfg, z):
+    """H16: the diaphragm level (0 = base) nearest to elevation z (ties go to the upper level)."""
+    zl = zlevels(cfg)
+    return min(range(len(zl)), key=lambda k: (abs(float(z) - zl[k]), -k))
+
+
 def self_weight_by_level(cfg, info=None):
     """Member self-weight apportioned to the floor levels (N): beams at their level, columns and
-    braces half to each end level (IS 1893 7.4.1).  Needs the live model (called right after build)."""
+    braces half to each end level (IS 1893 7.4.1).  Needs the live model (called right after build).
+    H16: each piece is binned to the diaphragm level NEAREST its elevation z (a crane-bracket node or a
+    beam at an intermediate height no longer lands on a level the seismic weight never reads)."""
     out = {}
     try:
         eles = (info or {}).get("ele") or []
         for (t, kind, sec, n1, n2) in eles:
             try:
                 A = Ipack(sec)[0]
-                L = math.dist(ops.nodeCoord(n1), ops.nodeCoord(n2))
+                c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+                L = math.dist(c1, c2)
             except Exception:
                 continue
             W = A * STEEL_N_PER_MM3 * L
-            k1, k2 = n1 // 100000, n2 // 100000
             if kind == "beam":
-                out[k1] = out.get(k1, 0.0) + W
+                kk = nearest_level(cfg, 0.5 * (c1[2] + c2[2]))
+                if kk >= 1:
+                    out[kk] = out.get(kk, 0.0) + W
             else:
-                for kk in (k1, k2):
+                for zz in (c1[2], c2[2]):
+                    kk = nearest_level(cfg, zz)
                     if kk >= 1:
                         out[kk] = out.get(kk, 0.0) + 0.5 * W
     except Exception:
         return {}
+    return out
+
+
+CRANE_W_ASSUMPTION = ("IS 1893 7.3.2: weights of equipment and other permanently fixed facilities are included -- crane "
+                      "bridge + crab weight 100 % at the diaphragm level nearest the rail; the lifted (hook) load is "
+                      "suspended and not a permanent mass, so it is excluded (EOR to confirm)")
+
+
+def point_weights_by_level(cfg, info=None):
+    """H16: declared point weights (N) per diaphragm level, binned by z on the live model:
+      * cfg['nodal_masses'] = [{node | ijk: (i, j, k), mass_kN (seismic WEIGHT, kN), note}]
+      * cfg['nodal_dead_loads'] = [{node, Fz_N (down < 0), ...}] -- permanent loads are full dead load in W (7.3.1),
+        unless the same node is listed in nodal_masses (that entry governs)
+      * crane bridge + crab (cfg['crane'] bridge_kN, crab_kN; include_in_W default True) -- CRANE_W_ASSUMPTION.
+    Returns {k: {"nodal_masses": N, "nodal_dead": N, "crane": N}}."""
+    out = {}
+
+    def _lev(node):
+        try:
+            return nearest_level(cfg, ops.nodeCoord(int(node))[2])
+        except Exception:
+            return int(node) // 100000
+
+    def _add(k, key, W):
+        if k is None or k < 1 or not W:
+            return
+        d = out.setdefault(k, {})
+        d[key] = d.get(key, 0.0) + W
+    nm_nodes = set()
+    for e in (cfg.get("nodal_masses") or []):
+        node, ijk = e.get("node"), e.get("ijk")
+        if isinstance(node, (list, tuple)):
+            node, ijk = None, tuple(node)
+        if node is None and ijk is None:
+            continue
+        if node is None:
+            node, k = ntag(*[int(x) for x in ijk]), int(ijk[2])
+        else:
+            node = int(node); k = _lev(node)
+        nm_nodes.add(node)
+        _add(k, "nodal_masses", abs(float(e.get("mass_kN") or 0.0)) * 1000.0)
+    for e in (cfg.get("nodal_dead_loads") or []):
+        try:
+            node = int(e["node"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if node in nm_nodes:
+            continue
+        Fz = float(e.get("Fz_N") or 0.0)
+        if Fz < 0:
+            _add(_lev(node), "nodal_dead", -Fz)
+    crs = cfg.get("cranes") if isinstance(cfg.get("cranes"), list) else ([cfg["crane"]] if isinstance(cfg.get("crane"), dict) else [])
+    for cr in crs:
+        if not isinstance(cr, dict) or cr.get("include_in_W") is False:
+            continue
+        Wc = (float(cr.get("bridge_kN") or 0.0) + float(cr.get("crab_kN") or 0.0)) * 1000.0
+        if Wc <= 0:
+            continue
+        if cr.get("rail_height_mm") is not None:
+            k = nearest_level(cfg, float(cr["rail_height_mm"]))
+        else:
+            bn = (cr.get("bracket_nodes") or {})
+            n0 = bn.get("L") if isinstance(bn, dict) else None
+            k = _lev(n0) if n0 is not None else None
+        _add(k, "crane", Wc)
     return out
 
 
@@ -570,23 +692,38 @@ def _table10_fraction(p):
     return 0.25 if float(p or 0.0) <= 3.0 else 0.50
 
 
+def partition_seismic_kNm2(cfg):
+    """(value, basis) of the partition weight in W (IS 1893 7.3.6).  H22 / ruling R1: default = max(0.5, IS 875-2
+    3.1.2 partition allowance cfg['partition_load_kNm2']); a declared cfg['partition_seismic_kNm2'] is used as is
+    (preflight WARNs when it is below the allowance; below 0.5 raises)."""
+    if not cfg.get("partitions", True):
+        return 0.0, "cfg['partitions'] False"
+    pp = cfg.get("partition_seismic_kNm2")
+    if pp is not None:
+        return float(pp), "declared partition_seismic_kNm2"
+    pa = float(cfg.get("partition_load_kNm2") or 0.0)
+    return max(0.5, pa), ("max(0.5, partition_load_kNm2 %.2f) -- IS 1893 7.3.6: 'In case the minimum values of "
+                          "seismic weights corresponding to partitions given in parts of IS 875 are higher, the higher "
+                          "values shall be used' (ruling R1)" % pa)
+
+
 def seismic_weight_components(cfg, k):
     """IS 1893 7.3/7.4 seismic weight of level k (N) -- the SAME W the design uses (WP1.6):
-    full DL + cladding + member self-weight + partitions (7.3.6, >= 0.5 kN/m2 on floors) +
-    Table 10 share of the floor imposed load (roof imposed load excluded, 7.3.2) + 20 % of snow
-    when snow > 1.5 kN/m2 (7.3.5) + declared extra mass."""
-    NF = len(cfg["heights"]); roof = (k == NF)
+    full DL + cladding + member self-weight + partitions (7.3.6, >= 0.5 kN/m2 on floors; default
+    max(0.5, partition allowance), R1) + Table 10 share of the floor imposed load (roof imposed load excluded,
+    7.3.2; roof levels = roof_levels(cfg), H50) + 20 % of snow when snow > 1.5 kN/m2 (7.3.5) + declared extra
+    mass + point weights (nodal_masses, nodal_dead_loads, crane bridge + crab; H16).  Cladding on the building
+    envelope perimeter (envelope_nodes, H16)."""
+    NF = len(cfg["heights"]); roof = (k in roof_levels(cfg))
     area = floor_area_mm2(cfg, k)
     d = _Dlev(cfg, k, roof)
-    th = cfg["heights"][k-1]; th = th if not roof else th / 2.0
+    th = cfg["heights"][k-1]; th = th if k != NF else th / 2.0
     comp = {"dead": d * area / 1000.0,
-            "cladding": float(cfg.get("clad") or 0.0) * perim_mm(cfg, k) * th / 1000.0}
+            "cladding": float(cfg.get("clad") or 0.0) * envelope_perim_mm(cfg, k) * th / 1000.0}
     sw = (cfg.get("_sw_by_level") or {})
     comp["self_weight"] = float(sw.get(k, sw.get(str(k), 0.0)) or 0.0) if cfg.get("self_weight", True) else 0.0
     if not roof:
-        pp = cfg.get("partition_seismic_kNm2")
-        if pp is None:
-            pp = 0.5 if cfg.get("partitions", True) else 0.0
+        pp, _ = partition_seismic_kNm2(cfg)
         if cfg.get("partitions", True) and pp < 0.5:
             raise ValueError("IS 1893 7.3.6: partition weight in W shall not be less than 0.5 kN/m2 (got %g)" % pp)
         comp["partitions"] = float(pp) * area / 1000.0
@@ -598,6 +735,10 @@ def seismic_weight_components(cfg, k):
     extra = (cfg.get("extra_mass_floors") or {}).get(k, 0.0)
     if extra:
         comp["extra"] = float(extra) * area / 1000.0
+    pw = (cfg.get("_pw_by_level") or {})
+    for key, v in (pw.get(k) or pw.get(str(k)) or {}).items():
+        if v:
+            comp[key] = float(v)
     return comp
 
 
@@ -620,7 +761,8 @@ def floor_dead(cfg,k):
     NF=len(cfg["heights"]); roof=(k==NF)
     if _UNIT_SYSTEM == "N-mm":
         c = seismic_weight_components(cfg, k)
-        return c["dead"] + c["cladding"] + c["self_weight"] + c.get("extra", 0.0)
+        return (c["dead"] + c["cladding"] + c["self_weight"] + c.get("extra", 0.0)
+                + c.get("nodal_masses", 0.0) + c.get("nodal_dead", 0.0))
     d=_Dlev(cfg,k,roof)
     w=d*floor_area_ft2(cfg,k)/1000.0
     th=cfg["heights"][k-1]/12.0; th=th if not roof else th/2
@@ -1387,7 +1529,7 @@ def india_dynamic_wind_gate(cfg, f1_hz):
         return True, [], False
     H_m = float(sum(cfg["heights"])) / 1000.0
     try:
-        xs = [_xy_in(cfg, i, j) for (i, j) in grid(cfg, 1)]
+        xs = [_xy_in(cfg, i, j) for (i, j) in envelope_nodes(cfg, 1)]     # H16: building envelope, not level 1
         bx = (max(c[0] for c in xs) - min(c[0] for c in xs)) / 1000.0
         by = (max(c[1] for c in xs) - min(c[1] for c in xs)) / 1000.0
         bmin = min(v for v in (bx, by) if v > 0)
