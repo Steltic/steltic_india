@@ -1695,6 +1695,14 @@ def design_india(name, cfg, outdir):
         pkg["diaphragm_7_6_4"]["flexible_run"] = {"levels": _jsonable(flex_d764["d764"]), "cite": FD.Q_7_6_4,
                                                   "basis": flex_d764["basis_7_6_4"],
                                                   "source": "india_flexible_diaphragm.drift_and_764 (Table 5(ii) run)"}
+    # AUD-3: the 7.6.4 record reports what the analysis found (flexible when any level's ratio > 1.2), the declared
+    # label kept beside it; a contradiction is a non-blocking warning (consistency.package_warnings)
+    try:
+        import india_diaphragm as DIA
+        DIA.reconcile_7_6_4(pkg["diaphragm_7_6_4"], (flex_d764 or {}).get("d764"),
+                            declared=str(cfg.get("diaphragm") or "rigid").lower())
+    except Exception as ex:
+        pkg["diaphragm_7_6_4"]["reconcile_error"] = str(ex)
     # IS 875 (Part 4):2021 4.4 ponding screen for long-span flat roofs (WP6-fix): the job declares the roof slope,
     # the governing span and the mid-span deflection under the impounded rain / snow load (transparent formula
     # in cfg['ponding']); india_loads.ponding_screen_4_4 records the engineering-practice screen and its verdict

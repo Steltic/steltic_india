@@ -1171,7 +1171,8 @@ def status_record(st, limit=200) -> dict:
     reasons (summarize_reasons), the full count and the reason classes."""
     sm = summarize_reasons(st.get("reasons") or [], limit=limit)
     return {"status": st["status"], "n_reasons": sm["n_reasons"], "reasons": sm["reasons"],
-            "reason_classes": sm["classes_raw"], "reasons_truncated": sm["truncated"], "authority": st["authority"]}
+            "reason_classes": sm["classes_raw"], "reasons_truncated": sm["truncated"], "authority": st["authority"],
+            "warnings": list(st.get("warnings") or [])}
 
 
 def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
@@ -1266,7 +1267,12 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
             seen.add(r)
             uniq.append(r)
     status = "example_only" if ex_hits else ("complete" if not uniq else "partial")
-    return {"status": status, "complete_allowed": status == "complete", "reasons": uniq,
+    try:                                                # AUD-3 / AUD-4: non-blocking findings (never a reason)
+        import consistency as _CCw
+        warns = _CCw.package_warnings(cfg, pk)
+    except Exception as ex:
+        warns = ["package warnings unavailable: %s" % ex]
+    return {"status": status, "complete_allowed": status == "complete", "reasons": uniq, "warnings": warns,
             "example_hits": ex_hits, "zone": zone_of(cfg), "R": resolve_R(cfg),
             "system": resolve_system_R(cfg),
             "authority": "india_seismic_gates.design_status (spec WP0.2)"}

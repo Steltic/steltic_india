@@ -290,6 +290,12 @@ def india_checks(cfg):
     dia = cfg.get("diaphragm", "rigid")
     if dia not in ("rigid", "flexible", "semi-rigid"):
         say("ERROR", "cfg['diaphragm'] must be 'rigid' | 'flexible' | 'semi-rigid' (got %r)" % (dia,))
+    try:                                  # AUD-3: board / CFS / bare-deck diaphragm declared rigid without a basis
+        import india_diaphragm as _DIA
+        for sev, msg in _DIA.light_diaphragm_rigid_findings(cfg):
+            say(sev, msg)
+    except Exception:
+        pass
     if not cfg.get("steel_grade"):
         say("ERROR", "cfg['steel_grade'] (IS 2062 grade, e.g. 'E250BR' / 'E350') required -- no default fy (WP2.3)")
     if cfg.get("braces") or "brace" in str(cfg.get("system") or "").lower() or "bf" in str(cfg.get("system") or "").lower():

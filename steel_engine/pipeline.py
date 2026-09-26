@@ -191,6 +191,9 @@ def design_and_report(name, cfg=None, do_report=True):
                         + "Open reasons (%d; classes %s):\n" % (len(st["reasons"]), ", ".join(
                             "%s %d" % kv for kv in sm["classes_raw"].items()))
                         + "".join("- %s\n" % r for r in sm["reasons"]))
+                if st.get("warnings"):                  # AUD-3 / AUD-4: non-blocking
+                    body += "\nWarnings (non-blocking, %d):\n" % len(st["warnings"]) + "".join(
+                        "- %s\n" % w for w in st["warnings"])
                 if len(sm["reasons"]) < len(st["reasons"]):
                     body += "\nAll open reasons, ungrouped (%d):\n" % len(st["reasons"]) + "".join(
                         "- %s\n" % r for c in G.REASON_CLASSES for r in st["reasons"] if G.reason_class(r) == c)

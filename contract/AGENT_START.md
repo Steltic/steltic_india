@@ -223,6 +223,15 @@ Before `pipeline.design_and_report`:
   names moment-frame lines; brace lines are found from the model). Collectors and chords are computed from the
   diaphragm load path and added to the beam checks automatically (`collector_basis` 'is800_12_2_3' amplifies
   them with the 12.2.3 rows).
+  The package's `diaphragm_7_6_4` reports what the analysis computed (AUD-3): when the X01 flexible run (or the
+  declared 7.6.4 deflections) gives a ratio > 1.2 at any level, `classification` is "flexible (IS 1893 7.6.4, from
+  the analysis)" with `ratio`, `computed_at` {dir, level} and `declared_classification`; the design stays enveloped
+  (rigid + flexible runs). A declared label that contradicts the computed one sets `declared_contradicted` and a
+  `warning`, reported in `design_status.warnings` (non-blocking). `cfg['diaphragm_type']` ('rc_slab' |
+  'composite_deck' | 'metal_deck' | 'board' | 'cfs_board' | 'braced_roof', optional; otherwise read from
+  `floor_system` / the 7.6.4 basis text): a board / CFS-sheathed or bare metal-deck diaphragm declared rigid with
+  no stiffness basis (`diaphragm_stiffness`, 7.6.4 deflections, RC / screed record, flexible run or
+  `flexible_diaphragm_eor`) gets a preflight WARN asking for the basis.
 * Cranes: `cfg['crane']` with capacity, crab and bridge weights, span, hook approach, wheel base, gantry
   span, class, type, `bracket_nodes`, `span_axis`, `bracket_eccentricity_mm`, `operation`
   ('pendant' | 'cab') and `rail_height_mm`. Gantry weight per owner ruling O2 (MODEL FEATURES, Cranes): girder +

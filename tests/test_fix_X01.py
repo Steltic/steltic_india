@@ -215,6 +215,23 @@ def test_lplan_engine_run_sets_the_flag(lplan_job):
     assert pkg["diaphragm_7_6_4"]["flexible_run"]["levels"]["X"][0]["limit"] == 1.2
 
 
+def test_lplan_764_label_follows_the_run(lplan_job):
+    """AUD-3: the package's 7.6.4 classification is what the flexible run measured (never 'rigid' when a level's
+    ratio exceeds 1.2); a declared label that disagrees is a non-blocking warning."""
+    pkg, _ = lplan_job
+    d = pkg["diaphragm_7_6_4"]
+    lv = [r for rows in d["flexible_run"]["levels"].values() for r in rows]
+    flex = [r for r in lv if r["flexible"]]
+    assert d["computed_classification"] == ("flexible" if flex else "rigid")
+    if flex:
+        assert d["classification"] == "flexible (IS 1893 7.6.4, from the analysis)" and d["flexible"] is True
+        assert d["ratio"] == pytest.approx(max(r["ratio"] for r in flex))
+        assert d["declared_contradicted"] is True and d["warning"] in pkg["design_status"]["warnings"]
+    else:
+        assert d["classification"] == "rigid" and not d.get("declared_contradicted")
+    assert not [r for r in pkg["design_status"]["reasons"] if "7.6.4" in r and "declared" in r]
+
+
 def test_lplan_envelope_not_below_either_run(lplan_job):
     pkg, forces = lplan_job
     env = pkg["seismic_analysis"]["flexible_diaphragm"]["envelope"]

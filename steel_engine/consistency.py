@@ -902,6 +902,19 @@ def retrieval_assumption_issues(plan, cfg=None):
     return out
 
 
+def package_warnings(cfg, pkg):
+    """AUD-3 / AUD-4: non-blocking WARN findings on a finished package (reported by design_status['warnings'],
+    never a COMPLETE blocker): a declared diaphragm label that contradicts the 7.6.4 classification computed by the
+    analysis, and the anchorage records (asserted embedment capacity without a derivation; concrete breakout not
+    delegated to the foundation EOR)."""
+    out = []
+    pkg = pkg if isinstance(pkg, dict) else {}
+    d764 = pkg.get("diaphragm_7_6_4")
+    if isinstance(d764, dict) and d764.get("declared_contradicted"):
+        out.append(str(d764.get("warning") or "IS 1893 7.6.4: declared diaphragm label contradicts the analysis"))
+    return out
+
+
 def plan_of(cfg, pkg, job_dir):
     """The job's load_plan: cfg first, then the package, then load_plan.json."""
     plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None

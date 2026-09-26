@@ -284,6 +284,95 @@ def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=
     return out
 
 
+FLEXIBLE_FROM_ANALYSIS = "flexible (IS 1893 7.6.4, from the analysis)"
+
+
+def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
+    """AUD-3 (gold audit M2): the package's 7.6.4 record states what the analysis found.  flexible_levels = the X01
+    flexible-diaphragm run's per-level records {dir: [{level, ratio, limit, flexible, ...}]}.  When that run (or the
+    record's own deflection-ratio evaluation) finds any level flexible (ratio > 1.2), the classification is
+    FLEXIBLE_FROM_ANALYSIS with the governing ratio, whatever was declared; the design stays enveloped (rigid and
+    flexible runs, Table 5(ii)).  A declared label that contradicts the computed one is kept as
+    'declared_classification' with 'declared_contradicted' True and a 'warning' (non-blocking: consistency /
+    design_status warnings).  Returns rec (updated in place)."""
+    if not isinstance(rec, dict):
+        return rec
+    decl = str(declared or "").strip().lower() or None
+    rows = []
+    for d, lv in (flexible_levels or {}).items():
+        for r in lv or []:
+            if isinstance(r, dict) and isinstance(r.get("ratio"), (int, float)):
+                rows.append((d, r))
+    computed, ratio, where = None, None, None
+    if rows:
+        flex = [(d, r) for d, r in rows if r.get("flexible")]
+        pick = max(flex or rows, key=lambda x: x[1]["ratio"])
+        computed = bool(flex)
+        ratio, where = pick[1]["ratio"], {"dir": pick[0], "level": pick[1].get("level"),
+                                          "source": "X01 flexible-diaphragm run (Table 5(ii))"}
+    elif rec.get("method") == "deflection ratio (Fig. 6)" and isinstance(rec.get("ratio"), (int, float)):
+        computed, ratio, where = bool(rec.get("flexible")), rec["ratio"], {"source": "declared 7.6.4 deflections"}
+    if computed is None:
+        return rec
+    rec["computed_classification"] = "flexible" if computed else "rigid"
+    rec["computed_ratio"] = ratio
+    rec["computed_at"] = where
+    if decl is None:
+        decl = str(rec.get("classification") or "").lower() or None
+    if computed:
+        if rec.get("classification") != FLEXIBLE_FROM_ANALYSIS:
+            rec.setdefault("declared_classification", decl)
+        rec.update(classification=FLEXIBLE_FROM_ANALYSIS, flexible=True, ratio=ratio, limit=1.2, ok=True,
+                   method="in-plane deformation ratio from the analysis (limit 1.2, IS 1893 7.6.4 / Fig. 6)")
+        if rows:
+            rec["model"] = ("design enveloped: rigid-diaphragm model (7.8.2 eccentricity) and the flexible-diaphragm "
+                            "3-D run (IS 1893 Table 5(ii)); the diaphragm is flexible by 7.6.4")
+    if decl in ("rigid", "flexible") and decl != rec["computed_classification"]:
+        rec["declared_contradicted"] = True
+        rec["warning"] = ("IS 1893 7.6.4: the diaphragm is declared %s but the analysis gives %s (ratio %.2f vs 1.2 at "
+                          "%s) -- declare cfg['diaphragm'] = '%s' (or show a ratio <= 1.2); the package reports the "
+                          "computed classification" % (decl, rec["computed_classification"], ratio,
+                                                       ", ".join("%s %s" % kv for kv in where.items() if kv[1] is not None),
+                                                       rec["computed_classification"]))
+    return rec
+
+
+def light_diaphragm_rigid_findings(cfg):
+    """AUD-3: a board / CFS-sheathed floor or a bare metal deck declared rigid with no stiffness basis and no 7.6.4
+    evaluation -> WARN (the 7.6.4 'usually rigid' rule covers RC / screeded floors only).  A stiffness basis is
+    cfg['diaphragm_stiffness'] (in-plane Gd, X01), 7.6.4 deflections, an RC / screed record, the X01 flexible run
+    (flexible_diaphragm_analysis True) or an EOR analysis record (flexible_diaphragm_eor).  The deck kind comes from
+    cfg['diaphragm_type'] ('board' | 'cfs_board' | 'metal_deck' | 'rc_slab' | 'composite_deck' | 'braced_roof') or
+    from the floor_system / 7.6.4 basis text."""
+    import re as _re
+    cfg = cfg or {}
+    if str(cfg.get("diaphragm") or "rigid").lower() != "rigid":
+        return []
+    d764 = cfg.get("diaphragm_7_6_4") if isinstance(cfg.get("diaphragm_7_6_4"), dict) else {}
+    if d764.get("rc_slab") or d764.get("screed_mm") is not None or (
+            d764.get("delta_max_from_chord_mm") is not None and d764.get("delta_avg_mm")):
+        return []
+    if cfg.get("diaphragm_stiffness") or cfg.get("flexible_diaphragm_analysis") is True or cfg.get("flexible_diaphragm_eor"):
+        return []
+    kind = str(cfg.get("diaphragm_type") or "").strip().lower()
+    if kind in ("rc_slab", "composite_deck", "braced_roof"):
+        return []
+    txt = " ".join(str(x or "") for x in (cfg.get("floor_system"), d764.get("basis"))).lower()
+    light = kind in ("board", "cfs_board", "metal_deck", "sheathing")
+    if not light and not kind:
+        if _re.search(r"\bcfs\b|board|sheathing|plywood|\bosb\b", txt):
+            light = True
+        elif _re.search(r"bare (metal |steel )?(roof )?deck|metal (roof )?deck|profiled (metal |steel )?sheet|(metal|roof) sheeting", txt) \
+                and not _re.search(r"concrete|screed|topping|composite", txt):
+            light = True
+    if not light:
+        return []
+    return [("WARN", "IS 1893 7.6.4: a board / CFS-sheathed or bare metal-deck diaphragm is declared rigid with no "
+                     "stiffness basis and no 7.6.4 evaluation (the 'usually rigid' rule covers RC / screeded floors "
+                     "only) -- give cfg['diaphragm_stiffness'] (in-plane Gd with source + cite) so the flexible run "
+                     "measures the 7.6.4 ratio, declare the 7.6.4 deflections, or declare the diaphragm flexible")]
+
+
 def tributary_line_shears(story_force_N, line_positions_mm, mass_extent_mm, *, eccentricity_mm=0.0):
     """Flexible diaphragm: the storey force is distributed to the vertical lateral elements by tributary width
     (7.6.4 'considering the in-plane flexibility'); no diaphragm torsion is transferred, so the 7.8.2 eccentricity
