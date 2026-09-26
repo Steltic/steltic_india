@@ -42,9 +42,40 @@ _T8_FLAGS = ("food_storage", "educational", "hospital", "assembly", "lifeline", 
 D8_AREA_ROW = "owner ruling D8 (area proxy for Table 8 (ii))"
 
 
-def _kw(use: str, words) -> list:
-    """Keywords of ``words`` found in ``use`` on word boundaries (H20)."""
-    return [w for w in words if _re.search(r"(?<![a-z0-9])" + _re.escape(w) + r"(?![a-z0-9])", use)]
+# RR-BUG-1: a keyword preceded (within its phrase) by a negation -- 'non-food storage', 'no food storage',
+# 'not a hospital', 'without any food storage', 'excluding food storage' -- names what the building is NOT and
+# must not select the class.  The negation attaches to the keyword: only filler words may stand between them
+# ('no food storage' negates 'food storage' but not the bare 'storage' keyword, since 'food' is not filler).
+_NEGATIONS = ("non", "no", "not", "without", "excluding", "except", "nor", "never")
+_NEG_FILLER = ("a", "an", "the", "any", "for", "of", "as", "used", "being", "intended", "meant", "use", "type",
+               "kind", "cum")
+
+
+def _negated(use: str, start: int) -> bool:
+    """True when the keyword starting at ``use[start]`` is preceded by a negation in its own phrase (RR-BUG-1)."""
+    before = _re.split(r"[.;:|]", use[:start])[-1]            # phrase boundary
+    words = _re.findall(r"[a-z0-9]+", before)
+    for w in reversed(words):
+        if w in _NEGATIONS:
+            return True
+        if w not in _NEG_FILLER:
+            return False
+    return False
+
+
+def _kw(use: str, words, negated: list = None) -> list:
+    """Keywords of ``words`` found in ``use`` on word boundaries (H20), ignoring negated occurrences (RR-BUG-1:
+    'non-food storage', 'no food storage', 'not a hospital').  Negated keywords are appended to ``negated``."""
+    out = []
+    for w in words:
+        pos = [m.start() for m in _re.finditer(r"(?<![a-z0-9])" + _re.escape(w) + r"(?![a-z0-9])", use)]
+        if not pos:
+            continue
+        if any(not _negated(use, p) for p in pos):
+            out.append(w)
+        elif negated is not None and w not in negated:
+            negated.append(w)
+    return out
 
 
 def importance_factor(occupancy) -> dict:
@@ -75,20 +106,26 @@ def importance_factor(occupancy) -> dict:
         return {"found": False, "I": None, "cite": cite,
                 "note": "occupancy{use, persons | area_m2 + occupant_load_m2_per_person, food_storage, "
                         "educational, hospital, assembly, lifeline} missing from the brief/cfg (D8)"}
-    use = " ".join(str(u) for u in ([occupancy.get("use")] + list(occupancy.get("uses") or [])) if u).lower()
+    use = " ; ".join(str(u) for u in ([occupancy.get("use")] + list(occupancy.get("uses") or [])) if u).lower()
     use_txt = use
-    use = _re.sub(r"[_/()\-,;]+", " ", use)
+    use = _re.sub(r"\s*[,;]+\s*", " ; ", use)             # RR-BUG-1: keep phrase boundaries for negation scope
+    use = _re.sub(r"\s+", " ", _re.sub(r"[_/()\-]+", " ", use)).strip(" ;")
     warnings = []
+    negated = []
     flags = {k: occupancy.get(k) for k in _T8_FLAGS}
     true_flags = [k for k, v in flags.items() if v is True]
-    residential = _kw(use, _T8_RESIDENTIAL)
+    residential = _kw(use, _T8_RESIDENTIAL, negated)
     hits = {}
     for cls, words in _T8_I_CLASSES.items():
         if flags.get(cls) is False:          # explicit 'not this class' overrides its keywords
             continue
-        m = _kw(use, words)
+        neg0 = len(negated)
+        m = _kw(use, words, negated)
         if m:
             hits[cls] = m
+        elif len(negated) > neg0 and flags.get(cls) is None:
+            warnings.append("use %r: negated keyword %r ignored (not a Table 8 (i) %s building); declare "
+                            "occupancy['%s'] = False to confirm (RR-BUG-1)" % (use_txt, negated[neg0], cls, cls))
     if residential:
         for cls in _T8_INSTITUTION_NAMES:
             if cls in hits and flags.get(cls) is not True:
@@ -108,12 +145,12 @@ def importance_factor(occupancy) -> dict:
                 "basis": basis, "warnings": warnings,
                 "note": "important service / community / educational / hospital / food storage (%s)"
                         % ", ".join(true_flags or [k for v in hits.values() for k in v][:2])}
-    storage = _kw(use, _T8_STORAGE)
+    storage = _kw(use, _T8_STORAGE, negated)
     if storage and "food_storage" not in occupancy:
         warnings.append("storage use %r: declare occupancy['food_storage'] (True/False) -- IS 1893 Table 8 (i) "
                         "'food storage buildings (such as warehouses)' take I = 1.5; I = 1.0 assumed for "
                         "general storage" % use)
-    clinic = _kw(use, ("clinic", "clinics"))
+    clinic = _kw(use, ("clinic", "clinics"), negated)
     if clinic:
         return {"found": True, "I": 1.2, "row": "owner ruling D8 (clinic; not a Table 8 row)", "cite": cite,
                 "matched_keyword": clinic[0], "basis": "ruling", "warnings": warnings,
@@ -121,7 +158,7 @@ def importance_factor(occupancy) -> dict:
     persons = occupancy.get("persons")
     if persons is None and occupancy.get("area_m2") and occupancy.get("occupant_load_m2_per_person"):
         persons = float(occupancy["area_m2"]) / float(occupancy["occupant_load_m2_per_person"])
-    res_com = _kw(use, _T8_ROW_II)
+    res_com = _kw(use, _T8_ROW_II, negated)
     if res_com:
         if persons is not None:
             if float(persons) > 200:

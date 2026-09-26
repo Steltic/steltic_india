@@ -112,7 +112,11 @@ CITE_1_2_OCC = (DOC + " 1.2 (pdf p. 3): 'shall be adopted in the design of the f
 
 
 def _has_word(text, kw):
-    return _re.search(r"\b%s\b" % _re.escape(kw), text) is not None
+    """Word-boundary match that ignores negated occurrences ('non-residential', 'no food storage'; RR-BUG-1, the
+    same negation rule as the IS 1893 Table 8 importance factor)."""
+    from india_seismic import _negated
+    t = _re.sub(r"\s+", " ", _re.sub(r"[_/()\-]+", " ", text))
+    return any(not _negated(t, m.start()) for m in _re.finditer(r"\b%s\b" % _re.escape(kw), t))
 
 
 def occupancy_in_scope(occupancy) -> dict:
