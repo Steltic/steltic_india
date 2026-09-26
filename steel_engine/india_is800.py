@@ -2933,8 +2933,13 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         else:
             v3, lim, row = klr, TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"
         if v3 is not None:
+            # RR-BUG-5: the Table 3 row carries its own combination -- the one with the largest axial compression
+            # for rows (i) / (iii); none for row (iv) (a geometric LLT / ry limit, no axial compression)
+            gc3 = (max(Ps, key=lambda t: t[0])[1] if (Ps and not row.startswith("(iv)")) else None)
             res["table3_slenderness"] = {"value": v3, "limit": lim, "dc": v3 / lim, "ok": v3 <= lim,
-                                         "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim)}
+                                         "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim),
+                                         "governing_combo": gc3,
+                                         "name": "IS 800 Table 3 slenderness"}
     if not per:
         res.update(found=False, ok=None, dc=None, reason="no combination forces")
         return res
@@ -2945,8 +2950,16 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         return res
     worst = max(per, key=lambda r: r["dc"])
     dc = worst["dc"]
-    if res.get("table3_slenderness") and res["table3_slenderness"].get("dc") is not None:
-        dc = max(dc, res["table3_slenderness"]["dc"])          # H34: the Table 3 ratio always enters the member D/C
-    res.update(found=True, governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0,
-               value=dc, limit=1.0, cite="IS 800:2007 9.3.2.2 / 9.3.1 per combination (concurrent P, Mz, My)")
+    cite93 = "IS 800:2007 9.3.2.2 / 9.3.1 per combination (concurrent P, Mz, My)"
+    # RR-BUG-5: the 9.3 interaction stays reported as the interaction (interaction_*); when the Table 3 slenderness
+    # ratio governs the member D/C (H34), the record names that check with its own value / limit / combination
+    res.update(interaction_dc=dc, interaction_governing_combo=worst["combo"], interaction_cite=cite93)
+    t3 = res.get("table3_slenderness")
+    if t3 and t3.get("dc") is not None and t3["dc"] > dc:      # H34: the Table 3 ratio always enters the member D/C
+        res.update(found=True, governing_check="IS 800 Table 3 slenderness", governing_combo=t3.get("governing_combo"),
+                   dc=t3["dc"], ok=t3["dc"] <= 1.0, value=t3["value"], limit=t3["limit"],
+                   cite="%s (%s); 9.3 interaction %.3f (%s)" % (t3["clause"], t3["cite"], dc, worst["combo"]))
+        return res
+    res.update(found=True, governing_check="IS 800 9.3 interaction / member resistance",
+               governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0, value=dc, limit=1.0, cite=cite93)
     return res

@@ -723,19 +723,27 @@ def _check_rows(res):
     """member_check_is800 result -> {value, limit, dc, ok, clause, cite, source} check records."""
     rows = []
     src = "india_is800.member_check_is800"
+    gov_t3 = str(res.get("governing_check") or "").startswith("IS 800 Table 3")
     if res.get("found") and res.get("dc") is not None:
-        rows.append({"name": "IS 800 9.3 interaction / member resistance (governing combination %s)"
-                             % res.get("governing_combo"), "value": float(res["dc"]), "limit": 1.0,
-                     "dc": float(res["dc"]), "ok": bool(res["dc"] <= 1.0), "clause": res.get("clause"),
-                     "cite": res.get("cite") or res.get("clause"), "source": src})
+        # RR-BUG-5: the 9.3 row carries the interaction value and its combination; the Table 3 row its own
+        dci = res.get("interaction_dc", res["dc"])
+        gci = res.get("interaction_governing_combo", res.get("governing_combo"))
+        rows.append({"name": "IS 800 9.3 interaction / member resistance (%scombination %s)"
+                             % ("" if gov_t3 else "governing ", gci), "value": float(dci), "limit": 1.0,
+                     "dc": float(dci), "ok": bool(dci <= 1.0), "clause": res.get("clause"),
+                     "cite": res.get("interaction_cite") or res.get("cite") or res.get("clause"), "source": src,
+                     "governing": not gov_t3, "combo": gci})
     else:
         rows.append({"name": "IS 800 member check", "value": None, "limit": None, "dc": None, "ok": None,
                      "found": False, "clause": "IS 800:2007 7-9", "cite": res.get("reason"), "source": src})
     t3 = res.get("table3_slenderness")
     if isinstance(t3, dict):
-        rows.append({"name": "IS 800 Table 3 slenderness KL/r", "value": t3.get("value"), "limit": t3.get("limit"),
+        gc3 = t3.get("governing_combo")
+        rows.append({"name": "IS 800 Table 3 slenderness KL/r%s%s" % (
+                         " (combination %s)" % gc3 if gc3 else "", " -- governing" if gov_t3 else ""),
+                     "value": t3.get("value"), "limit": t3.get("limit"),
                      "dc": t3.get("dc"), "ok": t3.get("ok"), "clause": t3.get("clause"), "cite": t3.get("cite"),
-                     "source": src})
+                     "source": src, "governing": gov_t3, "combo": gc3})
     return rows
 
 
@@ -1119,7 +1127,8 @@ def design_india(name, cfg, outdir):
                                "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
                                                                           {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
                                                                       for k, v in res["capacities"].items()},
-                               "DC": dc, "governing_element_result": _governing_result(res)})
+                               "DC": dc, "governing_check": res.get("governing_check"),
+                               "governing_element_result": _governing_result(res)})
 
     # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
     import india_connection_design as CD
@@ -1767,7 +1776,7 @@ def _governing_result(res):
     check record (incl. the LTB Md / chi_LT / lambda_LT that live only in per_combo)."""
     out = {k: v for k, v in res.items() if k != "per_combo"}
     pcs = res.get("per_combo")
-    gc = res.get("governing_combo")
+    gc = res.get("interaction_governing_combo") or res.get("governing_combo")   # RR-BUG-5: the 9.3 record
     gov = None
     if isinstance(pcs, dict):
         gov = pcs.get(gc)
