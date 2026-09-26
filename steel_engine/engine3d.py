@@ -1486,10 +1486,72 @@ def india_wind_serviceability(cfg):
     return out
 
 
+def crane_sway_model(cfg, cr=None):
+    """H48: ('building' | 'single_frame', basis).  cfg['crane']['sway_model'] when declared; otherwise single_frame
+    unless the roof is a rigid diaphragm (cfg['diaphragm'] == 'rigid') AND roof plan bracing is declared
+    (cfg['roof_bracing'] truthy) -- only then does the surge share out to the other frames through the roof."""
+    cr = cr if cr is not None else (cfg.get("crane") if isinstance(cfg.get("crane"), dict) else {})
+    sm = str((cr or {}).get("sway_model") or "").strip().lower()
+    if sm in ("building", "single_frame"):
+        return sm, "declared cfg['crane']['sway_model']"
+    if sm:
+        raise ValueError("cfg['crane']['sway_model'] must be 'building' or 'single_frame' (got %r)" % sm)
+    rigid = str(cfg.get("diaphragm", "rigid")).lower() == "rigid"
+    if rigid and cfg.get("roof_bracing"):
+        return "building", "default: rigid diaphragm with declared roof bracing -> surge shared by the building"
+    return "single_frame", ("default: %s -> surge on the loaded bracket frame alone"
+                            % ("no roof bracing declared (cfg['roof_bracing'])" if rigid else
+                               "diaphragm %r (not rigid)" % cfg.get("diaphragm")))
+
+
+def _single_frame_model(cfg, cr, ax):
+    """H48: rebuild the plane frame containing the two bracket nodes on its own (fresh OpenSees domain): the
+    building's elements whose both ends lie in that vertical plane, the original supports, out-of-plane
+    translation and the two out-of-plane rotations restrained (2-D frame), no diaphragm."""
+    info = build(cfg, "Linear")
+    bn = cr["bracket_nodes"]; nL, nR = int(bn["L"]), int(bn["R"])
+    oa = 1 - ax                                    # out-of-plane horizontal axis index
+    c0 = ops.nodeCoord(nL)[oa]
+    if abs(ops.nodeCoord(nR)[oa] - c0) > 1.0:
+        raise ValueError("crane bracket nodes L/R are not in one frame plane (single_frame sway model)")
+    on = lambda n: abs(ops.nodeCoord(n)[oa] - c0) <= 1.0
+    eles = [e for e in info["ele"] if on(e[3]) and on(e[4])]
+    nodes = {n for e in eles for n in e[3:5]} | {nL, nR}
+    crd = {n: ops.nodeCoord(n) for n in nodes}
+    fixd = {}
+    for n in nodes:
+        try:
+            fixd[n] = set(ops.getFixedDOFs(n))
+        except Exception:
+            fixd[n] = set()
+    flex = {n for e in eles if e[1] != "brace" for n in e[3:5]}
+    col_dir = dict(info.get("col_dir") or {}); rel = dict(info.get("beam_rel") or {})
+    saved = (set(_MOMENT_NODES), dict(_BEAM_REL), dict(_COL_DIR))
+    ops.wipe(); ops.model("basic", "-ndm", 3, "-ndf", 6)
+    for n, c in crd.items():
+        ops.node(n, *c)
+    op = {2, 4, 6} if ax == 0 else {1, 5, 6}
+    for n in nodes:
+        want = fixd[n] | op | ({4, 5, 6} if n not in flex else set())
+        ops.fix(n, *[1 if d in want else 0 for d in range(1, 7)])
+    ops.uniaxialMaterial("Elastic", 1, E)
+    for (t, kind, sec, n1, n2) in eles:
+        if kind == "col":
+            add_column(t, n1, n2, sec, col_dir.get(t, "X" if ax == 0 else "Y"))
+        elif kind == "brace":
+            ops.element("Truss", t, n1, n2, Ipack(sec)[0], 1)
+        else:
+            add_beam(t, n1, n2, sec, releases=rel.get(t))
+    _MOMENT_NODES.clear(); _MOMENT_NODES.update(saved[0])
+    _BEAM_REL.clear(); _BEAM_REL.update(saved[1]); _COL_DIR.clear(); _COL_DIR.update(saved[2])
+    return {"ele": eles, "nodes": sorted(nodes)}
+
+
 def india_crane_sway(cfg):
     """IS 800 Table 6 crane frame sway at rail level under the crane surge (gamma_f = 1.0):
     H/200 (pendant-operated, elastic cladding) or H/400 (cab-operated, brittle), H = rail height.
-    Returns None when the job has no crane."""
+    H48: sway on the whole building (surge shared through a rigid, plan-braced roof) or on the loaded bracket
+    frame alone (crane_sway_model).  Returns None when the job has no crane."""
     if not (cfg.get("crane") or cfg.get("cranes")):
         return None
     import india_loads as IL
@@ -1500,9 +1562,13 @@ def india_crane_sway(cfg):
     div = IL.IS800_TABLE6["frame_crane_cab_brittle" if op == "cab" else "frame_crane_pendant_elastic"]
     Hr = float(cr["rail_height_mm"])
     ax = 0 if str(cr["span_axis"]).upper() == "X" else 1
+    model, basis = crane_sway_model(cfg, cr)
     worst = 0.0
     for side in ("L", "R"):
-        info = build(cfg, "Linear")
+        if model == "single_frame":
+            _single_frame_model(cfg, cr, ax)
+        else:
+            build(cfg, "Linear")
         ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
         for nd, v in IL.crane_frame_loads(cfg, (side, "S+")).items():
             h = [0.0] * 6; h[ax] = v[ax]
@@ -1514,8 +1580,9 @@ def india_crane_sway(cfg):
             worst = max(worst, abs(ops.nodeDisp(int(nd), ax + 1)))
     lim = Hr / div
     return {"sway_mm": worst, "limit_mm": lim, "ratio": worst / lim, "operation": op,
-            "cite": "IS 800:2007 Table 6: crane frame sway at rail level H/%d (%s), crane surge at gamma 1.0"
-                    % (div, op)}
+            "sway_model": model, "sway_model_basis": basis,
+            "cite": "IS 800:2007 Table 6: crane frame sway at rail level H/%d (%s), crane surge at gamma 1.0; %s model"
+                    % (div, op, model)}
 
 
 def india_dynamic_wind_gate(cfg, f1_hz):
