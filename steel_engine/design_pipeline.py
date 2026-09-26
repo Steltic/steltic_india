@@ -208,12 +208,14 @@ def design(name, outdir=None):
     # agent no longer has to relabel interiors by hand.
     moment_lines = {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
     lateral_lines = brace_lines | moment_lines
-    def _role(kind, n1, n2):
+    link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
+    def _role(kind, n1, n2, t=None):
         if kind == "brace": return "brace"
+        if kind == "beam" and t in link_tags: return "link"
         if kind == "beam":  return "roof" if (n1 // 100000) >= NFlev else "floor"
         ij = ((n1 % 100000) // 100, n1 % 100)                  # column line (i,j)
         return "lateral_col" if ij in lateral_lines else "gravity_col"
-    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3]) for t in reg}
+    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3], t) for t in reg}
     by = {}
     for t in reg:
         kind, sec, n1, n2 = reg[t]; by.setdefault((kind, sec, role_of[t]), []).append(t)
@@ -826,6 +828,17 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
     return md
 
 
+def ebf_link_tags(cfg, info0):
+    """Element tags of the EBF shear links declared by the custom_build (info['links']) or cfg['ebf_links'] (H39)."""
+    out = set()
+    for ln in ((info0 or {}).get("links") or (cfg or {}).get("ebf_links") or []):
+        try:
+            out.add(int(ln["tag"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
 def ebf_links_model_data(cfg, info0, reg, members, forces, run=None):
     """model_data['links'] for india_is800_s12.ebf_link_checks from the links the custom_build declared:
     info['links'] = [{tag, e_mm, bay_L_mm, brace_tags, column_tags, beam_tags, end_stiffeners,
@@ -922,13 +935,17 @@ def design_india(name, cfg, outdir):
     moment_lines = {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
     lateral_lines = brace_lines | moment_lines
 
-    def _role(kind, n1, n2):
+    link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
+
+    def _role(kind, n1, n2, t=None):
         if kind == "brace":
             return "brace"
+        if kind == "beam" and t in link_tags:
+            return "link"
         if kind == "beam":
             return "roof" if (n1 // 100000) >= NFlev else "floor"
         return "lateral_col" if ((n1 % 100000) // 100, n1 % 100) in lateral_lines else "gravity_col"
-    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3]) for t in reg}
+    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3], t) for t in reg}
     envt = {t: env.get(frozenset((reg[t][2], reg[t][3])), dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="",
                                                               records={}, conn={})) for t in reg}
     zero = [t for t in reg if all(abs(x) < 1e-6 for r in (envt[t].get("records") or {}).values() for x in r[:4])]
@@ -1122,7 +1139,22 @@ def design_india(name, cfg, outdir):
             for r in (envt[t].get("conn") or {}).values():
                 conn_max = max(conn_max, abs(r[0]))
         checks, notes = [], []
-        if kind == "beam":
+        if kind == "beam" and role == "link":
+            # H39: an EBF link is continuous with the beam outside it (no link-to-column connection, IS 18168 12.3.1);
+            # its shear is not a beam-to-column connection demand
+            ctype = "EBF link (continuous with the beam)"
+            dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1)}
+            lids = {"12.3.1_link_not_at_column", "11.4.1_end_stiffeners", "11.4.2_intermediate_stiffeners"}
+            for t in tags:
+                for c in s12_by_member.get("link-e%d" % t, []):
+                    if c["id"] in lids:
+                        checks.append(_row("EBF link %s: %s" % (c.get("member"), c["id"]), c))
+            if not checks:
+                checks.append(_row("EBF link detailing", {"ok": None, "clause": "IS 18168:2023 11 / 12.3",
+                                                          "reason": "no IS 18168 link checks for this link group"}))
+            notes.append("link continuous with the beam outside the link: no end connection of its own; excluded from "
+                         "the beam-to-column shear demand (H39)")
+        elif kind == "beam":
             ctype = "beam-to-column"
             dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
             sfrs_tags = [t for t in tags if t in sfrs_beams]
@@ -1130,6 +1162,36 @@ def design_india(name, cfg, outdir):
             # pinned at both ends (eave strut / collector of a mixed OMF+OCBF job) takes the shear-connection path (WP6-fix)
             rel0_ = info0.get("beam_rel") or {}
             mf_tags = [t for t in sfrs_tags if (rel0_.get(t) or ("none",))[0] != "both"]
+            comps_ = S12.system_components(cfg.get("system"))
+            if mf_tags and "EBF" in comps_ and not any(c_ in ("SMF", "OMF") for c_ in comps_):
+                # H39: rigid beam-column joints of an EBF get a moment-connection row: IS 18168 12.3.4.4 where a brace /
+                # gusset frames into the joint, otherwise the connection for the end moment of the 5.5 / Table 4
+                # combinations (IS 18168 5.5(d): all connections of the structural system)
+                mids = {"e%d" % t for t in mf_tags}
+                jids = {j["id"] for j in (md.get("joints") or []) if any(b["member_id"] in mids for b in j.get("beams") or [])}
+                worst = {}
+                for jid in jids:
+                    for c in s12_by_member.get(jid, []):
+                        if str(c.get("id", "")).startswith("12.3.4.4"):
+                            w = worst.get(c["id"])
+                            k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                            if w is None or k_ > w[0]:
+                                worst[c["id"]] = (k_, c)
+                for cid, (_, c) in worst.items():
+                    checks.append(_row("IS 18168 12.3.4.4 %s (joint %s)" % (cid, c.get("member")), c))
+                if "12.3.4.4_connection_moment" not in worst:
+                    Mend = max([max(abs(r[4]), abs(r[5])) for t in mf_tags for r in (envt[t].get("records") or {}).values()]
+                               + [0.0])
+                    cn = joint_conn.get(sec) or CD.beam_column_connection(cfg, {"section": sec, "role": "beam"},
+                                                                          S.props(sec), CD._fy(mem_by_id["e%d" % mf_tags[0]],
+                                                                                               S.props(sec))[0])
+                    cap = (cn or {}).get("moment_capacity_Nmm")
+                    checks.append(_row("EBF rigid beam-column moment connection", C_._check(
+                        Mend, cap, clause="IS 18168:2023 5.5(d) / IS 800:2007 10",
+                        cite="rigid EBF beam-column joint (no brace at the joint): connection moment capacity >= the "
+                             "largest end moment of the Table 4 / 5.5 combinations") if cap else {
+                        "ok": None, "clause": "IS 18168:2023 5.5(d) / 12.3.4.4",
+                        "reason": "cfg['connections']['beam_column'] not declared for %s (rigid EBF beam-column joint)" % sec}))
             if mf_tags and G.section12_system(cfg) and S12.normalize_system(cfg.get("system")) in ("SMF", "OMF"):
                 sfrs_tags = mf_tags
                 # moment connection: the per-joint 12.11.2 checks (demand 1.2 Mp, shear) live in capacity_design

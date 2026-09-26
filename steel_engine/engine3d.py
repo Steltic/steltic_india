@@ -399,6 +399,31 @@ def add_beam(tag, n1, n2, sec, releases=None):
     return tag
 
 
+def add_link(tag, n1, n2, sec, Avy=None, Avz=None):
+    """EBF shear link for custom_build (IS 18168:2023 11 / 12.3; H39): an ElasticTimoshenkoBeam (shear deformation
+    kept) with the strong axis vertical (transf 3, as add_beam), no end releases (the link is continuous with the
+    beam outside it).  Arguments E G A Jx Iy Iz Avy Avz transf, with Iy = Ix(strong), Iz = Iy(weak) as add_beam;
+    Avz (major-axis shear, local z) defaults to the web area (d - 2 tf) tw and Avy to 5/6 x 2 bf tf.  Declare the
+    link in info['links'] ({tag, e_mm, brace_tags, beam_tags, column_tags, ...}) so the pipeline gives it role
+    'link'; static_model already maps ElasticTimoshenkoBeam elements of kind 'beam'."""
+    _ensure_col_transf()
+    A, Ix, Iy, J = Ipack(sec)
+    if Avy is None or Avz is None:
+        try:
+            import sections as _SEC
+            p = _SEC.props(sec)
+            Avz = Avz if Avz is not None else (p["d"] - 2.0 * p["tf"]) * p["tw"]
+            Avy = Avy if Avy is not None else 5.0 / 6.0 * 2.0 * p["bf"] * p["tf"]
+        except Exception:
+            Avz = Avz if Avz is not None else A / 2.0
+            Avy = Avy if Avy is not None else A / 2.0
+    ops.element("ElasticTimoshenkoBeam", tag, n1, n2, E, Gmod, A, J, Ix, Iy, Avy, Avz, 3)
+    _MOMENT_NODES.add(n1)
+    _MOMENT_NODES.add(n2)
+    _BEAM_REL[tag] = ("none", "none")
+    return tag
+
+
 def nbays(cfg,k):
     P=grid(cfg,k); n=0
     for i in range(cfg["NX"]):
