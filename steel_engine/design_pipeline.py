@@ -1141,14 +1141,15 @@ def design_india(name, cfg, outdir):
                             k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                             if w is None or k_ > w[0]:
                                 worst[c["id"]] = (k_, c)
+                _mcl = _mf_conn_clause(cfg)
                 for cid, (_, c) in worst.items():
-                    checks.append(_row("IS 800 12.11.2 %s (joint %s)" % (cid, c.get("member")), c))
+                    checks.append(_row(_mf_conn_label(cfg, cid, c), c))
                 cn = joint_conn.get(sec)
                 if cn and cn.get("moment_capacity_Nmm"):
                     dem["M_1p2Mp_Nmm"] = None
                     notes.append("moment capacity %.1f kN-m (%s)" % (cn["moment_capacity_Nmm"] / 1e6, cn.get("type")))
                 if not checks:
-                    checks.append(_row("IS 800 12.11.2 moment connection", {"ok": None, "clause": "IS 800:2007 12.11.2",
+                    checks.append(_row("IS 800 %s moment connection" % _mcl, {"ok": None, "clause": "IS 800:2007 %s" % _mcl,
                                                                             "reason": "no joint checks for this beam group"}))
                 # a moment-frame beam pinned at one end (corner bay whose corner column belongs to the orthogonal
                 # frame): that end is a shear connection under the governing V (WP6-fix)
@@ -1417,6 +1418,18 @@ def design_india(name, cfg, outdir):
     print("[%s] %d combinations, %d elements, %s -> demands + IS 800 checks written; status %s"
           % (name, len(cases), len(reg), run.get("method"), st["status"]))
     return {"members": len(reg), "combos": len(cases), "outdir": outdir, "status": st["status"]}
+
+
+def _mf_conn_clause(cfg):
+    """H44 (HR-B-14): moment-frame connection clause -- OMF IS 800 12.10.2, SMF 12.11.2."""
+    import india_is800_s12 as _S12
+    return "12.10.2" if _S12.normalize_system(cfg.get("system")) == "OMF" else "12.11.2"
+
+
+def _mf_conn_label(cfg, cid, c):
+    """Connection row name built from the check's own clause (fallback: the system's 12.10.2 / 12.11.2)."""
+    lab = str(c.get("clause") or ("IS 800:2007 " + _mf_conn_clause(cfg))).replace("IS 800:2007", "IS 800").strip()
+    return "%s %s (joint %s)" % (lab, cid, c.get("member"))
 
 
 def _governing_result(res):

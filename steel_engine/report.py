@@ -2074,8 +2074,10 @@ def _deflection_section(cfg, nseg=6):
 
 def _grounding_check(cfg, name, pkg):
     """Verify the design actually queried the RAG collections its systems require (reliability).
-    Reads the activity log; A341/A358 are required only for seismic systems detailed for ductility
-    (R > 3); IS 800 + connection grounding are always required."""
+    Reads the activity log and the calc_package cites.  H44 (L-06): credit only by the IS collection names and
+    by cites that name the standard ("IS 800", "IS 18168") -- never by bare number substrings such as "360"
+    (span/360), "341" or "358".  Rows: IS 800 member limit states, Section 10 connections, Section 12 seismic
+    detailing (R > 3), 12.10.2 / 12.11.2 moment connections (moment frames, R > 3)."""
     import re as _re
     recs, _ = _load_activity(name)
     col = {}
@@ -2084,40 +2086,45 @@ def _grounding_check(cfg, name, pkg):
             mm = _re.search(r"\[([A-Za-z0-9_]+)\]", r.get("detail", ""))
             if mm: col[mm.group(1)] = col.get(mm.group(1), 0) + 1
     def n(c): return col.get(c, 0)
-    # ALSO credit grounding from the CITED CLAUSES in calc_package.json (not the activity log alone), so a
-    # filled, RAG-grounded package is recognised even if the auto-logger did not record the queries (P5).
     def _cited(obj):
         out = []
         if isinstance(obj, dict):
             for k, v in obj.items():
-                out += ([str(v)] if k in ("cited", "cite") else _cited(v))
+                out += ([str(v)] if k in ("cited", "cite", "clause") else _cited(v))
         elif isinstance(obj, list):
             for v in obj: out += _cited(v)
         return out
     _ct = " ".join(_cited(pkg or {}))
-    cite_a360 = "360" in _ct; cite_a341 = "341" in _ct; cite_a358 = "358" in _ct
+    _cc = " ".join(_cited((pkg or {}).get("connections") or []))
+    _is800 = _re.compile(r"\bIS\s*800\b", _re.I)
+    cite_is800 = bool(_is800.search(_ct))
+    cite_s10 = bool(_re.search(r"\bIS\s*800(?::\s*2007)?\s*(?:cl\.?\s*|§\s*)?10\.\d", _cc, _re.I))
+    cite_s12 = bool(_re.search(r"\bIS\s*800(?::\s*2007)?\s*(?:cl\.?\s*|§\s*)?12\.\d|\bIS\s*18168\b", _ct, _re.I))
+    cite_mc = bool(_re.search(r"\bIS\s*800(?::\s*2007)?\s*(?:cl\.?\s*|§\s*)?12\.1[01]\.2", _ct, _re.I))
     R = cfg["seis"].get("R", 3); braced = E.is_braced(cfg); detailed = R > 3
     has_conn = bool((pkg or {}).get("connections")); has_cap = bool((pkg or {}).get("capacity_design"))
+    q800 = n("engineering_standards_IS800")
     rows = []
     def row(item, required, ok, ev):
         rows.append([item, "required" if required else "n/a (R&le;3)" if not detailed else "n/a",
                      ev, ("&mdash;" if not required else ("grounded" if ok else "<b>MISSING</b>"))])
-    row("IS 800:2007 &mdash; member limit states", True, n("engineering_standards_IS800") > 0 or cite_a360,
-        f"{n('engineering_standards_IS800')} queries" + (" + cited in calc_package" if cite_a360 else ""))
-    row("IS 800 Ch. J &mdash; connection design grounded", True, has_conn,
-        "connections block present" if has_conn else "no connections block written")
-    row("IS 800 seismic-22 &mdash; seismic detailing / capacity design", detailed,
-        n("engineering_standards_IS800") > 0 or has_cap or cite_a341,
-        f"{n('engineering_standards_IS800')} queries" + (" + capacity_design block" if has_cap else "")
-        + (" + cited in calc_package" if cite_a341 else ""))
-    row("IS 800 connections &mdash; prequalified moment connections", detailed and not braced,
-        n("engineering_standards_IS816") > 0 or cite_a358,
-        f"{n('engineering_standards_IS816')} queries" + (" + cited in calc_package" if cite_a358 else ""))
+    row("IS 800:2007 &mdash; member limit states (Sections 7&ndash;9)", True, q800 > 0 or cite_is800,
+        f"{q800} queries" + (" + IS 800 cited in calc_package" if cite_is800 else ""))
+    row("IS 800:2007 Section 10 &mdash; connection design", True, has_conn and (q800 > 0 or cite_s10),
+        ("connections block present" if has_conn else "no connections block written")
+        + (" + IS 800 10.x cited" if cite_s10 else ""))
+    row("IS 800:2007 Section 12 &mdash; seismic detailing / capacity design", detailed,
+        q800 > 0 or has_cap or cite_s12,
+        f"{q800} queries" + (" + capacity_design block" if has_cap else "")
+        + (" + IS 800 12.x / IS 18168 cited" if cite_s12 else ""))
+    row("IS 800:2007 12.10.2 / 12.11.2 &mdash; moment-frame beam-to-column connections", detailed and not braced,
+        q800 > 0 or cite_mc,
+        f"{q800} queries" + (" + IS 800 12.10.2 / 12.11.2 cited" if cite_mc else ""))
     nmiss = sum(1 for r in rows if "MISSING" in r[3])
     head = ("<h3>Grounding verification</h3>"
             f"<p>Whether the design queried the RAG collections its systems require. R = {R} "
-            + ("(&gt; 3 &mdash; IS 800 seismic ductile detailing applies)." if detailed
-               else "(&le; 3 &mdash; system not detailed for seismic; IS 800 seismic/358 do not apply, design per IS 800).")
+            + ("(&gt; 3 &mdash; IS 800 Section 12 ductile detailing applies)." if detailed
+               else "(&le; 3 &mdash; system not detailed for seismic ductility; IS 800 Section 12 ductile rows do not apply).")
             + "</p>")
     tail = ("<p class='note'>Grounding incomplete: the items marked MISSING were required for this building's "
             "systems but no RAG query / calc-package evidence was found. Re-run those checks against the RAG.</p>"
