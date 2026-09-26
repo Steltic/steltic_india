@@ -170,7 +170,11 @@ def base_load_cases(records, *, kind="col", major_plane_is_frame=True, tags_of=N
     return out
 
 
-def column_splice(cfg, col_member, p, fy, records, *, sfrs):
+def column_splice(cfg, col_member, p, fy, records, *, sfrs, tags_of=None, seismic_cfg=None, tie_force_N=None,
+                  Hc_mm=None, Zx_lower_mm3=None):
+    """Column splice of the upper-column group: every (combination, element) record is one concurrent case
+    (P, Mz, My) (H10); cases tagged 12.2.3 / IS 18168 5.5 carry family '5.5'.  seismic_cfg = the Section 12 cfg
+    (zone, occupancy, apply_is18168) for the IS 18168 7.5 / 12.2.4.6 / 12.3.4.7 rules of SFRS columns."""
     sp = spec_for(cfg, "column_splice", col_member["section"], col_member.get("role_group") or "column")
     if not sp:
         return None
@@ -180,12 +184,28 @@ def column_splice(cfg, col_member, p, fy, records, *, sfrs):
                                          "clause": "IS 800:2007 12.5.2 (not applicable: no splice)",
                                          "cite": "column continuous over this length (declared)"}}}
     import static_model as SM
-    P = M = 0.0
+    cases = []
     for lab, r in (records or {}).items():
         d = dict(zip(SM.REC_FIELDS, list(r) + [0.0] * (len(SM.REC_FIELDS) - len(r))))
-        P = max(P, abs(d["N"])); M = max(M, abs(d["Mmaj"]))
+        base = str(lab).split("@")[0]
+        tg = set((tags_of or {}).get(base) or [])
+        fam = "5.5" if (tg & {"is18168_5_5", "is800_12_2_3"} or "[col]" in base) else "table4"
+        cases.append({"combo": lab, "P_N": -d["N"], "Mz_Nmm": abs(d["Mmaj"]), "My_Nmm": abs(d["Mmin"]),
+                      "V_N": max(abs(d["Vmaj"]), abs(d["Vmin"])), "family": fam})
+    P = max([abs(c["P_N"]) for c in cases] + [0.0])
+    M = max([c["Mz_Nmm"] for c in cases] + [0.0])
+    a18 = None
+    if sfrs and seismic_cfg is not None:
+        import india_is800_s12 as S12
+        st = S12.is18168_status(cfg.get("system"), seismic_cfg)
+        comps = S12.system_components(cfg.get("system"))
+        sys18 = "EBF" if "EBF" in comps else ("SCBF" if "SCBF" in comps else ("SMRF" if "SMF" in comps else None))
+        ry, _ = S12._ry(col_member, p)
+        a18 = {"applies": bool(st.get("applies")) and sys18 is not None, "system": sys18, "Ry": ry}
     return C.column_splice_checks(sfrs=sfrs, Af_mm2=p["bf"] * p["tf"], fy_MPa=fy, P_N=P, M_Nmm=M, Zx_mm3=p["Zx"],
-                                  A_mm2=p["A"], d_mm=p["d"], splice=sp)
+                                  A_mm2=p["A"], d_mm=p["d"], splice=sp, cases=cases, bf_mm=p["bf"], tf_mm=p["tf"],
+                                  tw_mm=p["tw"], is18168=a18, tie_force_N=tie_force_N, Hc_mm=Hc_mm,
+                                  Zx_lower_mm3=Zx_lower_mm3)
 
 
 # ------------------------------------------------------------------------------------------ HSFG slip (10.4.3)

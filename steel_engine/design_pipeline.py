@@ -1250,12 +1250,32 @@ def design_india(name, cfg, outdir):
             if upper:
                 m0 = mem_by_id["e%d" % upper[0]]
                 p0 = S.props(sec); fy0 = CD._fy(m0, p0)[0]
-                recs_u = {}
+                # H10: every (combination, element) record is one concurrent (P, Mz, My) case (was the largest |N|
+                # per label); H41: 5.1.2 tie force = largest factored DL+LL floor reaction at the splice level
+                # (N of the column below minus N of this column), clear height and the smaller connected member
+                recs_u, tie_N, Hc_u, Zlow = {}, 0.0, None, None
+                grav = lambda l: not any(x in l for x in ("EQ", "W_", "N_", "SLS", "TS:", "[CL"))
                 for t in upper:
                     for l, r in (envt[t].get("records") or {}).items():
-                        if l not in recs_u or abs(r[0]) > abs(recs_u[l][0]):
-                            recs_u[l] = r
-                spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"))
+                        recs_u["%s@e%d" % (l, t)] = r
+                    n1_, n2_ = reg[t][2], reg[t][3]
+                    below = [tb for tb in reg if reg[tb][0] == "col" and reg[tb][3] == n1_]
+                    for tb in below:
+                        rb, ru = envt[tb].get("records") or {}, envt[t].get("records") or {}
+                        for l in rb:
+                            if l in ru and grav(l):
+                                tie_N = max(tie_N, abs(rb[l][0]) - abs(ru[l][0]))
+                        try:
+                            zb = S.props(reg[tb][1])["Zx"]
+                            Zlow = zb if Zlow is None else min(Zlow, zb)
+                        except Exception:
+                            pass
+                    dbeam = lambda nd: max([S.props(reg[tt][1])["d"] for tt in reg if reg[tt][0] == "beam"
+                                            and nd in (reg[tt][2], reg[tt][3])] or [0.0])
+                    hc = length[t] - 0.5 * (dbeam(n1_) + dbeam(n2_))
+                    Hc_u = hc if Hc_u is None else min(Hc_u, hc)
+                spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"), tags_of=tagof,
+                                       seismic_cfg=s12_cfg, tie_force_N=tie_N, Hc_mm=Hc_u, Zx_lower_mm3=Zlow)
                 if spl is None:
                     checks.append(_row("IS 800 12.5.2 column splice", {"ok": None, "clause": "IS 800:2007 12.5.2 / 10",
                                                                         "reason": "cfg['connections']['column_splice'] not declared for %s" % sec}))
