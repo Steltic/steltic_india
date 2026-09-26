@@ -1954,6 +1954,7 @@ def beam_deflection_si(cfg):
     roofs = IL.roof_level_set(cfg, NF)                                 # H50: top level + cfg['roof_levels']
     groups = {}
     coords = {}
+    rafters = False
     for (t, kind, sec, n1, n2) in info["ele"]:
         if kind != "beam":
             continue
@@ -1971,7 +1972,8 @@ def beam_deflection_si(cfg):
             if _cl is not None and _cl[1] != "rafter":
                 continue                                   # X02: eave struts / ridge members / ties carry no area load
             if _cl is not None:
-                k_ = _cl[0]["k"]; roof = True
+                rafters = True                             # GOLD-3: checked on the analysed frame below, over the
+                continue                                   # rafter's span between its supports (not per piece)
         # tributary width by the bays actually bounding the beam (edge beam: one bay -> half the bay width;
         # interior: two half bays) -- the full-bay width on every group over-read edge-beam deflections (WP6-fix)
         i_, j_ = (min(n1, n2) % 100000) // 100, min(n1, n2) % 100
@@ -1983,8 +1985,6 @@ def beam_deflection_si(cfg):
             tw = _SM.one_way_trib_mm(cfg, pk, i_, j_, dirn)          # H13: actual bays + secondary strips
             if tw is not None:
                 trib = tw
-        if _cl is not None:
-            trib = _RG.rafter_trib_mm(_cl[0], c1[_cl[0]["oax"]])      # X02: rafter strip; L = plan length
         # H11 (HR-E-08): roof imposed = max(Lr, snow) (IS 875-5 8.1 Note 1); floors: the per-level imposed load
         # (_Llev: cfg['L_by_level'] override) + partitions
         if roof:
@@ -2010,7 +2010,115 @@ def beam_deflection_si(cfg):
         rows.append({"section": sec, "span_mm": round(L, 0), "roof": roof, "w_LL_N_per_mm": round(w, 3),
                      "delta_mm": round(delta, 2), "limit_mm": round(lim, 2), "ratio": round(r, 3), "cite": cite})
         worst = max(worst, r); n += 1
+    if rafters:
+        if cfg.get("deflection_key_roof"):
+            div_r, cite_r = IL.floor_deflection_limit(cfg, roof=True)
+        else:
+            div_r, cite_r = IL.floor_deflection_limit(cfg)
+        for r_ in rafter_service_deflection(cfg, div_r, cite_r):
+            rows.append(r_)
+            worst = max(worst, r_["ratio"]); n += 1
     return worst, n, rows
+
+
+RAFTER_DEFL_BASIS = ("IS 800:2007 5.6.1 / Table 6: vertical deflection of the rafter under the service imposed roof load "
+                     "(gamma_f 1.0, 5.6: Lr and snow as separate cases -- IS 875-5 8.1 Note 1 -- plus the IS 875-4 4.3 "
+                     "half-loaded snow rows when cfg['snow_partial'] is declared) 'by elastic analysis' of the 3-D frame "
+                     "(true-slope roof_planes model, eaves free to spread): deflection = max over the rafter line of the "
+                     "downward displacement from the chord between its two supports (column tops), + the simply "
+                     "supported sag of one sub-element (conservative); Span = the plan distance between those supports "
+                     "(eave to eave for a clear-span portal)")
+
+
+def rafter_service_deflection(cfg, div, cite, nseg=6):
+    """GOLD-3 (IN_Ex15): IS 800 Table 6 rafter deflection for true-slope roof planes (cfg['roof_planes']).
+    Every rafter line (plane, frame line) is taken from the analysed static model under the service roof imposed load
+    (Lr, snow, declared partial snow -- one case at a time, gamma_f 1.0, no dead load: the Table 6 'Live load' row);
+    the rafter span is the plan distance between consecutive supports on the line (nodes with a column), the
+    deflection the largest downward displacement from the chord of those supports.  Returns rows in the
+    beam_deflection_si format (+ basis, plane, line_coord_mm, load_case, supports_mm), the worst per (section, span,
+    plane).  The wind row of Table 6 ('Live load/Wind load') is not screened here (the wind drift gates stand)."""
+    import roof_geometry as RG
+    import static_model as SM
+    pls = RG.planes(cfg)
+    if not pls:
+        return []
+    cases = []
+    if any(RG.plane_pressures(cfg, pl)[2] > 0 for pl in pls):
+        cases.append(("Lr", 1.0, 0.0, None))
+    if any(RG.plane_pressures(cfg, pl)[3] > 0 for pl in pls):
+        cases.append(("snow", 0.0, 1.0, None))
+        spx = cfg.get("snow_partial")
+        if spx:
+            ax_ = str((spx.get("axis") if isinstance(spx, dict) else spx) or "X").upper()
+            cases += [("snow partial %s-%s" % (ax_, sd), 0.0, 1.0, (ax_, sd)) for sd in ("lo", "hi")]
+    best = {}
+    for (case, fLr, fS, sp) in cases:
+        ops.wipe()
+        model = SM.build_static(cfg, "Linear", nseg)
+        ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+        SM.apply_gravity_state(cfg, model, 0.0, 0.0, fLr, fS, self_weight=False, snow_pattern=sp)
+        ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+        ops.test("NormDispIncr", 1e-9, 20); ops.algorithm("Linear"); ops.integrator("LoadControl", 1.0)
+        ops.analysis("Static")
+        if ops.analyze(1) != 0:
+            raise RuntimeError("rafter service deflection: case %s did not solve" % case)
+        supports = set()
+        for c in model["cols"]:
+            supports.update((c["n1"], c["n2"]))
+        lines = {}
+        for b in model["beams"]:
+            rp = b.get("rp")
+            if rp is None or rp[1] != "rafter":
+                continue
+            pl = rp[0]
+            ca = ops.nodeCoord(b["A"])
+            key = (pl["idx"], round(ca[pl["oax"]], 0))
+            ln = lines.setdefault(key, {"pl": pl, "nodes": {}, "sub": {}, "sec": set()})
+            ln["sec"].add(str(b["sec"]))
+            ch = b["nodes"]
+            for n_ in ch:
+                ln["nodes"][n_] = ops.nodeCoord(n_)[pl["ax"]]
+            A_, Ix_, _Iy, _J = Ipack(b["sec"])
+            D_, _L0, Lr_, S_ = RG.plane_pressures(cfg, pl)
+            w_ = (fLr * Lr_ + fS * S_) * RG.rafter_trib_mm(pl, ca[pl["oax"]]) / 1000.0     # N/mm of plan
+            ls_ = b["L"] / max(len(b["segs"]), 1)
+            for n0_, n1_ in zip(ch, ch[1:]):
+                ln["sub"][(n0_, n1_)] = (5.0 * w_ * ls_ ** 4 / (384.0 * E * Ix_), w_)
+        for key, ln in lines.items():
+            pl = ln["pl"]
+            pts = sorted(ln["nodes"].items(), key=lambda kv: kv[1])
+            sup = [(n_, a_) for n_, a_ in pts if n_ in supports]
+            for (s0, a0), (s1, a1) in zip(sup, sup[1:]):
+                span = a1 - a0
+                if span <= RG.TOL:
+                    continue
+                z0, z1 = ops.nodeDisp(s0, 3), ops.nodeDisp(s1, 3)
+                d_node = 0.0
+                for n_, a_ in pts:
+                    if a0 - RG.TOL <= a_ <= a1 + RG.TOL:
+                        chord = z0 + (z1 - z0) * (a_ - a0) / span
+                        d_node = max(d_node, chord - ops.nodeDisp(n_, 3))
+                subs = [v for (na, nb), v in ln["sub"].items()
+                        if a0 - RG.TOL <= ln["nodes"][na] <= a1 + RG.TOL and a0 - RG.TOL <= ln["nodes"][nb] <= a1 + RG.TOL]
+                d_sub = max([v[0] for v in subs] or [0.0])
+                w_line = max([v[1] for v in subs] or [0.0])
+                if w_line <= 0.0:
+                    continue
+                delta = d_node + d_sub
+                lim = span / div
+                sec = "/".join(sorted(ln["sec"]))
+                row = {"section": sec, "span_mm": round(span, 0), "roof": True, "w_LL_N_per_mm": round(w_line, 3),
+                       "delta_mm": round(delta, 2), "limit_mm": round(lim, 2), "ratio": round(delta / lim, 3),
+                       "cite": cite, "member": "rafter (roof_planes)", "plane": pl["idx"],
+                       "line_coord_mm": key[1], "supports_mm": [round(a0, 0), round(a1, 0)], "load_case": case,
+                       "delta_frame_mm": round(d_node, 2), "delta_subelement_mm": round(d_sub, 3),
+                       "basis": RAFTER_DEFL_BASIS}
+                gk = (sec, round(span, 0), pl["idx"])
+                if gk not in best or row["ratio"] > best[gk]["ratio"]:
+                    best[gk] = row
+    ops.wipe()
+    return list(best.values())
 
 
 _INDIA_RUN_CACHE = {}

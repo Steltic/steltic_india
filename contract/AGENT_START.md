@@ -267,6 +267,11 @@ Before `pipeline.design_and_report`:
   the eave nodes. A custom_build must call `roof_geometry.add_plane_members` / `tie_diaphragm` as
   `example_build.py` does. Limits: one span axis per level, no mono-pitch, `Lr` is not reduced for slope (declare
   it per plane), partial snow only when declared. A sloped beam without `roof_planes` is a preflight ERROR.
+  Rafter deflection (IS 800 5.6.1 / Table 6, e.g. `deflection_key_roof` 'rafter_profiled_sheeting' = Span/180): by
+  elastic analysis of the frame under the service roof imposed load (Lr, snow and declared partial snow, one at a
+  time, gamma_f 1.0), Span = plan distance between the rafter's supports (eave to eave for a clear-span portal),
+  deflection = largest drop from the chord of those supports (`beam_deflection` rows with `member` 'rafter
+  (roof_planes)'); the Table 6 wind case of that row is not screened there.
 * **Point loads:** `nodal_imposed_loads` [{node, Fz_N (down < 0), Mx_Nmm, My_Nmm, level, kind 'floor' | 'roof'}]
   (factored as floor imposed / roof imposed), `nodal_snow_loads` [{node, Fz_N, ...}] (lean-to drift reactions,
   factored with snow), `snow_partial` = {axis, ridge_mm} (IS 875-4 4.3 half-loaded rows split at the ridge, default
