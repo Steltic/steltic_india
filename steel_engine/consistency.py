@@ -814,15 +814,28 @@ def _rag_texts(job_dir):
                 _gather_text(js, txt)
                 raw = " ".join(t for t in txt if isinstance(t, str))
             except Exception:
-                pass
+                # AUD-1: a plain-text stored hit (steltic job_tools._render_rag) carries its own query in the
+                # header line '# RAG query: <query>'; without that header the file has no query (q stays None).
+                m = _RAG_QUERY_HDR.search(raw[:2000])
+                q = m.group(1).strip() if m else None
             out.append((os.path.relpath(p, job_dir), q, re.sub(r"\s+", " ", raw).lower()))
     return out
 
 
+_RAG_QUERY_HDR = re.compile(r"^#\s*RAG query:\s*(.+?)\s*$", re.M)
+
+
+def _norm_query(q):
+    return re.sub(r"\s+", " ", str(q or "")).strip().lower()
+
+
 def rag_evidence_issues(plan, job_dir):
-    """found:true retrieval entries must have a stored hit in rag/ containing the cited text:
-    either {hit_file, quote} with the quote in that file, or a stored hit for the same query whose
-    text contains every number quoted in the cite."""
+    """found:true retrieval entries must have a stored hit in rag/ that is THEIR OWN evidence (AUD-1):
+    (a) {hit_file, quote} with the quote verbatim (whitespace-normalised) in that file; or
+    (b) a stored rag/ file whose own query (the '# RAG query:' header line of a text hit, or the JSON 'query'
+        field) equals the row's query, and whose text contains every number quoted in the row's cite.
+    A file with no recorded query, or with a different query, is never evidence for the row -- an unrelated hit
+    that happens to contain the same digits (e.g. '0.75' in 'Ta = 0.075 h^0.75') must not back a quote-less row."""
     out = []
     ret = (plan or {}).get("retrieval") if isinstance(plan, dict) else None
     if not isinstance(ret, list):
@@ -834,20 +847,27 @@ def rag_evidence_issues(plan, job_dir):
         cite = str(h.get("cite") or "")
         ok = False
         hf, quote = h.get("hit_file"), h.get("quote")
+        why = ""
         if hf and quote:
             qn = re.sub(r"\s+", " ", str(quote)).lower()
             ok = any(rel.endswith(str(hf)) and qn in t for rel, _q, t in texts)
+            why = "its quote is not verbatim in the stored hit_file %s" % hf
         else:
             nums = [n.strip() for n in _NUM.findall(cite)]
-            for rel, q, t in texts:
-                if q is not None and str(q).strip().lower() != str(h.get("query") or "").strip().lower():
-                    continue
-                if nums and all(n in t for n in nums):
-                    ok = True
-                    break
+            rq = _norm_query(h.get("query"))
+            own = [t for rel, q, t in texts if q is not None and rq and _norm_query(q) == rq]
+            if not own:
+                why = "no stored rag/ file records this query (no '# RAG query:' header / JSON query match)"
+            elif not nums:
+                why = "the cite quotes no value to find in the stored hit for this query"
+            else:
+                ok = any(all(n in t for n in nums) for t in own)
+                why = "the stored hit for this query does not contain the cited value(s) %s" % nums
         if not ok:
-            out.append("load_plan.retrieval[%d] (%s) is found:true but no stored rag/ hit contains the cited "
-                       "text/values -- persist the hit (hit_file + quote) or set found:false" % (i, h.get("query")))
+            out.append("evidence: load_plan.retrieval[%d] (%s) is found:true but no stored rag/ hit contains the cited "
+                       "text/values as its own evidence (%s) -- attach hit_file + quote (verbatim text of the stored "
+                       "rag/ hit for this query), or set found:false with an EOR assumption {value, source, cite, "
+                       "verify: True} (AUD-1)" % (i, h.get("query"), why))
     return out
 
 
