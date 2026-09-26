@@ -219,16 +219,49 @@ def parse_systems(text, *, imf_as_smrf=False) -> list:
 
 
 def resolve_system_R(cfg) -> dict:
-    """Table 9 R for the declared system(s); R = min over components unless R_x/R_y given."""
+    """Table 9 R for the declared system(s).
+
+    R_table9 = min over all components (the default design R for both directions).  H06: per-direction R is
+    honoured when declared -- cfg['R_x'] / cfg['R_y'] (or seis / seismic_summary R_x, R_y).  Each declared value
+    is validated against the Table 9 R of that direction's system (cfg['system_x'] / cfg['system_y'] when given,
+    else every declared component): a declared R above that value is refused (errors[], the Table 9 value is
+    used), a lower one is kept (conservative).  R_x / R_y in the result are the values ESM and RSA use."""
     cfg = cfg or {}
     txt = system_text(cfg)
-    comps = parse_systems(txt, imf_as_smrf=bool(cfg.get("imf_as_smrf")))
+    imf = bool(cfg.get("imf_as_smrf"))
+    comps = parse_systems(txt, imf_as_smrf=imf)
     rows = [TABLE9_STEEL[c] for c in comps if c in TABLE9_STEEL]
     nob = [c.split(":", 1)[1] for c in comps if c.startswith("nobasis:")]
     R = min((r["R"] for r in rows), default=None)
-    return {"system_text": txt, "components": comps, "table9_rows": [r["row"] for r in rows],
-            "R_table9": R, "no_basis": nob,
-            "cite": "; ".join("%s R = %.1f" % (r["row"], r["R"]) for r in rows) or None}
+    _, ss = _summary(cfg)
+    out = {"system_text": txt, "components": comps, "table9_rows": [r["row"] for r in rows],
+           "R_table9": R, "no_basis": nob,
+           "cite": "; ".join("%s R = %.1f" % (r["row"], r["R"]) for r in rows) or None,
+           "errors": []}
+    for d in ("x", "y"):
+        dsys = cfg.get("system_" + d)
+        dcomps = parse_systems(dsys, imf_as_smrf=imf) if dsys else comps
+        drows = [TABLE9_STEEL[c] for c in dcomps if c in TABLE9_STEEL]
+        Rt = min((r["R"] for r in drows), default=R)
+        decl = None
+        for src in (cfg, _seis(cfg), ss):
+            v = _f(src.get("R_" + d))
+            if v is not None:
+                decl = v
+                break
+        use, basis = R, "min over components (Table 9)"
+        if decl is not None:
+            if Rt is not None and decl > Rt + 1e-9:
+                out["errors"].append("R_%s = %.2f exceeds the IS 1893 Table 9 value %.2f for the %s-direction system %s"
+                                     % (d, decl, Rt, d.upper(), "/".join(dcomps) or "?"))
+                use, basis = Rt, "declared R_%s refused (> Table 9); Table 9 value of the %s-direction system" % (d, d.upper())
+            else:
+                use, basis = decl, "declared R_%s (<= Table 9 %s for %s)" % (d, Rt, "/".join(dcomps) or "?")
+        out["R_" + d] = use
+        out["R_%s_table9" % d] = Rt
+        out["R_%s_declared" % d] = decl
+        out["R_%s_basis" % d] = basis
+    return out
 
 
 def declared_R(cfg):
@@ -316,6 +349,8 @@ def validate_R(cfg) -> list:
                         (R, Rt, "/".join(info["components"]))))
         elif R < Rt - 1e-9:
             out.append(("WARN", "R = %.2f is below the Table 9 value %.2f (conservative)" % (R, Rt)))
+    for msg in resolve_system_R(cfg).get("errors") or []:          # H06: per-direction R_x / R_y
+        out.append(("ERROR", msg))
     return out
 
 

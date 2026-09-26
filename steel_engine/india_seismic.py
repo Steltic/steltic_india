@@ -144,9 +144,9 @@ TABLE7_RHO = {"II": 0.007, "III": 0.011, "IV": 0.016, "V": 0.024}     # IS 1893 
 def esm_summary(W_by_floor_N, heights_mm, Z, I, R, soil, zone, Ta) -> dict:
     """IS 1893 7.6 equivalent static method from the (engine) seismic weights.
 
-    Ta: seconds, or {'X': Tx, 'Y': Ty}.  VB = max(Ah W, rho W) (7.6.1, 7.2.2 / Table 7),
-    Qi = VB Wi hi^2 / sum(Wj hj^2) (7.6.3(a)).  Returns a seismic_summary fragment (kN) and the
-    unfactored story forces in N."""
+    Ta: seconds, or {'X': Tx, 'Y': Ty}.  R: number, or {'X': R_x, 'Y': R_y} (H06 per-direction R).
+    VB = max(Ah W, rho W) (7.6.1, 7.2.2 / Table 7), Qi = VB Wi hi^2 / sum(Wj hj^2) (7.6.3(a)).
+    Returns a seismic_summary fragment (kN) and the unfactored story forces in N."""
     W = [float(w) for w in W_by_floor_N]
     hs = []
     z = 0.0
@@ -154,6 +154,8 @@ def esm_summary(W_by_floor_N, heights_mm, Z, I, R, soil, zone, Ta) -> dict:
         z += float(h)
         hs.append(z / 1000.0)
     Tad = Ta if isinstance(Ta, dict) else {"X": float(Ta), "Y": float(Ta)}
+    Rd = {k: float(v) for k, v in R.items()} if isinstance(R, dict) else {"X": float(R), "Y": float(R)}
+    R = min(Rd.values())
     rho = TABLE7_RHO.get(str(zone).upper().replace("ZONE", "").strip())
     Wt = sum(W)
     out = {"W_kN": round(Wt / 1000.0, 3), "W_by_floor_kN": [round(w / 1000.0, 3) for w in W],
@@ -163,7 +165,8 @@ def esm_summary(W_by_floor_N, heights_mm, Z, I, R, soil, zone, Ta) -> dict:
     den = sum(w * h * h for w, h in zip(W, hs))
     for d in ("X", "Y"):
         sa = sa_over_g(Tad[d], soil, "ESM")
-        Ah = max((float(Z) / 2.0) * (float(I) / float(R)) * sa, rho or 0.0)
+        Ah = max((float(Z) / 2.0) * (float(I) / Rd[d]) * sa, rho or 0.0)
+        out["R_%s" % d.lower()] = Rd[d]
         VB = Ah * Wt
         Q = [VB * w * h * h / den for w, h in zip(W, hs)]
         out["Ta_%s_s" % d.lower()] = round(Tad[d], 4)

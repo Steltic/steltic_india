@@ -1263,7 +1263,7 @@ def section12_checks(system, model_data, cfg=None):
             checks += brace_member_checks(sysn_b, m, model_data, cfg)
             checks += brace_connection_checks(sysn_b, m, conns.get(m["id"]), model_data, cfg)
         checks += tension_share_checks(sysn_b, model_data)
-    if sysn == "EBF":
+    if "EBF" in comps:                         # H06 (E2): the EBF link chain runs whenever EBF is any component
         links = model_data.get("links") or []
         if not links:
             checks.append(_na("ebf_links", clause="IS 18168:2023 11 / 12.3", cite="links modelled and designed",
@@ -1296,7 +1296,7 @@ def section12_checks(system, model_data, cfg=None):
                                    cite="12.3.4.1: columns satisfy Table 2 (ii), Ca = Pu/(Py/gamma_m0)"))
         for m in _members(model_data, "brace"):
             checks += ebf_brace_checks(m, model_data, cfg)
-            checks += brace_connection_checks(sysn, m, conns.get(m["id"]), model_data, cfg)
+            checks += brace_connection_checks("EBF", m, conns.get(m["id"]), model_data, cfg)
         checks += ebf_beam_column_checks(links, model_data, cfg)
         advisories.append({"note": "IS 800:2007 12.9 refers EBF to specialist literature; IS 18168:2023 cl. 11/12.3 "
                                    "applied (decision D2)."})
@@ -1327,4 +1327,4 @@ def section12_checks(system, model_data, cfg=None):
             "n_checks": len(checks), "n_fail": len(failing), "n_not_evaluated": len(missing),
             "checks": checks, "advisories": advisories,
             "blocks_complete": ok is not True,
-            "cite": "IS 800:2007 Section 12" + (" + IS 18168:2023 (EBF links)" if sysn == "EBF" else "")}
+            "cite": "IS 800:2007 Section 12" + (" + IS 18168:2023 (EBF links)" if "EBF" in comps else "")}

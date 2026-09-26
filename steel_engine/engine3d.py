@@ -872,6 +872,17 @@ def india_seismic_params(cfg):
     if miss:
         raise ValueError("IS 1893 seismic parameters missing: %s (seismic_summary / cfg['seis'])" % miss)
     out["Z"], out["I"], out["R"] = float(out["Z"]), float(out["I"]), float(out["R"])
+    # H06: per-direction R (cfg R_x / R_y validated against Table 9 per direction); default = R for both
+    out["R_x"] = out["R_y"] = out["R"]
+    try:
+        import india_seismic_gates as _G
+        sr = _G.resolve_system_R(cfg)
+        for d in ("x", "y"):
+            if sr.get("R_%s_declared" % d) is not None and sr.get("R_" + d) is not None:
+                out["R_" + d] = float(sr["R_" + d])
+                out["R_%s_basis" % d] = sr.get("R_%s_basis" % d)
+    except Exception:
+        pass
     return out
 
 
@@ -926,17 +937,74 @@ def india_story_forces(cfg, direction, kind="EQ"):
             for k, v in dict(raw).items()}
 
 
-def VBbar(cfg, direction):
-    """V-bar_B (N): design base shear from the approximate period Ta (7.7.3) -- the ESM VB of the
-    load_plan in that direction (VB_x_kN / VB_y_kN / VB_kN), cross-checked against the story forces."""
+def _agent_VBbar(cfg, direction):
+    """The agent's V-bar_B (N) in a direction: seismic_summary VB_x_kN / VB_y_kN / VB_kN, else the EQ story
+    forces sum.  None when neither is declared."""
     ss = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
     v = ss.get("VB_%s_kN" % direction.lower(), ss.get("VB_kN"))
     if v is not None:
-        return float(v) * 1000.0
+        return float(v) * 1000.0, ("seismic_summary.VB_%s_kN" % direction.lower()
+                                   if ss.get("VB_%s_kN" % direction.lower()) is not None else "seismic_summary.VB_kN")
     Fx = india_story_forces(cfg, direction)
     if Fx:
-        return abs(sum(f[0] if direction == "X" else f[1] for f in Fx.values()))
-    raise ValueError("V-bar_B for %s unavailable (seismic_summary.VB_kN or story_forces.EQ_%s)" % (direction, direction))
+        return abs(sum(f[0] if direction == "X" else f[1] for f in Fx.values())), "story_forces.EQ_" + direction
+    return None, None
+
+
+def VBbar_record(cfg, direction):
+    """H02: V-bar_B (N) per direction, computed by the engine and compared with the agent's value.
+
+    Engine value: IS 1893 7.6.1 VB = Ah W with Ah = max((Z/2)(I/R_d)(Sa/g)(Ta_d), rho_min Table 7) -- 6.4.2(a)
+    ESM spectrum at the approximate period Ta_d of 7.6.2 (seismic_summary Ta_x_s / Ta_y_s, else Ta_s / Ta), R_d
+    the direction's R (H06) and W = the larger of the engine seismic weight and the declared W_kN (7.4).
+    used_N = max(engine, agent) -- 7.7.3 V-bar_B is never below the code value."""
+    import india_seismic as IS
+    d = direction.upper()
+    ss = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
+    agent, agent_src = _agent_VBbar(cfg, d)
+    rec = {"direction": d, "agent_N": agent, "agent_source": agent_src, "engine_N": None,
+           "clause": "IS 1893 (Part 1):2016 6.4.2, 7.2.2 (Table 7), 7.6.1, 7.6.2, 7.7.3"}
+    try:
+        prm = india_seismic_params(cfg)
+        Ta = ss.get("Ta_%s_s" % d.lower())
+        if Ta is None:
+            Ta = ss.get("Ta_s", ss.get("Ta"))
+        if Ta is None:
+            raise ValueError("Ta_%s_s / Ta_s not declared" % d.lower())
+        Ta = float(Ta)
+        NF = len(cfg["heights"])
+        We = sum(floor_w(cfg, k) for k in range(1, NF + 1))
+        Wd = float(ss["W_kN"]) * 1000.0 if ss.get("W_kN") is not None else 0.0
+        W = max(We, Wd)
+        R = float(prm["R_" + d.lower()])
+        sa = IS.sa_over_g(Ta, prm["soil"], "ESM")
+        try:
+            import india_seismic_gates as _G
+            zone = _G.zone_of(cfg)
+        except Exception:
+            zone = prm.get("zone")
+        rho = IS.TABLE7_RHO.get(str(zone or "").upper().replace("ZONE", "").strip()) or 0.0
+        Ah = max((prm["Z"] / 2.0) * (prm["I"] / R) * sa, rho)
+        rec.update(engine_N=Ah * W, Ta_s=Ta, R=R, Z=prm["Z"], I=prm["I"], soil=prm["soil"], Sa_g=sa, Ah=Ah,
+                   rho_min=rho, W_engine_N=We, W_declared_N=Wd or None, W_used_N=W)
+    except Exception as ex:
+        rec["engine_error"] = "%s: %s" % (type(ex).__name__, ex)
+    vals = [v for v in (rec["engine_N"], agent) if v is not None]
+    if not vals:
+        raise ValueError("V-bar_B for %s unavailable (seismic_summary.VB_kN or story_forces.EQ_%s; engine: %s)"
+                         % (d, d, rec.get("engine_error")))
+    rec["used_N"] = max(vals)
+    rec["basis"] = ("engine" if rec["engine_N"] is not None and (agent is None or rec["engine_N"] > agent)
+                    else "agent")
+    if rec["engine_N"] and agent is not None:
+        rec["agent_shortfall"] = 1.0 - agent / rec["engine_N"]
+    return rec
+
+
+def VBbar(cfg, direction):
+    """V-bar_B (N): design base shear from the approximate period Ta (7.7.3) -- the larger of the engine's
+    IS 1893 7.6.1 value in that direction and the agent's load_plan value (H02, see VBbar_record)."""
+    return VBbar_record(cfg, direction)["used_N"]
 
 
 def seismic_weights(cfg):
@@ -952,7 +1020,8 @@ def esm_from_model(cfg, Ta, soil=None):
     import india_seismic as IS
     prm = india_seismic_params(dict(cfg, seis=dict(cfg.get("seis") or {}, soil=soil or (cfg.get("seis") or {}).get("soil"))))
     W, comps = seismic_weights(cfg)
-    r = IS.esm_summary(W, cfg["heights"], prm["Z"], prm["I"], prm["R"], prm["soil"], prm.get("zone"), Ta)
+    r = IS.esm_summary(W, cfg["heights"], prm["Z"], prm["I"], {"X": prm["R_x"], "Y": prm["R_y"]}, prm["soil"],
+                       prm.get("zone"), Ta)
     r["seismic_summary"]["W_components_kN"] = {k: {n: round(v / 1000.0, 2) for n, v in c.items()} for k, c in comps.items()}
     return r
 
@@ -988,7 +1057,10 @@ def rsa_analysis(cfg, nseg=6, zeta=0.05):
         Mn.append(M)
         Gam["X"].append(sum(m[k] * ph[k][0] for k in ph) / M)
         Gam["Y"].append(sum(m[k] * ph[k][1] for k in ph) / M)
-    A = [IS.design_Ah(prm["Z"], prm["I"], prm["R"], T, prm["soil"], "RSA") for T in mp["T"]]
+    # H06: Ak per direction with that direction's R (R_x / R_y; = R when not declared)
+    Ad = {d: [IS.design_Ah(prm["Z"], prm["I"], prm["R_" + d.lower()], T, prm["soil"], "RSA") for T in mp["T"]]
+          for d in ("X", "Y")}
+    A = Ad["X"]
     w = [math.sqrt(max(x, 1e-12)) for x in mp["w2"]]
     rho = np.array([[IS.cqc_rho(w[i], w[j], zeta) for j in range(nm)] for i in range(nm)])
     # unit modal load patterns on the linear static model, one solve per mode
@@ -1014,10 +1086,10 @@ def rsa_analysis(cfg, nseg=6, zeta=0.05):
         mx = Gam["X"][n] ** 2 * Mn[n] / mp["Mtot"]; my = Gam["Y"][n] ** 2 * Mn[n] / mp["Mtot"]
         ph = mp["phi"][n]
         out["modes"].append({"mode": n + 1, "T": mp["T"][n], "Sa_g": IS.sa_over_g(mp["T"][n], prm["soil"], "RSA"),
-                             "Ak": A[n], "mass_x": mx, "mass_y": my,
+                             "Ak": A[n], "Ak_x": Ad["X"][n], "Ak_y": Ad["Y"][n], "mass_x": mx, "mass_y": my,
                              "rot": sum(J[k] * ph[k][2] ** 2 for k in ph) / Mn[n]})
     for d in ("X", "Y"):
-        coef = np.array([Gam[d][n] * A[n] for n in range(nm)])
+        coef = np.array([Gam[d][n] * Ad[d][n] for n in range(nm)])
         # modal base shear (N): coef * g * sum(m phi_d)
         Vn = np.array([coef[n] * g * sum(m[k] * mp["phi"][n][k][0 if d == "X" else 1] for k in m) for n in range(nm)])
         VB = float(math.sqrt(max(Vn @ rho @ Vn, 0.0)))
@@ -1027,7 +1099,8 @@ def rsa_analysis(cfg, nseg=6, zeta=0.05):
             vk = np.array([coef[n] * g * sum(m[j] * mp["phi"][n][j][0 if d == "X" else 1] for j in range(k, NF + 1))
                            for n in range(nm)])
             Vst.append(float(math.sqrt(max(vk @ rho @ vk, 0.0))))
-        Vbar = VBbar(cfg, d)
+        _vrec = VBbar_record(cfg, d)
+        Vbar = _vrec["used_N"]
         scale = max(1.0, Vbar / VB) if VB > 0 else 1.0
         E_ = {}
         for t in tags:
@@ -1039,9 +1112,9 @@ def rsa_analysis(cfg, nseg=6, zeta=0.05):
         for k in range(1, NF + 1):
             un = np.array([coef[n] * g / mp["w2"][n] * mp["phi"][n][k][0 if d == "X" else 1] for n in range(nm)])
             disp.append(float(math.sqrt(max(un @ rho @ un, 0.0))))
-        out[d] = {"VB_rsa_N": VB, "VBbar_N": Vbar, "scale": scale, "VB_scaled_N": VB * scale,
+        out[d] = {"VB_rsa_N": VB, "VBbar_N": Vbar, "scale": scale, "VB_scaled_N": VB * scale, "R": prm["R_" + d.lower()],
                   "mass_participation": cum, "storey_shear_N": Vst, "storey_shear_scaled_N": [v * scale for v in Vst],
-                  "disp_cm_mm_unscaled": disp,
+                  "disp_cm_mm_unscaled": disp, "VBbar_record": _vrec,
                   "cite": "IS 1893 7.7.3.1 (Amd 2): force responses x V-bar_B/VB when VB < V-bar_B; "
                           "7.7.3.2 displacements not scaled"}
         out["elements"][d] = E_
