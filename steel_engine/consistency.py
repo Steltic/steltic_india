@@ -845,6 +845,50 @@ def rag_evidence_issues(plan, job_dir):
     return out
 
 
+def _eor_record_ok(r):
+    """An EOR assumption record: value + source + cite, flagged for verification (verify True)."""
+    return isinstance(r, dict) and r.get("value") is not None and \
+        all(r.get(k) not in (None, "", [], {}) for k in ("source", "cite")) and r.get("verify") is True
+
+
+def retrieval_assumption_issues(plan, cfg=None):
+    """H30 (HR-E-04): a found:false retrieval row must be paired with an EOR assumption record -- either the row
+    itself carries {value, source, cite, verify: True} or cfg['eor_assumptions'] holds a record with the row's
+    query (or retrieval_index) and those fields.  Otherwise the value used for that item is undisclosed."""
+    out = []
+    ret = (plan or {}).get("retrieval") if isinstance(plan, dict) else None
+    if not isinstance(ret, list):
+        return out
+    eor = (cfg or {}).get("eor_assumptions") if isinstance(cfg, dict) else None
+    eor = [eor] if isinstance(eor, dict) else (eor if isinstance(eor, list) else [])
+    for i, h in enumerate(ret):
+        if not isinstance(h, dict) or h.get("found") is not False:
+            continue
+        if _eor_record_ok(h):
+            continue
+        q = str(h.get("query") or "").strip().lower()
+        paired = any(_eor_record_ok(r) and ((q and str(r.get("query") or "").strip().lower() == q)
+                                            or r.get("retrieval_index") == i) for r in eor)
+        if not paired:
+            out.append("load_plan.retrieval[%d] (%s): found:false without EOR assumption -- record the value used "
+                       "with {value, source, cite, verify: True} on the row or in cfg['eor_assumptions']"
+                       % (i, h.get("query") or h.get("stem")))
+    return out
+
+
+def plan_of(cfg, pkg, job_dir):
+    """The job's load_plan: cfg first, then the package, then load_plan.json."""
+    plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None
+    if plan is None and isinstance(pkg, dict):
+        plan = pkg.get("load_plan")
+    if plan is None and job_dir and os.path.exists(os.path.join(job_dir, "load_plan.json")):
+        try:
+            plan = json.load(open(os.path.join(job_dir, "load_plan.json")))
+        except Exception:
+            plan = None
+    return plan
+
+
 _COMPONENT_REQUIRES = (
     (re.compile(r"crane|gantry|runway", re.I), lambda c, comps: bool(c.get("crane") or c.get("cranes"))),
     (re.compile(r"\bbrb|brb_core|buckling[_ -]?restrained", re.I), lambda c, comps: "nobasis:brbf" in comps),   # WP6-fix: not every 'buckling' key (gusset 12.8.3.4) is a BRB
@@ -981,15 +1025,9 @@ def india_issues(cfg, pkg, job_dir):
     out += script_grep_issues(job_dir)
     out += bak_issues(job_dir)
     out += report_residue_issues(job_dir)
-    plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None
-    if plan is None and isinstance(pkg, dict):
-        plan = pkg.get("load_plan")
-    if plan is None and job_dir and os.path.exists(os.path.join(job_dir, "load_plan.json")):
-        try:
-            plan = json.load(open(os.path.join(job_dir, "load_plan.json")))
-        except Exception:
-            plan = None
+    plan = plan_of(cfg, pkg, job_dir)
     out += rag_evidence_issues(plan, job_dir)
+    out += retrieval_assumption_issues(plan, cfg)
     return out
 
 

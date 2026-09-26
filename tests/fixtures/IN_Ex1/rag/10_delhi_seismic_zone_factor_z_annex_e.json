@@ -1,0 +1,17 @@
+{
+ "query": "Delhi seismic zone factor Z Annex E",
+ "collection": "engineering_standards_IS1893",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_1893_Part_1_2016",
+   "file": "documents/standards/IS_1893_Part_1_2016/markdown/IS_1893_Part_1_2016.search.md",
+   "char_span": [
+    159355,
+    160168
+   ],
+   "text": "6 Chandigarh IV 0.24 Ajmer II 0.10 Chennai III 0.16 Allahabad II 0.10 Chitradurga II 0.10 Almora IV 0.24 Coimbatore III 0.16 Ambala IV 0.24 Cuddalore II 0.10 Amritsar IV 0.24 Cuttack III 0.16 Asansol III 0.16 Darbhanga V 0.36 Aurangabad II 0.10 Darjeeling IV 0.24 Bahraich IV 0.24 Dharwad III 0.16 Bangalore (Bengaluru) II 0.10 Dehra Dun IV 0.24 Barauni IV 0.24 Dharampuri III 0.16 Bareilly III 0.16 Delhi IV 0.24 Belgaum III 0.16 Durgapur III 0.16 Bhatinda III 0.16 Gangtok IV 0.24 Bhilai II 0.10 Guwahati V 0.36 Bhopal II 0.10 Gulbarga II 0.10 Bhubaneswar III 0.16 Gaya III 0.16 Bhuj V 0.36 Gorakhpur IV 0.24 Bijapur III 0.16 Hyderabad II 0.10 Bikaner III 0.16 Imphal V 0.36 Bokaro III 0.16 Jabalpur III 0.16 Bulandshahr IV 0.24 Jaipur II 0.10 Burdwan III 0.16 Jamshedpur II 0.10 36 <!-- pdf_page=39 printed_lab"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

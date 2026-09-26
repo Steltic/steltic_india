@@ -33,7 +33,42 @@ def ex1_cfg(upgrade=True):
     for k in ("SDS", "SD1", "Cd", "Om0", "Ct", "x", "Cu", "Ie"):
         cfg["seis"].pop(k, None)
     cfg["occupancy"] = {"use": "office", "area_m2": 3600.0}
+    attach_rag_evidence(plan)
     return cfg, seis
+
+
+# H30: every found:true retrieval row names its stored hit (rag/<file> + a verbatim quote from the corpus, see
+# tests/fixtures/IN_Ex1/rag/, generated from engineering_rag_india .search.md); every found:false row carries the
+# EOR assumption actually used (value, source, cite, verify).
+EX1_EOR_ASSUMPTIONS = {
+    "snow Delhi": {"value": 0.0, "unit": "kN/m2", "source": "EOR assumption: New Delhi plains, no snowfall",
+                   "cite": "IS 875 (Part 4):1987 not retrieved (found:false); snow load not applied for Delhi",
+                   "verify": True},
+    "special loads": {"value": "none", "source": "EOR assumption: no IS 875 (Part 5) special load applies "
+                                                 "(no temperature / settlement / impact case in the brief)",
+                      "cite": "IS 875 (Part 5):1987 not retrieved (found:false)", "verify": True},
+}
+
+
+def attach_rag_evidence(plan):
+    import json as _json
+    idx = _json.load(open(FIX / "rag_index.json", encoding="utf-8"))
+    for row in plan.get("retrieval") or []:
+        if row.get("found") is True and row.get("query") in idx:
+            row.update(idx[row["query"]])
+        elif row.get("found") is False and row.get("query") in EX1_EOR_ASSUMPTIONS:
+            row.update(EX1_EOR_ASSUMPTIONS[row["query"]])
+    return plan
+
+
+def stage_ex1_rag(job_root):
+    """Copy the stored Ex1 rag/ hits into the job folder (what the agent persists during retrieval)."""
+    import shutil
+    dst = os.path.join(str(job_root), "rag")
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(str(FIX / "rag"), dst)
+    return dst
 
 
 def ex1_cfg_is(design=True, embedment=None):
@@ -191,6 +226,12 @@ def apply_wave2_design(cfg, *, embedment=None):
                       "bolts": {"n_bolts": 4, "d_mm": 20, "grade": "8.8", "t_mm": 13.1, "fu_plate_MPa": 410.0,
                                 "e_mm": 40.0, "p_mm": 70.0, "d0_mm": 22.0, "nn": 0, "ns": 2}}},
     }
+    cfg["delegated_design"] = [{"item": "composite metal deck sheeting (profile, gauge, fixings)",
+                                "criteria": "supplier design of the deck span: wet concrete 3.0 kN/m2 + construction "
+                                            "0.75 kN/m2 (cfg construction_stage); in service office 4.0 + partitions "
+                                            "1.0 kN/m2 imposed",
+                                "interface_forces": "deck bears on the beams (gravity by tributary width); deck "
+                                                    "fastener spacing 600 mm restrains the beam top flange (LLT_sag)"}]
     cfg["notes"] = ("IN_Ex1 5-storey office perimeter SCBF (X-bracing), New Delhi Zone IV, I 1.2, RSA. IS 808 sections, "
                     "IS 2062 E250 B0. Composite metal deck: bare-steel scope (IS 11384 not in corpus) + construction stage. "
                     "Anchorage embedment: EOR input required (IS 456 not in corpus).")

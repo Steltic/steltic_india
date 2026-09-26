@@ -1,0 +1,17 @@
+{
+ "query": "Ta all other buildings 7.6.2(c) 0.09h/sqrt(d)",
+ "collection": "engineering_standards_IS1893",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_1893_Part_1_2016",
+   "file": "documents/standards/IS_1893_Part_1_2016/markdown/IS_1893_Part_1_2016.search.md",
+   "char_span": [
+    115755,
+    116594
+   ],
+   "text": " first storey of building, in m²; Lwi = length of structural wall i in first storey in the considered direction of lateral forces, in m; d = base dimension of the building at the plinth level along the considered direction of earthquake shaking, in m; and Nw = number of walls in the considered direction of earthquake shaking. The value of Lwi/h to be used in this equation shall not exceed 0.9. c) All other buildings: - Ta = 0.09 h / √d where h = height of building, as defined in 7.6.2(a), in m; and d = base dimension of the building at the plinth level along the considered direction of earthquake shaking, in m. **7.6.2.1** [Amd 2, Nov 2020: new clause inserted at the end of 7.6.2(c)] The value of Ta obtained shall neither be taken to be more than that given in 7.6.2 (a) nor less than that given in 7.6.2 (c). Canonical lines [fo"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

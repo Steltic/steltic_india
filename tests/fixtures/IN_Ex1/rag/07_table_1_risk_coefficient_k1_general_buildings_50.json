@@ -1,0 +1,17 @@
+{
+ "query": "Table 1 Risk Coefficient k1 general buildings 50 years",
+ "collection": "engineering_standards_IS875_P3",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_3_2015",
+   "file": "documents/standards/IS_875_Part_3_2015/markdown/IS_875_Part_3_2015.search.md",
+   "char_span": [
+    29803,
+    30650
+   ],
+   "text": "--------------------------------------|---------------------------------------|---------------------------------------|---------------------------------------|---------------------------------------|---------------------------------------| | | | Structure in Years | | | | | | | | | | | | | | 47 | 50 | | | | | | 33 | 39 | 44 | | | 55 | | (1) | (2) | (3) | (4) | (5) | (6) | (7) | (8) | (9) | | i) | All general buildings and structures | 50 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | | ii) | Temporary sheds, structures such as those used during construction operations (for example, formwork and false work), structures during construction stages and boundary walls | 5 | 0.82 | 0.76 | 0.73 | 0.71 | 0.70 | 0.67 | | iii) | Buildings and structures presenting a low degree of hazard to life and property in the event of failure, such as isolated tower"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

@@ -1,0 +1,17 @@
+{
+ "query": "Cement Concrete Reinforced unit weight Table 1 1 percent steel",
+ "collection": "engineering_standards_IS875_P1",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_1_2026",
+   "file": "documents/standards/IS_875_Part_1_2026/markdown/IS_875_Part_1_2026.search.md",
+   "char_span": [
+    21353,
+    22194
+   ],
+   "text": "----|------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------| | | | mm | kN | per | | (1) | (2) | (3) | (4) | (5) | | 23. | Cement Concrete, Prestressed (conforming to IS 1343) | - | 23.50 | m 3 | | 24. | Cement Concrete, Reinforced: | | | | | 24. | With 1 percent steel | - | 22.75 to 24.20 | m 3 | | 24. | With 2 percent steel | - | 23.25 to 24.80 | m 3 | | 24. | With 5 percent steel | - | 24.80 to 26.50 | m 3 | | 25. | Damp-proofing ( see Sl No. 28 'Felt, bituminous, for waterproofing and damp proofing' in this Table) | Damp-proofing ( see Sl No. 28 'Felt, bituminous, for waterproofing and damp proofing' in this Table) | Damp-proofing ( see Sl No. 28 'Felt, bituminous, for waterpro"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

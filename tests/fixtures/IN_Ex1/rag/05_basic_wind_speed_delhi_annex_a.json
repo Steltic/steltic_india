@@ -1,0 +1,17 @@
+{
+ "query": "basic wind speed Delhi Annex A",
+ "collection": "engineering_standards_IS875_P3",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_3_2015",
+   "file": "documents/standards/IS_875_Part_3_2015/markdown/IS_875_Part_3_2015.search.md",
+   "char_span": [
+    180145,
+    180959
+   ],
+   "text": "| 47 | | Almora | 47 | | Amritsar | 47 | | Asansol | 47 | | Aurangabad | 39 | | Bahraich | 47 | | Bengaluru | 33 | | Barauni | 47 | | Bareilly | 47 | | Bhatinda | 47 | | Bhilai | 39 | | Bhopal | 39 | | Bhubaneshwar | 50 | | Bhuj | 50 | | Bikaner | 47 | | Bokaro | 47 | | Chandigarh | 47 | | Chennai | 50 | | Coimbatore | 39 | | Cuttack | 50 | | Darbhanga | 55 | | Darjeeling | 47 | | Dehradun | 47 | | Delhi | 47 | | Durgapur | 47 | | Gangtok | 47 | | Guwahati | 50 | | Gaya | 39 | | Gorakhpur | 47 | | Hyderabad | 44 | | Imphal | 47 | | Jabalpur | 47 | | Jaipur | 47 | | Jamshedpur | 47 | | Jhansi | 47 | | Jodhpur | 47 | | Kanpur | 47 | | Kohima | 44 | | Kolkata | 50 | | Kozhikode | 39 | | Kurnool | 39 | | Lakshadweep | 39 | | Lucknow | 47 | | Ludhiana | 47 | | Madurai | 39 | | Mandi | 39 | | Mangalore | 39 |"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

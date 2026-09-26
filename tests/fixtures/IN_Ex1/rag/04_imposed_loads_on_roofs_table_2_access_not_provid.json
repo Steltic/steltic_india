@@ -1,0 +1,17 @@
+{
+ "query": "imposed loads on roofs Table 2 access not provided",
+ "collection": "engineering_standards_IS875_P2",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_2_1987",
+   "file": "documents/standards/IS_875_Part_2_1987/markdown/IS_875_Part_2_1987.search.md",
+   "char_span": [
+    67340,
+    68195
+   ],
+   "text": "buted imposed load measured on plan area | Minimum imposed load measured on plan | | --- | --- | --- | --- | | i) | Flat, sloping or curved roof with slopes up to and including 10 degrees | | | | i)(a) | Access provided | 1.5 kN/m² | 3.75 kN uniformly distributed over any span of one metre width of the roof slab and 9 kN uniformly distributed over the span of any beam or truss or wall | | i)(b) | Access not provided except for maintenance | 0.75 kN/m² | 1.9 kN uniformly distributed over any span of one metre width of the roof slab and 4.5 kN uniformly distributed over the span of any beam or truss or wall | | ii) | Sloping roof with slope greater than 10 degrees | For roof membrane sheets or purlins — 0.75 kN/m² less 0.02 kN/m² for every degree increase in slope over 10 degrees | Subject to a minimum of 0.4 kN/m² | | iii) | Curved roof with sl"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

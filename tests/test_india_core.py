@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from _ex1_fixture import ex1_cfg, ex1_cfg_is
+from _ex1_fixture import ex1_cfg, ex1_cfg_is, stage_ex1_rag
 
 import engine3d as E
 import india_seismic as IS
@@ -78,6 +78,7 @@ def ex1_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is()
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_core"))              # H30: stored rag/ hits
     out = P.design_and_report("IN_Ex1_core", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
@@ -137,6 +138,7 @@ def ex1_complete_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is(design=True, embedment=EOR_EMBEDMENT)
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_complete"))              # H30: stored rag/ hits
     out = P.design_and_report("IN_Ex1_complete", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
