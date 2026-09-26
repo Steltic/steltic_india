@@ -303,8 +303,9 @@ class JobWorkspace:
             res = ((out or {}).get("results")) or []
             n = len(res)
             if not n:
-                if out and out.get("not_tabulated"):
-                    # the corpus answered: this is a tabulation gap (e.g. a town in neither annex),
+                if out and (out.get("not_tabulated") or out.get("document_not_in_corpus")
+                            or "is not in the corpus" in str(out.get("note") or "")):
+                    # the corpus answered (or said the document is not in it): this is a tabulation gap (e.g. a town in neither annex),
                     # a definite answer that no rewording will change
                     return self._not_found(query, collection, trail)
                 return None

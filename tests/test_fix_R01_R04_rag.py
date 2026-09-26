@@ -153,6 +153,7 @@ def test_document_not_in_corpus_passes_through():
     ws, out = _run(lambda q, c, cl, n: {"results": [], "note": "IS_456_2000 is not in the corpus"},
                    "development length", coll="engineering_standards_IS456")
     assert out["not_found_kind"] == "document_not_in_corpus" and out["document"] == "IS_456_2000"
+    assert len(ws.sent) == 1, "no further rungs once the corpus says the document is absent"
 
 
 # ---------------------------------------------------------------- R03: evidence files ----
