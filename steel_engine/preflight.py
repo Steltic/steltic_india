@@ -251,6 +251,13 @@ def india_checks(cfg):
     md = cfg.get("model")
     if not (isinstance(md, dict) and {"bases", "joints", "gravity"} <= set(md)):
         say("ERROR", "cfg['model'] = {'bases','joints','gravity'} declaration missing")
+    # ---- H18: pitched-roof guard (true-slope beams / zero roof tributary -> silent zero roof load) ----
+    try:
+        import static_model as _SMp
+        for sev, msg in _SMp.pitched_roof_findings(cfg):
+            say(sev, msg)
+    except Exception:
+        pass                          # a build failure is reported by the seismic-weight block above
     dia = cfg.get("diaphragm", "rigid")
     if dia not in ("rigid", "flexible", "semi-rigid"):
         say("ERROR", "cfg['diaphragm'] must be 'rigid' | 'flexible' | 'semi-rigid' (got %r)" % (dia,))

@@ -876,6 +876,57 @@ def apply_crane_loads(cfg, model, fC, pattern=None):
         ops.load(int(nd), fC * fx, fC * fy, fC * fz, fC * mx, fC * my, fC * mz)
 
 
+def pitched_roof_findings(cfg, info=None) -> list:
+    """H18 (HR-E-05, NEW-1): stop the silent zero roof load / zero roof weight of a true-slope roof.
+
+    ERROR when any beam's end levels differ by more than 1 mm (the static loads, seismic weight and diaphragm all
+    assume level beams; unless cfg['roof_planes'] is declared -- reserved for the phase-2 roof-plane input, X02), or
+    when a roof-level beam bounds no complete bay (zero tributary) while the roof area loads are non-zero.  ``info``
+    = an engine3d.build info dict (built here when omitted).  Returns [(severity, message)]."""
+    out = []
+    if info is None:
+        info = eng.build(cfg, "Linear")
+    NF = int(info.get("NF") or len(cfg.get("heights") or []))
+    present = info.get("present") or {}
+    NX, NY = int(cfg.get("NX") or 0), int(cfg.get("NY") or 0)
+    sloped, zero = [], []
+    area = float(cfg.get("D_roof") or 0.0) + float(cfg.get("Lr") or 0.0) + float(cfg.get("snow") or 0.0)
+    roofs = roof_level_set(cfg, NF)
+    for (t, kind, sec, n1, n2) in info.get("ele") or []:
+        if kind != "beam":
+            continue
+        try:
+            c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+        except Exception:
+            continue
+        if abs(c1[2] - c2[2]) > 1.0:
+            sloped.append(t)
+            continue
+        k = n1 // 100000
+        if k not in roofs or area <= 0.0:
+            continue
+        nlo = min(n1, n2)
+        i, j = (nlo % 100000) // 100, nlo % 100
+        pk = present.get(k, set())
+        if not (0 <= i <= NX and 0 <= j <= NY) or (i, j) not in pk:
+            continue                                   # off-grid work point (EBF link piece): not screened here
+        dirn = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
+        if _bays_adjacent(pk, i, j, dirn) == 0:
+            zero.append(t)
+    if sloped and not cfg.get("roof_planes"):
+        out.append(("ERROR", "%d beam(s) have end levels differing by > 1 mm (e.g. element %s): true-slope rafters "
+                             "are not supported yet -- the static roof load, the seismic weight (IS 1893 7.4) and "
+                             "the diaphragm assume level beams, so the roof load would silently be zero. Model the "
+                             "rafters flat at the eave with IS 875-3 Table 6 at the true pitch (roof_planes: X02)"
+                             % (len(sloped), sloped[0])))
+    if zero:
+        out.append(("ERROR", "%d roof-level beam(s) bound no complete bay (zero tributary, e.g. element %s) while the "
+                             "roof area loads D_roof + Lr + snow = %.2f kN/m2 are non-zero: the roof load and roof "
+                             "weight would silently be lost -- check the roof footprint / present set"
+                             % (len(zero), zero[0], area)))
+    return out
+
+
 def _strip_widths(coords, tol=1.0):
     """H14 (HR-B-12): tributary wall width per column line = half the distance to each neighbouring line
     (end line: half the distance to its one neighbour).  coords = the distinct line coordinates."""
