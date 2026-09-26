@@ -934,6 +934,78 @@ def embedded_base_checks(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, embedded=None)
             "policy": "EOR capacity with source + cite (found:false otherwise); VERIFY"}
 
 
+# ------------------------------------------------------------------ AUD-4: anchorage (embedment) transparency
+IS456_BOND_CITE = ("IS 456:2000 26.2.1 / 26.2.1.1 development length Ld = phi sigma_s / (4 tau_bd): bond capacity "
+                   "pi d L tau_bd, tau_bd increased by 60 percent for deformed bars (IS 1786) -- IS 456 is not in the "
+                   "corpus: tau_bd, the bar type and L are EOR inputs (VERIFY)")
+BREAKOUT_NOTE = "not covered by IS 800/IS 456 in the corpus: foundation EOR (delegated design)"
+def _nonempty(x):
+    return isinstance(x, str) and bool(x.strip())
+
+
+def anchorage_embedment_capacity(embedment, d_mm, *, anchor_grade=None):
+    """AUD-4 (gold audit M3): the per-anchor anchorage (embedment) capacity, in one of two forms:
+    - derived: {method: 'bond', tau_bd_MPa (EOR design bond stress, IS 456 26.2.1.1 -- outside the corpus), bar:
+      'plain' | 'deformed', L_mm (embedded length), source, cite} -> capacity = pi d L tau_bd (x 1.6 only for
+      bar = 'deformed', i.e. the EOR states a deformed-bar rod; threaded rods / plain bolts get no increase);
+    - asserted: {capacity_N, source, cite} -> kept, with a warning asking for the derivation.
+    Returns None (no record) or {found, capacity_N, method, ..., warn?, missing?}."""
+    import re as _re
+    e = embedment if isinstance(embedment, dict) else None
+    if not e:
+        return None
+    method = str(e.get("method") or "").strip().lower() or ("asserted" if e.get("capacity_N") is not None else "")
+    src, cite = e.get("source"), e.get("cite")
+    base = {"method": method or None, "source": src, "cite": cite, "verify": True,
+            "clause": "outside IS 800 (IS 456:2000 anchorage; EOR input)"}
+    if method == "bond":
+        tau, L, bar = e.get("tau_bd_MPa"), e.get("L_mm"), str(e.get("bar") or "").strip().lower()
+        miss = [k for k, v in (("tau_bd_MPa", tau), ("L_mm", L), ("anchor d_mm", d_mm)) if not (_isnum(v) and float(v) > 0)]
+        if bar not in ("plain", "deformed"):
+            miss.append("bar ('plain' | 'deformed')")
+        miss += [k for k, v in (("source", src), ("cite", cite)) if not _nonempty(v)]
+        if miss:
+            return dict(base, found=False, capacity_N=None, missing=miss,
+                        reason="found:false - embedment {method: 'bond'} missing %s" % ", ".join(miss))
+        k = 1.6 if bar == "deformed" else 1.0
+        cap = math.pi * float(d_mm) * float(L) * float(tau) * k
+        rec = dict(base, found=True, capacity_N=cap, tau_bd_MPa=float(tau), L_mm=float(L), bar=bar, d_mm=float(d_mm),
+                   deformed_factor=k, clause=IS456_BOND_CITE,
+                   derivation="pi d L tau_bd%s = pi x %g x %g x %g%s = %.0f N per anchor"
+                              % (" x 1.6" if k > 1 else "", float(d_mm), float(L), float(tau),
+                                 " x 1.6" if k > 1 else "", cap))
+        if k > 1 and _re.match(r"^\s*\d+\.\d+\s*$", str(anchor_grade or "")):
+            rec["warn"] = ("anchorage: x1.6 deformed-bar bond increase (IS 456 26.2.1.1) on a property-class %s anchor "
+                           "(threaded rod / bolt) -- valid only for a deformed-bar rod (IS 1786); confirm the rod type "
+                           "or use bar 'plain'" % anchor_grade)
+        return rec
+    cap = e.get("capacity_N")
+    miss = [k for k, v in (("capacity_N", cap),) if not (_isnum(v) and float(v) > 0)]
+    miss += [k for k, v in (("source", src), ("cite", cite)) if not _nonempty(v)]
+    if miss:
+        return dict(base, method="asserted", found=False, capacity_N=float(cap) if _isnum(cap) else None, missing=miss,
+                    reason="found:false - asserted embedment capacity needs capacity_N + source + cite (missing %s); "
+                           "or give embedment {method: 'bond', tau_bd_MPa, bar, L_mm, source, cite}" % ", ".join(miss))
+    return dict(base, method="asserted", found=True, capacity_N=float(cap),
+                warn="anchorage: asserted per-anchor embedment capacity %.0f kN (%s) without a derivation -- give "
+                     "embedment {method: 'bond', tau_bd_MPa, bar, L_mm, source, cite} or the EOR cone / breakout basis"
+                     % (float(cap) / 1e3, str(src)[:60]))
+
+
+def concrete_breakout_record(delegation=None):
+    """AUD-4: concrete cone / group breakout and the pedestal are outside IS 800 / IS 456 in the corpus -> an explicit
+    record; satisfied only by a cfg['delegated_design'] item for anchor breakout / pedestal design with criteria
+    (india_connection_design.breakout_delegation).  Unsatisfied is a WARN, not a blocker."""
+    ok = isinstance(delegation, dict)
+    return {"component": "concrete_breakout", "note": BREAKOUT_NOTE, "satisfied": ok,
+            "delegated_item": delegation.get("item") if ok else None,
+            "delegated_criteria": delegation.get("criteria") if ok else None,
+            "clause": "outside IS 800:2007 / IS 456 (corpus); foundation EOR", "gate": True, "blocks_complete": False,
+            "warn": None if ok else ("anchorage: concrete cone / group breakout and the pedestal are %s -- add a "
+                                     "cfg['delegated_design'] item for anchor breakout / pedestal design with criteria "
+                                     "(anchor tension and shear per base)" % BREAKOUT_NOTE)}
+
+
 SHEAR_KEY_BASIS = ("the key resists all base shear beyond friction (0.45 x bearing compression, IS 800 7.4.1); the "
                    "anchors are not counted together with the key (a stiff key bears before anchors in clearance holes "
                    "slip -- conservative where IS 800 is silent)")
@@ -980,7 +1052,7 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
                       shear_key=None, shear_key_source=None, shear_key_cite=None, friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
                       sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None, stiffeners=None,
-                      stiffener_axis="z", plate_grade=None, job_steel_grade=None):
+                      stiffener_axis="z", plate_grade=None, job_steel_grade=None, breakout_delegation=None):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
 
     Axis: moment about the axis perpendicular to L (L = plate dimension along the moment, B across).
@@ -1148,13 +1220,19 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
             span = (a["n_per_row"] - 1) * a["pitch_mm"] + 2 * (a.get("edge_mm") or 0)
             checks["geometry_anchor_fit"] = _geom_gate(span, B_mm, clause="geometric feasibility",
                                                    cite="anchor row must fit in the plate width")
-        if embedment and embedment.get("capacity_N") and embedment.get("cite"):
-            checks["anchorage_embedment"] = _check(T_one, embedment["capacity_N"], clause=embedment["cite"],
-                                                   cite="EOR/product anchorage capacity (outside IS 800)")
+        emb = anchorage_embedment_capacity(embedment if embedment else a.get("embedment"), a.get("d_mm"),
+                                           anchor_grade=a.get("grade"))
+        if emb and emb.get("found"):
+            checks["anchorage_embedment"] = _check(
+                T_one, emb["capacity_N"], clause=emb["cite"] if emb["method"] == "asserted" else emb["clause"],
+                cite=("EOR/product anchorage capacity (outside IS 800), asserted: %s" % emb["source"]
+                      if emb["method"] == "asserted" else "bond: %s; %s" % (emb["derivation"], emb["cite"])),
+                embedment=emb)
         elif T_anchor > 0:
             checks["anchorage_embedment"] = _check(T_one, None, clause="outside IS 800 (IS 456 / product data)",
-                                                   cite="concrete breakout/pull-out", ok=None,
-                                                   reason="found:false - EOR anchorage basis not supplied")
+                                                   cite="concrete breakout/pull-out", ok=None, embedment=emb,
+                                                   reason=(emb or {}).get("reason") or
+                                                   "found:false - EOR anchorage basis not supplied")
     elif T_anchor > 0 or V_dem > friction_mu * max(P, 0.0) + (shear_key_N or 0.0):
         checks["anchors"] = _check(None, None, clause="IS 800:2007 10.3.5/10.3.6", cite="anchor rods", ok=None,
                                    reason="anchor geometry not declared (found:false)")
@@ -1240,6 +1318,8 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     out = {"found": True, "ok": ok, "dc": max(dcs) if dcs else None, "checks": checks, "bearing": bearing,
            "demands": {"P_N": P, "M_Nmm": M_dem, "V_N": V_dem, "T_anchor_N": T_anchor},
            "clause": "IS 800:2007 7.4, 10.3, 12.12", "policy": "check of declared geometry; never sized from demand"}
+    if a.get("d_mm") and a.get("n_total"):
+        out["concrete_breakout"] = concrete_breakout_record(breakout_delegation)     # AUD-4 (record, not a check)
     out["plate_fy"] = _pfy
     if _sfy is not None:
         out["stiffener_fy"] = _sfy
@@ -1345,15 +1425,19 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
                     out["checks"]["bearing_biaxial"] = _check(fmax, fb, clause="IS 800:2007 7.4.1",
                                                               cite="corner bearing approximated as fp_z + fp_y - P/A "
                                                                    "(superposition of the two uniaxial solutions)")
-            emb = kw.get("embedment")
-            if emb and emb.get("capacity_N") and emb.get("cite"):
-                out["checks"]["anchorage_embedment"] = _check(T_corner, emb["capacity_N"], clause=emb["cite"],
-                                                              cite="EOR/product anchorage capacity (outside IS 800), "
-                                                                   "biaxial corner anchor")
+            emb = anchorage_embedment_capacity(kw.get("embedment") or a.get("embedment"), a.get("d_mm"),
+                                               anchor_grade=a.get("grade"))
+            if emb and emb.get("found"):
+                out["checks"]["anchorage_embedment"] = _check(
+                    T_corner, emb["capacity_N"], clause=emb["cite"] if emb["method"] == "asserted" else emb["clause"],
+                    cite=("EOR/product anchorage capacity (outside IS 800), biaxial corner anchor, asserted: %s"
+                          % emb["source"] if emb["method"] == "asserted" else
+                          "bond, biaxial corner anchor: %s; %s" % (emb["derivation"], emb["cite"])), embedment=emb)
             elif T_corner > 0:
                 out["checks"]["anchorage_embedment"] = _check(T_corner, None, clause="outside IS 800 (IS 456 / product data)",
-                                                              cite="concrete breakout/pull-out", ok=None,
-                                                              reason="found:false - EOR anchorage basis not supplied")
+                                                              cite="concrete breakout/pull-out", ok=None, embedment=emb,
+                                                              reason=(emb or {}).get("reason") or
+                                                              "found:false - EOR anchorage basis not supplied")
     if note:
         out["note"] = note
     oks = [c.get("ok") for c in out["checks"].values() if isinstance(c, dict)]
@@ -1361,6 +1445,9 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
     dcs = [c.get("dc") for c in out["checks"].values() if isinstance(c, dict) and c.get("dc") is not None]
     out["dc"] = max(dcs) if dcs else None
     out["demands"] = dict(rz["demands"], Mz_Nmm=rz["demands"]["M_Nmm"], My_Nmm=My, T_corner_anchor_N=T_corner)
+    for k_ in ("concrete_breakout", "plate_fy", "stiffener_fy"):
+        if k_ in rz:
+            out[k_] = rz[k_]
     return out
 
 

@@ -912,6 +912,11 @@ def package_warnings(cfg, pkg):
     d764 = pkg.get("diaphragm_7_6_4")
     if isinstance(d764, dict) and d764.get("declared_contradicted"):
         out.append(str(d764.get("warning") or "IS 1893 7.6.4: declared diaphragm label contradicts the analysis"))
+    try:
+        import india_connection_design as _CDw
+        out += [m for s_, m in _CDw.anchorage_findings(cfg if isinstance(cfg, dict) else {}) if s_ == "WARN"]
+    except Exception as ex:
+        out.append("anchorage findings unavailable: %s" % ex)
     return out
 
 

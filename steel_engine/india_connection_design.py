@@ -12,7 +12,9 @@ cfg['connections'] = {
   'beam_shear':   {<beam section> | 'default': fin_plate_shear_checks inputs (gravity beams)},
   'column_base':  {<column section> | 'default': base_plate_design geometry (B_mm, L_mm, t_plate_mm, fy_plate_MPa,
                    fck_MPa, anchors{n_total, n_tension, d_mm, grade, f_mm, pitch_mm, edge_mm, n_per_row},
-                   Ec_MPa? (default IS 456 5000 sqrt fck), embedment{capacity_N, cite}?, fixed (bool), Hc_mm?,
+                   Ec_MPa? (default IS 456 5000 sqrt fck), embedment{capacity_N, source, cite}? (asserted, WARN) or
+                   anchors.embedment{method 'bond', tau_bd_MPa, bar 'plain'|'deformed', L_mm, source, cite} (AUD-4),
+                   fixed (bool), Hc_mm?, plate_grade?,
                    X03 stiffeners?{n_per_side | x_mm, t_mm, h_mm (at the column face), fy_MPa, weld{size_mm, fu_MPa,
                    site?} | weld_column / weld_plate {type 'fillet'|'cjp', ...}, layout 'flange_extension'|'cross',
                    n_per_side_y?, y_mm?} (IS 800 7.4.2 gusseted base; anchors.x_mm / y_mm = tension-row anchor
@@ -175,7 +177,57 @@ def base_entry(cfg, col_member, load_cases):
         b.setdefault("plate_grade", pg)
     if jg is not None:
         b.setdefault("job_steel_grade", jg)
+    bd = breakout_delegation(cfg)                       # AUD-4: concrete breakout record (delegated or WARN)
+    if bd is not None:
+        b.setdefault("breakout_delegation", bd)
     return b
+
+
+def breakout_delegation(cfg):
+    """AUD-4: the cfg['delegated_design'] item that delegates anchor breakout / pedestal design to the foundation EOR
+    -- an item whose text names anchors / breakout / cone / pull-out / pedestal, with non-empty criteria -- or None."""
+    import re as _re
+    rx = _re.compile(r"anchor|break-?out|\bcone\b|pull-?out|pedestal", _re.I)
+    reg = (cfg or {}).get("delegated_design")
+    reg = [reg] if isinstance(reg, dict) else (reg if isinstance(reg, list) else [])
+    for r in reg:
+        if isinstance(r, dict) and r.get("criteria") not in (None, "", [], {}) and \
+                rx.search(" ".join(str(r.get(k) or "") for k in ("item", "criteria"))):
+            return {"item": r.get("item"), "criteria": r.get("criteria")}
+    return None
+
+
+def anchorage_findings(cfg):
+    """AUD-4 WARNs (never blockers): declared column bases whose anchorage rests on an asserted per-anchor capacity
+    (no derivation), a x1.6 deformed-bar bond increase on a property-class anchor, and anchored bases without a
+    delegated anchor-breakout / pedestal design item."""
+    out = []
+    bases = ((cfg or {}).get("connections") or {}).get("column_base") or {}
+    if not isinstance(bases, dict):
+        return out
+    asserted, anchored = [], False
+    for key, sp in bases.items():
+        if not isinstance(sp, dict):
+            continue
+        a = sp.get("anchors") or {}
+        if a.get("d_mm") and a.get("n_total"):
+            anchored = True
+        emb = C.anchorage_embedment_capacity(sp.get("embedment") or a.get("embedment"), a.get("d_mm"),
+                                             anchor_grade=a.get("grade"))
+        if emb and emb.get("found") and emb.get("method") == "asserted":
+            asserted.append("%s (%.0f kN)" % (key, emb["capacity_N"] / 1e3))
+        elif emb and emb.get("warn"):
+            out.append(("WARN", "column_base[%s]: %s" % (key, emb["warn"])))
+    if asserted:
+        out.append(("WARN", "anchorage: asserted per-anchor embedment capacities without a derivation at %s -- give "
+                            "column_base.anchors.embedment = {method: 'bond', tau_bd_MPa, bar: 'plain'|'deformed', L_mm, "
+                            "source, cite} (IS 456:2000 26.2.1.1 tau_bd is an EOR input) or the EOR cone / breakout "
+                            "basis" % ", ".join(asserted)))
+    if anchored and breakout_delegation(cfg) is None:
+        out.append(("WARN", "anchorage: concrete cone / group breakout and the pedestal are %s -- add a "
+                            "cfg['delegated_design'] item for anchor breakout / pedestal design with criteria"
+                            % C.BREAKOUT_NOTE))
+    return out
 
 
 def is_seismic_combo(label, tags=None):

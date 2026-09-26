@@ -164,7 +164,8 @@ def _lplan_cfg(stiffness=True):
     from _ex1_fixture import ex1_cfg, apply_wave2_design
     cfg, _ = ex1_cfg(upgrade=True)
     cfg["plan"] = lambda k, NX, NY: {(i, j) for i in range(NX + 1) for j in range(NY + 1) if not (i >= 4 and j >= 3)}
-    cfg = apply_wave2_design(cfg, embedment={"capacity_N": 900e3, "cite": "EOR anchorage design (declared input)"})
+    cfg = apply_wave2_design(cfg, embedment={"capacity_N": 900e3, "source": "EOR input",
+                                             "cite": "EOR anchorage design (declared input)"})
     if stiffness:
         cfg["diaphragm_stiffness"] = {"type": "metal_deck", "topping_t_mm": 75.0, "fck_MPa": 25.0,
                                       "source": "EOR: composite deck, 75 mm M25 topping above the ribs",

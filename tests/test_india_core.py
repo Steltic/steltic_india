@@ -127,7 +127,7 @@ def test_ex1_report_is_india_only(ex1_job):
     assert not re.search(r"\bpsf\b|\bkips?\b|Risk Category|\bSDC\b", re.sub(r"<[^>]+>", " ", html))
 
 
-EOR_EMBEDMENT = {"capacity_N": 900e3, "cite": "EOR anchorage design: IS 456:2000 cone / bond pull-out of the M48 "
+EOR_EMBEDMENT = {"capacity_N": 900e3, "source": "EOR input (foundation engineer)", "cite": "EOR anchorage design: IS 456:2000 cone / bond pull-out of the M48 "
                                             "anchors by the foundation engineer (outside the corpus; declared input)"}
 
 

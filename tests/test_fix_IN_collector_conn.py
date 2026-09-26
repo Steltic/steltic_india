@@ -26,7 +26,8 @@ def ex1(tmp_path_factory):
     jobs = tmp_path_factory.mktemp("jobsColl")
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
-    cfg, _ = ex1_cfg_is(design=True, embedment={"capacity_N": 900e3, "cite": "EOR anchorage design (test)"})
+    cfg, _ = ex1_cfg_is(design=True, embedment={"capacity_N": 900e3, "source": "EOR input",
+                                                               "cite": "EOR anchorage design (test)"})
     stage_ex1_rag(os.path.join(str(jobs), "IN_collconn"))
     out = P.design_and_report("IN_collconn", cfg, do_report=False)
     root = out["root"]

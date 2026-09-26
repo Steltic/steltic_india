@@ -120,7 +120,8 @@ def _ex2_md(stiffened, t_plate):
             "shear_key_source": "EOR shear-lug calc SK-01 (test record)", "shear_key_cite": "IS 456 34.4 bearing; IS 800 8.4.1",
             "anchors": {"n_total": 6, "n_tension": 3, "d_mm": 48, "grade": "8.8", "f_mm": 825, "Anb_mm2": 1473.0,
                         "x_mm": mids},
-            "embedment": {"capacity_N": 700e3, "cite": "EOR anchorage calc AN-01 (test record)"},
+            "embedment": {"capacity_N": 700e3, "source": "EOR anchorage calc AN-01",
+                          "cite": "EOR anchorage calc AN-01 (test record)"},
             "load_cases": [{"combo": "1.2DL+0.5LL+1.2EQ_X", "P_N": 2.0e6, "Mz_Nmm": 100e6, "My_Nmm": 0.0,
                             "V_N": 300e3, "seismic": True}]}
     if stiffened:

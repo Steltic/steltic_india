@@ -380,9 +380,18 @@ You:
      `shear_key` = {capacity_N, source, cite} (or `shear_key_N` + `shear_key_source` + `shear_key_cite`) — the EOR
      shear key / lug capacity: subtracted from the anchor shear and checked in its own row `shear_key` (shear beyond
      friction <= capacity; the anchors are not added to the key; without source + cite the row is found:false and the
-     package stays PARTIAL), and `embedment` = {capacity_N, cite} — the EOR's concrete anchorage capacity (IS 456 cone /
-     bond / product data is outside IS 800 and not in the corpus: without it the row is found:false and the
-     package stays PARTIAL). Biaxial moments: `anchors.f_y_mm` / `n_tension_y` (the minor-axis tension line;
+     package stays PARTIAL), and the per-anchor anchorage (AUD-4; IS 456 bond / cone / product data is outside
+     IS 800 and not in the corpus -- without a record the row is found:false and the package stays PARTIAL):
+     preferred, the derived form `anchors.embedment` = {method: 'bond', tau_bd_MPa (EOR design bond stress,
+     IS 456 26.2.1.1), bar: 'plain' | 'deformed', L_mm, source, cite} -> capacity pi d L tau_bd, x 1.6 only for
+     bar 'deformed' (the EOR states a deformed-bar rod; threaded rods / plain bolts: 'plain'; 'deformed' on a
+     property-class anchor draws a WARN); or the asserted form `embedment` (or `anchors.embedment`) =
+     {capacity_N, source, cite} -- source AND cite required (found:false otherwise), and a WARN asks for the
+     derivation. Each anchored base also carries a `concrete_breakout` record ("not covered by IS 800/IS 456 in
+     the corpus: foundation EOR (delegated design)"): satisfied only when `cfg['delegated_design']` holds an item
+     for anchor breakout / pedestal design (item or criteria naming anchors / breakout / cone / pull-out /
+     pedestal) with criteria; otherwise a WARN (never a blocker). The WARNs appear in preflight and in
+     `design_status.warnings`. Biaxial moments: `anchors.f_y_mm` / `n_tension_y` (the minor-axis tension line;
      a square plate without them reuses the major-axis pattern, flagged; B != L without them is found:false);
      `anchors.x_mm` / `y_mm` (tension-row anchor positions across the plate). Gusseted base (IS 800 7.4.2, X03):
      `stiffeners` {n_per_side | x_mm, t_mm, h_mm (at the column face), fy_MPa, weld {size_mm, fu_MPa, site} or

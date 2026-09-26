@@ -296,6 +296,12 @@ def india_checks(cfg):
             say(sev, msg)
     except Exception:
         pass
+    try:                                  # AUD-4: anchorage transparency (asserted capacity, breakout delegation)
+        import india_connection_design as _CDa
+        for sev, msg in _CDa.anchorage_findings(cfg):
+            say(sev, msg)
+    except Exception:
+        pass
     if not cfg.get("steel_grade"):
         say("ERROR", "cfg['steel_grade'] (IS 2062 grade, e.g. 'E250BR' / 'E350') required -- no default fy (WP2.3)")
     if cfg.get("braces") or "brace" in str(cfg.get("system") or "").lower() or "bf" in str(cfg.get("system") or "").lower():
