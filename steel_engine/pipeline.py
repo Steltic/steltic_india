@@ -11,10 +11,13 @@ You DETERMINE the joints / base fixity explicitly and STATE them in the report, 
 to ask the user to approve the model. (build_and_preview(name, cfg) remains available as an OPTIONAL
 self-review that builds just the 3 figures -- it is not a required hold.)
 
-The framework computes the model, the IS loads from cfg['load_plan'] (RAG), the P-Delta analysis, and the per-member
-DEMANDS + the report scaffold. It computes NO IS 800 capacity: YOU query the RAG, derive every
-capacity/D-C yourself, and write them into calc_package.json. All outputs go to the building's
-solution folder: steel_builder/<name>/ (design/, figs/, report.html).
+The framework does the mechanics (contract/AGENT_START.md): it generates the IS 800 Table 4 / IS 1893
+combinations from YOUR cfg['load_plan'] (every load and code value retrieved from the RAG), runs the second-order
+analysis and the response-spectrum analysis, envelopes the member forces per combination, runs the IS 800 member
+checks (india_is800.member_check_is800, Sections 7-9) and the Section 12 system checks
+(india_is800_s12.section12_checks), designs the declared connections, and writes calc_package.json and the report.
+YOU choose the system, the model, the sections and the connection geometry, and iterate.  All outputs go to the
+building's job folder: <jobs root>/<name>/ (STEEL_BUILDER_JOBS; design/, figs/, report.html, STATUS.engine.md).
 
 Unusual geometry / non-rigid joints: the parametric builder makes a rectangular grid of rigid
 elasticBeamColumn members. To model anything else (custom nodes, sloped roofs, per-member moment
@@ -31,6 +34,24 @@ for _p in (_HERE, _REPO):
         sys.path.insert(0, _p)
 
 import engine3d as E
+
+
+ENGINE_STATUS_MARK = "<!-- engine-generated: india_seismic_gates.design_status (pipeline.py) -->"
+
+
+def _status_md_engine_owned(path):
+    """STATUS.md may be (re)written by the engine only when absent or when its first line marks it engine-generated
+    (the marker, or the pre-H44 engine header '# <name> -- design status: <STATUS>')."""
+    import re as _re
+    if not os.path.exists(path):
+        return True
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            first = f.readline().strip()
+    except Exception:
+        return False
+    return first == ENGINE_STATUS_MARK or bool(
+        _re.match(r"^# .+ -- design status: (COMPLETE|PARTIAL|EXAMPLE_ONLY)$", first))
 
 
 def _root(name):
@@ -80,9 +101,9 @@ def build_and_preview(name, cfg=None):
 
 
 def design_and_report(name, cfg=None, do_report=True):
-    """Run the full design (no user-review pause): register cfg, run sanity -> DEMAND envelope ->
-    figures -> HTML report, all in process, writing to the solution folder steel_builder/<name>.
-    Computes NO IS 800 capacity; the agent derives those from the RAG and fills calc_package.json."""
+    """Run the full design (no user-review pause): register cfg, run preflight -> analysis -> combinations ->
+    IS 800 member + Section 12 checks -> figures -> HTML report, all in process, writing to the job folder
+    <jobs root>/<name> (STEEL_BUILDER_JOBS)."""
     if cfg is not None:
         E.CFG[name] = copy.deepcopy(cfg)   # freeze the analysed model: the report renders exactly this cfg
     if name not in E.CFG:
@@ -116,9 +137,9 @@ def design_and_report(name, cfg=None, do_report=True):
 
     # 2) India load_plan combinations + per-member DEMAND envelope (NO capacities -- agent/RAG)
     import design_pipeline as DP
-    if E._india_job(cfg) and not os.path.exists(os.path.join(root, "load_plan.json")):
-        try:                                     # the resolved load plan is part of the package (provenance hash)
-            json.dump(DP._jsonable(cfg.get("load_plan") or {}), open(os.path.join(root, "load_plan.json"), "w"), indent=1)
+    if E._india_job(E.CFG.get(name)):
+        try:     # the resolved load plan is part of the package (provenance hash); rewritten every run (H43, L-03)
+            json.dump(DP._jsonable(E.CFG[name].get("load_plan") or {}), open(os.path.join(root, "load_plan.json"), "w"), indent=1)
         except Exception:
             pass
     out["demands_written"] = bool(DP.design(name, outdir=os.path.join(root, "design")))
@@ -162,9 +183,17 @@ def design_and_report(name, cfg=None, do_report=True):
                     json.dump(pkg, open(cp, "w"), indent=1)
                     out["report_html"] = RPT.build_report(name, root=root)
                 out["design_status"] = new_st
-                with open(os.path.join(root, "STATUS.md"), "w") as f:
-                    f.write("# %s -- design status: %s\n\nAuthority: %s\n\n" % (name, st["status"].upper(), st["authority"]))
-                    f.write("Open reasons (%d):\n" % len(st["reasons"]) + "".join("- %s\n" % r for r in st["reasons"]))
+                # H44 (E9): the engine writes STATUS.engine.md; STATUS.md belongs to the package and is only
+                # (re)written when absent or itself engine-generated
+                body = ("%s\n# %s -- design status: %s\n\nAuthority: %s\n\n" % (ENGINE_STATUS_MARK, name,
+                                                                           st["status"].upper(), st["authority"])
+                        + "Open reasons (%d):\n" % len(st["reasons"]) + "".join("- %s\n" % r for r in st["reasons"]))
+                with open(os.path.join(root, "STATUS.engine.md"), "w") as f:
+                    f.write(body)
+                out["status_file"] = os.path.join(root, "STATUS.engine.md")
+                if _status_md_engine_owned(os.path.join(root, "STATUS.md")):
+                    with open(os.path.join(root, "STATUS.md"), "w") as f:
+                        f.write(body)
             except Exception as ex:
                 out["design_status_error"] = str(ex)
 

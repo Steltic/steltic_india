@@ -730,16 +730,16 @@ def _walk_strings(o, path="", acc=None):
 
 
 def example_label_hits(*objs) -> list:
-    """(path, text) of cite/_label/source strings matching the EXAMPLE regex."""
+    """(path, text) of cite/_label/source/basis strings matching the EXAMPLE regex.  H32: free-text note leaves
+    ('note', 'notes', '*_note', '*_notes') are exempt -- a note may say "EXAMPLE EOR json not used"; only the
+    provenance leaves (cite, label, source, basis) are scanned."""
     hits = []
     for o in objs:
         for p, s in _walk_strings(o):
-            leaf = p.rsplit(".", 1)[-1].lower()
-            if any(t in leaf for t in ("cite", "cited", "_label", "label", "source", "basis", "note")) \
-                    and EXAMPLE_RE.search(s):
-                # "found:false ... example" free notes are allowed only when not a cite/label/source
-                if leaf in ("note",) and "cite" not in p.lower():
-                    continue
+            leaf = re.sub(r"(\[\d+\])+$", "", p.rsplit(".", 1)[-1]).lower()
+            if leaf in ("note", "notes") or leaf.endswith("_note") or leaf.endswith("_notes"):
+                continue
+            if any(t in leaf for t in ("cite", "label", "source", "basis")) and EXAMPLE_RE.search(s):
                 hits.append((p, s[:120]))
     return hits
 
@@ -1114,12 +1114,18 @@ def design_status(cfg, pkg=None, *, job_dir=None, report_html=None) -> dict:
         reasons += _grounding_findings(pk, job_dir)
         reasons += provenance_findings(pk, job_dir) if job_dir else [
             "job folder unknown -- provenance hashes not verified"]
-        if job_dir:
-            try:
-                import consistency as _CC
+        # H30: one completion authority -- the consistency rules that are free of false positives also gate
+        try:
+            import consistency as _CC
+            if job_dir:
                 reasons += ["consistency: " + s for s in _CC.script_grep_issues(job_dir)]
-            except Exception:
-                pass
+            reasons += ["consistency: " + s for s in _CC.literal_dc_issues(pk)]
+            plan_ = _CC.plan_of(cfg, pk, job_dir)
+            if job_dir:
+                reasons += ["consistency: " + s for s in _CC.rag_evidence_issues(plan_, job_dir)]
+            reasons += ["consistency: " + s for s in _CC.retrieval_assumption_issues(plan_, cfg)]
+        except Exception as ex:
+            reasons.append("consistency rules unavailable: %s" % ex)
         if report_html is None and job_dir and os.path.exists(os.path.join(job_dir, "report.html")):
             report_html = os.path.join(job_dir, "report.html")
     if report_html:

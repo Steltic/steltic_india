@@ -70,13 +70,21 @@ def system_components(system):
 _AUTO = object()
 
 
-def _chk(id_, value, limit, *, clause, cite, member=None, dc=None, ok=_AUTO, **extra):
-    """Structured check. ok defaults to dc <= 1.0 when a dc can be formed; pass ok explicitly (incl. None)."""
-    if dc is None and value is not None and limit not in (None, 0):
-        try:
-            dc = abs(float(value)) / float(limit)
-        except (TypeError, ValueError):
-            dc = None
+def _chk(id_, value, limit, *, clause, cite, member=None, dc=_AUTO, ok=_AUTO, **extra):
+    """Structured check. ok defaults to dc <= 1.0 when a dc can be formed; pass ok explicitly (incl. None).
+    H31: a boolean detailing gate (value or limit a bool) or an explicit dc=None carries NO D/C (dc None,
+    gate True) -- it passes/fails on ok only and never governs a D/C."""
+    if dc is _AUTO:
+        dc = None
+        if isinstance(value, bool) or isinstance(limit, bool):
+            extra.setdefault("gate", True)
+        elif value is not None and limit not in (None, 0):
+            try:
+                dc = abs(float(value)) / float(limit)
+            except (TypeError, ValueError):
+                dc = None
+    elif dc is None and ok is not _AUTO and isinstance(ok, bool):
+        extra.setdefault("gate", True)
     if ok is _AUTO:
         ok = (dc <= 1.0) if dc is not None else None
     out = {"id": id_, "member": member, "value": value, "limit": limit, "dc": dc, "ok": ok, "clause": clause,

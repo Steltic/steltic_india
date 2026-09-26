@@ -17,7 +17,8 @@ from __future__ import annotations
 import re
 
 CONTRACT_RESIDUE_RE = re.compile(
-    r"ASCE|7-22|A360|A341|A358|Cd·|psf|kip|12\.12|12\.8\.|\bSDC\b|Risk Category")
+    r"\bASCE\b|7-22|\bA360\b|\bA341\b|\bA358\b|Cd·|\bpsf\b|\bkips?\b|12\.12|12\.8\.|\bSDC\b|Risk Category")
+# H44 (E10): word boundaries -- "skipped" / "kipper" are not "kip"
 
 REPORT_RESIDUE_RE = re.compile(
     r"\bASCE\b|\bAISC\b|\bIBC\b|ACI\s*318|\bAWS\b|\bOSHA\b|Risk Category|Seismic Design Category|"

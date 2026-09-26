@@ -1,0 +1,17 @@
+{
+ "query": "Section 12.8 Special Concentrically Braced Frames SCBF",
+ "collection": "engineering_standards_IS800",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_800_2007",
+   "file": "documents/standards/IS_800_2007/markdown/IS_800_2007.search.md",
+   "char_span": [
+    371764,
+    372665
+   ],
+   "text": " - 12.7.3.2 The connection should be checked for tension rupture and block shear under the load determined in 12.7.3.1. - 12.7.3.3 The connection shall be designed to withstand a moment of 1.2 times the full plastic moment of the braced section about the buckling axis. - 12.7.3.4 Gusset plates shall be checked for buckling out of their plane. ### 12.8 Special Concentrically Braced Frames (SCBF) - 12.8.1 Special concentrically braced frames (SCBF) should be shown to withstand inelastic deformation <!-- pdf_page=95 printed_label=89 printed_label_qualified=89 part=standard --> corresponding to a joint rotation of at least 0.04 radians without degradation in strength and stiffness below the full yield value. Special concentrically braced frames meeting the requirements of this section shall be deemed to satisfy the required inelastic deformation. 12.8.1.1 Special concentrically braced frames "
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

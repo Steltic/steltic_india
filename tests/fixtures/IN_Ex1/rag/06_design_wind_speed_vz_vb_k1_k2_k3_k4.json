@@ -1,0 +1,17 @@
+{
+ "query": "design wind speed Vz = Vb k1 k2 k3 k4",
+ "collection": "engineering_standards_IS875_P3",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_3_2015",
+   "file": "documents/standards/IS_875_Part_3_2015/markdown/IS_875_Part_3_2015.search.md",
+   "char_span": [
+    37189,
+    38037
+   ],
+   "text": "hich can significantly affect wind speed in their vicinity. The effect of topography is to accelerate wind near the summits of hills or crests of cliffs, escarpments or ridges and decelerate the wind in valleys or near the foot of cliffs, steep escarpments, or ridges. 6.3.3.1 The effect of topography shall be significant at a site when the upwind slope ( θ ) is more than about 3°, and below that, the value of k 3 may be taken to be equal to 1.0. The value of k 3 is confined in the range of 1.0 to 1.36 for slopes more than 3°. A method of evaluating the value of k 3 for values more than 1.0 is given in Annex C. It may be noted that the value of k 3 varies with height above ground level, at a maximum near the ground, and reducing to 1.0 at higher levels. ### 6.3.4 Importance Factor for Cyclonic Region (k 4 ) The east coast of India is rel"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

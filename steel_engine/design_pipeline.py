@@ -1080,7 +1080,7 @@ def design_india(name, cfg, outdir):
                                "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
                                                                           {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
                                                                       for k, v in res["capacities"].items()},
-                               "DC": dc, "governing_element_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})})
+                               "DC": dc, "governing_element_result": _governing_result(res)})
 
     # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
     import india_connection_design as CD
@@ -1262,14 +1262,15 @@ def design_india(name, cfg, outdir):
                             k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                             if w is None or k_ > w[0]:
                                 worst[c["id"]] = (k_, c)
+                _mcl = _mf_conn_clause(cfg)
                 for cid, (_, c) in worst.items():
-                    checks.append(_row("IS 800 12.11.2 %s (joint %s)" % (cid, c.get("member")), c))
+                    checks.append(_row(_mf_conn_label(cfg, cid, c), c))
                 cn = joint_conn.get(sec)
                 if cn and cn.get("moment_capacity_Nmm"):
                     dem["M_1p2Mp_Nmm"] = None
                     notes.append("moment capacity %.1f kN-m (%s)" % (cn["moment_capacity_Nmm"] / 1e6, cn.get("type")))
                 if not checks:
-                    checks.append(_row("IS 800 12.11.2 moment connection", {"ok": None, "clause": "IS 800:2007 12.11.2",
+                    checks.append(_row("IS 800 %s moment connection" % _mcl, {"ok": None, "clause": "IS 800:2007 %s" % _mcl,
                                                                             "reason": "no joint checks for this beam group"}))
                 # a moment-frame beam pinned at one end (corner bay whose corner column belongs to the orthogonal
                 # frame): that end is a shear connection under the governing V (WP6-fix)
@@ -1402,13 +1403,25 @@ def design_india(name, cfg, outdir):
                 else:
                     for nm, cc in spl["checks"].items():
                         checks.append(_row("column splice: %s" % nm, cc))
-        dcs = [c["dc"] for c in checks if isinstance(c.get("dc"), (int, float))]
-        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
-                                   "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
-                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
-                                                   "india_connection_design; declared geometry in cfg['connections'])",
-                                   "checks": checks, "DC": max(dcs) if dcs else None,
-                                   "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": notes})
+        # H31: gates (geometry fits, boolean detailing) carry no D/C and never govern; the connection record carries
+        # the value / limit / clause of its governing strength check
+        strength = [c for c in checks if isinstance(c.get("dc"), (int, float)) and not isinstance(c.get("dc"), bool)
+                    and c.get("gate") is not True]
+        gov = max(strength, key=lambda c: c["dc"]) if strength else None
+        crec = {"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
+                "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
+                "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
+                                "india_connection_design; declared geometry in cfg['connections'])",
+                "checks": checks, "DC": gov["dc"] if gov else None,
+                "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": gov.get("clause") if gov else None, "notes": notes}
+        if gov is not None:
+            crec["governing_check"] = gov.get("name")
+            crec["clause"] = gov.get("clause")
+            gv, gl = gov.get("value"), gov.get("limit")
+            if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (gv, gl)) and gl and \
+                    abs(abs(gv) / gl - gov["dc"]) <= 0.02 * max(gov["dc"], 1e-3) + 1e-4:
+                crec["value"], crec["limit"] = gv, gl
+        pkg["connections"].append(crec)
 
     for key, tags in sorted(by.items()):
         # H37: one failing connection group becomes a found:false row, never a lost package
@@ -1543,8 +1556,13 @@ def design_india(name, cfg, outdir):
                            "zone": G.zone_of(cfg), "W_engine_kN": round(sum(E.floor_w(cfg, k) for k in range(1, NFlev + 1)) / 1e3, 1),
                            "W_design_kN": ss.get("W_kN"),
                            "W_by_floor_engine_kN": [round(E.floor_w(cfg, k) / 1e3, 1) for k in range(1, NFlev + 1)]}
-    pkg["load_plan"] = {"seismic_summary": ss, "retrieval": plan.get("retrieval"),
-                        "story_forces_units": plan.get("story_forces_units")}
+    # H43: the whole load plan (wind / gravity summaries, member_wind, retrieval, ...) minus the bulky story-force arrays
+    pkg["load_plan"] = _jsonable({k: v for k, v in plan.items() if k != "story_forces"})
+    pkg["load_plan"]["seismic_summary"] = ss
+    pkg["load_plan"]["story_forces_keys"] = sorted((plan.get("story_forces") or {}).keys()) \
+        if isinstance(plan.get("story_forces"), dict) else None
+    if cfg.get("vibration_screen"):
+        pkg["vibration_screen"] = _jsonable(cfg["vibration_screen"])     # H31: structured footfall screen record
     pkg["zero_demand_elements"] = zero
     pkg["beam_deflection"] = run.get("beam_deflection_rows")
     pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
@@ -1558,7 +1576,7 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
-        pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway (WP6-fix: recorded)
+    pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway, every job (H43)
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
@@ -1598,6 +1616,48 @@ def design_india(name, cfg, outdir):
     print("[%s] %d combinations, %d elements, %s -> demands + IS 800 checks written; status %s"
           % (name, len(cases), len(reg), run.get("method"), st["status"]))
     return {"members": len(reg), "combos": len(cases), "outdir": outdir, "status": st["status"]}
+
+
+def _mf_conn_clause(cfg):
+    """H44 (HR-B-14): moment-frame connection clause -- OMF IS 800 12.10.2, SMF 12.11.2."""
+    import india_is800_s12 as _S12
+    return "12.10.2" if _S12.normalize_system(cfg.get("system")) == "OMF" else "12.11.2"
+
+
+def _mf_conn_label(cfg, cid, c):
+    """Connection row name built from the check's own clause (fallback: the system's 12.10.2 / 12.11.2)."""
+    lab = str(c.get("clause") or ("IS 800:2007 " + _mf_conn_clause(cfg))).replace("IS 800:2007", "IS 800").strip()
+    return "%s %s (joint %s)" % (lab, cid, c.get("member"))
+
+
+def _governing_result(res):
+    """H43 (HR-C-08): the member result without the per-combination list, but keeping the governing combination's
+    check record (incl. the LTB Md / chi_LT / lambda_LT that live only in per_combo)."""
+    out = {k: v for k, v in res.items() if k != "per_combo"}
+    pcs = res.get("per_combo")
+    gc = res.get("governing_combo")
+    gov = None
+    if isinstance(pcs, dict):
+        gov = pcs.get(gc)
+        if gov is not None and not isinstance(gov, dict):
+            gov = None
+        if gov is not None:
+            gov = dict(gov, combo=gc)
+    elif isinstance(pcs, list):
+        cand = [p for p in pcs if isinstance(p, dict)]
+        gov = next((p for p in cand if gc is not None and (p.get("combo") == gc or p.get("label") == gc)), None)
+        if gov is None and cand:
+            gov = max(cand, key=lambda p: p.get("dc") if isinstance(p.get("dc"), (int, float)) else -1)
+    if gov is not None:
+        out["governing_combo_record"] = gov
+        ltb = [c for c in (gov.get("checks") or []) if isinstance(c, dict) and c.get("Mdz_LTB_Nmm") is not None]
+        if ltb:
+            g = max(ltb, key=lambda c: c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1)
+            out["governing_ltb"] = {k: g.get(k) for k in ("moment_sign", "LLT_mm", "Mdz_LTB_Nmm", "chi_LT",
+                                                         "lambda_LT", "dc")}
+            out["governing_ltb"]["combo"] = gov.get("combo")
+            out["governing_ltb"]["clause"] = "IS 800:2007 8.2.2 (LTB) in the 9.3 interaction"
+    return _jsonable(out)
 
 
 def _collector_demands(cfg, pkg, run, envt, reg):
@@ -1965,6 +2025,26 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
     pkg["deformation_compatibility"] = out
 
 
+def _separation_D1(u, disp_max):
+    """H45 (HR-D-13): D1 for 7.11.3.  With same_floor_levels the (R1 D1 + R2 D2)/2 form compares the two units at a
+    matching floor level: D1 is this unit's displacement at that level -- adjacent_units[].level (1-based; e.g. the
+    lower unit's roof) or, when absent, min(this unit's levels, adjacent_units[].n_levels).  Otherwise (or when no
+    level can be identified) the largest displacement over all levels (conservative).  Returns (D1, basis, level)."""
+    dm = [float(x or 0.0) for x in (disp_max or [0.0])] or [0.0]
+    if u.get("same_floor_levels"):
+        lev = u.get("level", u.get("matching_level"))
+        if lev is None and u.get("n_levels") is not None:
+            lev = min(len(dm), int(u["n_levels"]))
+        try:
+            lev = int(lev) if lev is not None else None
+        except (TypeError, ValueError):
+            lev = None
+        if lev is not None and 1 <= lev <= len(dm):
+            return dm[lev - 1], "displacement at the matching level %d (same_floor_levels)" % lev, lev
+        return max(dm), "max over levels: declare adjacent_units[].level (or n_levels) for the matching level", None
+    return max(dm), "max over levels (R x (D1 + D2))", None
+
+
 def _separation_7_11_3(cfg, run, R, out):
     """IS 1893 7.11.3 separation from the declared adjacent units: R (D1 + D2) (or (R1 D1 + R2 D2)/2 at matching floor
     levels, Amd 1); D1 = this unit's largest edge displacement in the joint direction (7.11.1 drift run)."""
@@ -1975,12 +2055,14 @@ def _separation_7_11_3(cfg, run, R, out):
     dr = run.get("drift") or {}
     for u in sep:
         d = u.get("direction", "X")
-        D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
+        dm = list((dr.get(d) or {}).get("disp_max") or [0.0])
+        D1, D1_basis, lev = _separation_D1(u, dm)
         r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
                                     bool(u.get("same_floor_levels")))
         gap = u.get("gap_mm")
         out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
-                                                 "D1_mm": D1, "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
+                                                 "D1_mm": D1, "D1_basis": D1_basis, "level": lev,
+                                                 "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
                                                  "dc": (r_["required_mm"] / gap) if gap else None,
                                                  "ok": (gap is not None and r_["required_mm"] <= gap),
                                                  "clause": "IS 1893 7.11.3", "cite": r_["cite"]})
