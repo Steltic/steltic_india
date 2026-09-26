@@ -279,8 +279,65 @@ def _corpus_found(hit) -> bool:
     return False
 
 
-def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> dict:
-    """Prefer corpus exact_table 4; demote in-repo Ka to fallback when corpus found:false."""
+KA_AREA_CHECK_TOL = 0.0015      # RR-BUG-6: rounding tolerance of a declared Ka against Table 4 at the actual area
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ka_from_area_table(tab, A):
+    """{area_m2: Ka} (keys numeric or numeric strings) -> Ka at A, linear between rows, end values beyond."""
+    pts = sorted((_num(a), _num(k)) for a, k in dict(tab).items() if _num(a) is not None and _num(k) is not None)
+    if not pts:
+        return None
+    if A <= pts[0][0]:
+        return pts[0][1]
+    for (a1, k1), (a2, k2) in zip(pts, pts[1:]):
+        if a1 <= A <= a2:
+            return k1 + (k2 - k1) * (A - a1) / (a2 - a1) if a2 > a1 else k2
+    return pts[-1][1]
+
+
+def _declared_ka(hit, A, direction):
+    """RR-BUG-6: the Ka a corpus / EOR hit declares for this area and direction -> (Ka, basis).
+    Accepted forms: {'Ka': x} (one value, area-checked), {'Ka_x': x, 'Ka_y': y} / {'Ka': {'X': x, 'Y': y}}
+    (per direction), {'table': {area_m2: Ka}} / {'Ka': {area_m2: Ka}} / {'Ka_by_area': {...}} (Table 4 rows)."""
+    d = str(direction or "").upper()
+    for key in ("table", "Ka_by_area", "rows_by_area"):
+        if isinstance(hit.get(key), dict):
+            k = _ka_from_area_table(hit[key], A)
+            if k is not None:
+                return k, "area_table"
+    ka = hit.get("Ka")
+    if isinstance(ka, dict):
+        low = {str(k).upper(): v for k, v in ka.items()}
+        if low.get("X") is not None or low.get("Y") is not None:
+            if d in ("X", "Y") and _num(low.get(d)) is not None:
+                return _num(low[d]), "per_direction"
+            vals = [_num(v) for v in (low.get("X"), low.get("Y")) if _num(v) is not None]
+            return (max(vals), "per_direction_max") if vals else (None, None)
+        k = _ka_from_area_table(ka, A)
+        return (k, "area_table") if k is not None else (None, None)
+    per = {"X": _num(hit.get("Ka_x", hit.get("Ka_X"))), "Y": _num(hit.get("Ka_y", hit.get("Ka_Y")))}
+    if per["X"] is not None or per["Y"] is not None:
+        if d in ("X", "Y") and per[d] is not None:
+            return per[d], "per_direction"
+        vals = [v for v in per.values() if v is not None]
+        return max(vals), "per_direction_max"
+    return _num(ka), "single"
+
+
+def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True, direction=None) -> dict:
+    """Prefer corpus exact_table 4; demote in-repo Ka to fallback when corpus found:false.
+
+    RR-BUG-6: a declared corpus Ka is per direction ('Ka_x' / 'Ka_y', ``direction`` = 'X' | 'Y') or a Table 4
+    {area: Ka} table read at A_m2; a single declared Ka is checked against Table 4 at THIS tributary area and is never
+    applied where Table 4 gives a higher Ka (unconservative): the Table 4 value at A_m2 is used and the record says so
+    (``area_check``)."""
     if _corpus_found(corpus_hit):
         out = dict(corpus_hit)
         out.setdefault("found", True)
@@ -289,12 +346,37 @@ def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> 
             "cite",
             out.get("cite") or "IS 875 (Part 3) : 2015 Table 4 (corpus exact_table 4)",
         )
-        out["A_m2"] = float(A_m2)
+        A = float(A_m2)
+        ka_decl, basis = _declared_ka(corpus_hit, A, direction)
+        out["A_m2"] = A
         out["resolved_via"] = "corpus"
+        if direction:
+            out["direction"] = str(direction).upper()
+        if ka_decl is None:
+            out.update(found=False, Ka=None, resolved_via="refused",
+                       cite="corpus Ka hit without a usable Ka for A = %.2f m2 (%s)" % (A, out.get("cite")))
+            return out
+        out["Ka_declared"] = ka_decl
+        out["Ka_basis_declared"] = basis
+        out["Ka"] = ka_decl
+        t4 = ka_for_area_m2(A)                     # Table 4 transcription, used here as the area check
+        if t4.get("found") and t4.get("Ka") is not None:
+            chk = {"A_m2": A, "Ka_table4": t4["Ka"], "Ka_declared": ka_decl, "ok": ka_decl >= t4["Ka"] - KA_AREA_CHECK_TOL,
+                   "cite": "IS 875 (Part 3):2015 7.2.2.1 / Table 4 at the tributary area of this direction"}
+            out["area_check"] = chk
+            if not chk["ok"]:
+                out["Ka"] = t4["Ka"]
+                out["resolved_via"] = "table4_area_check"
+                out["note"] = ("declared corpus Ka %.4f (%s) is below Table 4 Ka %.4f for A = %.2f m2%s -- "
+                               "unconservative here; the Table 4 value at this area is used (RR-BUG-6)"
+                               % (ka_decl, basis, t4["Ka"], A, (" (wind along %s)" % str(direction).upper())
+                                  if direction else ""))
         return out
     fb = ka_for_area_m2(A_m2, allow_fallback=allow_fallback)
     fb["resolved_via"] = "fallback" if fb.get("found") else "refused"
     fb["corpus_found"] = False
+    if direction:
+        fb["direction"] = str(direction).upper()
     return fb
 
 
@@ -855,6 +937,16 @@ def wind_findings(cfg) -> list:
         ka = ka_for_area_m2(float(ws["Ka_area_m2"])).get("Ka")
         if ka is not None and abs(float(ws["Ka"]) - ka) > 0.005:
             say("ERROR", "Ka = %s but Table 4 gives %.3f for A = %s m2" % (ws["Ka"], ka, ws["Ka_area_m2"]))
+    # RR-BUG-6: per-direction Ka (Ka_X / Ka_area_X_m2, Ka_Y / Ka_area_Y_m2) -- each direction against its own area;
+    # a Ka below Table 4 at that direction's area is unconservative
+    for d in ("X", "Y"):
+        kd, ad = ws.get("Ka_%s" % d), ws.get("Ka_area_%s_m2" % d)
+        if kd is None or ad is None:
+            continue
+        ka = ka_for_area_m2(float(ad)).get("Ka")
+        if ka is not None and float(kd) < ka - 0.005:
+            say("ERROR", "Ka_%s = %s but Table 4 gives %.3f for the wind-along-%s tributary area A = %s m2 "
+                         "(7.2.2.1; a lower Ka is unconservative)" % (d, kd, ka, d, ad))
     # H21 (HR-A-12): IS 875-3 Table 1 iv) -- hospitals and other important buildings have a 100-year life, k1 > 1.0
     if _table1_iv_building(cfg, ws) and ws.get("k1") is not None and abs(float(ws["k1"]) - 1.0) < 1e-9:
         say("WARN", "k1 = 1.0 declared for a hospital / important building: IS 875-3 Table 1 iv) (important "

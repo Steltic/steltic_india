@@ -657,10 +657,11 @@ def cpe_walls_fallback(h_over_w: float, l_over_w: float, theta_deg: float = 0.0)
 cpe_walls_override = cpe_walls_fallback
 
 
-def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True) -> dict:
-    """Prefer corpus exact_table 4; fallback to in-repo Ka only if found:false."""
+def resolve_ka(A_m2: float, corpus_hit=None, *, allow_fallback: bool = True, direction=None) -> dict:
+    """Prefer corpus exact_table 4; fallback to in-repo Ka only if found:false.  A declared Ka is per direction or
+    checked against Table 4 at A_m2 (RR-BUG-6, india_wind_tables.resolve_ka)."""
     from india_wind_tables import resolve_ka as _resolve
-    return _resolve(A_m2, corpus_hit, allow_fallback=allow_fallback)
+    return _resolve(A_m2, corpus_hit, allow_fallback=allow_fallback, direction=direction)
 
 
 def resolve_cpe_walls(h_over_w: float, l_over_w: float, theta_deg: float = 0.0,
