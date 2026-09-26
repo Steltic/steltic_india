@@ -294,6 +294,8 @@ def india_checks(cfg):
         import india_diaphragm as _DIA
         for sev, msg in _DIA.light_diaphragm_rigid_findings(cfg):
             say(sev, msg)
+        for msg in _DIA.diaphragm_labels(cfg)[1]:            # GOLD-COLL: per-level diaphragm labels
+            say("ERROR", msg)
     except Exception:
         pass
     try:                                  # AUD-4: anchorage transparency (asserted capacity, breakout delegation)

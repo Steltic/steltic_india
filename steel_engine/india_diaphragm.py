@@ -48,15 +48,110 @@ def _story_forces(cfg, d, kind):
     return E.india_story_forces(cfg, d, kind=kind)
 
 
-def collector_forces(cfg, kind="EQ"):
-    """{'X': {beam_tag: N_comp}, 'Y': {...}, 'rows': [...]} per unit lateral factor (N)."""
-    import engine3d as E
-    dia = str(cfg.get("diaphragm") or "rigid").lower()
-    if dia in ("flexible",):
-        return _collector_forces_flexible(cfg, kind)
-    if dia not in ("rigid",):
+DIAPHRAGM_LABELS = ("rigid", "flexible")
+
+
+def diaphragm_labels(cfg):
+    """GOLD-COLL: the diaphragm label of every level 1..NF -- cfg['diaphragm_by_level'] = {k | 'k' | 'a-b' |
+    'default': 'rigid' | 'flexible'} (e.g. a composite podium rigid under flexible CFS floors), else cfg['diaphragm']
+    (default 'rigid') for the levels it does not name.  Returns ({k: label}, [errors])."""
+    NF = len(cfg.get("heights") or [])
+    base = str(cfg.get("diaphragm") or "rigid").lower()
+    bl = cfg.get("diaphragm_by_level")
+    errs = []
+    labels = {k: base for k in range(1, NF + 1)}
+    if bl in (None, {}, ""):
+        return labels, errs
+    if not isinstance(bl, dict):
+        return labels, ["cfg['diaphragm_by_level'] must be {level | 'a-b' | 'default': 'rigid' | 'flexible'} (got %r)"
+                        % (bl,)]
+    import india_flexible_diaphragm as FD
+    if "default" in bl:
+        dv = str(bl["default"] or "").lower()
+        if dv not in DIAPHRAGM_LABELS:
+            errs.append("cfg['diaphragm_by_level']['default'] = %r: must be 'rigid' | 'flexible'" % (bl["default"],))
+        else:
+            labels = {k: dv for k in labels}
+    seen = set()
+    for key, v in bl.items():
+        if key == "default":
+            continue
+        ks = FD._level_keys(key, NF)
+        lab = str(v or "").lower()
+        if ks is None:
+            errs.append("cfg['diaphragm_by_level'] key %r is not a level 1..%d or a range 'a-b'" % (key, NF))
+            continue
+        if lab not in DIAPHRAGM_LABELS:
+            errs.append("cfg['diaphragm_by_level'][%r] = %r: must be 'rigid' | 'flexible'" % (key, v))
+            continue
+        for k in ks:
+            if k in seen:
+                errs.append("cfg['diaphragm_by_level'] gives level %d twice" % k)
+            seen.add(k)
+            labels[k] = lab
+    return labels, errs
+
+
+def flexible_levels(cfg):
+    """Levels labelled flexible (diaphragm_labels); malformed declarations give an empty set (preflight ERRORs)."""
+    labels, errs = diaphragm_labels(cfg)
+    return set() if errs else {k for k, v in labels.items() if v == "flexible"}
+
+
+X01_COLLECTOR_NOTE = ("flexible-labelled levels, EQ combinations enveloped with the X01 flexible-diaphragm run "
+                      "(IS 1893 Table 5(ii)): the rigid half carries the rigid-diaphragm load-path collectors / chords "
+                      "(consistent with the rigid model), the flexible half the beam axial forces of the X01 deck model "
+                      "directly (india_flexible_diaphragm.merge_records); the tributary accumulation is not added")
+
+
+def collector_forces(cfg, kind="EQ", *, x01_flexible=False):
+    """{'X': {beam_tag: N_comp}, 'Y': {...}, 'rows': [...]} per unit lateral factor (N).
+
+    Per level (diaphragm_labels): rigid levels -> load path by equilibrium of the analysed rigid model; flexible
+    levels -> accumulation of the tributary deck shear along each braced / frame line (_collector_forces_flexible).
+    x01_flexible: the combination is enveloped with the X01 flexible-deck run, whose beam axial forces ARE the
+    flexible case -- the flexible levels then take the rigid-case collectors here (X01_COLLECTOR_NOTE)."""
+    labels, errs = diaphragm_labels(cfg)
+    if errs:
+        raise DiaphragmError("; ".join(errs))
+    bad = sorted({v for v in labels.values() if v not in DIAPHRAGM_LABELS})
+    if bad:
         raise DiaphragmError("diaphragm %r: collector / chord forces need a rigid or flexible diaphragm model "
-                             "(semi-rigid shell diaphragms are not provided) -- the EOR must supply them (WP2.6)" % dia)
+                             "(semi-rigid shell diaphragms are not provided) -- the EOR must supply them (WP2.6)"
+                             % bad[0])
+    allk = set(labels)
+    flex = {k for k, v in labels.items() if v == "flexible"}
+    flex_acc = set() if x01_flexible else flex
+    rig = allk - flex_acc
+    if flex and flex == allk and not x01_flexible:
+        out = _collector_forces_flexible(cfg, kind)
+    else:
+        out = _collector_forces_rigid(cfg, kind, levels=rig) if rig else {"X": {}, "Y": {}, "rows": [], "kind": kind,
+                                                                           "cite": CITE}
+        if flex_acc:
+            fo = _collector_forces_flexible(cfg, kind, levels=flex_acc)
+            for d in ("X", "Y"):
+                for t, v in fo[d].items():
+                    out[d][t] = out[d].get(t, 0.0) + v
+            out["rows"] += fo["rows"]
+            for q in ("upper_bound_lines", "accumulation_basis"):
+                if fo.get(q):
+                    out[q] = fo[q]
+        out["diaphragm"] = "flexible" if flex == allk and flex else ("rigid" if not flex else "by_level")
+    if cfg.get("diaphragm_by_level"):
+        out["diaphragm_by_level"] = {str(k): v for k, v in sorted(labels.items())}
+    if x01_flexible and flex:
+        out["x01_flexible"] = True
+        out["x01_note"] = X01_COLLECTOR_NOTE
+        for r in out["rows"]:
+            if r.get("level") in flex:
+                r["case"] = "rigid half of the Table 5(ii) envelope (X01 deck-model axial = flexible half)"
+    return out
+
+
+def _collector_forces_rigid(cfg, kind="EQ", levels=None):
+    """Rigid-diaphragm load path (module docstring 1-4); levels: the levels to evaluate (None = all)."""
+    import engine3d as E
     out = {"X": {}, "Y": {}, "rows": [], "kind": kind, "cite": CITE}
     for d in ("X", "Y"):
         F = _story_forces(cfg, d, kind)
@@ -91,6 +186,8 @@ def collector_forces(cfg, kind="EQ"):
         ax = 0 if d == "X" else 1           # coordinate along the force
         zlev = E.zlevels(cfg)
         for k in range(1, NF + 1):
+            if levels is not None and k not in levels:
+                continue
             nodes = [E.ntag(i, j, k) for (i, j) in info["present"][k]]
             crd = {n: ops.nodeCoord(n) for n in nodes}
             # off-grid work points at this level (EBF link ends, WP6): the braces deliver their storey shear
@@ -163,18 +260,29 @@ def collector_forces(cfg, kind="EQ"):
     return out
 
 
-def collector_demands(cfg, run=None, reg=None):
-    """Rows for calc_package['collectors'] (EQ and W), unit lateral factor."""
+def collector_demands(cfg, run=None, reg=None, x01_flexible=False):
+    """Rows for calc_package['collectors'] (EQ and W), unit lateral factor.  x01_flexible (the EQ combinations were
+    enveloped with the X01 flexible-deck run): the flexible levels' EQ rows of the rigid half are added with
+    case = 'rigid half ...' beside the tributary-accumulation rows (which then apply to non-enveloped combinations)."""
     rows = []
-    for kind in ("EQ", "W"):
+    flex = flexible_levels(cfg)
+    variants = [("EQ", False), ("W", False)]
+    if x01_flexible and flex:
+        variants.insert(1, ("EQ", True))
+    for kind, x01 in variants:
         try:
-            cf = collector_forces(cfg, kind)
+            cf = collector_forces(cfg, kind, x01_flexible=x01)
         except DiaphragmError as ex:
             return [{"error": str(ex)}]
         for r in cf["rows"]:
+            if x01 and r.get("level") not in flex:
+                continue                                  # same rows as the plain EQ variant
             # H49: a row keeps its own cite (flexible rows cite 7.6.4 flexible / tributary), else the result's cite
             rows.append(dict(r, kind=kind, units="N per unit fE/fW (+ = compression under +dir)",
                              cite=r.get("cite") or cf.get("cite") or CITE))
+        if x01:
+            rows.append({"kind": kind, "role": "note", "levels": sorted(flex), "note": X01_COLLECTOR_NOTE,
+                         "cite": "IS 1893 (Part 1):2016 Table 5(ii) (Amd 2); 7.6.4"})
     return rows
 
 
@@ -195,24 +303,29 @@ def pattern_collector_forces(cfg, kind, ref):
     return dict(collector_forces(cfg2, kind).get(dF) or {})
 
 
-def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False):
+def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False, x01_labels=None):
     """Add fLat x collector/chord N to the beam records of every lateral combination (in place).
 
     per_case: {label: {frozenset(n1, n2): rec}} (static_model.solve_cases_si); records are tuples with
     N (tension +) first.  12.2.3-tagged combinations (col_only) receive the forces too, and are kept
     for the collector members' checks only when amplify_12_2_3 (EOR basis) is set.
+    x01_labels: the combinations enveloped with the X01 flexible-deck run (Table 5(ii)); for them the flexible
+    levels take the rigid-case collectors (collector_forces x01_flexible, X01_COLLECTOR_NOTE).
     Returns {beam_tag: max |added N|}."""
     cache = {}
     added = {}
+    x01_labels = set(x01_labels or ()) if flexible_levels(cfg) else set()
     tag_of = {frozenset((n1, n2)): t for t, (k, s_, n1, n2) in reg.items() if k == "beam"}
     for c in cases:
         m = getattr(c, "meta", {}) or {}
         kind, d, f = m.get("kind"), m.get("direction"), m.get("fLat")
         if kind not in ("EQ", "W") or d not in ("X", "Y") or not f or m.get("service"):
             continue
-        if kind not in cache:
-            cache[kind] = collector_forces(cfg, kind)
-        cf = cache[kind][d]
+        x01 = c[0] in x01_labels
+        ck = (kind, x01)
+        if ck not in cache:
+            cache[ck] = collector_forces(cfg, kind, x01_flexible=x01)
+        cf = cache[ck][d]
         res = per_case.get(c[0])
         if not res:
             continue
@@ -223,7 +336,7 @@ def add_to_records(per_case, cases, reg, cfg, *, amplify_12_2_3=False):
                 continue
             dd = ref2[len(kind) + 1:]
             if dd in ("X", "Y"):
-                extra.append((cache[kind][dd], float(t2["f"])))
+                extra.append((cache[ck][dd], float(t2["f"])))
             else:                                   # X05: e.g. W_X_across -- collectors of that pattern itself
                 if ref2 not in cache:
                     cache[ref2] = pattern_collector_forces(cfg, kind, ref2)
@@ -305,7 +418,7 @@ def literal_ratio_7_6_4(r):
     return None                                   # drift-only record: not the 7.6.4 criterion
 
 
-def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
+def reconcile_7_6_4(rec, flexible_levels=None, declared=None, declared_by_level=None):
     """AUD-3 (gold audit M2): the package's 7.6.4 record states what the analysis found.  flexible_levels = the X01
     flexible-diaphragm run's per-level records {dir: [{level, ratio, limit, flexible, ...}]}.  The ratio is the
     7.6.4 literal one (literal_ratio_7_6_4: deviation from the chord / average displacement of the entire
@@ -314,7 +427,9 @@ def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
     FLEXIBLE_FROM_ANALYSIS with the governing ratio, whatever was declared; the design stays enveloped (rigid and
     flexible runs, Table 5(ii)).  A declared label that contradicts the computed one is kept as
     'declared_classification' with 'declared_contradicted' True and a 'warning' (non-blocking: consistency /
-    design_status warnings).  Returns rec (updated in place)."""
+    design_status warnings).  declared_by_level ({k: 'rigid' | 'flexible'}, cfg['diaphragm_by_level'] via
+    diaphragm_labels): the declared label of each level is compared with that level's computed classification
+    ('computed_by_level'; contradictions listed in 'contradicted_levels').  Returns rec (updated in place)."""
     if not isinstance(rec, dict):
         return rec
     decl = str(declared or "").strip().lower() or None
@@ -332,6 +447,15 @@ def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
         computed = bool(flex)
         ratio, where = pick[2], {"dir": pick[0], "level": pick[1].get("level"),
                                  "source": "X01 flexible-diaphragm run (Table 5(ii))"}
+        byk = {}
+        for d, r, lr in rows:
+            k = r.get("level")
+            if k is None:
+                continue
+            cur = byk.get(k)
+            if cur is None or lr > cur["ratio"]:
+                byk[k] = {"ratio": lr, "dir": d, "classification": "flexible" if lr > lim else "rigid"}
+        rec["computed_by_level"] = {str(k): v for k, v in sorted(byk.items())}
         inf = [(d, r) for d, r, _ in rows if isinstance(r.get("ratio_vs_storey_drift"), (int, float))]
         if inf:
             d_, r_ = max(inf, key=lambda x: x[1]["ratio_vs_storey_drift"])
@@ -356,6 +480,22 @@ def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
         if rows:
             rec["model"] = ("design enveloped: rigid-diaphragm model (7.8.2 eccentricity) and the flexible-diaphragm "
                             "3-D run (IS 1893 Table 5(ii)); the diaphragm is flexible by 7.6.4")
+    if declared_by_level and rec.get("computed_by_level"):
+        bad = []
+        for k, c in rec["computed_by_level"].items():
+            dk = str((declared_by_level or {}).get(int(k)) or "").lower()
+            if dk in ("rigid", "flexible") and dk != c["classification"]:
+                bad.append({"level": int(k), "declared": dk, "computed": c["classification"], "ratio": c["ratio"],
+                            "dir": c["dir"]})
+        if bad:
+            rec["declared_contradicted"] = True
+            rec["contradicted_levels"] = bad
+            rec["warning"] = ("IS 1893 7.6.4: cfg['diaphragm_by_level'] contradicts the analysis at %s (deviation from "
+                              "the chord / average displacement of the entire diaphragm vs 1.2) -- declare the "
+                              "computed label per level (or show a ratio <= 1.2); the package reports the computed "
+                              "classification" % "; ".join("level %d: declared %s, computed %s (ratio %.2f, %s)" % (
+                                  b["level"], b["declared"], b["computed"], b["ratio"], b["dir"]) for b in bad))
+        return rec
     if decl in ("rigid", "flexible") and decl != rec["computed_classification"]:
         rec["declared_contradicted"] = True
         rec["warning"] = ("IS 1893 7.6.4: the diaphragm is declared %s but the analysis gives %s (ratio %.2f vs 1.2 at "
@@ -470,32 +610,174 @@ def flexible_diaphragm_line_shears(cfg, kind="EQ"):
     return out
 
 
-def _collector_forces_flexible(cfg, kind="EQ"):
-    """Flexible diaphragm (7.6.4): each lateral line receives its tributary storey shear; the collector on that
-    line carries the accumulated deck shear into the braced bay, so every beam on the line at that level is
-    given the line shear as its collector axial (upper bound: the whole line shear reaches the bay through one
-    beam).  Chord forces: the deck spans between lines as a simple beam of span s (the tributary panel) -- chord
-    T = w s^2 / (8 B) with w = the panel's share of the storey force per unit length and B the panel depth."""
+CITE_FLEX_COLL = ("IS 1893 (Part 1):2016 7.6.4 flexible diaphragm: storey shear to the lateral lines by tributary width; "
+                  "collector (drag) force = the deck shear accumulated along the line from the free end / the previous "
+                  "vertical element, delivered to each braced / frame bay (tributary distribution)")
+UPPER_BOUND_TEXT = ("upper bound: the positions of the vertical lateral elements on this line at this level could not be "
+                    "determined (no brace or moment-frame bay on the line in the model) -- every beam on the line is "
+                    "given the whole line shear")
+
+
+def accumulate_line_collector(segments, elements, V_line, x0=None, x1=None):
+    """GOLD-COLL: collector (drag) axial along ONE lateral line of a flexible diaphragm at one level.
+
+    segments = [(xa, xb, key)] the beams on the line (coordinate along the force);
+    elements = [{'span': (a, b), 'nodes': [(x, w), ...]}] the vertical lateral elements on the line (braced bays /
+               moment-frame bays): plan span and delivery nodes with weights (brace ends / frame columns);
+    V_line   = the line's tributary deck shear (N), delivered uniformly along the line, q = V_line / (x1 - x0).
+    Overlapping / touching spans merge into one element.  Each element takes the deck shear of its tributary length
+    of the line (free end or mid-gap to the next element): R_i = q (hi_i - lo_i), shared among its delivery nodes by
+    weight.  N(x) = q (x - x0) - sum of the deliveries before x (+ = compression under a +d force: the free end
+    pushes into the bay, the far side is pulled); each beam takes the larger |N| at its two ends.
+    Returns {'q', 'x0', 'x1', 'elements': [{span, lo, hi, R}], 'deliveries': [(x, r)], 'N': {key: N}}."""
+    if not elements:
+        raise DiaphragmError("accumulate_line_collector: no vertical lateral element on the line")
+    xs = [v for (a, b, _k) in segments for v in (a, b)]
+    for e in elements:
+        xs += list(e["span"]) + [x for x, _w in e["nodes"]]
+    x0 = min(xs) if x0 is None else float(x0)
+    x1 = max(xs) if x1 is None else float(x1)
+    if x1 - x0 <= 0:
+        raise DiaphragmError("accumulate_line_collector: zero line length")
+    q = float(V_line) / (x1 - x0)
+    tol = 1.0
+    els = sorted(({"span": (min(e["span"]), max(e["span"])), "nodes": list(e["nodes"])} for e in elements),
+                 key=lambda e: e["span"][0])
+    merged = [els[0]]
+    for e in els[1:]:
+        m = merged[-1]
+        if e["span"][0] <= m["span"][1] + tol:
+            m["span"] = (m["span"][0], max(m["span"][1], e["span"][1]))
+            m["nodes"] += e["nodes"]
+        else:
+            merged.append(e)
+    dels, rec = [], []
+    for i, e in enumerate(merged):
+        lo = x0 if i == 0 else 0.5 * (merged[i - 1]["span"][1] + e["span"][0])
+        hi = x1 if i == len(merged) - 1 else 0.5 * (e["span"][1] + merged[i + 1]["span"][0])
+        R = q * (hi - lo)
+        nd = {}
+        for x, w in e["nodes"]:
+            nd[round(x, 3)] = nd.get(round(x, 3), 0.0) + float(w)
+        if not nd or sum(nd.values()) <= 0:
+            nd = {round(e["span"][0], 3): 1.0, round(e["span"][1], 3): 1.0}
+        W = sum(nd.values())
+        for x, w in sorted(nd.items()):
+            dels.append((x, R * w / W))
+        rec.append({"span": list(e["span"]), "lo": lo, "hi": hi, "R": R})
+
+    def N(x, right):
+        return q * (x - x0) - sum(r for (s_, r) in dels if (s_ <= x + 1e-6 if right else s_ < x - 1e-6))
+    out = {}
+    for (a, b, key) in segments:
+        a_, b_ = min(a, b), max(a, b)
+        Na, Nb = N(a_, True), N(b_, False)
+        out[key] = Na if abs(Na) >= abs(Nb) else Nb
+    return {"q": q, "x0": x0, "x1": x1, "elements": rec, "deliveries": dels, "N": out}
+
+
+def _line_elements(info, d, k, pos, crd, tol=1.0):
+    """The vertical lateral elements of the line at coordinate pos (normal to the force d) at level k, from the
+    built model: braced bays (braces in d on the line with an end at level k: span = plan projection, delivery nodes
+    = the brace ends at level k, weight = number of brace ends) and, when the line has no brace there, moment-frame
+    bays (beams on the line at level k with a moment end, engine3d add_beam release record: delivery nodes = the
+    moment ends).  Returns (elements, basis)."""
+    ax, nx = (0, 1) if d == "X" else (1, 0)
+    els = []
+    for (t, kind_e, sec, n1, n2) in info["ele"]:
+        if kind_e != "brace":
+            continue
+        c1, c2 = crd(n1), crd(n2)
+        if (abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1])) != (d == "X"):
+            continue
+        if abs(c1[nx] - pos) > tol or abs(c2[nx] - pos) > tol:
+            continue
+        ends = [(c[ax], 1.0) for n, c in ((n1, c1), (n2, c2)) if _lvl(n) == k]
+        if not ends:
+            continue
+        els.append({"span": (c1[ax], c2[ax]), "nodes": ends})
+    if els:
+        return els, "braced bays of the model (brace ends at the level)"
+    rel = info.get("beam_rel") or {}
+    mn = info.get("moment_nodes") or set()
+    for (t, kind_e, sec, n1, n2) in info["ele"]:
+        if kind_e != "beam" or _lvl(n1) != k or _lvl(n2) != k:
+            continue
+        c1, c2 = crd(n1), crd(n2)
+        if abs(c1[nx] - pos) > tol or abs(c2[nx] - pos) > tol or abs(c2[ax] - c1[ax]) < tol:
+            continue
+        rz = (rel.get(t) or ("both",))[0]
+        ends = [(c[ax], 1.0) for n, c, free in ((n1, c1, rz in ("I", "both")), (n2, c2, rz in ("J", "both")))
+                if not free and n in mn]
+        if ends:
+            els.append({"span": (c1[ax], c2[ax]), "nodes": ends})
+    if els:
+        return els, "moment-frame bays of the model (beams with moment ends on the line)"
+    return [], None
+
+
+def _collector_forces_flexible(cfg, kind="EQ", levels=None):
+    """Flexible diaphragm (7.6.4): each lateral line receives its tributary storey shear (flexible_diaphragm_line_shears,
+    e0); along the line the collector carries the deck shear accumulated from the free end (or the previous
+    vertical element) into each braced / frame bay (accumulate_line_collector, GOLD-COLL): q = V_line / line length,
+    each vertical element taking q x its tributary length of the line.  Only when the positions of the vertical
+    elements on the line cannot be determined is every beam on the line given the whole line shear (upper bound,
+    stated in the rows and in 'upper_bound_lines').  Chord forces: the deck spans between lines as a simple beam of
+    span s (the tributary panel) -- chord T = w s^2 / (8 B) with w = the panel's share of the storey force per unit
+    length and B the panel depth.  levels: the levels to evaluate (None = all)."""
     import engine3d as E
     ls = flexible_diaphragm_line_shears(cfg, kind)
     info = E.build(cfg, "Linear")
     NF = info["NF"]
     out = {"X": {}, "Y": {}, "rows": [], "kind": kind, "cite": CITE_7_6_4 + " (tributary distribution)",
-           "diaphragm": "flexible"}
+           "diaphragm": "flexible", "accumulation_basis": CITE_FLEX_COLL, "upper_bound_lines": []}
+    _c = {}
+
+    def crd(n):
+        if n not in _c:
+            _c[n] = ops.nodeCoord(n)
+        return _c[n]
     beams = {}
     for (t, k_, sec, n1, n2) in info["ele"]:
         if k_ == "beam":
-            c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+            c1, c2 = crd(n1), crd(n2)
             d = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
-            beams.setdefault((d, _lvl(n1), round(c1[1] if d == "X" else c1[0], 1)), []).append(t)
+            beams.setdefault((d, _lvl(n1), round(c1[1] if d == "X" else c1[0], 1)), []).append((t, c1, c2))
     for d, lines in (ls.get("lines") or {}).items():
+        ax = 0 if d == "X" else 1
         for k in range(1, NF + 1):
+            if levels is not None and k not in levels:
+                continue
             sh = (ls.get("e0") or {}).get(d, {}).get(k) or {}
             for pos, V in sh.items():
-                for t in beams.get((d, k, round(pos, 1)), []):
-                    out[d][t] = out[d].get(t, 0.0) + abs(V)
-                    out["rows"].append({"dir": d, "level": k, "line": pos, "beam": t, "role": "collector",
-                                        "N_N": round(abs(V), 1), "R_line_N": round(V, 1), "basis": "tributary line shear"})
+                bl = beams.get((d, k, round(pos, 1)), [])
+                if not bl or abs(V) < 1e-9:
+                    continue
+                els, ebasis = _line_elements(info, d, k, pos, crd)
+                if els:
+                    segs = [(c1[ax], c2[ax], t) for (t, c1, c2) in bl]
+                    acc = accumulate_line_collector(segs, els, abs(V))
+                    for (t, c1, c2) in bl:
+                        Nt = acc["N"][t]
+                        if abs(Nt) < 1.0:
+                            continue
+                        out[d][t] = out[d].get(t, 0.0) + Nt
+                        out["rows"].append({"dir": d, "level": k, "line": pos, "beam": t, "role": "collector",
+                                            "N_N": round(Nt, 1), "R_line_N": round(V, 1),
+                                            "q_N_per_mm": round(acc["q"], 4),
+                                            "x_mm": [round(min(c1[ax], c2[ax]), 1), round(max(c1[ax], c2[ax]), 1)],
+                                            "vertical_elements": [{"span_mm": [round(v, 1) for v in e["span"]],
+                                                                   "R_N": round(e["R"], 1)} for e in acc["elements"]],
+                                            "basis": "tributary deck shear accumulated along the line (%s)" % ebasis,
+                                            "cite": CITE_FLEX_COLL})
+                else:
+                    out["upper_bound_lines"].append({"dir": d, "level": k, "line": pos, "reason": UPPER_BOUND_TEXT})
+                    for (t, c1, c2) in bl:
+                        out[d][t] = out[d].get(t, 0.0) + abs(V)
+                        out["rows"].append({"dir": d, "level": k, "line": pos, "beam": t, "role": "collector",
+                                            "N_N": round(abs(V), 1), "R_line_N": round(V, 1),
+                                            "basis": UPPER_BOUND_TEXT, "upper_bound": True,
+                                            "cite": CITE_7_6_4 + " (tributary distribution; upper bound)"})
             # chords: panel between adjacent lines, uniform deck load w = (F x panel width / b) / span
             srt = sorted(lines)
             F = sum(abs(v) for v in sh.values())
@@ -511,7 +793,7 @@ def _collector_forces_flexible(cfg, kind="EQ"):
                 T = w * span ** 2 / (8.0 * B)
                 dd = "Y" if d == "X" else "X"
                 for pos_edge in (min(xs), max(xs)):
-                    for t in beams.get((dd, k, round(pos_edge, 1)), []):
+                    for (t, _c1, _c2) in beams.get((dd, k, round(pos_edge, 1)), []):
                         out[dd][t] = out[dd].get(t, 0.0) + T
                         out["rows"].append({"dir": d, "level": k, "beam": t, "role": "chord", "N_N": round(T, 1),
                                             "span_mm": span, "B_mm": B, "basis": "flexible panel w s^2/(8 B)"})

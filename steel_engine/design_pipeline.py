@@ -1015,7 +1015,10 @@ def design_india(name, cfg, outdir):
         import india_diaphragm as DIA
         _i = E.build(cfg, "PDelta")
         _reg = {t: (kind, sec, n1, n2) for (t, kind, sec, n1, n2) in _i["ele"]}
-        coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223)
+        # GOLD-COLL: the EQ combinations enveloped with the X01 flexible-deck run take the X01 beam axial forces as
+        # their flexible case; their rigid half carries the rigid-diaphragm collectors (DIA.X01_COLLECTOR_NOTE)
+        coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223,
+                                        x01_labels=[lab for lab in (per_flex or {}) if not lab.startswith("_")])
     except Exception as ex:
         coll_error = "%s: %s" % (type(ex).__name__, ex)
     if per_flex is not None:
@@ -1685,7 +1688,14 @@ def design_india(name, cfg, outdir):
         rec764 = DIA.classify_7_6_4(**d764)
         rec764["model"] = "rigid diaphragm constraint + 7.8.2 eccentricity" if not rec764.get("flexible") else \
             "tributary-width storey-shear distribution to the lateral lines (no diaphragm torsion)"
-        if rec764.get("flexible"):
+        _flv = DIA.flexible_levels(cfg)
+        if cfg.get("diaphragm_by_level"):
+            # GOLD-COLL: per-level labels (e.g. a composite podium rigid under flexible CFS floors)
+            rec764["declared_by_level"] = {str(k): v for k, v in sorted(DIA.diaphragm_labels(cfg)[0].items())}
+            if _flv and not rec764.get("flexible"):
+                rec764["model"] += ("; levels %s declared flexible: tributary-width distribution to the lateral "
+                                    "lines" % sorted(_flv))
+        if rec764.get("flexible") or _flv:
             rec764["line_shears"] = _jsonable(DIA.flexible_diaphragm_line_shears(cfg, "EQ"))
         pkg["diaphragm_7_6_4"] = rec764
     except Exception as ex:
@@ -1702,7 +1712,9 @@ def design_india(name, cfg, outdir):
     try:
         import india_diaphragm as DIA
         DIA.reconcile_7_6_4(pkg["diaphragm_7_6_4"], (flex_d764 or {}).get("d764"),
-                            declared=str(cfg.get("diaphragm") or "rigid").lower())
+                            declared=str(cfg.get("diaphragm") or "rigid").lower(),
+                            declared_by_level=(DIA.diaphragm_labels(cfg)[0] if cfg.get("diaphragm_by_level")
+                                               else None))
     except Exception as ex:
         pkg["diaphragm_7_6_4"]["reconcile_error"] = str(ex)
     # IS 875 (Part 4):2021 4.4 ponding screen for long-span flat roofs (WP6-fix): the job declares the roof slope,
@@ -1778,6 +1790,7 @@ def design_india(name, cfg, outdir):
             pkg["across_wind"] = {"evaluated": None, "error": str(ex)}
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
+    pkg["_coll_x01"] = per_flex is not None
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
         try:
             hook(cfg, pkg, run, envt, reg)
@@ -1862,12 +1875,26 @@ def _collector_demands(cfg, pkg, run, envt, reg):
     """WP2.6: collector / chord rows (india_diaphragm); the forces were already added to the beam
     records before the member checks."""
     from india_diaphragm import collector_demands
-    rows = collector_demands(cfg, run, reg)
+    rows = collector_demands(cfg, run, reg, x01_flexible=bool(pkg.get("_coll_x01")))
     pkg["collectors"] = {"rows": rows, "applied_to_member_checks": bool(pkg.get("_coll_added")),
                          "n_beams_with_axial": len(pkg.get("_coll_added") or {}),
                          "basis_12_2_3": pkg.get("_coll_amp"), "error": pkg.get("_coll_error"),
                          "cite": "india_diaphragm (equilibrium of the analysed model); IS 800 9.3"}
-    for k in ("_coll_added", "_coll_error", "_coll_amp"):
+    try:                                    # GOLD-COLL: per-level diaphragm labels, flexible-collector basis
+        import india_diaphragm as DIA
+        labels, _errs = DIA.diaphragm_labels(cfg)
+        flex = sorted(k for k, v in labels.items() if v == "flexible")
+        if flex:
+            pkg["collectors"].update(
+                flexible_levels=flex, flexible_basis=DIA.CITE_FLEX_COLL,
+                upper_bound_lines=[r for r in rows if r.get("upper_bound")] and sorted(
+                    {(r["dir"], r["level"], r["line"]) for r in rows if r.get("upper_bound")}),
+                x01_flexible_case=(DIA.X01_COLLECTOR_NOTE if pkg.get("_coll_x01") else None))
+        if cfg.get("diaphragm_by_level"):
+            pkg["collectors"]["diaphragm_by_level"] = {str(k): v for k, v in sorted(labels.items())}
+    except Exception as ex:
+        pkg["collectors"]["labels_error"] = str(ex)
+    for k in ("_coll_added", "_coll_error", "_coll_amp", "_coll_x01"):
         pkg.pop(k, None)
 
 

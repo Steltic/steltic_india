@@ -225,7 +225,15 @@ Before `pipeline.design_and_report`:
   lines by tributary width of each level's own footprint (`cfg['lateral_lines']` = {X: [y_mm..], Y: [x_mm..]}
   names moment-frame lines; brace lines are found from the model). Collectors and chords are computed from the
   diaphragm load path and added to the beam checks automatically (`collector_basis` 'is800_12_2_3' amplifies
-  them with the 12.2.3 rows).
+  them with the 12.2.3 rows). Flexible levels: along each line the collector carries the deck shear accumulated
+  from the free end (or the previous vertical element) into each braced / frame bay, q = line shear / line length,
+  each bay taking q x its tributary length of the line (mid-gap to the next bay); only when the model shows no
+  brace or moment-connected beam on a line at that level is every beam on it given the whole line shear (upper
+  bound, `collectors.upper_bound_lines`). EQ combinations enveloped with the X01 flexible-deck run take the X01
+  beam axial forces as their flexible case and the rigid-diaphragm collectors in their rigid half.
+  `cfg['diaphragm_by_level']` = {k | 'a-b' | 'default': 'rigid' | 'flexible'} labels levels individually (e.g. a
+  composite podium rigid under flexible CFS / metal-deck floors; unnamed levels take `diaphragm`); a malformed
+  entry is a preflight ERROR, and each level's label is compared with that level's computed 7.6.4 ratio.
   The package's `diaphragm_7_6_4` reports what the analysis computed (AUD-3): when the X01 flexible run (or the
   declared 7.6.4 deflections) gives a literal ratio (deviation from the chord / average displacement of the entire
   diaphragm) > 1.2 at any level, `classification` is "flexible (IS 1893 7.6.4, from

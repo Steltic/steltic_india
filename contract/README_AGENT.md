@@ -67,7 +67,7 @@ Every optional key is backward compatible; AGENT_START explains the ones with en
   occupant_load_m2_per_person, educational, hospital, food_storage, assembly, lifeline, important} (Table 8;
   a list = mixed occupancy, the larger I governs), `seis` = {Z, zone, I, R, soil} (IS 1893 values only),
   `zone` / `seismic_zone` / `Z` (aliases read by the zone gate), `analyses` (['RSA'] where 7.7.1 requires it),
-  `brace_config`, `diaphragm`, `diaphragm_7_6_4`, `lateral_lines`, `diaphragm_stiffness`,
+  `brace_config`, `diaphragm`, `diaphragm_by_level`, `diaphragm_7_6_4`, `lateral_lines`, `diaphragm_stiffness`,
   `flexible_diaphragm_analysis`, `flexible_diaphragm_eor`, `Jm_by_level`, `nodal_masses`, `extra_mass_floors`,
   `partition_seismic_kNm2`, `partitions` (False removes partitions from W), `irregular`, `regular`,
   `torsion_ratio`, `in_plane_discontinuity`, `weak_storey`, `out_of_plane_offset`, `nonparallel`,
@@ -144,7 +144,8 @@ figures, and `cfg.py`.
 ## 9. Caveats — state them in the report
 * Elastic analysis; the Section 12 detailing makes the R-based design valid.
 * Bare-centreline models run flexible (no slab or non-structural stiffness).
-* Diaphragm idealisation as declared: rigid (constraint + 7.8.2 torsion) or flexible (tributary distribution);
+* Diaphragm idealisation as declared (per level with `diaphragm_by_level`): rigid (constraint + 7.8.2 torsion) or
+  flexible (tributary distribution; collectors accumulate the deck shear along each line into the braced / frame bays);
   a re-entrant plan adds the Table 5(ii) flexible-deck 3-D run with the declared deck stiffness (isotropic
   membrane; state the stiffness source).
 * Pitched roofs at their true slope only through `roof_planes`; units of one job are separate models joined only
