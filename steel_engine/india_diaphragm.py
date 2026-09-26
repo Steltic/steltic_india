@@ -265,7 +265,7 @@ def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=
     if delta_max_from_chord_mm is not None and delta_avg_mm:
         r = float(delta_max_from_chord_mm) / float(delta_avg_mm)
         out.update(method="deflection ratio (Fig. 6)", ratio=r, limit=1.2, flexible=r > 1.2,
-                   classification="flexible" if r > 1.2 else "rigid", ok=True)
+                   classification="flexible" if r > 1.2 else "rigid", ok=True, ratio_basis=RATIO_BASIS_7_6_4)
         return out
     if rc_slab or (screed_mm is not None and float(screed_mm) >= (75.0 if roof else 50.0)):
         ar_ok = plan_aspect_ratio is None or float(plan_aspect_ratio) < 3.0
@@ -285,12 +285,32 @@ def classify_7_6_4(*, delta_max_from_chord_mm=None, delta_avg_mm=None, declared=
 
 
 FLEXIBLE_FROM_ANALYSIS = "flexible (IS 1893 7.6.4, from the analysis)"
+RATIO_BASIS_7_6_4 = ("IS 1893 (Part 1):2016 7.6.4 literal: maximum lateral displacement measured from the chord of the "
+                     "deformed shape / average displacement of the entire diaphragm (per level and direction)")
+INFORMATIVE_DRIFT_7_6_4 = "informative (not the IS 1893 criterion): deviation from the chord / average storey drift"
+
+
+def literal_ratio_7_6_4(r):
+    """The 7.6.4 ratio of one per-level record: deviation from the chord / average displacement of the entire
+    diaphragm.  Records written before the literal reading carried the drift-based value in 'ratio' and the literal
+    one in 'ratio_vs_avg_displacement' (no 'ratio_basis'); the literal one is taken whenever it is present."""
+    if not isinstance(r, dict):
+        return None
+    v = r.get("ratio_vs_avg_displacement")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if r.get("ratio_basis") or "avg_storey_drift_mm" not in r:
+        v = r.get("ratio")
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    return None                                   # drift-only record: not the 7.6.4 criterion
 
 
 def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
     """AUD-3 (gold audit M2): the package's 7.6.4 record states what the analysis found.  flexible_levels = the X01
-    flexible-diaphragm run's per-level records {dir: [{level, ratio, limit, flexible, ...}]}.  When that run (or the
-    record's own deflection-ratio evaluation) finds any level flexible (ratio > 1.2), the classification is
+    flexible-diaphragm run's per-level records {dir: [{level, ratio, limit, flexible, ...}]}.  The ratio is the
+    7.6.4 literal one (literal_ratio_7_6_4: deviation from the chord / average displacement of the entire
+    diaphragm; the deviation / average storey drift is informative only and never classifies).  When any level's
+    literal ratio > 1.2 (or the record's own deflection-ratio evaluation), the classification is
     FLEXIBLE_FROM_ANALYSIS with the governing ratio, whatever was declared; the design stays enveloped (rigid and
     flexible runs, Table 5(ii)).  A declared label that contradicts the computed one is kept as
     'declared_classification' with 'declared_contradicted' True and a 'warning' (non-blocking: consistency /
@@ -301,15 +321,22 @@ def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
     rows = []
     for d, lv in (flexible_levels or {}).items():
         for r in lv or []:
-            if isinstance(r, dict) and isinstance(r.get("ratio"), (int, float)):
-                rows.append((d, r))
+            lr = literal_ratio_7_6_4(r)
+            if lr is not None:
+                rows.append((d, r, lr))
     computed, ratio, where = None, None, None
     if rows:
-        flex = [(d, r) for d, r in rows if r.get("flexible")]
-        pick = max(flex or rows, key=lambda x: x[1]["ratio"])
+        lim = 1.2
+        flex = [x for x in rows if x[2] > lim]
+        pick = max(flex or rows, key=lambda x: x[2])
         computed = bool(flex)
-        ratio, where = pick[1]["ratio"], {"dir": pick[0], "level": pick[1].get("level"),
-                                          "source": "X01 flexible-diaphragm run (Table 5(ii))"}
+        ratio, where = pick[2], {"dir": pick[0], "level": pick[1].get("level"),
+                                 "source": "X01 flexible-diaphragm run (Table 5(ii))"}
+        inf = [(d, r) for d, r, _ in rows if isinstance(r.get("ratio_vs_storey_drift"), (int, float))]
+        if inf:
+            d_, r_ = max(inf, key=lambda x: x[1]["ratio_vs_storey_drift"])
+            rec["informative_ratio_vs_storey_drift"] = {"value": r_["ratio_vs_storey_drift"], "dir": d_,
+                                                        "level": r_.get("level"), "note": INFORMATIVE_DRIFT_7_6_4}
     elif rec.get("method") == "deflection ratio (Fig. 6)" and isinstance(rec.get("ratio"), (int, float)):
         computed, ratio, where = bool(rec.get("flexible")), rec["ratio"], {"source": "declared 7.6.4 deflections"}
     if computed is None:
@@ -317,23 +344,26 @@ def reconcile_7_6_4(rec, flexible_levels=None, declared=None):
     rec["computed_classification"] = "flexible" if computed else "rigid"
     rec["computed_ratio"] = ratio
     rec["computed_at"] = where
+    rec["ratio_basis"] = RATIO_BASIS_7_6_4
     if decl is None:
         decl = str(rec.get("classification") or "").lower() or None
     if computed:
         if rec.get("classification") != FLEXIBLE_FROM_ANALYSIS:
             rec.setdefault("declared_classification", decl)
         rec.update(classification=FLEXIBLE_FROM_ANALYSIS, flexible=True, ratio=ratio, limit=1.2, ok=True,
-                   method="in-plane deformation ratio from the analysis (limit 1.2, IS 1893 7.6.4 / Fig. 6)")
+                   method="in-plane deformation ratio from the analysis (deviation from the chord / average "
+                          "displacement of the entire diaphragm, limit 1.2, IS 1893 7.6.4 / Fig. 6)")
         if rows:
             rec["model"] = ("design enveloped: rigid-diaphragm model (7.8.2 eccentricity) and the flexible-diaphragm "
                             "3-D run (IS 1893 Table 5(ii)); the diaphragm is flexible by 7.6.4")
     if decl in ("rigid", "flexible") and decl != rec["computed_classification"]:
         rec["declared_contradicted"] = True
         rec["warning"] = ("IS 1893 7.6.4: the diaphragm is declared %s but the analysis gives %s (ratio %.2f vs 1.2 at "
-                          "%s) -- declare cfg['diaphragm'] = '%s' (or show a ratio <= 1.2); the package reports the "
-                          "computed classification" % (decl, rec["computed_classification"], ratio,
-                                                       ", ".join("%s %s" % kv for kv in where.items() if kv[1] is not None),
-                                                       rec["computed_classification"]))
+                          "%s; deviation from the chord / average displacement of the entire diaphragm) -- declare "
+                          "cfg['diaphragm'] = '%s' (or show a ratio <= 1.2); the package reports the computed "
+                          "classification" % (decl, rec["computed_classification"], ratio,
+                                              ", ".join("%s %s" % kv for kv in where.items() if kv[1] is not None),
+                                              rec["computed_classification"]))
     return rec
 
 

@@ -182,7 +182,10 @@ Before `pipeline.design_and_report`:
   run, `cfg['flexible_diaphragm_eor']` = {analysis_ref, results, source, cite} (all four) records an external
   analysis. Neither → PARTIAL with the reason; the private `_flexible_diaphragm_run` is never evidence. The
   flexible run's own 90 % mass (7.7.5.2), scaling and drift records must pass; the package keeps both runs and the
-  7.6.4 in-plane deformation ratio per level.
+  7.6.4 in-plane deformation ratio per level and direction. The 7.6.4 ratio is code-literal: the maximum lateral
+  displacement measured from the chord of the deformed shape (rigid-body plane motion of the level's braced / frame
+  nodes) / the average displacement of the entire diaphragm (`ratio`, `ratio_basis`); the deviation / average storey
+  drift is kept as `ratio_vs_storey_drift`, "informative (not the IS 1893 criterion)", and never classifies.
 * **Vertical earthquake (6.3.3.1):** automatic in Zones IV / V, for irregular buildings and soft soil; declare
   `long_span`, `overhang` / `large_overhang`, `prestressed` or `vertical_eq: True` (EOR) where they apply.
 * **Declared irregularities the model cannot see:** `in_plane_discontinuity` (Table 6(iv)), `weak_storey`
@@ -224,8 +227,10 @@ Before `pipeline.design_and_report`:
   diaphragm load path and added to the beam checks automatically (`collector_basis` 'is800_12_2_3' amplifies
   them with the 12.2.3 rows).
   The package's `diaphragm_7_6_4` reports what the analysis computed (AUD-3): when the X01 flexible run (or the
-  declared 7.6.4 deflections) gives a ratio > 1.2 at any level, `classification` is "flexible (IS 1893 7.6.4, from
-  the analysis)" with `ratio`, `computed_at` {dir, level} and `declared_classification`; the design stays enveloped
+  declared 7.6.4 deflections) gives a literal ratio (deviation from the chord / average displacement of the entire
+  diaphragm) > 1.2 at any level, `classification` is "flexible (IS 1893 7.6.4, from
+  the analysis)" with `ratio`, `ratio_basis`, `computed_at` {dir, level} and `declared_classification`
+  (`informative_ratio_vs_storey_drift` is a record only); the design stays enveloped
   (rigid + flexible runs). A declared label that contradicts the computed one sets `declared_contradicted` and a
   `warning`, reported in `design_status.warnings` (non-blocking). `cfg['diaphragm_type']` ('rc_slab' |
   'composite_deck' | 'metal_deck' | 'board' | 'cfs_board' | 'braced_roof', optional; otherwise read from

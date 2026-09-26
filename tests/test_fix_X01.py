@@ -123,6 +123,13 @@ def test_regular_plan_stiff_deck_reproduces_rigid(eng):
         for a, b in zip(dr[d]["drift"], fd["drift"][d]):
             assert b == pytest.approx(a, rel=0.02)
         assert all(r["ratio"] < 0.05 and r["classification"] == "rigid" for r in fd["d764"][d])
+        # GOLD-764: 'ratio' is the 7.6.4 literal ratio (deviation / average displacement of the diaphragm); the
+        # storey-drift ratio is an informative record only
+        for r in fd["d764"][d]:
+            assert r["ratio"] == pytest.approx(r["delta_max_from_chord_mm"] / r["delta_avg_diaphragm_mm"])
+            assert r["ratio_vs_avg_displacement"] == r["ratio"] and "7.6.4 literal" in r["ratio_basis"]
+            assert r["ratio_vs_storey_drift"] == pytest.approx(r["delta_max_from_chord_mm"] / r["avg_storey_drift_mm"])
+            assert r["ratio_vs_storey_drift_note"].startswith("informative (not the IS 1893 criterion)")
 
 
 def test_membrane_hand_check_long_diaphragm(eng):

@@ -626,12 +626,56 @@ def _lateral_loads(lv_nodes, Fd, mz):
     return out
 
 
+RATIO_BASIS = ("IS 1893 (Part 1):2016 7.6.4 literal: maximum lateral displacement measured from the chord of the "
+               "deformed shape / average displacement of the entire diaphragm (same level and direction)")
+INFORMATIVE_DRIFT = ("informative (not the IS 1893 criterion): deviation from the chord / average storey drift of the "
+                     "level (the storey drift shrinks at upper levels while the deck deviation does not)")
+FIG6_NOTE = ("Fig. 6 ('DEFINITION OF FLEXIBLE FLOOR DIAPHRAGM', plan) is an image in the corpus (page_025: caption and "
+             "'PLAN' only); the ratio follows the 7.6.4 text")
+
+
+def chord_deviation_764(points, supports, d):
+    """IS 1893 (Part 1):2016 7.6.4 in-plane deformation of one level in direction d ('X' | 'Y'):
+
+    points   = [(u, m, x, y)]  displacement along d, weight (nodal mass = tributary area), plan coordinates of every
+               deck / grid node of the level;
+    supports = [(u, x, y)]     the level's lateral-load-resisting nodes (braces / moment frames).
+    The chord of the deformed shape = the least-squares plane rigid-body motion of the supports (translation along d
+    plus rotation; only the component along d: u = a - th (y - ys) for X, b + th (x - xs) for Y).  Returns
+    {delta_max_from_chord_mm, delta_avg_diaphragm_mm (|weighted mean u|), avg_displacement_signed_mm,
+     ratio = delta_max / delta_avg (the 7.6.4 criterion, limit 1.2), chord_a, chord_theta}."""
+    if not points:
+        raise ValueError("chord_deviation_764 needs the level's nodes")
+    sup = list(supports) if len(supports) >= 2 else [(u, x, y) for (u, _m, x, y) in points]
+    n = float(len(sup))
+    xs = sum(x for _u, x, _y in sup) / n
+    ys = sum(y for _u, _x, y in sup) / n
+    a = sum(u for u, _x, _y in sup) / n
+    num = den = 0.0
+    for (u, x, y) in sup:
+        r = -(y - ys) if d == "X" else (x - xs)
+        num += r * (u - a); den += r * r
+    th = num / den if den > 0 else 0.0
+
+    def chord(x, y):
+        return a + th * (-(y - ys) if d == "X" else (x - xs))
+    dev = max(abs(u - chord(x, y)) for (u, _m, x, y) in points)
+    M = sum(m for (_u, m, _x, _y) in points)
+    if M <= 0:
+        M = float(len(points)); avg = sum(u for (u, _m, _x, _y) in points) / M
+    else:
+        avg = sum(m * u for (u, m, _x, _y) in points) / M
+    return {"delta_max_from_chord_mm": dev, "delta_avg_diaphragm_mm": abs(avg), "avg_displacement_signed_mm": avg,
+            "ratio": (dev / abs(avg)) if avg else None, "chord_a": a, "chord_theta": th}
+
+
 def drift_and_764(cfg, eccentricity=None, support_nodes=None):
     """IS 1893 7.11.1.1 storey drift at every column line of the flexible model (1.0 DL + 1.0 LL P-Delta gravity
     state, design ESM storey forces spread by mass + the 7.8.2 torsion variants, both signs; linear increments about
     the gravity state) and the 7.6.4 in-plane deformation per level: max deviation of the deck-node displacement from
-    the chord (rigid-body plane motion fitted to the lateral-load-resisting nodes of the level) vs the average storey
-    drift and vs the average displacement of the entire diaphragm."""
+    the chord (rigid-body plane motion fitted to the lateral-load-resisting nodes of the level) vs the average
+    displacement of the entire diaphragm (the 7.6.4 criterion, chord_deviation_764); the deviation vs the average
+    storey drift is kept as an informative ratio (not the IS 1893 criterion)."""
     import engine3d as E
     import india_combos as IC
     import india_loads as IL
@@ -705,34 +749,19 @@ def drift_and_764(cfg, eccentricity=None, support_nodes=None):
                            if support_nodes is None or t in support_nodes]
                     if len(sup) < 2:
                         sup = [(t, x, y) for (t, m, x, y) in nodes if t in model["deck"][k]["grid_nodes"].values()]
-                    xs = sum(x for _t, x, _y in sup) / len(sup); ys = sum(y for _t, _x, y in sup) / len(sup)
-                    # least-squares plane rigid motion (ux = a - th (y - ys), uy = b + th (x - xs)) on the supports;
-                    # only the component along the force enters (the chord of Fig. 6 in the loaded direction)
-                    num = den = 0.0
-                    aa = bb = 0.0
-                    for (t, x, y) in sup:
-                        u = uL[t]
-                        if d == "X":
-                            aa += u
-                        else:
-                            bb += u
-                    aa /= len(sup); bb /= len(sup)
-                    for (t, x, y) in sup:
-                        u = uL[t]
-                        if d == "X":
-                            num += -(y - ys) * (u - aa); den += (y - ys) ** 2
-                        else:
-                            num += (x - xs) * (u - bb); den += (x - xs) ** 2
-                    th = num / den if den > 0 else 0.0
-                    dev = [abs(uL[t] - ((aa - th * (y - ys)) if d == "X" else (bb + th * (x - xs))))
-                           for (t, m, x, y) in nodes]
-                    M = sum(m for (_t, m, _x, _y) in nodes) or 1.0
-                    avg = sum(m * uL[t] for (t, m, _x, _y) in nodes) / M
+                    ev = chord_deviation_764([(uL[t], m, x, y) for (t, m, x, y) in nodes],
+                                             [(uL[t], x, y) for (t, x, y) in sup], d)
+                    avg = ev["avg_displacement_signed_mm"]
                     sd = abs(avg - prev_avg)
-                    cl = DIA.classify_7_6_4(delta_max_from_chord_mm=max(dev), delta_avg_mm=sd or None)
-                    recs.append({"level": k, "delta_max_from_chord_mm": max(dev), "delta_avg_diaphragm_mm": abs(avg),
-                                 "avg_storey_drift_mm": sd, "ratio": (max(dev) / sd) if sd else None,
-                                 "ratio_vs_avg_displacement": (max(dev) / abs(avg)) if avg else None, "limit": 1.2,
+                    cl = DIA.classify_7_6_4(delta_max_from_chord_mm=ev["delta_max_from_chord_mm"],
+                                            delta_avg_mm=ev["delta_avg_diaphragm_mm"] or None)
+                    recs.append({"level": k, "delta_max_from_chord_mm": ev["delta_max_from_chord_mm"],
+                                 "delta_avg_diaphragm_mm": ev["delta_avg_diaphragm_mm"],
+                                 "ratio": ev["ratio"], "ratio_vs_avg_displacement": ev["ratio"], "limit": 1.2,
+                                 "ratio_basis": RATIO_BASIS,
+                                 "avg_storey_drift_mm": sd,
+                                 "ratio_vs_storey_drift": (ev["delta_max_from_chord_mm"] / sd) if sd else None,
+                                 "ratio_vs_storey_drift_note": INFORMATIVE_DRIFT,
                                  "classification": cl.get("classification"), "flexible": cl.get("flexible"),
                                  "chord": "plane rigid-body motion fitted to the level's lateral-load-resisting nodes"
                                           if support_nodes else "plane rigid-body motion fitted to the level's grid nodes"})
@@ -744,9 +773,9 @@ def drift_and_764(cfg, eccentricity=None, support_nodes=None):
                     "mass-proportional rotational field, +F and -F (linear increments about the gravity state)")
     out["cite_7_6_4"] = Q_7_6_4
     out["basis_7_6_4"] = ("in-plane deformation = max deviation of the deck displacement (no torsion variant, lateral "
-                          "only) from the chord; 'ratio' = deviation / average storey drift of the diaphragm (the "
-                          "conservative reading), 'ratio_vs_avg_displacement' = deviation / average displacement of "
-                          "the entire diaphragm (7.6.4 literal); classification on 'ratio' (limit 1.2)")
+                          "only) from the chord; classification on 'ratio' = " + RATIO_BASIS + " (limit 1.2); "
+                          "'ratio_vs_storey_drift' = deviation / average storey drift of the level: " + INFORMATIVE_DRIFT)
+    out["fig6_note"] = FIG6_NOTE
     return out
 
 

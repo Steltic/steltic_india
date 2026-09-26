@@ -1691,11 +1691,13 @@ def design_india(name, cfg, outdir):
     except Exception as ex:
         pkg["diaphragm_7_6_4"] = {"clause": "IS 1893 (Part 1):2016 7.6.4", "ok": None, "error": str(ex)}
     if flex_d764:
-        # X01: per-level in-plane deformation vs average storey drift measured on the flexible-diaphragm run (record)
+        # X01: per-level in-plane deformation from the chord vs the average displacement of the entire diaphragm
+        # (7.6.4 literal; the storey-drift ratio is informative only) measured on the flexible-diaphragm run (record)
         pkg["diaphragm_7_6_4"]["flexible_run"] = {"levels": _jsonable(flex_d764["d764"]), "cite": FD.Q_7_6_4,
                                                   "basis": flex_d764["basis_7_6_4"],
+                                                  "ratio_basis": FD.RATIO_BASIS, "fig6_note": FD.FIG6_NOTE,
                                                   "source": "india_flexible_diaphragm.drift_and_764 (Table 5(ii) run)"}
-    # AUD-3: the 7.6.4 record reports what the analysis found (flexible when any level's ratio > 1.2), the declared
+    # AUD-3: the 7.6.4 record reports what the analysis found (flexible when any level's literal ratio > 1.2), the declared
     # label kept beside it; a contradiction is a non-blocking warning (consistency.package_warnings)
     try:
         import india_diaphragm as DIA
