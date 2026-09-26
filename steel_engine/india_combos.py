@@ -246,7 +246,7 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
     if s12:
         try:
             import india_is18168 as I18
-            is18168 = I18.applies(cfg.get("system"), _zone(cfg, plan), opt_in=bool(cfg.get("apply_is18168")))
+            is18168 = I18.applies_for_cfg(cfg.get("system"), _zone(cfg, plan), cfg)
             if is18168["applies"]:
                 is18168["Omega"] = I18.omega(cfg.get("system"))["Omega"]
                 is18168["members"] = I18.overstrength_members(cfg.get("system"))
@@ -495,7 +495,7 @@ def validate_combinations(combos, cfg, plan=None) -> list:
                                      "for a Section 12 system"))
             try:
                 import india_is18168 as I18
-                a = I18.applies(cfg.get("system"), _zone(cfg, plan), opt_in=bool(cfg.get("apply_is18168")))
+                a = I18.applies_for_cfg(cfg.get("system"), _zone(cfg, plan), cfg)
                 om = I18.omega(cfg.get("system"))["Omega"] if a["applies"] else None
                 if om and not fam(1.2, 0.5, om, "fE") and not fam(0.9, 0.0, om, "fE"):
                     out.append(("ERROR", "IS 18168:2023 5.5 overstrength combinations (Omega = %.1f for %s) missing "

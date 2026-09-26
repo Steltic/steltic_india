@@ -90,9 +90,11 @@ def _na(id_, *, clause, cite, member=None, reason):
 
 
 def is18168_status(system, cfg):
-    """IS 18168:2023 applicability for this job (mandatory Zones III-V for SMRF/SCBF/EBF; Zone II opt-in)."""
+    """IS 18168:2023 applicability for this job (ruling R8, H52): Zones III-V for SMRF/SCBF/EBF when the occupancy
+    (cfg['occupancy']) is in the 1.2 list or not declared; cfg['apply_is18168'] True / False overrides (False is
+    ignored where 1.2 makes it mandatory)."""
     cfg = cfg or {}
-    return I18.applies(system, cfg.get("zone") or cfg.get("Z"), opt_in=bool(cfg.get("apply_is18168")))
+    return I18.applies_for_cfg(system, cfg.get("zone") or cfg.get("Z"), cfg)
 
 
 def _ry(member, p):
@@ -368,7 +370,7 @@ def ebf_brace_checks(m, model_data, cfg):
         return out + [_na("brace_fy", clause="IS 18168:2023 12.3.4.5", cite="fy from grade", member=m["id"],
                           reason="grade not resolved")]
     ry, _ = _ry(m, p)
-    if p.get("section_type") == "I":
+    if p.get("section_type") in I18.TABLE2_SECTION_TYPES:
         out.append(dict(I18.table2_check("brace", p, fy, ry, member=m["id"]),
                         cite="12.3.4.1: braces satisfy the Table 2 (iii) width-to-thickness limits"))
     L = m.get("L_mm")
@@ -998,7 +1000,7 @@ def ebf_link_checks(link, model_data=None, cfg=None):
     Sh = IS18168_SH["I"] if st == "I" else IS18168_SH["box"]
     gm0 = 1.1
     d, tf, tw = p["d"], p["tf"], p["tw"]
-    if Ry and st == "I":
+    if Ry and st in I18.TABLE2_SECTION_TYPES:
         out.append(dict(I18.table2_check("link", p, fy, Ry, member=lid),
                         cite="11.1: flange and web width-to-thickness less than Table 2 (iv) links"))
     AwL = (d - 2 * tf) * tw
@@ -1217,24 +1219,40 @@ def section12_checks(system, model_data, cfg=None):
     checks += column_checks(sysn, model_data, cfg)
     checks += base_checks(sysn, model_data, cfg)
     conns = {c.get("member_id"): c for c in (model_data.get("connections") or []) if c.get("kind") == "brace_end"}
-    if a18["applies"] and sysn in ("SCBF", "SMF") and not cfg.get("is18168_table2"):
-        advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": False,
-                           "note": "width-to-thickness limits of the SFRS sections (Table 2 x eps/sqrt(Ry): beams 9.0/44.5, columns "
-                                   "9.0/72.7(1-1.04Ca), braces 11.3/44.4) are NOT enforced on this job -- set cfg['is18168_table2'] = "
-                                   "True to run them as live checks (rolled NPB webs d/tw > ~38 and WPB flanges b/tf > ~7.8 fail; WP6)"})
-    if a18["applies"] and sysn in ("SCBF", "SMF") and cfg.get("is18168_table2"):
-        # IS 18168:2023 5.3 / Table 2: width-to-thickness limits of the lateral load resisting system's sections
-        # (braces (iii), columns (ii) with Ca, SFRS beams (i)); EBF members are checked in their own branch (WP6).
-        # Opt-in on SCBF / SMF jobs (cfg['is18168_table2']) so the wave-2 fixtures keep their status; EBF always.
+    # H05 (E4, HR-C-14): IS 18168:2023 5.3 / Table 2 width-to-thickness limits are LIVE whenever IS 18168 applies
+    # (braces (iii), columns (ii) with Ca, SFRS beams (i)); built-up boxes are checked with the closed-box rows.
+    # cfg['is18168_table2'] = False is honoured only outside Zones III-V (Zone II opt-in jobs); EBF members are
+    # checked in their own branch (links, braces, beams outside links, columns), without duplicates.
+    t2_done = set()
+    link_ids = {ln.get("member_id") for ln in (model_data.get("links") or [])}
+    zone_r = _zone_roman(cfg.get("zone") or cfg.get("Z"))
+    t2_live = bool(a18["applies"])
+    if t2_live and cfg.get("is18168_table2") is False:
+        if zone_r in ("III", "IV", "V"):
+            advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": True,
+                               "note": "cfg['is18168_table2'] = False ignored: IS 18168 5.3 is mandatory in Zone %s "
+                                       "(the opt-out is honoured only outside Zones III-V)" % zone_r})
+        else:
+            t2_live = False
+            advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True, "live": False,
+                               "note": "Table 2 width-to-thickness checks switched off by cfg['is18168_table2'] = False "
+                                       "(Zone %s, IS 18168 applied by opt-in)" % zone_r})
+    t2_skipped = []
+    if t2_live and any(c in ("SCBF", "SMF") for c in comps):
         for m in _members(model_data):
             if m.get("role") not in ("brace", "column", "beam") or (m.get("role") == "beam" and not m.get("sfrs")):
                 continue
+            if m.get("id") in link_ids or (m.get("role") == "brace" and "EBF" in comps and "SCBF" not in comps):
+                continue                               # EBF links / braces: IS 18168 11.1 / 12.3.4.1 in the EBF branch
             try:
                 pm = _props(m)
             except KeyError:
                 continue
             fym, _ = _fy(m, pm)
-            if not fym or pm.get("section_type") != "I":
+            if not fym:
+                continue
+            if pm.get("section_type") not in I18.TABLE2_SECTION_TYPES:
+                t2_skipped.append("%s (%s, %s)" % (m.get("id"), m.get("section"), pm.get("section_type")))
                 continue
             comp = {"brace": "brace", "column": "column", "beam": "beam"}[m["role"]]
             Ca = None
@@ -1244,6 +1262,10 @@ def section12_checks(system, model_data, cfg=None):
             checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
                                cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
                                     % {"brace": "iii", "column": "ii", "beam": "i"}[comp]))
+            t2_done.add(m["id"])
+    if t2_skipped:
+        advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True,
+                           "note": "no Table 2 row for these SFRS section types (not checked): %s" % ", ".join(t2_skipped)})
     if has_braces:
         sysn_b = sys_br
         cfgb = str(cfg.get("brace_config") or "").lower()
@@ -1277,19 +1299,21 @@ def section12_checks(system, model_data, cfg=None):
         seen = set()
         for ln in links:
             for bid in ln.get("beam_ids") or []:
-                if bid in seen:
+                if bid in seen or bid in t2_done:
                     continue
                 seen.add(bid)
                 mb = _member(model_data, bid)
                 if not mb:
                     continue
                 pb = _props(mb); fyb, _ = _fy(mb, pb)
-                if fyb and pb.get("section_type") == "I":
+                if fyb and pb.get("section_type") in I18.TABLE2_SECTION_TYPES:
                     checks.append(dict(I18.table2_check("beam", pb, fyb, _ry(mb, pb)[0], member=bid),
                                        cite="12.3.4.1: beams outside the links satisfy Table 2 (i)"))
         for mc in _members(model_data, "column"):
+            if mc["id"] in t2_done:
+                continue
             pc = _props(mc); fyc, _ = _fy(mc, pc)
-            if fyc and pc.get("section_type") == "I":
+            if fyc and pc.get("section_type") in I18.TABLE2_SECTION_TYPES:
                 Py = fyc * pc["A"] / I8.GAMMA_M0_DEFAULT
                 Pu = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, mc["id"])] + [0.0])
                 checks.append(dict(I18.table2_check("column", pc, fyc, _ry(mc, pc)[0], Ca=Pu / Py, member=mc["id"]),

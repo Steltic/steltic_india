@@ -1042,6 +1042,7 @@ def design_india(name, cfg, outdir):
                    height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
                    apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
                    is18168_table2=cfg.get("is18168_table2"))
+    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis") if k in cfg})     # H52 / H46 (rulings R8, R3)
     joint_conn = {}
     try:
         import india_is800_s12 as S12
