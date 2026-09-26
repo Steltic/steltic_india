@@ -189,6 +189,8 @@ def india_checks(cfg):
             say(sev, msg)
         for msg in G.occupancy_findings(cfg):
             say("ERROR", "IS 1893 Table 8: " + msg)
+        for msg in G.occupancy_warnings(cfg):          # H20
+            say("WARN", "IS 1893 Table 8: " + msg)
         # 7.7.1 gate (WP1.3)
         ok_esm, why = G.esm_permitted(cfg, None)
         an = [str(a).upper() for a in (cfg.get("analyses") or [])]

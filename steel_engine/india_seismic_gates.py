@@ -876,8 +876,26 @@ def occupancy_findings(cfg) -> list:
     if I is None:
         return ["I not declared"]
     if I + 1e-9 < r["I"]:
-        return ["I = %.2f is below the Table 8 value %.2f (%s)" % (I, r["I"], r.get("row"))]
+        # H20: the matched keyword / flag and the ruling label (R2) are part of the message
+        via = (" via %s" % r["matched_keyword"]) if r.get("matched_keyword") else ""
+        return ["I = %.2f is below the %s value %.2f%s" % (
+            I, "Table 8" if str(r.get("row") or "").startswith("Table 8") else "resolved", r["I"],
+            " (%s%s)" % (r.get("row"), via))]
     return []
+
+
+def occupancy_warnings(cfg) -> list:
+    """H20: non-blocking Table 8 notes (storage use without food_storage declared, keyword-only row (i),
+    residential precedence over an institution name)."""
+    try:
+        from india_seismic import importance_factor
+    except Exception:
+        return []
+    occ = (cfg or {}).get("occupancy")
+    if occ is None:
+        _, ss = _summary(cfg or {})
+        occ = ss.get("occupancy")
+    return list(importance_factor(occ).get("warnings") or [])
 
 
 def _R_system_agreement(cfg, pkg) -> list:
