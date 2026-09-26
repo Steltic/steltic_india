@@ -510,11 +510,18 @@ TABLE_6_CPE_PITCHED = {
 }
 
 
+WIND_STRUCTURE_CLASSES = ("post_cyclone", "industrial", "other")
+
+
 def k4_required(cyclone_belt, structure_class="other"):
-    """6.3.4 + decision D10: k4 and Kd come from the same cyclone_belt flag."""
+    """6.3.4 + decision D10: k4 and Kd come from the same cyclone_belt flag.
+    H21: inside the belt a missing class is not defaulted to 'other' (k4 1.00) -- found:false, k4 None."""
     if not cyclone_belt:
         return {"k4": 1.0, "Kd": None, "cite": K4_CITE + " (outside the belt: k4 = 1.0)"}
-    cls = str(structure_class or "other").lower()
+    if structure_class is None or str(structure_class).strip() == "":
+        return {"found": False, "k4": None, "Kd": 1.0, "class": None,
+                "cite": K4_CITE + "; wind_structure_class (post_cyclone | industrial | other) must be declared"}
+    cls = str(structure_class).lower()
     cls = "post_cyclone" if any(t in cls for t in ("post", "shelter", "hospital", "school", "tower", "emergency")) \
         else ("industrial" if "industr" in cls else "other")
     return {"k4": K4_BY_CLASS[cls], "Kd": 1.0, "class": cls, "cite": K4_CITE + "; " + KD_CITE}
@@ -617,9 +624,18 @@ def wind_findings(cfg) -> list:
     out = []
     plan = cfg.get("load_plan") or {}
     ws = plan.get("wind_summary") or {}
+    say = lambda s, m: out.append((s, m))
+    # H47 / ruling R5: the seismic zone takes the same site-proxy policy as Vb (IS 1893 Annex E town list)
+    ss = plan.get("seismic_summary") or {}
+    zsrc = str(ss.get("zone_source") or "").lower()
+    if zsrc == "site_proxy":
+        out.extend(site_proxy_findings(ss, quantity="zone", cfg=cfg))
+    elif "proxy" in zsrc or "nearest" in zsrc:
+        say("ERROR", "seismic zone from a proxy / nearest town is not permitted: read IS 1893 Fig. 1 at the site "
+                     "(zone_source='derived_from_map' with lat/long), or -- only when Annex E has no row for the "
+                     "town -- zone_source='site_proxy' with proxy_town, distance_km, basis, verify: True (ruling R5)")
     if plan.get("no_wind") or not ws:
         return out
-    say = lambda s, m: out.append((s, m))
     cb = ws.get("cyclone_belt", cfg.get("cyclone_belt"))
     if cb is None:
         say("ERROR", "wind_summary.cyclone_belt (true/false, with cite) must be declared -- it sets Kd = 1.0 "
@@ -628,11 +644,22 @@ def wind_findings(cfg) -> list:
     if k4 is not None and float(k4) not in (1.0, 1.15, 1.30):
         say("ERROR", "k4 = %s not in {1.0, 1.15, 1.30} (IS 875-3 6.3.4)" % k4)
     if cb is True:
-        req = k4_required(True, ws.get("structure_class") or cfg.get("wind_structure_class"))
         if Kd is not None and abs(float(Kd) - 1.0) > 1e-9:
             say("ERROR", "cyclone_belt: Kd = %s but %s" % (Kd, KD_CITE))
-        if k4 is not None and abs(float(k4) - req["k4"]) > 1e-9:
-            say("ERROR", "cyclone_belt, class %s: k4 = %s but 6.3.4 gives %.2f" % (req["class"], k4, req["k4"]))
+        # H21 (E7): the 6.3.4 class is an explicit input inside the belt -- no silent 'other' (k4 1.00)
+        wsc = ws.get("structure_class") or cfg.get("wind_structure_class")
+        wsc_n = str(wsc or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if not wsc_n:
+            say("ERROR", "cyclone_belt: declare wind_structure_class in {post_cyclone, industrial, other} "
+                         "(IS 875-3 6.3.4: post-cyclone importance 1.30, industrial 1.15, all other 1.00); "
+                         "k4 is not defaulted")
+        elif wsc_n not in WIND_STRUCTURE_CLASSES:
+            say("ERROR", "cyclone_belt: wind_structure_class %r must be one of post_cyclone | industrial | other "
+                         "(IS 875-3 6.3.4)" % (wsc,))
+        else:
+            req = {"k4": K4_BY_CLASS[wsc_n], "class": wsc_n}
+            if k4 is not None and abs(float(k4) - req["k4"]) > 1e-9:
+                say("ERROR", "cyclone_belt, class %s: k4 = %s but 6.3.4 gives %.2f" % (req["class"], k4, req["k4"]))
     elif cb is False and k4 is not None and float(k4) != 1.0:
         say("ERROR", "k4 = %s > 1.0 but cyclone_belt is false (k4 applies only in the 60 km belt, 6.3.4)" % k4)
     pz, pd = ws.get("pz_kNm2"), ws.get("pd_kNm2")
@@ -645,10 +672,20 @@ def wind_findings(cfg) -> list:
         ka = ka_for_area_m2(float(ws["Ka_area_m2"])).get("Ka")
         if ka is not None and abs(float(ws["Ka"]) - ka) > 0.005:
             say("ERROR", "Ka = %s but Table 4 gives %.3f for A = %s m2" % (ws["Ka"], ka, ws["Ka_area_m2"]))
+    # H21 (HR-A-12): IS 875-3 Table 1 iv) -- hospitals and other important buildings have a 100-year life, k1 > 1.0
+    if _table1_iv_building(cfg, ws) and ws.get("k1") is not None and abs(float(ws["k1"]) - 1.0) < 1e-9:
+        say("WARN", "k1 = 1.0 declared for a hospital / important building: IS 875-3 Table 1 iv) (important "
+                    "buildings such as hospitals, communication buildings, power plant structures; 100 yr) gives "
+                    "k1 = 1.05-1.08 by basic wind speed -- confirm the Table 1 class (6.3.1)")
     src = str(ws.get("Vb_source") or "").lower()
-    if "proxy" in src or "nearest" in src:
+    if src == "site_proxy":
+        for sev, msg in site_proxy_findings(ws, quantity="Vb", cfg=cfg):
+            say(sev, msg)
+    elif "proxy" in src or "nearest" in src:
         say("ERROR", "Vb from a proxy city is not permitted: read IS 875-3 Fig. 1 at the site coordinates and "
-                     "record Vb_source='derived_from_map' with lat/long (WP1.11-8)")
+                     "record Vb_source='derived_from_map' with lat/long (WP1.11-8), or -- only when Annex A has no "
+                     "row for the town -- Vb_source='site_proxy' with proxy_town, distance_km, basis, verify: True "
+                     "(ruling R5)")
     if src == "derived_from_map" and not (ws.get("lat") and ws.get("long")):
         say("ERROR", "Vb_source derived_from_map needs the site lat/long")
     slope = cfg.get("terrain_upwind_slope_deg") or ws.get("upwind_slope_deg")
@@ -659,6 +696,40 @@ def wind_findings(cfg) -> list:
         say("ERROR", "low-rise / portal building: member-level wind cases (Table 5 walls, Table 6 roof by pitch, "
                      "Cpi by opening ratio, uplift with 0.9DL) are required -- india_wind_tables.lowrise_member_wind")
     return out
+
+
+def _table1_iv_building(cfg, ws) -> bool:
+    """IS 875-3 Table 1 iv) class: declared k1_class 'iv' / 'important', or a hospital occupancy."""
+    k1c = str(ws.get("k1_class") or cfg.get("k1_class") or "").strip().lower()
+    if k1c in ("iv", "iv)", "table1_iv", "important"):
+        return True
+    occ = cfg.get("occupancy") or ((cfg.get("load_plan") or {}).get("seismic_summary") or {}).get("occupancy")
+    occs = occ if isinstance(occ, (list, tuple)) else [occ]
+    import re as _re
+    for o in occs:
+        if not isinstance(o, dict):
+            continue
+        if o.get("hospital") is True or o.get("lifeline") is True:
+            return True
+        use = " ".join(str(u) for u in ([o.get("use")] + list(o.get("uses") or [])) if u).lower()
+        if _re.search(r"\bhospitals?\b", use):
+            return True
+    return False
+
+
+def site_proxy_findings(rec, *, quantity="Vb", cfg=None) -> list:
+    """H47 / ruling R5: one site-proxy policy.  A town not in IS 875-3 Annex A (Vb) or IS 1893 Annex E (zone) may
+    use ``<q>_source = 'site_proxy'`` with the record {proxy_town, distance_km, basis, verify: True} and the corpus
+    lookup stated as not tabulated.  The decision is india_loads.resolve_site_annex_proxy (the preflight and the
+    helper agree).  Returns [(severity, message)]."""
+    import india_loads as _IL
+    r = _IL.resolve_site_annex_proxy(cfg or {}, quantity=quantity, record=rec)
+    if r.get("found") and r.get("site_proxy"):
+        return [("WARN", "%s from site_proxy %r (%s km, basis: %s) -- VERIFY against the %s map at the site "
+                         "(ruling R5)" % (quantity, r.get("proxy_town"), r.get("distance_km"), r.get("cite"),
+                                          "IS 875-3 Fig. 1" if quantity == "Vb" else "IS 1893 Fig. 1"))]
+    return [("ERROR", "%s_source = 'site_proxy' refused (ruling R5): %s" % (
+        "Vb" if quantity == "Vb" else "zone", "; ".join(r.get("required_inputs") or [r.get("note") or "incomplete"])))]
 
 
 def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_ratio, *, theta_cases=(0, 90),
