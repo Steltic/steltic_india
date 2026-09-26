@@ -58,3 +58,13 @@ def test_deflection_roof_uses_snow_and_levels_use_L_by_level():
     fl = [r for r in rows2 if not r["roof"]]
     assert max(r["w_LL_N_per_mm"] for r in fl) == pytest.approx(
         (7.5 + cfg["partition_load_kNm2"]) * cfg["SX"] / 1000.0, rel=1e-6)
+
+
+def test_vertical_eq_rows_keep_roof_imposed():
+    import india_combos as IC
+    cfg, _ = ex1_cfg_is()
+    plan = cfg["load_plan"]
+    rows = [c for c in IC.expand_combinations(plan, cfg, method="ESM") if "ELZ leading" in c["family"]]
+    if not rows:
+        pytest.skip("vertical earthquake not required for this fixture")
+    assert all(c["fLr"] == c["fL"] for c in rows)

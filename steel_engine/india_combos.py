@@ -405,8 +405,14 @@ def expand_combinations(plan, cfg, *, eccentricity=None, method=None) -> list:
                             f = s * 0.3 * fl
                             lab = _grav_label(fD, fL) + "%s%sEQ_Z" % ("+" if sz > 0 else "-", _fmt(fl)) + \
                                 _lat_label(f, "EQ", d)
-                            c = add(lab, fD, fL, 0.0, family=fam, cite=IS1893 + " 6.3.4.1(c)",
-                                    lateral_kind="EQ", direction=d, sign=s, tags=[])
+                            # H11: the roof imposed term follows the floor factor (Table 4 'LL' = every imposed
+                            # load), as snow when snow > Lr (IS 875-5 8.1 Note 1) -- it was dropped (fLr 0) here
+                            fLrz, fSz = (0.0, fL) if (snow_governs_roof and fL) else (fL, 0.0)
+                            if fSz:
+                                lab = lab.replace(_grav_label(fD, fL), _grav_label(fD, fL, 0.0, fSz), 1)
+                            c = add(lab, fD, fL, fLrz, family=fam, cite=IS1893 + " 6.3.4.1(c)"
+                                    + (" + " + SNOW_NOTE_CITE if fSz else ""),
+                                    lateral_kind="EQ", direction=d, sign=s, tags=[], fS=fSz)
                             c["fE"] = f
                             c["fEv"] = sz * fl * Av
                             c["vertical"] = {"Av": Av, "coef": sz}
