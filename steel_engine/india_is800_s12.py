@@ -1483,7 +1483,12 @@ def section12_checks(system, model_data, cfg=None):
         advisories.append({"clause": "IS 18168:2023 1.2 / Foreword", "applies": True, "mandatory": a18["mandatory"],
                            "note": I18.PRECEDENCE, "live_checks": ["is18168_1_3_system", "is18168_5_5_combinations",
                            "is18168_7_2_column_KL_r", "brace_KL_r (10.2)", "brace_connection_force (10.4.1)",
-                           "is18168_8_2_SCWB", "12.12_base (9.3/9.4)", "EBF links (11, 12.3)"]})
+                           "is18168_8_2_SCWB", "12.12_base (9.3/9.4)", "EBF links (11, 12.3)",
+                           "is18168_table2 (5.3)", "column splices (7.5, 12.2.4.6 / 12.3.4.7)"],
+                           "occupancy_basis": a18.get("occupancy_basis"), "applicability_note": a18.get("note")})
+    elif sysn in ("SCBF", "SMF", "EBF") and zone in ("III", "IV", "V"):
+        advisories.append({"clause": "IS 18168:2023 1.2", "applies": False, "occupancy_basis": a18.get("occupancy_basis"),
+                           "note": a18.get("note") or "IS 18168 not applied (ruling R8)"})
     elif sysn in ("SCBF", "SMF", "EBF") and zone == "II":
         advisories.append({"clause": "IS 18168:2023 1.2", "applies": False,
                            "note": "Zone II: IS 18168 optional (set cfg['apply_is18168'] to apply it); Omega "
