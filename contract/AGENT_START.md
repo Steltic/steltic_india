@@ -174,7 +174,11 @@ Before `pipeline.design_and_report`:
   shear stiffness, product / test value) | `G_eff_MPa` + `t_mm` | `E_MPa` + `t_mm` | `t_mm` + `fck_MPa` (rc_slab) |
   `topping_t_mm` + `fck_MPa` (metal_deck), `source` (required), `cite`, `nu` (0.2), `mesh` 1 | 2 (2),
   `void_cells` {level: [[i, j], ...]}, `verify`} — an EOR input; Ec from fck is IS 456 6.2.3.1, an EOR-labelled
-  default. `cfg['flexible_diaphragm_analysis']` = True runs it on any plan, False declines it. Instead of the engine
+  default. Per level (each floor diaphragm has its own flexibility, e.g. a composite podium under light CFS floors):
+  `{'by_level': {k | 'a-b': record}, 'default': record, 'mesh', 'void_cells'}` (or the record fields at the top level
+  as the default, plus `by_level`), or a list [record for level 1, ..., level NF]; every level 1..NF must resolve to a
+  record (an uncovered level is an ERROR), `mesh` is one value for the model, a level record's `void_cells` is
+  [[i, j], ...] for that level. The package records each level's G t and basis (`flexible_diaphragm.deck[k]`). `cfg['flexible_diaphragm_analysis']` = True runs it on any plan, False declines it. Instead of the engine
   run, `cfg['flexible_diaphragm_eor']` = {analysis_ref, results, source, cite} (all four) records an external
   analysis. Neither → PARTIAL with the reason; the private `_flexible_diaphragm_run` is never evidence. The
   flexible run's own 90 % mass (7.7.5.2), scaling and drift records must pass; the package keeps both runs and the

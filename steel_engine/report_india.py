@@ -310,6 +310,13 @@ def _seismic_table(cfg, pkg, run):
             out += "<p><b>Not run:</b> %s</p>" % html.escape(str(fd.get("error")))
         else:
             out += "<p>%s</p>" % html.escape(str(fd.get("model") or ""))
+            deck_ = fd.get("deck") if isinstance(fd.get("deck"), dict) else {}
+            if any(isinstance(v, dict) and v.get("Gt_N_per_mm") is not None for v in deck_.values()):
+                # the in-plane deck stiffness of each level (per-level cfg['diaphragm_stiffness'] or one record)
+                out += _t(["level", "deck G t (N/mm)", "panels", "basis"],
+                          [[k, _num(v.get("Gt_N_per_mm"), 0), v.get("panels"), html.escape(str(v.get("stiffness_basis") or ""))]
+                           for k, v in sorted(deck_.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0)
+                           if isinstance(v, dict)])
             tab = [[d, _num(v.get("rigid_VB_rsa_kN"), 1), _num(v.get("VB_rsa_kN"), 1), _num(v.get("VBbar_kN"), 1),
                     _num(v.get("scale"), 3), _num(v.get("mass_participation"), 3)]
                    for d, v in (fd.get("base_shear") or {}).items()]

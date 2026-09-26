@@ -94,36 +94,155 @@ def _num(v):
     return x if math.isfinite(x) and x > 0 else None
 
 
+NEED_TEXT = ("cfg['diaphragm_stiffness'] = {type: 'rc_slab'|'metal_deck'|'custom', t_mm | G_eff_MPa | Gd_kN_per_m, "
+             "source, cite} (EOR input), or per level {'by_level': {k | 'a-b': {...}}, 'default': {...}} / "
+             "[{...} per level 1..NF]")
+_GLOBAL_KEYS = ("mesh", "void_cells")
+
+
+def _level_keys(key, NF):
+    """Level numbers of a by_level key: k, 'k' or 'a-b' (inclusive).  None when malformed."""
+    try:
+        if isinstance(key, bool):
+            return None
+        if isinstance(key, int):
+            ks = [key]
+        else:
+            txt = str(key).strip()
+            if "-" in txt:
+                a, b = (int(x) for x in txt.split("-", 1))
+                ks = list(range(a, b + 1)) if a <= b else None
+            else:
+                ks = [int(txt)]
+    except (TypeError, ValueError):
+        return None
+    if not ks or any(k < 1 or (NF is not None and k > NF) for k in ks):
+        return None
+    return ks
+
+
 def diaphragm_stiffness(cfg):
-    """(record | None, error | None) from cfg['diaphragm_stiffness'] (EOR input):
+    """(record | None, error | None) from cfg['diaphragm_stiffness'] (EOR input).
+
+    One deck for every level (the original form):
       {'type': 'rc_slab' | 'metal_deck' | 'custom',
        one of: 'Gd_kN_per_m' (in-plane shear stiffness per unit width, = N/mm) | 'G_eff_MPa' + 't_mm' |
                'E_MPa' + 't_mm' | ('rc_slab') 't_mm' + 'fck_MPa' | ('metal_deck') 'topping_t_mm' + 'fck_MPa',
        'source' (required), 'cite', optional 'nu' (default 0.2), 'mesh' (1 or 2, default 2),
        'void_cells' {level: [[i, j], ...]} (panels without deck)}.
+    Per level (IS 1893 Table 5(ii): each floor diaphragm with its own flexibility, e.g. a composite podium under light
+    CFS floors):
+      {'by_level': {k | 'k' | 'a-b': {record}}, 'default': {record}, 'mesh', 'void_cells'}  -- or the record fields at
+      the top level as the default: {'type': ..., ..., 'by_level': {...}};
+      [record_level_1, ..., record_level_NF]  (a list covers every diaphragm level 1..NF in order).
+    Every level 1..NF must resolve to a record (a by_level entry, else the default) -- an uncovered level is an ERROR,
+    never a silent value.  'mesh' is global (a level record with a different mesh is an ERROR); a level record's
+    'void_cells' [[i, j], ...] lists that level's panels without deck.  The returned record then carries
+    'by_level' {k: record} for every level; build_flexible makes one membrane section per distinct record.
     The concrete modulus from fck is IS 456 6.2.3.1 as an EOR-labelled default (verify) -- only when the slab / the
     composite-deck topping thickness is declared; a bare metal deck needs Gd_kN_per_m (product / test value)."""
     ds = (cfg or {}).get("diaphragm_stiffness")
-    need = ("cfg['diaphragm_stiffness'] = {type: 'rc_slab'|'metal_deck'|'custom', t_mm | G_eff_MPa | Gd_kN_per_m, "
-            "source, cite} (EOR input)")
+    try:
+        NF = len((cfg or {}).get("heights") or []) or None
+    except TypeError:
+        NF = None
+    if isinstance(ds, (list, tuple)) and ds:
+        if NF is not None and len(ds) != NF:
+            return None, ("ERROR: diaphragm_stiffness list has %d records for %d diaphragm levels (one per level 1..NF, "
+                          "or use {'by_level': ..., 'default': ...}) -- %s" % (len(ds), NF, NEED_TEXT))
+        ds = {"by_level": {i + 1: r for i, r in enumerate(ds)}}
+    if isinstance(ds, dict) and "by_level" in ds:
+        return _per_level_stiffness(ds, NF)
+    return _stiffness_record(ds)
+
+
+def _per_level_stiffness(ds, NF):
+    bl = ds.get("by_level")
+    if not isinstance(bl, dict) or not bl:
+        return None, "ERROR: diaphragm_stiffness.by_level must be a non-empty {level | 'a-b': record} -- %s" % NEED_TEXT
+    dflt_in = ds.get("default")
+    if dflt_in is None:
+        top = {k: v for k, v in ds.items() if k not in ("by_level", "default") + _GLOBAL_KEYS}
+        dflt_in = dict(top, **{k: ds[k] for k in _GLOBAL_KEYS if k in ds}) if top else None
+    mesh = ds.get("mesh", (dflt_in or {}).get("mesh", 2) if isinstance(dflt_in, dict) else 2)
+    voids = {int(k): [tuple(int(a) for a in p) for p in v] for k, v in dict(ds.get("void_cells") or
+                                                                          ((dflt_in or {}).get("void_cells") if isinstance(dflt_in, dict) else None)
+                                                                          or {}).items()}
+    dflt = None
+    if dflt_in is not None:
+        if not isinstance(dflt_in, dict):
+            return None, "ERROR: diaphragm_stiffness.default must be a record -- %s" % NEED_TEXT
+        dflt, err = _stiffness_record(dict({k: v for k, v in dflt_in.items() if k not in _GLOBAL_KEYS}, mesh=mesh),
+                                      where="diaphragm_stiffness.default")
+        if err:
+            return None, err
+    per = {}
+    for key, r in bl.items():
+        ks = _level_keys(key, NF)
+        if ks is None:
+            return None, ("ERROR: diaphragm_stiffness.by_level key %r is not a level 1..%s or a range 'a-b'"
+                          % (key, NF if NF is not None else "NF"))
+        if not isinstance(r, dict):
+            return None, "ERROR: diaphragm_stiffness.by_level[%r] must be a record -- %s" % (key, NEED_TEXT)
+        if "mesh" in r and int(r["mesh"]) != int(mesh):
+            return None, ("ERROR: diaphragm_stiffness.by_level[%r].mesh = %r differs from the global mesh %r (mesh is "
+                          "one value for the model)" % (key, r["mesh"], mesh))
+        rec, err = _stiffness_record(dict({k: v for k, v in r.items() if k not in _GLOBAL_KEYS}, mesh=mesh),
+                                     where="diaphragm_stiffness.by_level[%r]" % (key,))
+        if err:
+            return None, err
+        for k in ks:
+            if k in per:
+                return None, "ERROR: diaphragm_stiffness.by_level gives level %d twice" % k
+            per[k] = dict(rec, level_key=str(key))
+            lv_voids = r.get("void_cells")
+            if lv_voids:
+                voids.setdefault(k, [])
+                voids[k] = voids[k] + [tuple(int(a) for a in p) for p in lv_voids]
+    levels = range(1, NF + 1) if NF is not None else sorted(per)
+    miss = [k for k in levels if k not in per and dflt is None]
+    if miss:
+        return None, ("ERROR: diaphragm_stiffness.by_level does not cover level(s) %s and no default record is given "
+                      "-- every diaphragm level needs its declared deck stiffness (%s)" % (miss, NEED_TEXT))
+    by_level = {}
+    for k in levels:
+        rr = per.get(k) or dict(dflt, level_key="default")
+        by_level[k] = {kk: vv for kk, vv in rr.items() if kk != "void_cells"}
+    recs = list(by_level.values())
+    srcs = []
+    for r in recs:
+        if r["source"] not in srcs:
+            srcs.append(r["source"])
+    out = dict({kk: vv for kk, vv in (dflt or {}).items() if kk != "void_cells"})
+    out.update(type=(dflt or {}).get("type", "per_level"), per_level=True, mesh=int(mesh),
+               source="; ".join(srcs), verify=any(r.get("verify") for r in recs),
+               basis="per level: " + "; ".join("%d: %s" % (k, r["basis"]) for k, r in by_level.items()),
+               by_level=by_level, void_cells=voids)
+    if not (dflt or {}).get("cite"):
+        out["cite"] = "; ".join(sorted({str(r.get("cite")) for r in recs if r.get("cite")}))
+    return out, None
+
+
+def _stiffness_record(ds, where="diaphragm_stiffness"):
+    need = NEED_TEXT
     if not isinstance(ds, dict) or not ds:
         return None, ("ERROR: %s flexible-diaphragm model needs the declared in-plane deck stiffness %s"
                       % (T5II_CLAUSE, need))
     typ = str(ds.get("type") or "").strip().lower()
     if typ not in ("rc_slab", "metal_deck", "custom"):
-        return None, "ERROR: diaphragm_stiffness.type %r not one of rc_slab / metal_deck / custom (%s)" % (ds.get("type"), need)
+        return None, "ERROR: %s.type %r not one of rc_slab / metal_deck / custom (%s)" % (where, ds.get("type"), need)
     src = ds.get("source")
     if not (isinstance(src, str) and src.strip()):
-        return None, "ERROR: diaphragm_stiffness.source missing (who supplied the deck stiffness; %s)" % need
+        return None, "ERROR: %s.source missing (who supplied the deck stiffness; %s)" % (where, need)
     nu = ds.get("nu")
     nu = float(nu) if nu is not None else 0.2
     if not (0.0 <= nu < 0.5):
-        return None, "ERROR: diaphragm_stiffness.nu = %r outside [0, 0.5)" % ds.get("nu")
+        return None, "ERROR: %s.nu = %r outside [0, 0.5)" % (where, ds.get("nu"))
     rec = {"type": typ, "source": src.strip(), "cite": ds.get("cite"), "nu": nu,
            "nu_basis": "declared" if ds.get("nu") is not None else "default 0.2 (EOR to confirm)",
            "mesh": int(ds.get("mesh", 2)), "verify": bool(ds.get("verify", False))}
     if rec["mesh"] not in (1, 2):
-        return None, "ERROR: diaphragm_stiffness.mesh must be 1 or 2 (panel subdivision)"
+        return None, "ERROR: %s.mesh must be 1 or 2 (panel subdivision)" % where
     t = _num(ds.get("t_mm"))
     Gd = _num(ds.get("Gd_kN_per_m"))
     G = _num(ds.get("G_eff_MPa"))
@@ -148,12 +267,12 @@ def diaphragm_stiffness(cfg):
                      % (t, EC_IS456, Em))
         rec["verify"] = True
     elif typ == "metal_deck":
-        return None, ("ERROR: metal_deck diaphragm_stiffness needs Gd_kN_per_m (product / test value) or the concrete "
-                      "topping (topping_t_mm + fck_MPa, Ec per IS 456 6.2.3.1 as an EOR default) -- %s" % need)
+        return None, ("ERROR: %s: metal_deck needs Gd_kN_per_m (product / test value) or the concrete "
+                      "topping (topping_t_mm + fck_MPa, Ec per IS 456 6.2.3.1 as an EOR default) -- %s" % (where, need))
     elif typ == "rc_slab":
-        return None, "ERROR: rc_slab diaphragm_stiffness needs t_mm with fck_MPa or E_MPa (or G_eff_MPa) -- %s" % need
+        return None, "ERROR: %s: rc_slab needs t_mm with fck_MPa or E_MPa (or G_eff_MPa) -- %s" % (where, need)
     else:
-        return None, "ERROR: custom diaphragm_stiffness needs Gd_kN_per_m, or G_eff_MPa / E_MPa with t_mm -- %s" % need
+        return None, "ERROR: %s: custom needs Gd_kN_per_m, or G_eff_MPa / E_MPa with t_mm -- %s" % (where, need)
     rec.update(Gt_N_per_mm=Gt, Et_N_per_mm=2.0 * (1.0 + nu) * Gt, h_mm=t, E_eff_MPa=2.0 * (1.0 + nu) * Gt / t,
                basis=basis)
     if not rec.get("cite"):
@@ -161,6 +280,12 @@ def diaphragm_stiffness(cfg):
     rec["void_cells"] = {int(k): [tuple(int(a) for a in p) for p in v]
                          for k, v in dict(ds.get("void_cells") or {}).items()}
     return rec, None
+
+
+def level_stiffness(stiff, k):
+    """The deck record of diaphragm level k (the per-level record, else the single record)."""
+    bl = stiff.get("by_level") if isinstance(stiff, dict) else None
+    return bl[k] if bl and k in bl else stiff
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -221,7 +346,15 @@ def build_flexible(cfg, transf="Linear", nseg=6, stiff=None):
         ch = b.get("nodes") or []
         if len(ch) >= 3 and (len(ch) - 1) % 2 == 0:
             mids[frozenset((b["A"], b["B"]))] = ch[(len(ch) - 1) // 2]
-    ops.section("ElasticMembranePlateSection", DECK_SEC, stiff["E_eff_MPa"], stiff["nu"], stiff["h_mm"], 0.0, EP_MOD)
+    # one membrane section per distinct deck record (per-level diaphragm_stiffness: e.g. composite podium + light floors)
+    sec_of, lev_rec = {}, {}
+    for k in range(1, NF + 1):
+        r_ = level_stiffness(stiff, k)
+        sk = (r_["E_eff_MPa"], r_["nu"], r_["h_mm"])
+        if sk not in sec_of:
+            sec_of[sk] = DECK_SEC + len(sec_of)
+            ops.section("ElasticMembranePlateSection", sec_of[sk], r_["E_eff_MPa"], r_["nu"], r_["h_mm"], 0.0, EP_MOD)
+        lev_rec[k] = (sec_of[sk], r_)
     mesh = stiff["mesh"]
     nid, eid = DECK_NODE0, DECK_ELE0
     deck, mass_nodes = {}, {}
@@ -234,6 +367,7 @@ def build_flexible(cfg, transf="Linear", nseg=6, stiff=None):
             if n // 100000 == k and n == E.ntag(i, j, k) and 0 <= i <= NX and 0 <= j <= NY:
                 grid_[(i, j)] = n
         voids = set(stiff.get("void_cells", {}).get(k, []))
+        sec_k, rec_k = lev_rec[k]
         cells = [(i, j) for i in range(NX) for j in range(NY)
                  if all(c in grid_ for c in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))) and (i, j) not in voids]
         keyed = {}                                           # (2i+s, 2j+t) -> node tag
@@ -279,7 +413,7 @@ def build_flexible(cfg, transf="Linear", nseg=6, stiff=None):
                     xy = P(s / 2.0, t / 2.0)
                     n = _node_at(key, xy, edge_of.get((s, t)))
                     ns.append(n); pts.append(xy); crd[n] = xy
-                ops.element("ShellMITC4", eid, *ns, DECK_SEC)
+                ops.element("ShellMITC4", eid, *ns, sec_k)
                 shells.append(eid); eid += 1
                 a = _poly_area(pts)
                 A_tot += a
@@ -296,7 +430,10 @@ def build_flexible(cfg, transf="Linear", nseg=6, stiff=None):
         for n, a in area_share.items():
             mass_nodes[n] = (("deck", k) + tuple(inv.get(n, ("n", n))), k, m_k * a / A_tot, crd[n][0], crd[n][1])
         deck[k] = {"panels": len(cells), "shells": len(shells), "mass_t": m_k, "area_mm2": A_tot if cells else 0.0,
-                   "nodes": len(area_share), "no_panel": not cells, "grid_nodes": dict(grid_)}
+                   "nodes": len(area_share), "no_panel": not cells, "grid_nodes": dict(grid_),
+                   "Gt_N_per_mm": rec_k["Gt_N_per_mm"], "stiffness_basis": rec_k["basis"], "section": sec_k}
+        if stiff.get("per_level"):
+            deck[k].update(stiffness_source=rec_k["source"], stiffness_level_key=rec_k.get("level_key"))
     model["deck"] = deck
     model["mass_nodes"] = mass_nodes
     model["stiffness"] = stiff
