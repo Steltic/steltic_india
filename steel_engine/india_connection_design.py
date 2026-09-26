@@ -3,7 +3,8 @@
 cfg['connections'] = {
   'brace_end':    {<brace section> | 'default': {weld_type ('cjp'|'fillet'), bolt_type ('HSFG'|...), welds{size_mm|
                    cjp:{t_mm}, length_mm, fu_MPa|fy_MPa, n_sides, site}, bolts{n_bolts, d_mm, grade, t_mm,
-                   fu_plate_MPa, e_mm, p_mm, d0_mm, lj_mm?}, gusset{t_mm, fy_MPa, fu_MPa, w_start_mm, L_conn_mm,
+                   fu_plate_MPa, e_mm, p_mm, d0_mm, lj_mm?, n_e? (10.4.3 effective interfaces, default 1), Kh? (10.4.3
+                   hole factor, default 1.0), mu_f? (Table 20)}, gusset{t_mm, fy_MPa, fu_MPa, w_start_mm, L_conn_mm,
                    L_unbraced_mm, K, Avg_mm2, Avn_mm2, Atg_mm2, Atn_mm2}, An_mm2 (brace net area at the slot),
                    moment_capacity_Nmm?, system_max_force_N?, bolts_and_welds_share (bool), slip_surface?}},
   'beam_column':  {<beam section> | 'default': {type 'end_plate' {bolt rows...} | 'welded_cover_plate' {...},

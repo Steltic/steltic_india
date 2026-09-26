@@ -1113,7 +1113,7 @@ def design_india(name, cfg, outdir):
             best = max(best, abs(r[0]) if kind == "brace" else abs(r[3]))
         return best
 
-    for key, tags in sorted(by.items()):
+    def _conn_group(key, tags):
         kind, sec, role = key
         g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
         conn_max = 0.0
@@ -1268,6 +1268,22 @@ def design_india(name, cfg, outdir):
                                                    "india_connection_design; declared geometry in cfg['connections'])",
                                    "checks": checks, "DC": max(dcs) if dcs else None,
                                    "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": notes})
+
+    for key, tags in sorted(by.items()):
+        # H37: one failing connection group becomes a found:false row, never a lost package
+        try:
+            _conn_group(key, tags)
+        except Exception as ex:
+            kind, sec, role = key
+            err = "%s: %s" % (type(ex).__name__, ex)
+            pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": kind, "section": sec, "demand": {},
+                                       "inputs": {}, "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12",
+                                       "checks": [{"name": "connection design (%s)" % kind, "value": None, "limit": None,
+                                                   "dc": None, "ok": None, "found": False, "clause": "IS 800:2007 10",
+                                                   "cite": "connection row build failed", "reason": err,
+                                                   "source": CD.SRC}],
+                                       "DC": None, "found": False, "error": err,
+                                       "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": [err]})
 
     # ---- composite floors (WP2.9) ----
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()

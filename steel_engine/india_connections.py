@@ -137,9 +137,23 @@ def bolt_capacity_is800(d_mm, grade="8.8", *, nn=1, ns=0, t_mm=None, fu_plate_MP
     return out
 
 
+BOLT_SPEC_ONLY_KEYS = ("n_e", "Kh", "mu_f", "slip_surface", "bolt_type", "slip_at_ultimate")
+
+
+def bolt_kwargs(spec):
+    """The subset of a declared bolts dict that bolt_capacity_is800 accepts (H37).  The same dict also carries the
+    10.4.3 slip keys (n_e effective interfaces, Kh hole factor, mu_f / slip_surface Table 20) read by the HSFG
+    slip check, which are not bearing-bolt arguments; they are dropped here instead of raising TypeError."""
+    import inspect
+    allowed = set(inspect.signature(bolt_capacity_is800).parameters) - {"d_mm", "grade"}
+    return {k: v for k, v in (spec or {}).items() if k in allowed}
+
+
 def bolt_group_capacity_is800(n_bolts, d_mm, grade="8.8", *, V_N=None, **kw):
-    """n x min(Vdsb, Vdpb) for a concentrically loaded bolt group (10.3.2). Long-joint beta_lj via lj_mm."""
-    one = bolt_capacity_is800(d_mm, grade, **kw)
+    """n x min(Vdsb, Vdpb) for a concentrically loaded bolt group (10.3.2). Long-joint beta_lj via lj_mm.
+    Keys that are not bolt_capacity_is800 arguments (n_e, Kh, mu_f, slip_surface: the 10.4.3 slip inputs) are
+    ignored (H37)."""
+    one = bolt_capacity_is800(d_mm, grade, **bolt_kwargs(kw))
     if not one.get("found") or not n_bolts:
         return {"found": False, "capacity_N": None, "per_bolt": one, "cite": one.get("cite"),
                 "required_inputs": one.get("required_inputs") or ["n_bolts"]}
