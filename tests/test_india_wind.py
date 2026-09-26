@@ -169,4 +169,7 @@ def test_dynamic_gate_requires_gust_factor_and_across_wind():
     ok, why, req = E.india_dynamic_wind_gate(cfg, 0.8)
     assert not ok and any("< 10.2 gust-factor" in w for w in why)
     ws["gust_factor"] = {"G": 2.4, "VB_x_kN": 100.0, "VB_y_kN": 100.0}
+    # H12 / ruling R10: an across-wind record with result "n/a" is not an evaluation -> still not ok
+    assert not E.india_dynamic_wind_gate(cfg, 0.8)[0]
+    ws["across_wind"] = {"method": "10.3", "found": True, "Mc_kNm": 850.0, "cite": "IS 875-3 10.3"}
     assert E.india_dynamic_wind_gate(cfg, 0.8)[0]

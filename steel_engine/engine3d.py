@@ -1410,10 +1410,33 @@ def india_dynamic_wind_gate(cfg, f1_hz):
                 if have < float(want) * (1 - 0.02):
                     bad.append("W_%s story forces sum %.1f kN < 10.2 gust-factor along-wind base shear %.1f kN"
                                % (d, have, float(want)))
-    if not ws.get("across_wind"):
-        bad.append("dynamic wind required (%s): the across-wind response (IS 875-3 10.3) must be declared "
-                   "in wind_summary.across_wind {method, result, cite}" % "; ".join(why))
+    aw_ok, aw_why = across_wind_evaluated(ws.get("across_wind"))
+    if not aw_ok:
+        bad.append("dynamic wind required (%s): the across-wind response (IS 875-3 10.3) is not evaluated -- %s "
+                   "(ruling R10: wind_summary.across_wind {found: true, Mc_kNm: <number>, cite} or an EOR record "
+                   "{eor: {value, source, cite}}; job stays PARTIAL until then)" % ("; ".join(why), aw_why))
     return not bad, bad, True
+
+
+def across_wind_evaluated(aw):
+    """H12 / ruling R10: the IS 875-3 10.3 across-wind record counts only when evaluated -- found is True with a
+    numeric Mc_kNm, or an EOR record {value (numeric), source, cite}.  Returns (ok, reason)."""
+    def _num(v):
+        try:
+            return v is not None and not isinstance(v, bool) and math.isfinite(float(v))
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(aw, dict) or not aw:
+        return False, "wind_summary.across_wind missing"
+    if aw.get("found") is True and _num(aw.get("Mc_kNm")):
+        return True, None
+    eor = aw.get("eor") or aw.get("EOR")
+    if isinstance(eor, dict) and _num(eor.get("value")) and str(eor.get("source") or "").strip() \
+            and str(eor.get("cite") or "").strip():
+        return True, None
+    if aw.get("found") is True:
+        return False, "across_wind.found is true but Mc_kNm is not a number"
+    return False, "across_wind is not evaluated (found %r, no numeric Mc_kNm, no EOR {value, source, cite})" % aw.get("found")
 
 
 def _bays_adjacent(present_k, i, j, dirn):
