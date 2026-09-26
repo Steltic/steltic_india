@@ -860,10 +860,40 @@ def embedded_base_checks(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, embedded=None)
             "policy": "EOR capacity with source + cite (found:false otherwise); VERIFY"}
 
 
+SHEAR_KEY_BASIS = ("the key resists all base shear beyond friction (0.45 x bearing compression, IS 800 7.4.1); the "
+                   "anchors are not counted together with the key (a stiff key bears before anchors in clearance holes "
+                   "slip -- conservative where IS 800 is silent)")
+
+
+def _isnum(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(float(x))
+
+
+def shear_key_check(V_key_N, shear_key):
+    """GOLD-4 (IN_Ex8): the declared base shear key / lug.  Row: V_key (shear beyond friction) <= capacity_N, the
+    EOR capacity with its source and cite (IS 456 bearing / lug shear, bending and weld are outside the IS 800 base
+    rules the engine checks: the capacity is an EOR record, VERIFY).  Missing capacity, source or cite -> not
+    evaluated (ok None, found:false): a capacity that is subtracted from the anchor shear must be traceable."""
+    sk = shear_key or {}
+    cap, src, cite = sk.get("capacity_N"), sk.get("source"), sk.get("cite")
+    miss = [k for k, v in (("capacity_N", cap), ("source", src), ("cite", cite))
+            if not (_isnum(v) and float(v) > 0 if k == "capacity_N" else isinstance(v, str) and v.strip())]
+    common = dict(clause="IS 800:2007 7.4.1 (base shear transfer) / 12.12.2; EOR shear key capacity",
+                  basis=SHEAR_KEY_BASIS, capacity_source=src, capacity_cite=cite, verify=True)
+    if miss:
+        r = _check(V_key_N, None, cite="shear key demand <= declared capacity", found=False,
+                   reason="found:false - shear key %s missing: declare shear_key = {capacity_N, source, cite} (or "
+                          "shear_key_N + shear_key_source + shear_key_cite)" % "/".join(miss), **common)
+        r.update(limit=float(cap) if _isnum(cap) else None, dc=None, ok=None)      # not evaluated, never a pass
+        return r
+    return _check(V_key_N, float(cap), cite="shear key demand (shear beyond friction) <= declared capacity: %s"
+                  % cite.strip(), **common)
+
+
 def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_plate_MPa, fck_MPa,
                       col_d_mm, col_bf_mm, col_tf_mm, anchors=None, Ec_MPa=None, modular_ratio=None,
                       sfrs_fixed_base=False, col_Zp_mm3=None, col_fy_MPa=None, col_Vd_N=None, shear_key_N=None,
-                      friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
+                      shear_key=None, shear_key_source=None, shear_key_cite=None, friction_mu=0.45, weld_length_mm=None, col_perimeter_mm=None, embedment=None,
                       sfrs_moment_factor=1.2, Ec_source=None, col_A_mm2=None, stiffeners=None,
                       stiffener_axis="z"):
     """Column base per IS 800 7.4 (P + M + V) - a CHECK of declared geometry; it never sizes from demand.
@@ -875,7 +905,10 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
       (modular ratio n = E/Ec; Ec from the EOR, else IS 456:2000 6.2.3.1 Ec = 5000 sqrt(fck) - recorded as the source).
     - anchors: 10.3.5 tension, 10.3.3 shear, 10.3.6 combined; concrete embedment/pull-out is outside IS 800
       (found:false unless embedment={capacity_N, cite} is supplied by the EOR).
-    - shear path: friction 0.45 x compression (7.4.1) or shear key or anchors.
+    - shear path: friction 0.45 x compression (7.4.1) or shear key or anchors.  A declared shear key
+      (shear_key = {capacity_N, source, cite} or shear_key_N + shear_key_source + shear_key_cite) gets its own row
+      'shear_key': the shear beyond friction <= the declared capacity (shear_key_check); without source + cite the
+      row is found:false (not evaluated) -- an EOR capacity is never a bare number.
     - thickness: compression-side cantilever per 7.4.3.1 form (M = 0.2 t^2 fy/gamma_m0 per unit width, the
       1.2 Ze cap of 8.2.1.2 - equivalent to 7.4.3.1 with b = 0), tension-side anchor-line moment; ts > tf.
     - 12.12: for SFRS fixed bases M_dem = max(M, sfrs_moment_factor x Mp_col) (1.2 per IS 800 12.12.1; 1.1 Ry per
@@ -892,6 +925,16 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     checks = {}
     cite_b = "IS 800:2007 7.4.1 (linear bearing, 0.6 fck)"
     M_dem, V_dem = abs(float(M_Nmm or 0.0)), abs(float(V_N or 0.0))
+    if shear_key is not None or shear_key_N:
+        sk_ = dict(shear_key) if isinstance(shear_key, dict) else {}
+        if shear_key is not None and not isinstance(shear_key, dict):
+            sk_["capacity_N"] = shear_key
+        sk_.setdefault("capacity_N", shear_key_N)
+        if shear_key_source is not None:
+            sk_.setdefault("source", shear_key_source)
+        if shear_key_cite is not None:
+            sk_.setdefault("cite", shear_key_cite)
+        shear_key, shear_key_N = sk_, (float(sk_["capacity_N"]) if _isnum(sk_.get("capacity_N")) else None)
     if sfrs_fixed_base:
         if col_Zp_mm3 and col_fy_MPa:
             Mp_ = col_Zp_mm3 * col_fy_MPa
@@ -997,6 +1040,8 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         checks["shear_path"] = {"value": V_dem, "friction_N": V_fric, "shear_key_N": shear_key_N,
                                 "anchors_N": V_anchor, "clause": "IS 800:2007 7.4.1 (friction 0.45)",
                                 "cite": "shear by friction, shear key, then anchors", "ok": True}
+        if shear_key is not None:
+            checks["shear_key"] = shear_key_check(max(V_dem - V_fric, 0.0), shear_key)
         if a.get("pitch_mm") is not None:
             checks["geometry_anchor_pitch"] = _geom_gate(2.5 * a["d_mm"], a["pitch_mm"], clause="IS 800:2007 10.2.2",
                                                      cite="pitch >= 2.5 d")
@@ -1021,6 +1066,8 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     else:
         checks["shear_path"] = _check(V_dem, friction_mu * max(P, 0.0) + (shear_key_N or 0.0),
                                       clause="IS 800:2007 7.4.1", cite="friction 0.45 x compression (+ key)")
+    if shear_key is not None and "shear_key" not in checks:
+        checks["shear_key"] = shear_key_check(max(V_dem - friction_mu * max(P, 0.0), 0.0), shear_key)
     # plate thickness
     a_proj = (L_mm - 0.95 * col_d_mm) / 2.0
     b_proj = (B_mm - 0.8 * col_bf_mm) / 2.0
@@ -1139,7 +1186,7 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
         ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
                                col_tf_mm=col_tf_mm, anchors=ay, **common_y)
         for k, v in ry["checks"].items():
-            if k.startswith(("geometry_", "shear_path", "anchor_shear", "anchorage_embedment")):
+            if k.startswith(("geometry_", "shear_path", "shear_key", "anchor_shear", "anchorage_embedment")):
                 continue
             out["checks"]["y:" + k] = v
         out["bearing_y"] = ry.get("bearing")

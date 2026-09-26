@@ -112,6 +112,7 @@ def _ex2_md(stiffened, t_plate):
     mids = [(a + b) / 2 for a, b in zip(main, main[1:])]            # tension anchors mid-panel between the gussets
     base = {"id": "b1", "column_member_id": "c1", "fixed": True, "B_mm": 650, "L_mm": 1900, "t_plate_mm": t_plate,
             "fy_plate_MPa": 230, "fck_MPa": 40, "shear_key_N": 3.0e6,
+            "shear_key_source": "EOR shear-lug calc SK-01 (test record)", "shear_key_cite": "IS 456 34.4 bearing; IS 800 8.4.1",
             "anchors": {"n_total": 6, "n_tension": 3, "d_mm": 48, "grade": "8.8", "f_mm": 825, "Anb_mm2": 1473.0,
                         "x_mm": mids},
             "embedment": {"capacity_N": 700e3, "cite": "EOR anchorage calc AN-01 (test record)"},

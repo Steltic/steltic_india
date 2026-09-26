@@ -365,7 +365,10 @@ You:
      fck_MPa, `fixed`, `anchors` {n_total, n_tension, d_mm, grade, f_mm (tension-anchor line from the plate
      centre), pitch_mm, edge_mm, n_per_row, Anb_mm2 when not in IS 4000 Table 2}, optional `Ec_MPa` /
      `modular_ratio` (default Ec = 5000 sqrt(fck), IS 456:2000 6.2.3.1 — recorded as the source), `Hc_mm`,
-     `shear_key_N`, and `embedment` = {capacity_N, cite} — the EOR's concrete anchorage capacity (IS 456 cone /
+     `shear_key` = {capacity_N, source, cite} (or `shear_key_N` + `shear_key_source` + `shear_key_cite`) — the EOR
+     shear key / lug capacity: subtracted from the anchor shear and checked in its own row `shear_key` (shear beyond
+     friction <= capacity; the anchors are not added to the key; without source + cite the row is found:false and the
+     package stays PARTIAL), and `embedment` = {capacity_N, cite} — the EOR's concrete anchorage capacity (IS 456 cone /
      bond / product data is outside IS 800 and not in the corpus: without it the row is found:false and the
      package stays PARTIAL). Biaxial moments: `anchors.f_y_mm` / `n_tension_y` (the minor-axis tension line;
      a square plate without them reuses the major-axis pattern, flagged; B != L without them is found:false);
