@@ -209,8 +209,14 @@ def _entry_issues(kind, entry):
     if not entry.get("cited") and not any(isinstance(c, dict) and (c.get("cited") or c.get("clause") or c.get("cite"))
                                           for c in checks):
         out.append(f"[{kind} {cid}] no cited code clause")
+    # GOLD-7: a record whose checks are ALL passing gates (deemed-to-comply rows, e.g. a CJP column splice with
+    # matching electrode -- IS 800 10.5.7.1.2, ruling R4) has no numeric D/C by nature; a failing or unevaluated gate,
+    # or any non-gate row, still needs its D/C
+    gates_only = bool(checks) and all(isinstance(c, dict) and c.get("gate") is True and c.get("ok") is True
+                                      for c in checks)
     if not all_dcs:
-        out.append(f"[{kind} {cid}] no D/C reported (top-level or in a check)")
+        if not gates_only:
+            out.append(f"[{kind} {cid}] no D/C reported (top-level or in a check)")
     else:
         worst = max(all_dcs)
         if worst > 1.0 + 1e-9:
