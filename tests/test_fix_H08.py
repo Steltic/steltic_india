@@ -124,3 +124,14 @@ def test_base_load_cases_keep_both_moments():
     a = lc[0]
     assert a["Mz_Nmm"] == 30e6 and a["My_Nmm"] == 12e6 and a["V_N"] == pytest.approx(50e3) and a["seismic"] is True
     assert lc[1]["seismic"] is False
+
+
+def test_biaxial_resultant_in_kern_gives_no_anchor_tension():
+    p = S.props(SEC)
+    r = C.base_plate_design_biaxial(P_N=1500e3, Mz_Nmm=5e6, My_Nmm=3e6, V_N=10e3, B_mm=600, L_mm=600, t_plate_mm=45,
+                                    fy_plate_MPa=240, fck_MPa=30, col_d_mm=p["d"], col_bf_mm=p["bf"], col_tf_mm=p["tf"],
+                                    anchors={"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "4.6", "f_mm": 240})
+    assert r["demands"]["T_corner_anchor_N"] == 0.0
+    assert "anchorage_embedment" not in r["checks"] or r["checks"]["anchorage_embedment"].get("ok") is not None
+    fb = r["checks"]["bearing_biaxial"]
+    assert fb["value"] == pytest.approx(1500e3 / 600 ** 2 + 6 * 5e6 / 600 ** 3 + 6 * 3e6 / 600 ** 3)
