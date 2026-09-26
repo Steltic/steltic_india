@@ -32,7 +32,12 @@ def test_sloped_beam_is_error():
     import static_model as SM
     f = SM.pitched_roof_findings(CFG, _portal(1500.0))
     assert any(s == "ERROR" and "end levels" in m for s, m in f)
-    assert not any("end levels" in m for s, m in SM.pitched_roof_findings(dict(CFG, roof_planes=[{}]), _portal(1500.0)))
+    # X02: an invalid / non-matching roof_planes declaration no longer silences the guard; a plane that the sloped
+    # rafters actually lie on does
+    assert any(s == "ERROR" for s, m in SM.pitched_roof_findings(dict(CFG, roof_planes=[{}]), _portal(1500.0)))
+    plane = {"axis": "X", "eave_coords_mm": [0.0, 12000.0], "ridge_coord_mm": 6000.0, "eave_z_mm": 8000.0,
+             "ridge_z_mm": 9500.0, "lines": [0]}
+    assert SM.pitched_roof_findings(dict(CFG, roof_planes=[plane]), _portal(1500.0)) == []
     assert not SM.pitched_roof_findings(CFG, _portal(0.0))
 
 
