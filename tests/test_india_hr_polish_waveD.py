@@ -156,6 +156,8 @@ def test_site_proxy_kochi_vb_disclosed_ok():
                 "Kerala coastal proxy disclosed"
             ),
             "site_proxy_source": "site_proxy",
+            "site_proxy_distance_km": 30.0,  # ruling R5 record (H47)
+            "site_proxy_verify": True,
         },
         quantity="Vb",
         annex_hit={"found": False},
@@ -175,6 +177,8 @@ def test_site_proxy_indore_bhopal_z():
             "site_proxy_value": 0.10,
             "site_proxy_cite": "Annex E Indore found:false — Bhopal Zone II Z=0.10 MP inland",
             "site_proxy_source": "site_proxy",
+            "site_proxy_distance_km": 30.0,  # ruling R5 record (H47)
+            "site_proxy_verify": True,
         },
         quantity="Z",
         annex_hit={"found": False},
@@ -191,6 +195,8 @@ def test_site_proxy_noida_delhi_vb():
             "site_proxy_value": 47.0,
             "site_proxy_cite": "Annex A Noida found:false — Delhi NCR Vb=47 disclosed",
             "site_proxy_source": "site_proxy",
+            "site_proxy_distance_km": 30.0,  # ruling R5 record (H47)
+            "site_proxy_verify": True,
         },
         quantity="Vb",
         annex_hit={"found": False},

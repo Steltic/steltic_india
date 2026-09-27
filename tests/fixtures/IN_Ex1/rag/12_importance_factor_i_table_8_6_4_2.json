@@ -1,0 +1,17 @@
+{
+ "query": "importance factor I Table 8 / 6.4.2",
+ "collection": "engineering_standards_IS1893",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_1893_Part_1_2016",
+   "file": "documents/standards/IS_1893_Part_1_2016/markdown/IS_1893_Part_1_2016.search.md",
+   "char_span": [
+    92896,
+    93721
+   ],
+   "text": "ions, airports, food storage buildings (such as warehouses), fuel station buildings, power station buildings, and fire station buildings), and large community hall buildings (for example, cinema halls, shopping malls, assembly halls and subway stations) | 1.5 | | ii) | Residential or commercial buildings [other than those listed in Sl No. (i)] with occupancy more than 200 persons | 1.2 | | iii) | All other buildings | 1.0 | NOTES 1 Owners and design engineers of buildings or structures may choose values of importance factor I more than those mentioned above. 2 Buildings or structures covered under Sl No. (iii) may be designed for higher value of importance factor I, depending on economy and strategy. 3 In Sl No. (ii), when a building is composed of more than one structurally independent unit, the occupancy size sh"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

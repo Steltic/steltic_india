@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "steltic-india"
-version = "0.2.2"
+version = "0.3.0"
 description = "Free, local India IS 800 / IS 875 / IS 1893 HR steel-design agent: your LLM + OpenSees + stamped-style reports"
 readme = "README.md"
 license = "MIT"

@@ -1,0 +1,74 @@
+{
+ "Cement Concrete Reinforced unit weight Table 1 1 percent steel": {
+  "hit_file": "rag/01_cement_concrete_reinforced_unit_weight_table_1_1.json",
+  "quote": "With 1 percent steel | - | 22.75 to 24.20"
+ },
+ "cement plaster screed floor tiles finishes unit weight": {
+  "hit_file": "rag/02_cement_plaster_screed_floor_tiles_finishes_unit_.json",
+  "quote": "Plaster on tile or concrete | 13 mm thick | 0.25"
+ },
+ "office rooms imposed floor load Table 1": {
+  "hit_file": "rag/03_office_rooms_imposed_floor_load_table_1.json",
+  "quote": "Office rooms | 2.5 | 2.7"
+ },
+ "imposed loads on roofs Table 2 access not provided": {
+  "hit_file": "rag/04_imposed_loads_on_roofs_table_2_access_not_provid.json",
+  "quote": "Access not provided except for maintenance | 0.75 kN/m²"
+ },
+ "basic wind speed Delhi Annex A": {
+  "hit_file": "rag/05_basic_wind_speed_delhi_annex_a.json",
+  "quote": "| Delhi | 47 |"
+ },
+ "design wind speed Vz = Vb k1 k2 k3 k4": {
+  "hit_file": "rag/06_design_wind_speed_vz_vb_k1_k2_k3_k4.json",
+  "quote": "the value of k 3 may be taken to be equal to 1.0"
+ },
+ "Table 1 Risk Coefficient k1 general buildings 50 years": {
+  "hit_file": "rag/07_table_1_risk_coefficient_k1_general_buildings_50.json",
+  "quote": "All general buildings and structures | 50 | 1.0"
+ },
+ "Table 2 Terrain and Height Multiplier k2 Category 3": {
+  "hit_file": "rag/08_table_2_terrain_and_height_multiplier_k2_categor.json",
+  "quote": "| 15 | 1.09 | 1.05 | 0.97 | 0.80 | | iii) | 20 | 1.12 | 1.07 | 1.01"
+ },
+ "Table 5 external pressure coefficients walls rectangular + Cpi 7.3.2": {
+  "hit_file": "rag/09_table_5_external_pressure_coefficients_walls_rec.json",
+  "quote": "internal pressure coefficient of +0.2 and another with an internal pressure coefficient of -0.2"
+ },
+ "Delhi seismic zone factor Z Annex E": {
+  "hit_file": "rag/10_delhi_seismic_zone_factor_z_annex_e.json",
+  "quote": "Delhi IV 0.24"
+ },
+ "response reduction factor R concentric braced SBF Table 9": {
+  "hit_file": "rag/11_response_reduction_factor_r_concentric_braced_sb.json",
+  "quote": "Buildings with special braced frame (SBF) having concentric braces | 4.5"
+ },
+ "importance factor I Table 8 / 6.4.2": {
+  "hit_file": "rag/12_importance_factor_i_table_8_6_4_2.json",
+  "quote": "All other buildings | 1.0"
+ },
+ "design horizontal seismic coefficient Ah 6.4.2 spectrum medium soil": {
+  "hit_file": "rag/13_design_horizontal_seismic_coefficient_ah_6_4_2_s.json",
+  "quote": "Ah = (Z/2) · (Sa/g) / (R/I)"
+ },
+ "Ta all other buildings 7.6.2(c) 0.09h/sqrt(d)": {
+  "hit_file": "rag/14_ta_all_other_buildings_7_6_2_c_0_09h_sqrt_d.json",
+  "quote": "All other buildings: - Ta = 0.09 h / √d"
+ },
+ "storey drift limit 7.11.1.1": {
+  "hit_file": "rag/15_storey_drift_limit_7_11_1_1.json",
+  "quote": "storey drift ≤ 0.004 × storey height under design base shear VB"
+ },
+ "Table 4 partial safety factors for loads": {
+  "hit_file": "rag/16_table_4_partial_safety_factors_for_loads.json",
+  "quote": "Table 4 Partial Safety Factors for Loads, γf, for Limit States"
+ },
+ "Section 12.8 Special Concentrically Braced Frames SCBF": {
+  "hit_file": "rag/17_section_12_8_special_concentrically_braced_frame.json",
+  "quote": "12.8.1 Special concentrically braced frames (SCBF) should be shown to withstand inelastic deformation"
+ },
+ "E250 yield stress Table 3": {
+  "hit_file": "rag/18_e250_yield_stress_table_3.json",
+  "quote": "E 250 | B0 | 410 | 250"
+ }
+}

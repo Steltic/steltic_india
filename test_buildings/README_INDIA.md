@@ -20,12 +20,13 @@ and are not loaded:
 - `IN_Ex14_Crane_bay_OMRF_OCBF_Vizag.txt`
 - `IN_Ex15_Gable_warehouse_SMF_SCBF_snow_Shimla.txt`
 
-EOR EXAMPLE fixtures (COMPLETE gate when Table 9 / Ω0 found:false) — **not-for-construction**:
+Retired EOR EXAMPLE memos (not loaded, **not-for-construction**):
 
 - (Ex6 EBF EXAMPLE memo retired: R from Table 9 (ii)(c); file under usa_reference/)
 - (Ex7 BRBF EXAMPLE memo retired: BRBF has no Indian basis, D3 -> SCBF; file under usa_reference/)
 - (Ex9 SPSW EXAMPLE memo retired: SPSW has no Indian basis, D3 -> EBF in Zone V per IS 18168 1.3; usa_reference/)
 - (Ex10 dual SMF+BRBF EXAMPLE memo retired: no dual claim, SCBF sole system per IS 18168 1.3; usa_reference/)
-- `IN_Ex12_EOR_inputs_EXAMPLE.json` — soft-story SMF / Ω0
+- (Ex12 soft-storey SMF / overstrength EXAMPLE memo retired: R from Table 9 i)(d), no transfer girder in the brief and no
+  foreign overstrength factor (D02); file under usa_reference/)
 
 Agents must still LIVE-retrieve IS 875 / IS 1893 into `cfg['load_plan']` every job.

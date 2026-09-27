@@ -11,10 +11,12 @@ from design_pipeline import _section12_component_stubs, _composite_chI_worksheet
 
 
 def test_corpus_prefer_ka_uses_hit_not_fallback():
-    hit = {"found": True, "Ka": 0.85, "cite": "corpus exact_table 4"}
+    # RR-BUG-6: a declared Ka is area-checked -- 0.90 >= Table 4 0.88 at 40 m2 (the old 0.85 is below Table 4 at this
+    # area and is now replaced by the Table 4 value, see tests/test_fix_RR_BUG_6_ka_per_direction.py)
+    hit = {"found": True, "Ka": 0.90, "cite": "corpus exact_table 4"}
     r = WT.resolve_ka(40.0, hit)
     assert r["resolved_via"] == "corpus"
-    assert r["Ka"] == 0.85
+    assert r["Ka"] == 0.90
     assert r["found"] is True
     # india_loads wrapper
     r2 = IL.resolve_ka(40.0, hit)

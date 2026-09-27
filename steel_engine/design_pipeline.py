@@ -208,12 +208,14 @@ def design(name, outdir=None):
     # agent no longer has to relabel interiors by hand.
     moment_lines = {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
     lateral_lines = brace_lines | moment_lines
-    def _role(kind, n1, n2):
+    link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
+    def _role(kind, n1, n2, t=None):
         if kind == "brace": return "brace"
+        if kind == "beam" and t in link_tags: return "link"
         if kind == "beam":  return "roof" if (n1 // 100000) >= NFlev else "floor"
         ij = ((n1 % 100000) // 100, n1 % 100)                  # column line (i,j)
         return "lateral_col" if ij in lateral_lines else "gravity_col"
-    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3]) for t in reg}
+    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3], t) for t in reg}
     by = {}
     for t in reg:
         kind, sec, n1, n2 = reg[t]; by.setdefault((kind, sec, role_of[t]), []).append(t)
@@ -618,13 +620,58 @@ def provenance_record(job_dir):
                                     "(engine-generated model files excluded)"}
 
 
+_OVERRIDE_FIELDS = ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm", "grade", "process")
+
+
+def _is_tube(sec):
+    return str(sec or "").upper().startswith(("CHS", "NB"))
+
+
+def member_override(cfg, t, kind, sec, role):
+    """H19 (HR-E-15, CFS-A-16, CFS-D-11): cfg['member_overrides'] = {key: {Kz, Ky, LLT_sag_mm, LLT_hog_mm, Lz_mm,
+    Ly_mm, grade, process}} with key 'e<tag>' (one element), '<role>:<SECTION>' (role = brace | roof | floor |
+    lateral_col | gravity_col), '<kind>:<SECTION>' (kind = col | beam | brace, or column) or '<SECTION>'.  The
+    more specific key wins field by field (tag > role:section > kind:section > section).  Returns (fields, keys)."""
+    mo = cfg.get("member_overrides") or {}
+    if not isinstance(mo, dict) or not mo:
+        return {}, []
+    keys = [str(sec), "%s:%s" % (_ROLE_TO_I8.get(kind, kind), sec), "%s:%s" % (kind, sec), "%s:%s" % (role, sec),
+            "e%d" % t]
+    out, used = {}, []
+    for k in keys:
+        v = mo.get(k)
+        if isinstance(v, dict):
+            out.update({f: v[f] for f in _OVERRIDE_FIELDS if v.get(f) is not None})
+            used.append(k)
+    return out, used
+
+
 def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
-    grade = cfg.get("brace_grade") if kind == "brace" else cfg.get("steel_grade")
-    grade = (cfg.get("grade_by_section") or {}).get(sec) or grade      # per-section IS 2062 grade (e.g. E350 columns)
+    # H19 (HR-B-05, HR-E-14): grade / process lookup.  Braces keep cfg['brace_grade'] unless grade_by_section names
+    # 'brace:<SEC>'; other kinds: grade_by_section '<role>:<SEC>' or '<SEC>'.  CHS / NB tubes of any kind take
+    # cfg['tube_grade'] / cfg['tube_process'] (IS 1161), falling back to brace_grade / brace_process.
+    gbs = cfg.get("grade_by_section") or {}
+    tube = _is_tube(sec)
+    if tube:
+        grade = cfg.get("tube_grade") or cfg.get("brace_grade") or (None if kind == "brace" else cfg.get("steel_grade"))
+        process = cfg.get("tube_process") or cfg.get("brace_process")
+    elif kind == "brace":
+        grade, process = cfg.get("brace_grade"), cfg.get("brace_process")
+    else:
+        grade, process = cfg.get("steel_grade"), None
+    gv = gbs.get("brace:%s" % sec) if kind == "brace" else (gbs.get("%s:%s" % (role, sec)) or gbs.get(sec))
+    if isinstance(gv, dict):
+        grade = gv.get("grade") or grade
+        process = gv.get("process") or process
+    elif gv:
+        grade = gv                                     # per-section IS 2062 grade (e.g. E350 columns)
+    ov, used = member_override(cfg, t, kind, sec, role)
+    grade = ov.get("grade") or grade
+    process = ov.get("process") or process
     m = {"id": "e%d" % t, "tag": t, "section": sec, "grade": grade, "role": _ROLE_TO_I8.get(kind, kind),
          "role_group": role, "L_mm": length, "node_i": n1, "node_j": n2}
-    if kind == "brace":
-        m["process"] = cfg.get("brace_process")
+    if kind == "brace" or tube or process:
+        m["process"] = process
     K = cfg.get("K_factors") or {}
     kk = K.get(role) or K.get(kind) or {}
     if kk:
@@ -633,6 +680,12 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
         for key in ("LLT_sag_mm", "LLT_hog_mm"):        # a number, or {role: mm} per member group
             v = cfg.get(key)
             m[key] = (v.get(role) if isinstance(v, dict) else v)
+    # H19: per-member overrides for every kind, including columns (girt / fly-brace restraint -> column LTB length)
+    for f in ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm"):
+        if ov.get(f) is not None:
+            m[f] = float(ov[f])
+    if used:
+        m["overrides"] = used
     if kind == "col":
         m["sway"] = bool(cfg.get("sway_frame"))
     return m
@@ -670,19 +723,27 @@ def _check_rows(res):
     """member_check_is800 result -> {value, limit, dc, ok, clause, cite, source} check records."""
     rows = []
     src = "india_is800.member_check_is800"
+    gov_t3 = str(res.get("governing_check") or "").startswith("IS 800 Table 3")
     if res.get("found") and res.get("dc") is not None:
-        rows.append({"name": "IS 800 9.3 interaction / member resistance (governing combination %s)"
-                             % res.get("governing_combo"), "value": float(res["dc"]), "limit": 1.0,
-                     "dc": float(res["dc"]), "ok": bool(res["dc"] <= 1.0), "clause": res.get("clause"),
-                     "cite": res.get("cite") or res.get("clause"), "source": src})
+        # RR-BUG-5: the 9.3 row carries the interaction value and its combination; the Table 3 row its own
+        dci = res.get("interaction_dc", res["dc"])
+        gci = res.get("interaction_governing_combo", res.get("governing_combo"))
+        rows.append({"name": "IS 800 9.3 interaction / member resistance (%scombination %s)"
+                             % ("" if gov_t3 else "governing ", gci), "value": float(dci), "limit": 1.0,
+                     "dc": float(dci), "ok": bool(dci <= 1.0), "clause": res.get("clause"),
+                     "cite": res.get("interaction_cite") or res.get("cite") or res.get("clause"), "source": src,
+                     "governing": not gov_t3, "combo": gci})
     else:
         rows.append({"name": "IS 800 member check", "value": None, "limit": None, "dc": None, "ok": None,
                      "found": False, "clause": "IS 800:2007 7-9", "cite": res.get("reason"), "source": src})
     t3 = res.get("table3_slenderness")
     if isinstance(t3, dict):
-        rows.append({"name": "IS 800 Table 3 slenderness KL/r", "value": t3.get("value"), "limit": t3.get("limit"),
+        gc3 = t3.get("governing_combo")
+        rows.append({"name": "IS 800 Table 3 slenderness KL/r%s%s" % (
+                         " (combination %s)" % gc3 if gc3 else "", " -- governing" if gov_t3 else ""),
+                     "value": t3.get("value"), "limit": t3.get("limit"),
                      "dc": t3.get("dc"), "ok": t3.get("ok"), "clause": t3.get("clause"), "cite": t3.get("cite"),
-                     "source": src})
+                     "source": src, "governing": gov_t3, "combo": gc3})
     return rows
 
 
@@ -759,7 +820,15 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
                 dcol = max((S.props(reg[tc][1])["d"] for tc in reg if reg[tc][0] == "col" and reg[tc][3] in (n1, n2)),
                            default=0.0)
                 rec["L_clear_mm"] = length[t] - dcol
-                bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"]}
+                bdict = {"k": n1 // 100000, "L": length[t], "dir": d_, "_A": S.props(sec)["A"],
+                         "etag": t, "sec": sec}                  # O2: self_weight_in_nodal_loads by tag / section
+                # H13 (HR-C-03/HR-D-08): the beam's grid position + level footprint give the actual tributary
+                # (edge girder: half bay; beam parallel to the deck span: its secondary strip when declared)
+                n_lo = min(n1, n2)
+                ij = ((n_lo % 100000) // 100, n_lo % 100)
+                pk = (info0.get("present") or {}).get(n1 // 100000)
+                if pk and ij in pk:
+                    bdict.update(i=ij[0], j=ij[1], present_k=pk)
                 rec["V_gravity_N"] = SM.one_way_gravity(cfg, bdict, 1.2, 0.5, 0.5)[1]
                 rec["V_gravity_cite"] = "1.2DL + 0.5LL simple-span end shear (12.11.2.2)"
             except Exception:
@@ -826,6 +895,17 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
     return md
 
 
+def ebf_link_tags(cfg, info0):
+    """Element tags of the EBF shear links declared by the custom_build (info['links']) or cfg['ebf_links'] (H39)."""
+    out = set()
+    for ln in ((info0 or {}).get("links") or (cfg or {}).get("ebf_links") or []):
+        try:
+            out.add(int(ln["tag"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
 def ebf_links_model_data(cfg, info0, reg, members, forces, run=None):
     """model_data['links'] for india_is800_s12.ebf_link_checks from the links the custom_build declared:
     info['links'] = [{tag, e_mm, bay_L_mm, brace_tags, column_tags, beam_tags, end_stiffeners,
@@ -890,14 +970,44 @@ def design_india(name, cfg, outdir):
     job_dir = os.path.dirname(os.path.abspath(outdir))
     cases = combos(cfg)
     run = E.india_run_cached(cfg, name)
+    # X01: IS 1893 Table 5(ii) (Amd 2) flexible-diaphragm 3-D dynamic analysis, in addition to the rigid case
+    import india_flexible_diaphragm as FD
+    flex_on, flex_why = FD.trigger(cfg, run.get("irregularity") or {})
+    flex, flex_err, flex_note = None, None, None
+    _has_rsa = lambda cs: any((getattr(c, "meta", {}) or {}).get("rsa") for c in cs)
+    if flex_on and not _has_rsa(cases):
+        # Table 5(ii) asks for a three-dimensional DYNAMIC analysis: the rigid case becomes RSA as well
+        cfg["analyses"] = list(cfg.get("analyses") or []) + ["RSA"]
+        E._INDIA_RUN_CACHE.pop(E._model_key(cfg), None)
+        run = E.india_run_cached(cfg, name)
+        cases = combos(cfg)
+        flex_note = ("IS 1893 Table 5(ii): three-dimensional dynamic analysis -> RSA adopted for the rigid case too "
+                     "(cfg['analyses'] += ['RSA'])")
     rsa_el = None
-    if any((getattr(c, "meta", {}) or {}).get("rsa") for c in cases):
+    if _has_rsa(cases):
         rsa = run.get("rsa") or E.rsa_analysis(cfg)
         run["rsa"] = rsa
         rsa_el = rsa["elements"]
+    if flex_on:
+        if rsa_el is None:
+            flex_err = "no RSA combinations to envelope (EQ story forces missing?)"
+        else:
+            try:
+                flex = FD.rsa_flexible(cfg)
+            except FD.FlexibleDiaphragmError as ex:
+                flex_err = str(ex)
+            except Exception as ex:
+                flex_err = "flexible-diaphragm run failed: %s: %s" % (type(ex).__name__, ex)
     fs_ = "two-way" if "two" in str(cfg.get("floor_system", "one-way")).lower() else "one-way"
     nseg = int(cfg.get("demand_nseg", 6))
     per_case, kinds, sinfo = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el)
+    flex_env, per_flex = None, None
+    if flex is not None:
+        try:
+            _eqc = [c for c in cases if (getattr(c, "meta", {}) or {}).get("rsa")]
+            per_flex, _kf, _if = SM.solve_cases_si(cfg, _eqc, nseg, fs_, rsa=flex["elements"])
+        except Exception as ex:
+            flex, flex_err = None, "flexible-run combinations failed: %s: %s" % (type(ex).__name__, ex)
     # WP2.6: collector / chord axial from the diaphragm load path (rigid diaphragm gives beams P = 0)
     coll_added, coll_error = {}, None
     amp1223 = str(cfg.get("collector_basis") or "").lower() in ("is800_12_2_3", "12.2.3")
@@ -905,9 +1015,18 @@ def design_india(name, cfg, outdir):
         import india_diaphragm as DIA
         _i = E.build(cfg, "PDelta")
         _reg = {t: (kind, sec, n1, n2) for (t, kind, sec, n1, n2) in _i["ele"]}
-        coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223)
+        # GOLD-COLL: the EQ combinations enveloped with the X01 flexible-deck run take the X01 beam axial forces as
+        # their flexible case; their rigid half carries the rigid-diaphragm collectors (DIA.X01_COLLECTOR_NOTE)
+        coll_added = DIA.add_to_records(per_case, cases, _reg, cfg, amplify_12_2_3=amp1223,
+                                        x01_labels=[lab for lab in (per_flex or {}) if not lab.startswith("_")])
     except Exception as ex:
         coll_error = "%s: %s" % (type(ex).__name__, ex)
+    if per_flex is not None:
+        # X01 Table 5(ii) worst effect: rigid run (with its collector / chord forces) vs flexible run, per combination
+        per_rigid_eq = {lab: dict(per_case[lab]) for lab in per_flex if lab in per_case}
+        n_f, n_r = FD.merge_records(per_case, per_flex)
+        flex_env = {"per_flex": per_flex, "per_rigid": per_rigid_eq, "n_flexible_governs": n_f, "n_records": n_r,
+                    "n_cases": len(per_flex)}
     env = SM.envelope_from_records(per_case, kinds, cases)
 
     info0 = E.build(cfg, "PDelta")
@@ -922,13 +1041,17 @@ def design_india(name, cfg, outdir):
     moment_lines = {((nd % 100000) // 100, nd % 100) for nd in info0.get("moment_nodes", set())}
     lateral_lines = brace_lines | moment_lines
 
-    def _role(kind, n1, n2):
+    link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
+
+    def _role(kind, n1, n2, t=None):
         if kind == "brace":
             return "brace"
+        if kind == "beam" and t in link_tags:
+            return "link"
         if kind == "beam":
             return "roof" if (n1 // 100000) >= NFlev else "floor"
         return "lateral_col" if ((n1 % 100000) // 100, n1 % 100) in lateral_lines else "gravity_col"
-    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3]) for t in reg}
+    role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3], t) for t in reg}
     envt = {t: env.get(frozenset((reg[t][2], reg[t][3])), dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="",
                                                               records={}, conn={})) for t in reg}
     zero = [t for t in reg if all(abs(x) < 1e-6 for r in (envt[t].get("records") or {}).values() for x in r[:4])]
@@ -937,6 +1060,9 @@ def design_india(name, cfg, outdir):
     # serviceability cases (IS 800 10.4.3 service-load slip of HSFG connections): {label: {fset: rec}}
     try:
         per_sls, _k2, _i2 = SM.solve_cases_si(cfg, cases, nseg, fs_, rsa=rsa_el, service=True)
+        _eqs = [c for c in cases if (getattr(c, "meta", {}) or {}).get("rsa") and (getattr(c, "meta", {}) or {}).get("service")]
+        if flex is not None and _eqs:                                    # X01: same rigid / flexible envelope
+            FD.merge_records(per_sls, SM.solve_cases_si(cfg, _eqs, nseg, fs_, rsa=flex["elements"], service=True)[0])
     except Exception as ex:
         per_sls = {"_error": str(ex)}
     sls_rec = {}
@@ -1005,7 +1131,8 @@ def design_india(name, cfg, outdir):
                                "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
                                                                           {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
                                                                       for k, v in res["capacities"].items()},
-                               "DC": dc, "governing_element_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})})
+                               "DC": dc, "governing_check": res.get("governing_check"),
+                               "governing_element_result": _governing_result(res)})
 
     # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
     import india_connection_design as CD
@@ -1042,6 +1169,7 @@ def design_india(name, cfg, outdir):
                    height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
                    apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
                    is18168_table2=cfg.get("is18168_table2"))
+    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis") if k in cfg})     # H52 / H46 (rulings R8, R3)
     joint_conn = {}
     try:
         import india_is800_s12 as S12
@@ -1075,9 +1203,10 @@ def design_india(name, cfg, outdir):
         s12 = S12.section12_checks(cfg.get("system"), md, s12_cfg)
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12": _jsonable(s12),
                                   "checks": {c.get("id", "c%d" % i) + ("@" + str(c.get("member")) if c.get("member") else ""):
-                                             {"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
-                                              "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
-                                              "cite": c.get("cite"), "found": c.get("ok") is not None}
+                                             dict({"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
+                                                   "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
+                                                   "cite": c.get("cite"), "found": c.get("ok") is not None},
+                                                  **({"sense": c["sense"]} if c.get("sense") else {}))
                                              for i, c in enumerate(s12.get("checks") or [])}}
     except ImportError as ex:
         s12 = {"checks": []}
@@ -1098,6 +1227,8 @@ def design_india(name, cfg, outdir):
     def _row(name, c, **extra):
         r = {"name": name, "value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"), "ok": c.get("ok"),
              "clause": c.get("clause"), "cite": c.get("cite"), "source": c.get("source", CD.SRC)}
+        if c.get("sense"):
+            r["sense"] = c["sense"]
         if c.get("reason"):
             r["reason"] = c["reason"]
         if c.get("ok") is None:
@@ -1110,10 +1241,53 @@ def design_india(name, cfg, outdir):
     def _conn_force_sls(t, kind):
         best = 0.0
         for lab, r in (sls_rec.get(frozenset((reg[t][2], reg[t][3]))) or {}).items():
-            best = max(best, abs(r[0]) if kind == "brace" else abs(r[3]))
+            # GOLD-5: a beam end transfers its axial force (collector / chord / flexible-deck) with the shear
+            best = max(best, abs(r[0]) if kind == "brace" else math.hypot(r[3], r[0]))
         return best
 
-    for key, tags in sorted(by.items()):
+    try:
+        _os_conn = bool(amp1223 or S12.is18168_status(cfg.get("system"), s12_cfg)["applies"])
+    except Exception:
+        _os_conn = bool(amp1223)
+
+    def _beam_end_resultant(tags):
+        """GOLD-5 (IN_CFS_Ex6): the beam-end connection transfers the member's axial force -- the collector / chord
+        force of the diaphragm load path (IS 1893 7.6.4 load path; india_diaphragm, in the records) or the
+        flexible-deck axial (Table 5(ii)) -- together with the shear: R = sqrt(V^2 + N^2) per combination
+        (concurrent V and N of the same record).  The overstrength (12.2.3 / IS 18168 5.5) rows count where
+        IS 18168 applies (IS 18168 12.2.4.5 / 6.4: collector forces from the overstrength earthquake load) or
+        cfg['collector_basis'] = 'is800_12_2_3'.  Returns (R, combo, V, N, collector?)."""
+        best = (0.0, None, 0.0, 0.0)
+        for t in tags:
+            conn_l = envt[t].get("conn") or {}
+            for lab, r in (envt[t].get("records") or {}).items():
+                if lab in conn_l and not _os_conn:
+                    continue
+                V_, N_ = abs(r[3]), abs(r[0])
+                R_ = math.hypot(V_, N_)
+                if R_ > best[0]:
+                    best = (R_, lab, V_, N_)
+        return best + (any(t in coll_added for t in tags),)
+
+    def _vp_demand(tags, V_env, dem, notes):
+        """The shear-connection demand of a beam group: the envelope shear, or the V + N resultant when the beam end
+        carries axial force (GOLD-5); records the basis in dem / notes.  Returns (demand, label prefix)."""
+        R_, lab_, V_, N_, coll_ = _beam_end_resultant(tags)
+        if N_ <= 1e-6 * max(V_env, 1.0) or R_ <= V_env:
+            return V_env, ""
+        what = "collector / chord" if coll_ else "member"
+        dem.update(P_end_N=round(N_, 1), V_concurrent_N=round(V_, 1), V_P_resultant_N=round(R_, 1),
+                   resultant_combo=lab_, resultant_basis=(
+                       "IS 1893 (Part 1):2016 7.6.4 load path: the %s axial force is transferred through the beam-end "
+                       "connection with the concurrent shear, R = sqrt(V^2 + N^2) per combination (IS 800:2007 10.3 bolts "
+                       "under the resultant; plate / block shear / weld rows checked for R as a shear -- conservative)%s"
+                       % (what, "; overstrength rows included (IS 18168:2023 12.2.4.5 / 6.4 / 5.5%s)"
+                          % (", cfg collector_basis" if amp1223 else "") if _os_conn else "")))
+        notes.append("beam-end connection checked for the V + N resultant %.1f kN (V %.1f kN, %s axial %.1f kN, %s)"
+                     % (R_ / 1e3, V_ / 1e3, what, N_ / 1e3, lab_))
+        return R_, "(V + N resultant) "
+
+    def _conn_group(key, tags):
         kind, sec, role = key
         g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
         conn_max = 0.0
@@ -1121,7 +1295,22 @@ def design_india(name, cfg, outdir):
             for r in (envt[t].get("conn") or {}).values():
                 conn_max = max(conn_max, abs(r[0]))
         checks, notes = [], []
-        if kind == "beam":
+        if kind == "beam" and role == "link":
+            # H39: an EBF link is continuous with the beam outside it (no link-to-column connection, IS 18168 12.3.1);
+            # its shear is not a beam-to-column connection demand
+            ctype = "EBF link (continuous with the beam)"
+            dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1)}
+            lids = {"12.3.1_link_not_at_column", "11.4.1_end_stiffeners", "11.4.2_intermediate_stiffeners"}
+            for t in tags:
+                for c in s12_by_member.get("link-e%d" % t, []):
+                    if c["id"] in lids:
+                        checks.append(_row("EBF link %s: %s" % (c.get("member"), c["id"]), c))
+            if not checks:
+                checks.append(_row("EBF link detailing", {"ok": None, "clause": "IS 18168:2023 11 / 12.3",
+                                                          "reason": "no IS 18168 link checks for this link group"}))
+            notes.append("link continuous with the beam outside the link: no end connection of its own; excluded from "
+                         "the beam-to-column shear demand (H39)")
+        elif kind == "beam":
             ctype = "beam-to-column"
             dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
             sfrs_tags = [t for t in tags if t in sfrs_beams]
@@ -1129,6 +1318,36 @@ def design_india(name, cfg, outdir):
             # pinned at both ends (eave strut / collector of a mixed OMF+OCBF job) takes the shear-connection path (WP6-fix)
             rel0_ = info0.get("beam_rel") or {}
             mf_tags = [t for t in sfrs_tags if (rel0_.get(t) or ("none",))[0] != "both"]
+            comps_ = S12.system_components(cfg.get("system"))
+            if mf_tags and "EBF" in comps_ and not any(c_ in ("SMF", "OMF") for c_ in comps_):
+                # H39: rigid beam-column joints of an EBF get a moment-connection row: IS 18168 12.3.4.4 where a brace /
+                # gusset frames into the joint, otherwise the connection for the end moment of the 5.5 / Table 4
+                # combinations (IS 18168 5.5(d): all connections of the structural system)
+                mids = {"e%d" % t for t in mf_tags}
+                jids = {j["id"] for j in (md.get("joints") or []) if any(b["member_id"] in mids for b in j.get("beams") or [])}
+                worst = {}
+                for jid in jids:
+                    for c in s12_by_member.get(jid, []):
+                        if str(c.get("id", "")).startswith("12.3.4.4"):
+                            w = worst.get(c["id"])
+                            k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                            if w is None or k_ > w[0]:
+                                worst[c["id"]] = (k_, c)
+                for cid, (_, c) in worst.items():
+                    checks.append(_row("IS 18168 12.3.4.4 %s (joint %s)" % (cid, c.get("member")), c))
+                if "12.3.4.4_connection_moment" not in worst:
+                    Mend = max([max(abs(r[4]), abs(r[5])) for t in mf_tags for r in (envt[t].get("records") or {}).values()]
+                               + [0.0])
+                    cn = joint_conn.get(sec) or CD.beam_column_connection(cfg, {"section": sec, "role": "beam"},
+                                                                          S.props(sec), CD._fy(mem_by_id["e%d" % mf_tags[0]],
+                                                                                               S.props(sec))[0])
+                    cap = (cn or {}).get("moment_capacity_Nmm")
+                    checks.append(_row("EBF rigid beam-column moment connection", C_._check(
+                        Mend, cap, clause="IS 18168:2023 5.5(d) / IS 800:2007 10",
+                        cite="rigid EBF beam-column joint (no brace at the joint): connection moment capacity >= the "
+                             "largest end moment of the Table 4 / 5.5 combinations") if cap else {
+                        "ok": None, "clause": "IS 18168:2023 5.5(d) / 12.3.4.4",
+                        "reason": "cfg['connections']['beam_column'] not declared for %s (rigid EBF beam-column joint)" % sec}))
             if mf_tags and G.section12_system(cfg) and S12.normalize_system(cfg.get("system")) in ("SMF", "OMF"):
                 sfrs_tags = mf_tags
                 # moment connection: the per-joint 12.11.2 checks (demand 1.2 Mp, shear) live in capacity_design
@@ -1138,41 +1357,43 @@ def design_india(name, cfg, outdir):
                     for c in s12_by_member.get("e%d" % t, []):
                         if c["id"] in ids:
                             w = worst.get(c["id"])
-                            k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                            k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                             if w is None or k_ > w[0]:
                                 worst[c["id"]] = (k_, c)
+                _mcl = _mf_conn_clause(cfg)
                 for cid, (_, c) in worst.items():
-                    checks.append(_row("IS 800 12.11.2 %s (joint %s)" % (cid, c.get("member")), c))
+                    checks.append(_row(_mf_conn_label(cfg, cid, c), c))
                 cn = joint_conn.get(sec)
                 if cn and cn.get("moment_capacity_Nmm"):
                     dem["M_1p2Mp_Nmm"] = None
                     notes.append("moment capacity %.1f kN-m (%s)" % (cn["moment_capacity_Nmm"] / 1e6, cn.get("type")))
                 if not checks:
-                    checks.append(_row("IS 800 12.11.2 moment connection", {"ok": None, "clause": "IS 800:2007 12.11.2",
+                    checks.append(_row("IS 800 %s moment connection" % _mcl, {"ok": None, "clause": "IS 800:2007 %s" % _mcl,
                                                                             "reason": "no joint checks for this beam group"}))
                 # a moment-frame beam pinned at one end (corner bay whose corner column belongs to the orthogonal
                 # frame): that end is a shear connection under the governing V (WP6-fix)
                 rel_ = info0.get("beam_rel") or {}
                 if any((rel_.get(t) or ("none",))[0] in ("I", "J") for t in sfrs_tags):
-                    r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, g["V"])
+                    Vpin, pfx_ = _vp_demand(tags, g["V"], dem, notes)
+                    r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vpin)
                     if r is None:
                         checks.append(_row("IS 800 10 shear connection (pinned end)", {
                             "ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
                             "reason": "cfg['connections']['beam_shear'] not declared for %s (pinned end of the SMF beam)" % sec}))
                     else:
                         for nm, c in r["checks"].items():
-                            checks.append(_row("pinned-end shear connection: %s" % nm, c))
+                            checks.append(_row("pinned-end shear connection: %s%s" % (pfx_, nm), c))
             else:
-                # braced-bay / gravity beam: shear connection under the governing V (SFRS braced-bay beams: also the
-                # collector axial is carried by the member check; the connection sees V and the 12.2.3 axial)
-                Vd = g["V"]
+                # braced-bay / gravity beam: shear connection under the governing V; a beam end carrying axial force
+                # (collector / chord / flexible deck) is checked for the V + N resultant per combination (GOLD-5)
+                Vd, pfx_ = _vp_demand(tags, g["V"], dem, notes)
                 r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vd)
                 if r is None:
                     checks.append(_row("IS 800 10 shear connection", {"ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
                                                                        "reason": "cfg['connections']['beam_shear'] not declared for %s" % sec}))
                 else:
                     for nm, c in r["checks"].items():
-                        checks.append(_row("beam-end shear connection: %s" % nm, c))
+                        checks.append(_row("beam-end shear connection: %s%s" % (pfx_, nm), c))
                     sp = CD.spec_for(cfg, "beam_shear", sec, "beam") or {}
                     if sp.get("bolts") and (sfrs_tags or sp.get("bolt_type")):
                         sl = CD.hsfg_slip_checks(sp.get("bolts"), sp.get("bolt_type"),
@@ -1206,7 +1427,7 @@ def design_india(name, cfg, outdir):
                 for c in s12_by_member.get("e%d" % t, []):
                     if c["id"] in ids:
                         w = worst.get(c["id"])
-                        k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                        k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                         if w is None or k_ > w[0]:
                             worst[c["id"]] = (k_, c)
             for cid, (_, c) in worst.items():
@@ -1232,7 +1453,7 @@ def design_india(name, cfg, outdir):
             for t in base_tags:
                 for c in s12_by_member.get("base-e%d" % t, []):
                     w = bchecks.get(c["id"])
-                    k_ = (c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
+                    k_ = (c.get("ok") is False, c.get("ok") is None, c.get("dc") if c.get("dc") is not None else -1)
                     if w is None or k_ > w[0]:
                         bchecks[c["id"]] = (k_, c)
             for cid, (_, c) in bchecks.items():
@@ -1249,36 +1470,109 @@ def design_india(name, cfg, outdir):
             if upper:
                 m0 = mem_by_id["e%d" % upper[0]]
                 p0 = S.props(sec); fy0 = CD._fy(m0, p0)[0]
-                recs_u = {}
+                # H10: every (combination, element) record is one concurrent (P, Mz, My) case (was the largest |N|
+                # per label); H41: 5.1.2 tie force = largest factored DL+LL floor reaction at the splice level
+                # (N of the column below minus N of this column), clear height and the smaller connected member
+                recs_u, tie_N, Hc_u, Zlow = {}, 0.0, None, None
+                grav = lambda l: not any(x in l for x in ("EQ", "W_", "N_", "SLS", "TS:", "[CL"))
                 for t in upper:
                     for l, r in (envt[t].get("records") or {}).items():
-                        if l not in recs_u or abs(r[0]) > abs(recs_u[l][0]):
-                            recs_u[l] = r
-                spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"))
+                        recs_u["%s@e%d" % (l, t)] = r
+                    n1_, n2_ = reg[t][2], reg[t][3]
+                    below = [tb for tb in reg if reg[tb][0] == "col" and reg[tb][3] == n1_]
+                    for tb in below:
+                        rb, ru = envt[tb].get("records") or {}, envt[t].get("records") or {}
+                        for l in rb:
+                            if l in ru and grav(l):
+                                tie_N = max(tie_N, abs(rb[l][0]) - abs(ru[l][0]))
+                        try:
+                            zb = S.props(reg[tb][1])["Zx"]
+                            Zlow = zb if Zlow is None else min(Zlow, zb)
+                        except Exception:
+                            pass
+                    dbeam = lambda nd: max([S.props(reg[tt][1])["d"] for tt in reg if reg[tt][0] == "beam"
+                                            and nd in (reg[tt][2], reg[tt][3])] or [0.0])
+                    hc = length[t] - 0.5 * (dbeam(n1_) + dbeam(n2_))
+                    Hc_u = hc if Hc_u is None else min(Hc_u, hc)
+                spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"), tags_of=tagof,
+                                       seismic_cfg=s12_cfg, tie_force_N=tie_N, Hc_mm=Hc_u, Zx_lower_mm3=Zlow)
                 if spl is None:
                     checks.append(_row("IS 800 12.5.2 column splice", {"ok": None, "clause": "IS 800:2007 12.5.2 / 10",
                                                                         "reason": "cfg['connections']['column_splice'] not declared for %s" % sec}))
                 else:
                     for nm, cc in spl["checks"].items():
                         checks.append(_row("column splice: %s" % nm, cc))
-        dcs = [c["dc"] for c in checks if isinstance(c.get("dc"), (int, float))]
-        pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
-                                   "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
-                                   "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
-                                                   "india_connection_design; declared geometry in cfg['connections'])",
-                                   "checks": checks, "DC": max(dcs) if dcs else None,
-                                   "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": notes})
+        # H31: gates (geometry fits, boolean detailing) carry no D/C and never govern; the connection record carries
+        # the value / limit / clause of its governing strength check
+        strength = [c for c in checks if isinstance(c.get("dc"), (int, float)) and not isinstance(c.get("dc"), bool)
+                    and c.get("gate") is not True]
+        gov = max(strength, key=lambda c: c["dc"]) if strength else None
+        crec = {"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec, "demand": dem,
+                "inputs": dict(dem, V_N=dem.get("V_N", dem.get("axial_N"))),
+                "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12 (india_connections, "
+                                "india_connection_design; declared geometry in cfg['connections'])",
+                "checks": checks, "DC": gov["dc"] if gov else None,
+                "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": gov.get("clause") if gov else None, "notes": notes}
+        if gov is not None:
+            crec["governing_check"] = gov.get("name")
+            crec["clause"] = gov.get("clause")
+            gv, gl = gov.get("value"), gov.get("limit")
+            if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in (gv, gl)) and gl and \
+                    abs(abs(gv) / gl - gov["dc"]) <= 0.02 * max(gov["dc"], 1e-3) + 1e-4:
+                crec["value"], crec["limit"] = gv, gl
+        pkg["connections"].append(crec)
+
+    for key, tags in sorted(by.items()):
+        # H37: one failing connection group becomes a found:false row, never a lost package
+        try:
+            _conn_group(key, tags)
+        except Exception as ex:
+            kind, sec, role = key
+            err = "%s: %s" % (type(ex).__name__, ex)
+            pkg["connections"].append({"id": "conn-%s-%s" % (role, sec), "type": kind, "section": sec, "demand": {},
+                                       "inputs": {}, "design_basis": "IS 800:2007 Section 10 / 7.4 / Section 12",
+                                       "checks": [{"name": "connection design (%s)" % kind, "value": None, "limit": None,
+                                                   "dc": None, "ok": None, "found": False, "clause": "IS 800:2007 10",
+                                                   "cite": "connection row build failed", "reason": err,
+                                                   "source": CD.SRC}],
+                                       "DC": None, "found": False, "error": err,
+                                       "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": [err]})
 
     # ---- composite floors (WP2.9) ----
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()
     if "composite" in _blob or cfg.get("composite") or cfg.get("composite_scope"):
         try:
-            _bdirs = {}
+            # H40: construction stage per floor-beam element and direction (role 'floor' only), with the bays
+            # present beside each beam (edge beam: half a bay) and the element's own grade
+            _bel = []
             for (t_, k_, s_, n1_, n2_) in info0["ele"]:
                 if k_ == "beam":
                     c1_, c2_ = ops.nodeCoord(n1_), ops.nodeCoord(n2_)
-                    _bdirs.setdefault(s_, set()).add("X" if abs(c2_[0] - c1_[0]) >= abs(c2_[1] - c1_[1]) else "Y")
-            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"], beam_dirs=_bdirs),
+                    _bel.append({"tag": t_, "section": s_, "role": role_of.get(t_),
+                                 "dir": "X" if abs(c2_[0] - c1_[0]) >= abs(c2_[1] - c1_[1]) else "Y",
+                                 "L_mm": length[t_], "c1": c1_, "c2": c2_,
+                                 "grade": _member_input_record(cfg, t_, "beam", s_, n1_, n2_, length[t_],
+                                                               role_of.get(t_)).get("grade")})
+            try:
+                _dmax = 1.5 * max(float(cfg["SX"]), float(cfg["SY"]))
+            except Exception:
+                _dmax = float("inf")
+            for e_ in _bel:
+                ax_, pr_ = (0, 1) if e_["dir"] == "X" else (1, 0)
+                lo_, hi_ = sorted((e_["c1"][ax_], e_["c2"][ax_]))
+                sides_ = set()
+                for o_ in _bel:
+                    if o_ is e_ or o_["dir"] != e_["dir"] or abs(o_["c1"][2] - e_["c1"][2]) > 1.0:
+                        continue
+                    olo_, ohi_ = sorted((o_["c1"][ax_], o_["c2"][ax_]))
+                    if min(hi_, ohi_) - max(lo_, olo_) <= 1.0:
+                        continue
+                    dp_ = o_["c1"][pr_] - e_["c1"][pr_]
+                    if 1.0 < abs(dp_) <= _dmax:
+                        sides_.add(1 if dp_ > 0 else -1)
+                e_["nb"] = len(sides_)
+            _bel = [{k: v for k, v in e_.items() if k not in ("c1", "c2")} for e_ in _bel]
+            pkg["composite_design"] = {"status": "evaluated", "chI_worksheet": CD.composite_design_record(cfg, pkg["members"], beam_elems=_bel),
                                        "note": "WP2.9: IS 11384 not in the corpus; scope per COMPOSITE_INDIA.md"}
             pkg["composite_design"]["blocks_complete"] = pkg["composite_design"]["chI_worksheet"].get("blocks_complete")
         except Exception as ex:
@@ -1308,6 +1602,81 @@ def design_india(name, cfg, outdir):
             pkg["drift_table"].append({"storey": i + 1, "dir": d, "drift": round(x, 6), "limit": lim,
                                        "value": x, "dc": x / lim if lim else None, "ok": x <= lim,
                                        "clause": "IS 1893 7.11.1.1 (edges, 7.8.2 eccentricity, gamma 1.0)"})
+    flex_d764 = None
+    if flex_on:
+        # X01: record of the Table 5(ii) flexible-diaphragm run (periods, base shears, envelope ratios, drift, 7.6.4)
+        frec = {"trigger": flex_why, "clause": FD.T5II_CLAUSE + "; 7.7.5; 7.7.3.1; 7.6.4; 7.11.1.1",
+                "cite": FD.T5II_QUOTE}
+        if flex_note:
+            frec["method_note"] = flex_note
+        if flex is None:
+            sa["flexible_diaphragm_engine_error"] = flex_err
+            frec.update(status="not run", error=flex_err)
+        else:
+            st_ = flex["stiffness"]
+            frec.update(status="run", basis="engine",
+                        model=FD.MODEL_TEXT % ("2 x 2" if st_["mesh"] == 2 else "1 x 1"),
+                        diaphragm_stiffness=_jsonable({k: v for k, v in st_.items() if k != "void_cells"}),
+                        deck=_jsonable(flex["deck"]), n_modes=len(flex["modes"]),
+                        periods_s=[round(m_["T"], 4) for m_ in flex["modes"][:12]],
+                        periods_rigid_s=[round(m_["T"], 4) for m_ in (rsa or {}).get("modes", [])[:12]],
+                        modes=[{k: (round(v, 5) if isinstance(v, float) else v) for k, v in m_.items()}
+                               for m_ in flex["modes"][:15]],
+                        base_shear={d: {"VB_rsa_kN": round(flex[d]["VB_rsa_N"] / 1e3, 2),
+                                        "VBbar_kN": round(flex[d]["VBbar_N"] / 1e3, 2),
+                                        "scale": round(flex[d]["scale"], 4),
+                                        "VB_scaled_kN": round(flex[d]["VB_scaled_N"] / 1e3, 2),
+                                        "rigid_VB_rsa_kN": round(rsa[d]["VB_rsa_N"] / 1e3, 2),
+                                        "mass_participation": round(flex[d]["mass_participation"], 4)}
+                                    for d in ("X", "Y")})
+            chks = []
+            for d in ("X", "Y"):
+                mp_ = flex[d]["mass_participation"]
+                chks.append({"name": "7.7.5.2 modal mass %s (flexible run)" % d, "value": round(mp_, 4), "limit": 0.90,
+                             "dc": round(0.90 / mp_, 4) if mp_ > 0 else None, "ok": mp_ >= 0.90, "sense": ">=",
+                             "clause": "IS 1893 7.7.5.2", "cite": "sum of modal masses >= 90 % of the seismic mass",
+                             "source": "india_flexible_diaphragm.rsa_flexible"})
+                vs, vb = flex[d]["VB_scaled_N"], flex[d]["VBbar_N"]
+                chks.append({"name": "7.7.3.1 scaled base shear %s (flexible run)" % d, "value": round(vs / 1e3, 2),
+                             "limit": round(vb / 1e3, 2), "dc": round(vb / vs, 4) if vs > 0 else None,
+                             "ok": vs >= vb * 0.999, "sense": ">=", "clause": "IS 1893 7.7.3.1",
+                             "cite": "force responses x V-bar_B / VB when VB < V-bar_B",
+                             "source": "india_flexible_diaphragm.rsa_flexible"})
+            frec["checks"] = chks
+            if flex_env is not None:
+                rofs = {frozenset((reg[t][2], reg[t][3])): role_of[t] for t in reg}
+                frec["envelope"] = {"method": FD.ENVELOPE_TEXT, "n_cases": flex_env["n_cases"],
+                                    "n_records": flex_env["n_records"],
+                                    "n_components_flexible_governs_by_1pct": flex_env["n_flexible_governs"],
+                                    "ratio_flexible_over_rigid_by_group": FD.group_ratios(
+                                        flex_env["per_rigid"], flex_env["per_flex"], rofs, list(flex_env["per_flex"]))}
+            try:
+                sup = set(info0.get("moment_nodes") or set())
+                for (t_, k_, s_, n1_, n2_) in info0["ele"]:
+                    if k_ == "brace":
+                        sup.update((n1_, n2_))
+                fdr = FD.drift_and_764(cfg, run.get("eccentricity"), support_nodes=sup or None)
+                flex_d764 = fdr
+                frec["drift"] = {"basis": fdr["basis"], "flexible": _jsonable(fdr["drift"]),
+                                 "rigid": {d: _jsonable((run.get("drift") or {}).get(d, {}).get("drift"))
+                                           for d in fdr["drift"]}}
+                for row in pkg["drift_table"]:
+                    fv = (fdr["drift"].get(row["dir"]) or [None] * 999)[row["storey"] - 1]
+                    row["drift_rigid"] = row["drift"]
+                    row["drift_flexible"] = round(fv, 6) if fv is not None else None
+                    if fv is not None and fv > row["value"]:
+                        row.update(drift=round(fv, 6), value=fv, dc=fv / row["limit"] if row["limit"] else None,
+                                   ok=fv <= row["limit"], governs="flexible-diaphragm run")
+                    row["clause"] += "; worse of the rigid and flexible-diaphragm runs (Table 5(ii))"
+            except Exception as ex:
+                frec["drift_error"] = "%s: %s" % (type(ex).__name__, ex)
+                chks.append({"name": "7.11.1.1 drift (flexible run)", "value": None, "limit": None, "dc": None,
+                             "ok": None, "clause": "IS 1893 7.11.1.1 / Table 5(ii)", "cite": "flexible-run drift",
+                             "reason": frec["drift_error"], "source": "india_flexible_diaphragm.drift_and_764"})
+            sa["flexible_diaphragm_run"] = True
+            sa["flexible_diaphragm_basis"] = "engine"
+        sa["flexible_diaphragm"] = _jsonable(frec)
+    pkg["unit_displacements"] = _unit_displacements(cfg, run)       # X04: per-level input of the multi-unit 7.11.3 driver
     pkg["irregularity"] = run.get("irregularity") or {"error": "irregularity screens not run"}
     # IS 1893 7.6.4 diaphragm classification (rigid: 7.8.2 torsion in the model; flexible: tributary distribution)
     try:
@@ -1319,11 +1688,35 @@ def design_india(name, cfg, outdir):
         rec764 = DIA.classify_7_6_4(**d764)
         rec764["model"] = "rigid diaphragm constraint + 7.8.2 eccentricity" if not rec764.get("flexible") else \
             "tributary-width storey-shear distribution to the lateral lines (no diaphragm torsion)"
-        if rec764.get("flexible"):
+        _flv = DIA.flexible_levels(cfg)
+        if cfg.get("diaphragm_by_level"):
+            # GOLD-COLL: per-level labels (e.g. a composite podium rigid under flexible CFS floors)
+            rec764["declared_by_level"] = {str(k): v for k, v in sorted(DIA.diaphragm_labels(cfg)[0].items())}
+            if _flv and not rec764.get("flexible"):
+                rec764["model"] += ("; levels %s declared flexible: tributary-width distribution to the lateral "
+                                    "lines" % sorted(_flv))
+        if rec764.get("flexible") or _flv:
             rec764["line_shears"] = _jsonable(DIA.flexible_diaphragm_line_shears(cfg, "EQ"))
         pkg["diaphragm_7_6_4"] = rec764
     except Exception as ex:
         pkg["diaphragm_7_6_4"] = {"clause": "IS 1893 (Part 1):2016 7.6.4", "ok": None, "error": str(ex)}
+    if flex_d764:
+        # X01: per-level in-plane deformation from the chord vs the average displacement of the entire diaphragm
+        # (7.6.4 literal; the storey-drift ratio is informative only) measured on the flexible-diaphragm run (record)
+        pkg["diaphragm_7_6_4"]["flexible_run"] = {"levels": _jsonable(flex_d764["d764"]), "cite": FD.Q_7_6_4,
+                                                  "basis": flex_d764["basis_7_6_4"],
+                                                  "ratio_basis": FD.RATIO_BASIS, "fig6_note": FD.FIG6_NOTE,
+                                                  "source": "india_flexible_diaphragm.drift_and_764 (Table 5(ii) run)"}
+    # AUD-3: the 7.6.4 record reports what the analysis found (flexible when any level's literal ratio > 1.2), the declared
+    # label kept beside it; a contradiction is a non-blocking warning (consistency.package_warnings)
+    try:
+        import india_diaphragm as DIA
+        DIA.reconcile_7_6_4(pkg["diaphragm_7_6_4"], (flex_d764 or {}).get("d764"),
+                            declared=str(cfg.get("diaphragm") or "rigid").lower(),
+                            declared_by_level=(DIA.diaphragm_labels(cfg)[0] if cfg.get("diaphragm_by_level")
+                                               else None))
+    except Exception as ex:
+        pkg["diaphragm_7_6_4"]["reconcile_error"] = str(ex)
     # IS 875 (Part 4):2021 4.4 ponding screen for long-span flat roofs (WP6-fix): the job declares the roof slope,
     # the governing span and the mid-span deflection under the impounded rain / snow load (transparent formula
     # in cfg['ponding']); india_loads.ponding_screen_4_4 records the engineering-practice screen and its verdict
@@ -1337,16 +1730,37 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["ponding"] = {"clause": "IS 875 (Part 4):2021 4.4", "ok": None, "error": str(ex)}
     if (pkg["irregularity"].get("reentrant") or {}).get("irregular"):
-        pkg["seismic_analysis"]["reentrant_flexible_required"] = True
-        pkg["seismic_analysis"]["flexible_diaphragm_run"] = bool(cfg.get("_flexible_diaphragm_run"))
+        _sa = pkg["seismic_analysis"]
+        _sa["reentrant_flexible_required"] = True
+        # H01: never from a cfg flag.  True only when (a) an engine flexible-diaphragm run recorded it in
+        # pkg['seismic_analysis'] (flexible_diaphragm_run True + basis 'engine', set by the X01 run above) or (b) a
+        # complete EOR record cfg['flexible_diaphragm_eor'] = {analysis_ref, results, source, cite}.
+        if not (_sa.get("flexible_diaphragm_run") is True and _sa.get("flexible_diaphragm_basis") == "engine"):
+            _feor, _fmiss = G.flexible_diaphragm_eor(cfg)
+            _sa["flexible_diaphragm_run"] = _feor is not None
+            if _feor is not None:
+                _sa["flexible_diaphragm_basis"] = "EOR-documented"
+                _sa["flexible_diaphragm_eor"] = _jsonable(_feor)
+            else:
+                _sa.pop("flexible_diaphragm_basis", None)
+                if _fmiss:
+                    _sa["flexible_diaphragm_eor_missing"] = _fmiss
+            if cfg.get("_flexible_diaphragm_run"):
+                _sa["flexible_diaphragm_note"] = ("cfg['_flexible_diaphragm_run'] is not evidence of the Table 5(ii) "
+                                                  "analysis and is ignored (H01)")
     plan = cfg.get("load_plan") or {}
     ss = plan.get("seismic_summary") or {}
     pkg["seismic_calc"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "Z": ss.get("Z"), "I": G.importance_of(cfg),
                            "zone": G.zone_of(cfg), "W_engine_kN": round(sum(E.floor_w(cfg, k) for k in range(1, NFlev + 1)) / 1e3, 1),
                            "W_design_kN": ss.get("W_kN"),
                            "W_by_floor_engine_kN": [round(E.floor_w(cfg, k) / 1e3, 1) for k in range(1, NFlev + 1)]}
-    pkg["load_plan"] = {"seismic_summary": ss, "retrieval": plan.get("retrieval"),
-                        "story_forces_units": plan.get("story_forces_units")}
+    # H43: the whole load plan (wind / gravity summaries, member_wind, retrieval, ...) minus the bulky story-force arrays
+    pkg["load_plan"] = _jsonable({k: v for k, v in plan.items() if k != "story_forces"})
+    pkg["load_plan"]["seismic_summary"] = ss
+    pkg["load_plan"]["story_forces_keys"] = sorted((plan.get("story_forces") or {}).keys()) \
+        if isinstance(plan.get("story_forces"), dict) else None
+    if cfg.get("vibration_screen"):
+        pkg["vibration_screen"] = _jsonable(cfg["vibration_screen"])     # H31: structured footfall screen record
     pkg["zero_demand_elements"] = zero
     pkg["beam_deflection"] = run.get("beam_deflection_rows")
     pkg["gates"] = {k: bool(v) for k, v in (run.get("chk") or {}).items()}
@@ -1360,9 +1774,23 @@ def design_india(name, cfg, outdir):
         except Exception as ex:
             pkg["gantry_girder"] = {"error": str(ex), "checks": [], "DC": None}
         pkg["crane_sway"] = _jsonable(run.get("crane_sway"))
-        pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway (WP6-fix: recorded)
+    pkg["wind_serviceability"] = _jsonable(run.get("wind_serviceability"))     # IS 800 Table 6 wind sway, every job (H43)
+    if (sinfo or {}).get("erection"):          # X07: erection-sequence assumption (braces after the dead load)
+        pkg["erection_sequence"] = _jsonable(sinfo["erection"])
+    if ((plan.get("wind_summary") or {}).get("across_wind")):
+        try:                                   # X05: IS 875-3 10.3 across-wind patterns + 10.4 rows actually used
+            import india_combos as _IC
+            _awp = _IC.across_wind_patterns(plan, cfg)
+            pkg["across_wind"] = _jsonable({"evaluated": _awp["evaluated"], "reason": _awp.get("reason"),
+                                            "patterns": _awp["summary"], "resolved": _awp.get("resolved"),
+                                            "n_combinations": sum(1 for c in cases if "across_wind" in
+                                                                  ((getattr(c, "meta", {}) or {}).get("tags") or [])),
+                                            "cite": _IC.ACROSS_10_4_CITE})
+        except Exception as ex:
+            pkg["across_wind"] = {"evaluated": None, "error": str(ex)}
     pkg["_coll_added"] = {str(t): round(v, 1) for t, v in coll_added.items()}
     pkg["_coll_error"] = coll_error; pkg["_coll_amp"] = amp1223
+    pkg["_coll_x01"] = per_flex is not None
     for hook in (_collector_demands, _secondary_member_demands, _deformation_compatibility):
         try:
             hook(cfg, pkg, run, envt, reg)
@@ -1371,8 +1799,7 @@ def design_india(name, cfg, outdir):
     pkg["provenance"] = provenance_record(job_dir)
     json.dump(cfg_snapshot(cfg), open(os.path.join(outdir, "cfg_snapshot.json"), "w"), indent=1, default=str)
     st = G.design_status(cfg, pkg, job_dir=job_dir)
-    pkg["design_status"] = {"status": st["status"], "n_reasons": len(st["reasons"]), "reasons": st["reasons"][:200],
-                            "authority": st["authority"]}
+    pkg["design_status"] = G.status_record(st)      # RR-BUG-4: ordered by class, element rows grouped, no class dropped
     json.dump(_jsonable(pkg), open(os.path.join(outdir, "calc_package.json"), "w"), indent=1)
 
     # ---- member_demands.md / connection_demands.csv / design_report.md ----
@@ -1402,16 +1829,72 @@ def design_india(name, cfg, outdir):
     return {"members": len(reg), "combos": len(cases), "outdir": outdir, "status": st["status"]}
 
 
+def _mf_conn_clause(cfg):
+    """H44 (HR-B-14): moment-frame connection clause -- OMF IS 800 12.10.2, SMF 12.11.2."""
+    import india_is800_s12 as _S12
+    return "12.10.2" if _S12.normalize_system(cfg.get("system")) == "OMF" else "12.11.2"
+
+
+def _mf_conn_label(cfg, cid, c):
+    """Connection row name built from the check's own clause (fallback: the system's 12.10.2 / 12.11.2)."""
+    lab = str(c.get("clause") or ("IS 800:2007 " + _mf_conn_clause(cfg))).replace("IS 800:2007", "IS 800").strip()
+    return "%s %s (joint %s)" % (lab, cid, c.get("member"))
+
+
+def _governing_result(res):
+    """H43 (HR-C-08): the member result without the per-combination list, but keeping the governing combination's
+    check record (incl. the LTB Md / chi_LT / lambda_LT that live only in per_combo)."""
+    out = {k: v for k, v in res.items() if k != "per_combo"}
+    pcs = res.get("per_combo")
+    gc = res.get("interaction_governing_combo") or res.get("governing_combo")   # RR-BUG-5: the 9.3 record
+    gov = None
+    if isinstance(pcs, dict):
+        gov = pcs.get(gc)
+        if gov is not None and not isinstance(gov, dict):
+            gov = None
+        if gov is not None:
+            gov = dict(gov, combo=gc)
+    elif isinstance(pcs, list):
+        cand = [p for p in pcs if isinstance(p, dict)]
+        gov = next((p for p in cand if gc is not None and (p.get("combo") == gc or p.get("label") == gc)), None)
+        if gov is None and cand:
+            gov = max(cand, key=lambda p: p.get("dc") if isinstance(p.get("dc"), (int, float)) else -1)
+    if gov is not None:
+        out["governing_combo_record"] = gov
+        ltb = [c for c in (gov.get("checks") or []) if isinstance(c, dict) and c.get("Mdz_LTB_Nmm") is not None]
+        if ltb:
+            g = max(ltb, key=lambda c: c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1)
+            out["governing_ltb"] = {k: g.get(k) for k in ("moment_sign", "LLT_mm", "Mdz_LTB_Nmm", "chi_LT",
+                                                         "lambda_LT", "dc")}
+            out["governing_ltb"]["combo"] = gov.get("combo")
+            out["governing_ltb"]["clause"] = "IS 800:2007 8.2.2 (LTB) in the 9.3 interaction"
+    return _jsonable(out)
+
+
 def _collector_demands(cfg, pkg, run, envt, reg):
     """WP2.6: collector / chord rows (india_diaphragm); the forces were already added to the beam
     records before the member checks."""
     from india_diaphragm import collector_demands
-    rows = collector_demands(cfg, run, reg)
+    rows = collector_demands(cfg, run, reg, x01_flexible=bool(pkg.get("_coll_x01")))
     pkg["collectors"] = {"rows": rows, "applied_to_member_checks": bool(pkg.get("_coll_added")),
                          "n_beams_with_axial": len(pkg.get("_coll_added") or {}),
                          "basis_12_2_3": pkg.get("_coll_amp"), "error": pkg.get("_coll_error"),
                          "cite": "india_diaphragm (equilibrium of the analysed model); IS 800 9.3"}
-    for k in ("_coll_added", "_coll_error", "_coll_amp"):
+    try:                                    # GOLD-COLL: per-level diaphragm labels, flexible-collector basis
+        import india_diaphragm as DIA
+        labels, _errs = DIA.diaphragm_labels(cfg)
+        flex = sorted(k for k, v in labels.items() if v == "flexible")
+        if flex:
+            pkg["collectors"].update(
+                flexible_levels=flex, flexible_basis=DIA.CITE_FLEX_COLL,
+                upper_bound_lines=[r for r in rows if r.get("upper_bound")] and sorted(
+                    {(r["dir"], r["level"], r["line"]) for r in rows if r.get("upper_bound")}),
+                x01_flexible_case=(DIA.X01_COLLECTOR_NOTE if pkg.get("_coll_x01") else None))
+        if cfg.get("diaphragm_by_level"):
+            pkg["collectors"]["diaphragm_by_level"] = {str(k): v for k, v in sorted(labels.items())}
+    except Exception as ex:
+        pkg["collectors"]["labels_error"] = str(ex)
+    for k in ("_coll_added", "_coll_error", "_coll_amp", "_coll_x01"):
         pkg.pop(k, None)
 
 
@@ -1767,6 +2250,51 @@ def _deformation_compatibility(cfg, pkg, run, envt, reg):
     pkg["deformation_compatibility"] = out
 
 
+def _separation_D1(u, disp_max):
+    """H45 (HR-D-13): D1 for 7.11.3.  With same_floor_levels the (R1 D1 + R2 D2)/2 form compares the two units at a
+    matching floor level: D1 is this unit's displacement at that level -- adjacent_units[].level (1-based; e.g. the
+    lower unit's roof) or, when absent, min(this unit's levels, adjacent_units[].n_levels).  Otherwise (or when no
+    level can be identified) the largest displacement over all levels (conservative).  Returns (D1, basis, level)."""
+    dm = [float(x or 0.0) for x in (disp_max or [0.0])] or [0.0]
+    if u.get("same_floor_levels"):
+        lev = u.get("level", u.get("matching_level"))
+        if lev is None and u.get("n_levels") is not None:
+            lev = min(len(dm), int(u["n_levels"]))
+        try:
+            lev = int(lev) if lev is not None else None
+        except (TypeError, ValueError):
+            lev = None
+        if lev is not None and 1 <= lev <= len(dm):
+            return dm[lev - 1], "displacement at the matching level %d (same_floor_levels)" % lev, lev
+        return max(dm), "max over levels: declare adjacent_units[].level (or n_levels) for the matching level", None
+    return max(dm), "max over levels (R x (D1 + D2))", None
+
+
+def _unit_displacements(cfg, run):
+    """X04 (HR-D-13): per direction, the 7.11.1 storey displacement of every level (the larger of the two extreme plan
+    edges, lateral part only, of the governing drift run: design lateral force, gamma 1.0, 7.8.2 eccentricity) with the
+    level elevations above the base and the R of that direction -- what multi_unit.design_units reads to compute the
+    IS 1893 7.11.3 separation between seismically separated units of one job."""
+    out = {}
+    try:
+        prm = E.india_seismic_params(cfg)
+    except Exception:
+        prm = {}
+    for d, rec in ((run or {}).get("drift") or {}).items():
+        hs = [float(h) for h in (rec.get("heights") or cfg.get("heights") or [])]
+        z, acc = [], 0.0
+        for h in hs:
+            acc += h
+            z.append(acc)
+        R = prm.get("R_" + d.lower(), prm.get("R"))
+        out[d] = {"disp_max_mm": [float(x) for x in (rec.get("disp_max") or [])], "z_mm": z,
+                  "R": float(R) if R is not None else None,
+                  "basis": "IS 1893 7.11.1: larger extreme-edge lateral displacement per level, design lateral force "
+                           "(gamma 1.0) with the 7.8.2 eccentricity, governing drift run (%s %s)"
+                           % (rec.get("variant") or "no ecc.", rec.get("sign") or "")}
+    return out
+
+
 def _separation_7_11_3(cfg, run, R, out):
     """IS 1893 7.11.3 separation from the declared adjacent units: R (D1 + D2) (or (R1 D1 + R2 D2)/2 at matching floor
     levels, Amd 1); D1 = this unit's largest edge displacement in the joint direction (7.11.1 drift run)."""
@@ -1777,12 +2305,14 @@ def _separation_7_11_3(cfg, run, R, out):
     dr = run.get("drift") or {}
     for u in sep:
         d = u.get("direction", "X")
-        D1 = max((dr.get(d) or {}).get("disp_max") or [0.0])
+        dm = list((dr.get(d) or {}).get("disp_max") or [0.0])
+        D1, D1_basis, lev = _separation_D1(u, dm)
         r_ = IS.separation_required(float(R), D1, float(u.get("R2", R)), float(u.get("delta2_mm", 0.0)),
                                     bool(u.get("same_floor_levels")))
         gap = u.get("gap_mm")
         out.setdefault("separation", []).append({"unit": u.get("id"), "value": r_["required_mm"], "limit": gap,
-                                                 "D1_mm": D1, "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
+                                                 "D1_mm": D1, "D1_basis": D1_basis, "level": lev,
+                                                 "delta2_mm": u.get("delta2_mm"), "R1": R, "R2": u.get("R2", R),
                                                  "dc": (r_["required_mm"] / gap) if gap else None,
                                                  "ok": (gap is not None and r_["required_mm"] <= gap),
                                                  "clause": "IS 1893 7.11.3", "cite": r_["cite"]})

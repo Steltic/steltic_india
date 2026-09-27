@@ -1,8 +1,10 @@
 IN_Ex10 — 18-storey slender office tower, special concentrically braced frames (SCBF, sole lateral system), Noida
 
 Location: Noida (NCR) — not listed in IS 1893 (Part 1):2016 Annex E; Zone IV read from Fig. 1 at the site
-  (record as derived_from_map; Delhi, 20 km, is Annex E Zone IV), Z 0.24; soil medium (Type II).
-Occupancy: office, 18 x 486 m2 = 8,748 m2 (> 2,000 m2) -> importance factor I = 1.2 (Table 8 (ii)).
+  at 28.54 N, 77.39 E (zone_source = 'derived_from_map' with lat / long; Delhi, 20 km, is Annex E Zone IV), Z 0.24;
+  soil medium (Type II).
+Occupancy: office, 18 x 486 m2 = 8,748 m2 -> importance factor I = 1.2 by owner ruling D8 (area > 2,000 m2 as the
+  proxy for the Table 8 (ii) '> 200 persons'; persons not stated).
 Lateral system: special concentrically braced frames as the ONLY designated system (IS 1893 Table 9 (ii)(b),
   R = 4.5), IS 800 12.8 with IS 18168:2023 (mandatory in Zone IV, cl. 1.2). IS 18168 1.3: an SMRF is not
   permitted in Zone IV for a building >= 15 m (H = 59.8 m), so no moment frame is claimed and no dual-system
@@ -17,11 +19,16 @@ Gravity (IS 875 Part 1 / Part 2): floor dead 3.0 kN/m2, roof dead 2.8 kN/m2; imp
   office without separate storage) + 1.0 kN/m2 partition allowance (3.1.2); roof imposed 0.75 kN/m2 (Table 2);
   IS 875-2 3.2.1 imposed-load reduction for columns.
 Seismic weight: full dead + self-weight + partitions (7.3.6) + 50 % of the imposed load (Table 10).
-Wind (IS 875 Part 3:2015): Vb = 47 m/s (Annex A: Delhi; Noida is not listed - nearest listed city, same
-  isotach on Fig. 1); terrain category 3; k1 1.0, k3 1.0; outside the 60 km cyclone belt -> k4 = 1.0, Kd = 0.9;
+Wind (IS 875 Part 3:2015): Noida is not in Annex A (the corpus answers not_tabulated) -> Vb = 47 m/s from IS 875-3
+  Fig. 1 at the site (Vb_source = 'derived_from_map', lat / long above; VERIFY), or as the disclosed site proxy of
+  ruling R5 (Vb_source = 'site_proxy', proxy_town 'Delhi', distance_km 20, basis 'same isotach on Fig. 1',
+  verify: True); terrain category 3; k1 1.0, k3 1.0; outside the 60 km cyclone belt -> k4 = 1.0, Kd = 0.9;
   Ka per Table 4 (7.2.2.1); Table 5 Cpe; gust factor (10.2) - the first-mode frequency of a 60 m braced
   tower is expected below 1 Hz (9.1), so both directions use the dynamic method; check both wind and
-  earthquake - neither is omitted for a tall slender building; across-wind (10.3) declared.
+  earthquake - neither is omitted for a tall slender building; across-wind (10.3): declare wind_summary.across_wind
+  with a numeric result (found: true + Mc_kNm, or
+  Mc_kNm_X / Mc_kNm_Y) or the Cfs record (EOR reading of Fig. 10 / 11 with source and cite: Cfs, k, beta, fc_hz)
+  from which the engine computes Mc and adds the W_X_across / W_Y_across cases; without it the job stays PARTIAL (R10).
 Analysis: response spectrum (7.7.1), CQC, scaled to V-bar_B (7.7.3.1), 7.8.2 design eccentricity; storey drift
   0.004 h (7.11.1.1); Amd 2 Table 5/6 irregularity screens (torsion, slenderness); IS 800 Table 4 + 12.2.3
   (= IS 18168 5.5) combinations; P-Delta included (IS 800 4.4.3.1 sway frames).

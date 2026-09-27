@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from _ex1_fixture import ex1_cfg, ex1_cfg_is
+from _ex1_fixture import ex1_cfg, ex1_cfg_is, stage_ex1_rag
 
 import engine3d as E
 import india_seismic as IS
@@ -78,6 +78,7 @@ def ex1_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is()
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_core"))              # H30: stored rag/ hits
     out = P.design_and_report("IN_Ex1_core", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
@@ -107,10 +108,11 @@ def test_ex1_generated_combinations_and_rsa(ex1_job):
 
 def test_ex1_demands(ex1_job):
     _, _, pkg = ex1_job
-    floor = next(m for m in pkg["members"] if m["inputs"]["role"] == "floor")
-    assert floor["inputs"]["V_N"] / 1e3 >= 148.0                     # one-way girder shear (WP2.1)
+    floors = [m for m in pkg["members"] if m["inputs"]["role"] == "floor"]
+    # interior one-way girder shear (WP2.1); edge girders carry half a bay since H13 (nb * bay / 2)
+    assert max(m["inputs"]["V_N"] for m in floors) / 1e3 >= 148.0
     assert pkg["collectors"]["applied_to_member_checks"]
-    assert floor["inputs"]["P_comp_N"] > 0                           # collector / chord axial (WP2.6)
+    assert any(m["inputs"]["P_comp_N"] > 0 for m in floors)          # collector / chord axial (WP2.6)
     assert all(r["ok"] for r in pkg["drift_table"])
     assert pkg["seismic_calc"]["W_engine_kN"] == pytest.approx(pkg["seismic_calc"]["W_design_kN"], rel=0.02)
 
@@ -125,7 +127,7 @@ def test_ex1_report_is_india_only(ex1_job):
     assert not re.search(r"\bpsf\b|\bkips?\b|Risk Category|\bSDC\b", re.sub(r"<[^>]+>", " ", html))
 
 
-EOR_EMBEDMENT = {"capacity_N": 900e3, "cite": "EOR anchorage design: IS 456:2000 cone / bond pull-out of the M48 "
+EOR_EMBEDMENT = {"capacity_N": 900e3, "source": "EOR input (foundation engineer)", "cite": "EOR anchorage design: IS 456:2000 cone / bond pull-out of the M48 "
                                             "anchors by the foundation engineer (outside the corpus; declared input)"}
 
 
@@ -137,6 +139,7 @@ def ex1_complete_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is(design=True, embedment=EOR_EMBEDMENT)
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_complete"))              # H30: stored rag/ hits
     out = P.design_and_report("IN_Ex1_complete", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))

@@ -33,7 +33,42 @@ def ex1_cfg(upgrade=True):
     for k in ("SDS", "SD1", "Cd", "Om0", "Ct", "x", "Cu", "Ie"):
         cfg["seis"].pop(k, None)
     cfg["occupancy"] = {"use": "office", "area_m2": 3600.0}
+    attach_rag_evidence(plan)
     return cfg, seis
+
+
+# H30: every found:true retrieval row names its stored hit (rag/<file> + a verbatim quote from the corpus, see
+# tests/fixtures/IN_Ex1/rag/, generated from engineering_rag_india .search.md); every found:false row carries the
+# EOR assumption actually used (value, source, cite, verify).
+EX1_EOR_ASSUMPTIONS = {
+    "snow Delhi": {"value": 0.0, "unit": "kN/m2", "source": "EOR assumption: New Delhi plains, no snowfall",
+                   "cite": "IS 875 (Part 4):1987 not retrieved (found:false); snow load not applied for Delhi",
+                   "verify": True},
+    "special loads": {"value": "none", "source": "EOR assumption: no IS 875 (Part 5) special load applies "
+                                                 "(no temperature / settlement / impact case in the brief)",
+                      "cite": "IS 875 (Part 5):1987 not retrieved (found:false)", "verify": True},
+}
+
+
+def attach_rag_evidence(plan):
+    import json as _json
+    idx = _json.load(open(FIX / "rag_index.json", encoding="utf-8"))
+    for row in plan.get("retrieval") or []:
+        if row.get("found") is True and row.get("query") in idx:
+            row.update(idx[row["query"]])
+        elif row.get("found") is False and row.get("query") in EX1_EOR_ASSUMPTIONS:
+            row.update(EX1_EOR_ASSUMPTIONS[row["query"]])
+    return plan
+
+
+def stage_ex1_rag(job_root):
+    """Copy the stored Ex1 rag/ hits into the job folder (what the agent persists during retrieval)."""
+    import shutil
+    dst = os.path.join(str(job_root), "rag")
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+    shutil.copytree(str(FIX / "rag"), dst)
+    return dst
 
 
 def ex1_cfg_is(design=True, embedment=None):
@@ -74,11 +109,21 @@ import math
 
 
 def col_sec(i, j, k, perim):
+    # perimeter (SCBF) columns within IS 18168 Table 2 (ii) (H05: b/tf <= 9.0 eps/sqrt(Ry) is live in Zone IV)
     if k <= 2:
-        return "WPB300X300X117.03" if perim else "WPB300X300X88.34"
+        return "WPB320X300X126.66" if perim else "WPB300X300X88.34"
     if k <= 4:
-        return "WPB300X300X100.85" if perim else "WPB300X300X69.8"
-    return "WPB250X250X73.15" if perim else "MB300"
+        return "WPB250X250X97.04" if perim else "WPB300X300X69.8"
+    return "WPB250X250X97.04" if perim else "MB300"
+
+
+def beam_sec_is18168(base_beam_sec, NX, NY):
+    """Perimeter (braced-bay, SFRS) beams within IS 18168 Table 2 (i) (d/tw <= 44.5 eps/sqrt(Ry), H05);
+    interior gravity beams unchanged."""
+    def beam_sec(i, j, k, dirn):
+        perim = (dirn == "X" and j in (0, NY)) or (dirn == "Y" and i in (0, NX))
+        return "NPB350X170X66.05" if perim else base_beam_sec(i, j, k, dirn)
+    return beam_sec
 
 
 def releases(i, j, k, dirn):
@@ -110,6 +155,7 @@ def apply_wave2_design(cfg, *, embedment=None):
     for k in ("Cs", "V", "Tu", "Ta", "k", "W", "Fx"):
         ss.pop(k, None)
     # ---- sections / SFRS layout ----
+    cfg["beam_sec"] = beam_sec_is18168(cfg["beam_sec"], cfg["NX"], cfg["NY"])
     cfg.update(col="WPB300X300X100.85", brace="WPB200X200X50.92", col_sec=col_sec, releases=releases,
                brace_orientation="web perpendicular to the frame plane (minor-axis buckling in plane)")
     cfg["LLT_sag_mm"] = {"floor": 600.0, "roof": 600.0}       # deck fastener spacing (compression flange restrained)
@@ -178,11 +224,15 @@ def apply_wave2_design(cfg, *, embedment=None):
                                              "pitch_mm": 120.0, "edge_mm": 60.0, "n_per_row": 2}}},
         "column_splice": {
             "default": {"type": "flange_plates",
-                        "plate": {"A_mm2": 300.0 * 25.0, "fy_MPa": 250.0},
+                        "plate": {"A_mm2": 300.0 * 32.0, "fy_MPa": 250.0},
                         "bolt_type": "HSFG",
                         "bolts": {"n_bolts": 12, "d_mm": 24, "grade": "8.8", "t_mm": 16.0, "fu_plate_MPa": 410.0,
-                                  "e_mm": 45.0, "p_mm": 75.0, "d0_mm": 26.0, "nn": 0, "ns": 2}},
-            "WPB300X300X117.03": {"none": True, "note": "ground-storey column length: no splice"},
+                                  "e_mm": 45.0, "p_mm": 75.0, "d0_mm": 26.0, "nn": 0, "ns": 2},
+                        # IS 18168 7.5 web splice plates (1.2 Ry x the web strength) and the 12.2.4.6 shear (H10)
+                        "web_plate": {"A_mm2": 2 * 200.0 * 14.0, "fy_MPa": 250.0},
+                        "web_bolts": {"n_bolts": 4, "d_mm": 20, "grade": "8.8", "t_mm": 10.0, "fu_plate_MPa": 410.0,
+                                      "e_mm": 40.0, "p_mm": 70.0, "d0_mm": 22.0, "nn": 0, "ns": 2}},
+            "WPB320X300X126.66": {"none": True, "note": "ground-storey column length: no splice"},
             "WPB300X300X88.34": {"none": True, "note": "ground-storey gravity column: no splice"},
             "WPB300X300X69.8": {"type": "flange_plates", "plate": {"A_mm2": 300.0 * 12.0, "fy_MPa": 250.0},
                                 "bolts": {"n_bolts": 6, "d_mm": 20, "grade": "8.8", "t_mm": 10.5, "fu_plate_MPa": 410.0,
@@ -191,6 +241,12 @@ def apply_wave2_design(cfg, *, embedment=None):
                       "bolts": {"n_bolts": 4, "d_mm": 20, "grade": "8.8", "t_mm": 13.1, "fu_plate_MPa": 410.0,
                                 "e_mm": 40.0, "p_mm": 70.0, "d0_mm": 22.0, "nn": 0, "ns": 2}}},
     }
+    cfg["delegated_design"] = [{"item": "composite metal deck sheeting (profile, gauge, fixings)",
+                                "criteria": "supplier design of the deck span: wet concrete 3.0 kN/m2 + construction "
+                                            "0.75 kN/m2 (cfg construction_stage); in service office 4.0 + partitions "
+                                            "1.0 kN/m2 imposed",
+                                "interface_forces": "deck bears on the beams (gravity by tributary width); deck "
+                                                    "fastener spacing 600 mm restrains the beam top flange (LLT_sag)"}]
     cfg["notes"] = ("IN_Ex1 5-storey office perimeter SCBF (X-bracing), New Delhi Zone IV, I 1.2, RSA. IS 808 sections, "
                     "IS 2062 E250 B0. Composite metal deck: bare-steel scope (IS 11384 not in corpus) + construction stage. "
                     "Anchorage embedment: EOR input required (IS 456 not in corpus).")

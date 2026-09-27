@@ -6,8 +6,14 @@ an interactive 3D viewer — **bringing your own LLM** (API base-url + key, held
 
 This repository is the **India HR variant** of [Steltic/steltic](https://github.com/Steltic/steltic)
 (USA AISC/ASCE). Do **not** confuse the two. Design authority: **IS 800:2007** (+ IS 808, IS 816/9595,
-IS 4000, IS 2062, IS 1161). Loads: **IS 875 Parts 1–5** and **IS 1893 Part 1:2016**, retrieved LIVE
-via RAG every job (not hardcoded in the engine).
+IS 4000, IS 2062, IS 1161). Loads: **IS 875 Parts 1–5** and **IS 1893 Part 1:2016**: the job's load VALUES
+(Vb, zone / Z, I, R, imposed and dead loads, snow, Cpe for the building) are retrieved LIVE via RAG every job into
+`cfg['load_plan']`. The engine carries transcriptions of the code tables it computes with — IS 875-3 Tables 4 / 5 /
+6, 6.3.4 k4 and 7.3.2.2 Cpi (`india_wind_tables`), IS 1893 Tables 3 / 7 / 9 and the Table 8 keyword rules
+(`india_seismic`, `india_seismic_gates`), IS 800 tables (`india_is800`, `india_connections`) and IS 18168 Table 1
+Ry / Ru (`india_is18168`). Retrieved values take precedence where the engine accepts them (e.g. the Table 5
+record passed to `lowrise_member_wind`), and `tests/test_fix_H15_tables_vs_corpus.py` diffs the IS 875-3 Table 5 /
+6 transcriptions against the corpus cell by cell.
 
 ```
 browser ──▶ FastAPI app (localhost) ──▶ your LLM (key in app memory, never stored)
@@ -76,7 +82,47 @@ cd /workspace/engineering_rag_india
 PYTHONPATH=scripts .venv/bin/python scripts/search.py exact_section 5.4 --doc IS_800_2007 --limit 2
 ```
 
-Set `RAG_API_URL` / `RAG_API_TOKEN` / optionally `RAG_ALIASES_FILE` to the India aliases file.
+Serve the corpus over HTTP for the app's search tool and point the engine at it:
+
+```bash
+cd /path/to/engineering_rag_india
+python3 scripts/serve_http.py --host 127.0.0.1 --port 8765        # POST /query, GET /healthz
+export RAG_API_URL=http://127.0.0.1:8765/query
+export INDIA_CORPUS_ROOT=/path/to/engineering_rag_india            # default: a sibling ../engineering_rag_india,
+                                                                   # else /workspace/engineering_rag_india
+```
+
+Set `RAG_API_URL` / `RAG_API_TOKEN` / optionally `RAG_ALIASES_FILE` (default `$INDIA_CORPUS_ROOT/indexes/aliases.json`).
+`INDIA_CORPUS_ROOT` is the one place the corpus location is decided (the app's aliases and the engine's own
+corpus lookups, e.g. `india_omega_is18168`). The search tool reports `not_found_kind` = `no_specification_index`,
+`document_not_in_corpus`, `not_tabulated` (the corpus answered: no table row, e.g. a town in neither Annex A nor
+Annex E), `server_error` (`found: None`, retry — never evidence of absence) or `term_absent_from_document`; hits carry
+`exact_match` / `also_found_in`, and `retrieval_errors` lists failed rungs. Every hit is saved under the job's `rag/`
+(keyed on collection, clause, type, query and a content hash; never overwritten).
+
+## Design contract and capabilities
+
+The agent contract is `contract/AGENT_START.md` + `contract/README_AGENT.md` (cfg key index) +
+`contract/IS800_WORKED_METHOD.md`. Beyond the regular grid model the engine supports: per-direction R
+(`R_x` / `R_y`), the IS 1893 Table 5(ii) flexible-diaphragm 3-D analysis of re-entrant plans (`diaphragm_stiffness`),
+true-slope pitched roofs (`roof_planes`) and roof regions, the JSON frame builder with chevron EBF links
+(`frame_build.py`, `example_build_ebf.py`), several seismically separated units in one job
+(`pipeline.design_units`), the IS 875-3 10.3 across-wind load case, gusseted / embedded column bases, IS 18168
+column splices, and an optional erection sequence (braces after the dead load).
+
+### Engine cfg keys outside the India contract
+
+The engine is shared with the USA heritage code and still reads a few keys that India jobs must not use (the
+contract lint `tests/test_fix_D05_contract_lint.py` checks that they are named here): `sdc`, `rho`, `drift_relief_16_1_2`,
+`use_asce7_engine_loads`, `force_kip_in`, `metric` / `si_native`, `code_jurisdiction` / `code_region` (aliases of
+`jurisdiction`), `Fy` (the viewer's legacy yield default), `L_roof` (legacy report label; India uses `Lr`),
+`Omega0` / `Om0` / `Omega0_source` / `Omega0_cite` / `Omega0_found` (the legacy overstrength provenance API — India
+jobs use the IS 18168 5.5 / IS 800 12.2.3 combinations and never declare it), `r_source` (alias of `R_source`),
+`imf_as_smrf` (maps an 'IMF' label; IMF has no Indian basis and is refused), `dual_check` / `softstorey_check` /
+`torsion_check` (flags of the legacy quick `run()` path; the India gates screen these themselves), and the legacy
+connection worksheet inputs `base_plate_geometry` / `column_base_geometry` / `base_plate` / `splice_geometry` /
+`connection_rag_capacities` (India jobs declare `cfg['connections']`). Keys with a leading underscore are
+engine-private caches.
 
 ## Product shape (unchanged)
 

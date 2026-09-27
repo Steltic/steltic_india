@@ -27,7 +27,10 @@ WPB800X300X317.36, fy 240, KL = 5400 mm: Pdy = 5955 kN.
   lambda_LT <= 0.4 -> no LTB reduction.
 * LLT is the PHYSICAL unbraced length of the compression flange for each moment sign: a deck restrains the
   top flange (sagging), uplift / hogging needs the fly-brace spacing. Declare it per member group
-  (`cfg['LLT_sag_mm']`, `cfg['LLT_hog_mm']`, a number or `{role: mm}`); the framework does not guess it.
+  (`cfg['LLT_sag_mm']`, `cfg['LLT_hog_mm']`, a number or `{role: mm}`; per member or per column in
+  `cfg['member_overrides']`); the framework does not guess it.
+* Channels (IS 808 ISMC purlins / girts): Mcr by the IS 800 Annex E general expression (load through the shear
+  centre, It = J, Iw = Cw); declare the restraint spacing (sag rods / fly braces) as LLT.
 
 Hand values: MB450, LLT = 3 m: Md = 271.3 kNm. NPB400X180X57.38, LLT = 3040 mm: Md = 217.0 kNm
 (lambda_LT <= 0.4 needs LLT <= 1611 mm). CHS168.3x8 simply supported: Md cap = 42.04 kNm.
@@ -57,15 +60,42 @@ P/Pdy = 1.21. Ex12 level-1 WPB800 at 6.6 m: 9.3.2.2 ~ 1.52.
 3. OCBF (IS 800 12.7): KL/r <= 120; P <= 0.8 Pd; 30-70 % tension share; connection force min(1.2 fy Ag,
    12.2.3 force); gusset checks.
 4. SCBF (IS 800 12.8): braces of E250B (IS 2062) unless an EOR exception / IS 18168 basis is recorded;
-   KL/r <= 160; plastic brace section; brace connection force 1.1 fy Ag (CHS219.1x8, fy 250 -> 1459 kN
-   whatever the analysis force); SCBF columns plastic.
+   KL/r <= 160 with the per-axis K (Kz L on rz, Ky L on ry); plastic brace section; brace compression from the
+   Table 4 combinations; brace connection force 1.1 fy Ag (CHS219.1x8, fy 250 -> 1459 kN whatever the analysis
+   force); SCBF columns plastic. Where IS 18168 applies the force is max(1.1 Ry fy Ag, Ru fu An) (10.4.1(a)):
+   An = the declared `An_mm2`, else Ag — for E250 (Ry 1.4, Ru 1.2, fy 250, fu 410) that is 1.2 x 410 Ag = 492 Ag N
+   (1.97 fy Ag) against 1.54 fy Ag = 385 Ag N, so Ru fu An governs unless An < 0.78 Ag.
 5. OMF (IS 800 12.10): connections for min(1.2 Mp of the beam, deliverable moment).
 6. SMF (IS 800 12.11): beam-to-column connections for 1.2 Mp of the beam; shear from 1.2DL + 0.5LL plus
-   2 (1.2 Mp) / L'; panel zone per joint with doubler / web thickness each >= (dp + bp)/90; continuity
-   plates; sum Mpc / sum Mpb >= 1.2 at EVERY joint from the model connectivity, Mpc reduced for axial load.
-7. Column bases (IS 800 12.12): fixed bases and anchors for 1.2 Mp of the column; shear >= the larger of the
-   full column shear and 1.2 Vd.
-8. EBF: IS 800 points to specialist literature -- use IS 18168:2023 with the links modelled.
+   2 (1.2 Mp) / L'; panel zone per joint with doubler / web thickness each >= (dp + bp)/90 (a built-up box
+   counts both webs, and the joint is checked in both frame directions); continuity plates; sum Mpc / sum Mpb
+   >= 1.2 at EVERY joint from the model connectivity, Mpc reduced for axial load. IS 18168 8.2: sum Zpc fyc
+   (1 - Pu/Pd) / sum 1.1 Ry Zpb fyb > 1.4 (not at the roof, 8.2.1), Pu = the maximum factored axial compression
+   over ALL combinations (literal, ruling R3; `scwb_pu_basis` 'seismic' = the Table 4 earthquake rows only).
+7. Column bases (IS 800 12.12): fixed bases and anchors for 1.2 Mp of the column (IS 18168 9.3: 1.1 Ry Mpc and
+   2.2 Ry Mpc / Hc); shear >= the larger of the full column shear and 1.2 Vd. Checked for EVERY combination
+   with its concurrent (P, Mz, My, V): biaxial anchors (corner anchor = sum of the two tension-side shares),
+   net uplift by anchor / bearing equilibrium, Mpc by the IS 800 9.3.1.2 form of the column (rolled I (c):
+   1.11 Mp (1 - n) <= Mp; welded I (b); box / RHS (d); CHS (e)). A gusseted base is checked to IS 800 7.4.2
+   (plate panels between gussets, gusset outstand / shear / bending, gusset welds); an embedded base against the
+   EOR capacities (VERIFY). Anchor embedment (IS 456) is always an EOR input.
+8. EBF (IS 800 12.9 points to specialist literature — IS 18168:2023 11 / 12.3 with the links modelled by
+   `engine3d.add_link` and declared in `info['links']`): link Table 2 (iv) and the beam outside it Table 2 (i);
+   shear link e < 1.6 MpL / VpL (11.3); link shear Vu <= Vd over the Table 4 earthquake rows; stiffeners 11.4
+   (full-depth end stiffeners both sides, combined width >= bf - 2 tw, t >= max(0.75 tw, 10 mm); intermediate
+   spacing <= 30 tw - d/5 for 0.08 rad); link rotation (L/e) x R x elastic storey drift <= 0.08 rad (12.3.3.1);
+   braces, beams outside the link and columns for 1.1 Ry Sh Vd / 1.2 Ry Vd of the link (12.3.2.2, 12.3.4.5);
+   links not connected to columns (12.3.1) and braced at both flanges (12.3.3.2); 12.3.4.4 beam-to-column
+   joints where a brace or gusset frames in.
+9. Column splices (IS 800 12.5.2): each flange splice of an SFRS column >= 1.2 fy Af (12.5.2.2), PJP welds
+   200 % of the required strength (12.5.2.1); a CJP with matching electrode develops the parent metal
+   (IS 800 10.5.7.1.2) and is deemed to comply (ruling R4) — the weld record is required. Flange force per
+   combination: P Af/A + Mz/d + 3 My/bf with a web splice (P/2 + ... without); machined bearing ends (7.3.4.1)
+   leave tension / bending plus the IS 800 5.1.2 tie (the largest factored DL + LL reaction of one floor, T/2 per
+   flange). IS 18168 7.5 (and 12.2.4.6 SCBF / 12.3.4.7 EBF): 5.5 demands, plates >= 1.2 Ry x flange / web
+   strength, >= 0.5 Mp of the smaller member and shear > sum Mp / Hc.
+10. IS 18168 5.3 / Table 2 width-to-thickness limits are live wherever IS 18168 applies (beams (i), columns (ii)
+   with Ca, braces (iii), links (iv); built-up boxes by the closed-box rows (B - 2 tw)/tf and (D - 2 tf)/tw).
 
 Every check goes into `calc_package.capacity_design.checks` as
 `{value, limit, dc, ok, clause, cite, source}`; a failing or found:false item blocks COMPLETE.

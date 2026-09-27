@@ -1,8 +1,9 @@
 IN_Ex3 — Single-storey industrial portal shed, Chennai (wind-governed), steel SMRF / SMF (India)
 
-Site: Chennai — inside the IS 875 (Part 3) 6.3.4 east-coast cyclone belt: k4 = 1.15 (industrial structure), Kd = 1.0
-(7.2.1). Wind governs; seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3),
-I (Table 8: industrial = all other buildings), R (Table 9). Soil: medium (Type II).
+Site: Chennai — inside the IS 875 (Part 3) 6.3.4 east-coast cyclone belt: k4 = 1.15 (industrial structure,
+wind_structure_class = 'industrial'), Kd = 1.0 (7.2.1). Wind governs; seismic per IS 1893 (Part 1):2016 + Amd 1 +
+  Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3),
+I = 1.0 (Table 8 (iii): industrial = all other buildings), R (Table 9). Soil: medium (Type II).
 Lateral system: the ordinary moment frame is NOT permitted in Zone III (IS 1893 Table 9 Note 1, D4) — design the
 portals as a steel special moment resisting frame (SMRF, R 5.0; IS 800:2007 12.11 with IS 18168:2023) in both
 directions (transverse portals + longitudinal eave-beam moment frames); single storey, so IS 18168 8.2.1 applies

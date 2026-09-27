@@ -2,7 +2,8 @@ IN_Ex9 — 12-storey residential, eccentrically braced frames (EBF, IS 18168 she
 units by a seismic joint, Guwahati
 
 Location: Guwahati — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone V, Z 0.36; soil medium (Type II).
-Occupancy: residential, 13,872 m2 (flange 10,404 m2 + stem 3,468 m2, each > 2,000 m2) -> I = 1.2 (Table 8 (ii));
+Occupancy: residential, 13,872 m2 (flange 10,404 m2 + stem 3,468 m2, each > 2,000 m2) -> I = 1.2 by owner ruling
+  D8 (area proxy for the Table 8 (ii) '> 200 persons'; persons not stated);
   each unit a structurally independent building (Table 8 Note 3).
 Lateral system: eccentrically braced frames — IS 1893 Table 9 (ii)(c) special braced frame with eccentric braces,
   R = 5.0; IS 18168:2023 mandatory (1.3: the only braced system permitted in Zone V; OBF banned by Table 9 Note 1).
@@ -32,5 +33,8 @@ Analysis: response spectrum (7.7.1: Zone V, H > 15 m), CQC, scaled to V-bar_B (7
 Design: IS 800:2007 LSD; IS 808 rolled sections + built-up welded box columns for the EBF (E250 plates, CJP corners);
   IS 2062 E250 B0 / E350 B0 (fy by thickness); connections IS 800 Section 10 / 12.4 (CJP 12.4.2, HSFG 12.4.1),
   EBF joints 12.3.4.4 / 12.3.4.6; anchorage embedment is an engineer-of-record input (IS 456 not in the corpus).
-Deliverable: report.html + viewer_3d.html per unit (package root = flange; units/stem/); cfg['load_plan'] from the
-  corpus retrievals stored in rag/.
+Deliverable: two units (flange, stem) -- pipeline.design_units(name, {unit: cfg}, joints=[{units, direction,
+  gap_mm}]) runs
+  each unit as its own sub-job <name>/units/<unit>/ (report.html + viewer_3d.html per unit), checks the 7.11.3
+  separation of every joint from the two units' displacements and writes one combined STATUS and a units index;
+  cfg['load_plan'] from the corpus retrievals stored in rag/.

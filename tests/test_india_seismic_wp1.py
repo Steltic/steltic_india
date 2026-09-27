@@ -42,7 +42,7 @@ def test_zone_system_errors_for_banned_systems(ex):
     assert G.complete_allowed(FIX[ex])[0] is False
 
 
-@pytest.mark.parametrize("ex", ["Ex5", "Ex13", "Ex14"])
+@pytest.mark.parametrize("ex", ["Ex5", "Ex14", "legacy_Ex13_OCBF_ZoneII"])     # D02: real Zone II examples + the legacy OBF case
 def test_zone_ii_systems_pass_the_zone_gate(ex):
     errs = [m for s, m in G.system_zone_findings(FIX[ex]) if s == "ERROR"]
     assert not errs, errs

@@ -1,7 +1,8 @@
 IN_Ex7 — 10-storey laboratory / office building, special concentrically braced frames (SCBF), Ahmedabad
 
 Location: Ahmedabad — IS 1893 (Part 1):2016 (+ Amd 1, Amd 2) Annex E Zone III, Z 0.16; soil medium (Type II).
-Occupancy: office and laboratories, 17,340 m2 (> 2,000 m2) -> importance factor I = 1.2 (Table 8 (ii)).
+Occupancy: office and laboratories, 17,340 m2 -> importance factor I = 1.2 by owner ruling D8 (area > 2,000 m2 as
+  the proxy for the Table 8 (ii) '> 200 persons'; persons not stated).
 Lateral system: special concentrically braced frames (IS 1893 Table 9 (ii)(b), R = 4.5), IS 800 12.8 with
   IS 18168:2023 (mandatory in Zone III, cl. 1.2); X-bracing (12.8.1.2) in distributed bays both directions,
   IS 808 WPB braces of IS 2062 E250 B0; braced-bay beams pinned; interior gravity framing pinned (IS 18168 1.4).

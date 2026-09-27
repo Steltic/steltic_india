@@ -1,7 +1,8 @@
 IN_Ex5 — Multi-bay OMRF warehouse + storage mezzanine, Hyderabad (wind + seismic) (India)
 
 Site: Hyderabad. Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E), Z (Table 3), soil,
-importance factor (Table 8: general non-food storage -> (iii); a food-storage warehouse would be (i) 1.5 — the stored
+importance factor I = 1.0 (Table 8: general non-food storage -> (iii); a food-storage warehouse would be (i) 1.5 —
+  the stored
 goods are declared non-food), R for the ordinary moment resisting frame (Table 9; permitted in Zone II by Note 1).
 Soil: medium (Type II).
 

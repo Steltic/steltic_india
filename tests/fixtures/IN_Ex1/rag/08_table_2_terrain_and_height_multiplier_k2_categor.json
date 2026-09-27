@@ -1,0 +1,17 @@
+{
+ "query": "Table 2 Terrain and Height Multiplier k2 Category 3",
+ "collection": "engineering_standards_IS875_P3",
+ "found": true,
+ "hits": [
+  {
+   "stem": "IS_875_Part_3_2015",
+   "file": "documents/standards/IS_875_Part_3_2015/markdown/IS_875_Part_3_2015.search.md",
+   "char_span": [
+    34135,
+    35002
+   ],
+   "text": "d Height Multiplier ( k 2 ) | |----------|------------|-----------------------------------------|-----------------------------------------|-----------------------------------------|-----------------------------------------| | | m | Terrain Category 1 | Terrain Category 2 | Terrain Category 3 (5) | Terrain Category 4 | | (1) | (2) | (3) | (4) | | (6) | | i) | 10 | 1.05 | 1.00 | 0.91 | 0.80 | | ii) | 15 | 1.09 | 1.05 | 0.97 | 0.80 | | iii) | 20 | 1.12 | 1.07 | 1.01 | 0.80 | | iv) | 30 | 1.15 | 1.12 | 1.06 | 0.97 | | v) | 50 | 1.20 | 1.17 | 1.12 | 1.10 | | vi) | 100 | 1.26 | 1.24 | 1.20 | 1.20 | | vii) | 150 | 1.30 | 1.28 | 1.24 | 1.24 | | viii) | 200 | 1.32 | 1.30 | 1.27 | 1.27 | | ix) | 250 | 1.34 | 1.32 | 1.29 | 1.28 | | x) | 300 | 1.35 | 1.34 | 1.31 | 1.30 | | xi) | 350 | 1.35 | 1.35 | 1.32 | 1.31 | | xii) | 400 | 1.35 | 1.35 | 1.34 | 1.32 | | xiii) | 45"
+  }
+ ],
+ "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+}

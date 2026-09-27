@@ -209,8 +209,14 @@ def _entry_issues(kind, entry):
     if not entry.get("cited") and not any(isinstance(c, dict) and (c.get("cited") or c.get("clause") or c.get("cite"))
                                           for c in checks):
         out.append(f"[{kind} {cid}] no cited code clause")
+    # GOLD-7: a record whose checks are ALL passing gates (deemed-to-comply rows, e.g. a CJP column splice with
+    # matching electrode -- IS 800 10.5.7.1.2, ruling R4) has no numeric D/C by nature; a failing or unevaluated gate,
+    # or any non-gate row, still needs its D/C
+    gates_only = bool(checks) and all(isinstance(c, dict) and c.get("gate") is True and c.get("ok") is True
+                                      for c in checks)
     if not all_dcs:
-        out.append(f"[{kind} {cid}] no D/C reported (top-level or in a check)")
+        if not gates_only:
+            out.append(f"[{kind} {cid}] no D/C reported (top-level or in a check)")
     else:
         worst = max(all_dcs)
         if worst > 1.0 + 1e-9:
@@ -601,14 +607,16 @@ def _consultancy_issues(cfg, pkg):
         out.append("long-span (>= 12 m) roof framing and NO ponding evaluation in calc_package -- "
                    "check ponding / impounded rain (roof slope + secondary drainage head; IS 875 (Part 4) "
                    "for snow-water) and record it")
-    # A6 footfall vibration: long floor spans or vibration-sensitive occupancy
-    floor_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor"
-                     and _len_m(m) >= 12.0 for m in mem)
+    # A6 footfall vibration: long floor spans or vibration-sensitive occupancy (H31: cfg['roof_levels'] are roofs,
+    # not floors; cleared only by a structured cfg/pkg['vibration_screen'] {basis, result, cite}, never by a keyword)
+    floor_long = _has_floor_levels(cfg) and any(
+        isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "floor" and _len_m(m) >= 12.0 for m in mem)
     sens = any(k in arch for k in ("lab", "laborator", "hospital", "gym", "assembly", "vibration"))
-    if (floor_long or sens) and "vibration" not in blob:
+    if (floor_long or sens) and not _vibration_screen_ok(cfg, pkg):
         out.append("footfall VIBRATION serviceability not addressed (long floor spans and/or "
                    "vibration-sensitive occupancy) -- IS 800:2007 5.6.4 / Annex (floor vibration) screen: "
-                   "fundamental frequency and acceleration vs occupancy, recorded in the package")
+                   "fundamental frequency and acceleration vs occupancy, recorded as cfg['vibration_screen'] = "
+                   "{'basis', 'result', 'cite'}")
     # A1 composite floors: the cfg declares a composite floor system -> the package must carry the
     # Ch. I essentials (studs + camber + the unshored wet-concrete stage), OR an explicit scope
     # statement (bare-steel lower bound / composite excluded / delegated). Content-clearable.
@@ -647,13 +655,79 @@ def _consultancy_issues(cfg, pkg):
     if float(cfg.get("snow", 0) or 0) > 0 and stepish and "drift" not in blob.replace("drift_", ""):
         out.append("snow present with roof steps/parapets/setbacks and no DRIFT surcharge in the "
                    "package (IS 875 (Part 4) drift / unbalanced cases) -- add it to the step-adjacent members")
-    # B8 delegated-design register
-    if any(k in blob for k in ("joist", "sji", " deck", "brb", "stair", "curtain wall")) and \
-            "delegat" not in blob:
-        out.append("delegated-design components referenced (joists/deck/BRBs/stairs/cladding) but no "
-                   "'delegated_design' register in capacity_design -- list each delegated item, the "
-                   "design criteria handed off, and the interface forces")
+    # B8 delegated-design register (H31): triggered by agent-authored text only (cfg notes / arch / floor_system /
+    # connection notes; engine boilerplate such as "deck restraint" is not a reference), cleared only by a
+    # structured register [{item, criteria, interface_forces}] -- the word "delegated" alone does not clear
+    ablob = " " + _agent_text(cfg, pkg) + " "
+    if any(re.search(r"\b%s" % k, ablob) for k in ("joist", "sji", "deck", "brb", "stair", "curtain wall")):
+        bad = _delegated_register_problems(cfg, pkg)
+        if bad:
+            out.append("delegated-design components referenced (joists/deck/BRBs/stairs/cladding) but %s -- "
+                       "declare cfg['delegated_design'] = [{'item', 'criteria', 'interface_forces'}, ...] listing "
+                       "each delegated item, the design criteria handed off, and the interface forces" % bad)
     return out
+
+
+def _has_floor_levels(cfg):
+    """False when every suspended level below the top is declared a roof (cfg['roof_levels'], e.g. a lean-to)."""
+    try:
+        nf = len(cfg.get("heights") or [])
+    except Exception:
+        nf = 0
+    rl = cfg.get("roof_levels")
+    if not rl or nf <= 1:
+        return True
+    try:
+        roofs = {int(x) for x in rl}
+    except Exception:
+        return True
+    return any(k not in roofs for k in range(1, nf))
+
+
+def _vibration_screen_ok(cfg, pkg):
+    for src in (cfg, pkg):
+        vs = src.get("vibration_screen") if isinstance(src, dict) else None
+        if isinstance(vs, dict) and all(vs.get(k) not in (None, "", [], {}) for k in ("basis", "result", "cite")):
+            return True
+    return False
+
+
+def _agent_text(cfg, pkg):
+    """Agent-authored free text: cfg notes / arch / floor_system and the declared connections' notes."""
+    txt = []
+    for k in ("notes", "note", "arch", "floor_system"):
+        if cfg.get(k):
+            _gather_text(cfg.get(k), txt)
+    def _notes(o):
+        if isinstance(o, dict):
+            for kk, v in o.items():
+                if str(kk).lower() in ("note", "notes") or str(kk).lower().endswith("_note"):
+                    _gather_text(v, txt)
+                else:
+                    _notes(v)
+        elif isinstance(o, list):
+            for v in o:
+                _notes(v)
+    _notes(cfg.get("connections"))
+    return " ".join(t for t in txt if isinstance(t, str)).lower()
+
+
+def _delegated_register_problems(cfg, pkg):
+    reg = cfg.get("delegated_design")
+    if reg is None and isinstance(pkg, dict):
+        reg = (pkg.get("capacity_design") or {}).get("delegated_design") if isinstance(pkg.get("capacity_design"), dict) else None
+    if not reg:
+        return "no cfg['delegated_design'] register"
+    if isinstance(reg, dict):
+        reg = [reg]
+    if not isinstance(reg, list):
+        return "cfg['delegated_design'] is not a list of records"
+    for i, r in enumerate(reg):
+        miss = [k for k in ("item", "criteria", "interface_forces")
+                if not isinstance(r, dict) or r.get(k) in (None, "", [], {})]
+        if miss:
+            return "cfg['delegated_design'][%d] lacks %s" % (i, ", ".join(miss))
+    return ""
 
 
 # =====================================================================================
@@ -740,15 +814,28 @@ def _rag_texts(job_dir):
                 _gather_text(js, txt)
                 raw = " ".join(t for t in txt if isinstance(t, str))
             except Exception:
-                pass
-            out.append((os.path.relpath(p, job_dir), q, re.sub(r"\s+", " ", raw).lower()))
+                # AUD-1: a plain-text stored hit (steltic job_tools._render_rag) carries its own query in the
+                # header line '# RAG query: <query>'; without that header the file has no query (q stays None).
+                m = _RAG_QUERY_HDR.search(raw[:2000])
+                q = m.group(1).strip() if m else None
+            out.append((os.path.relpath(p, job_dir).replace(os.sep, "/"), q, re.sub(r"\s+", " ", raw).lower()))  # POSIX-style rel path (Windows)
     return out
 
 
+_RAG_QUERY_HDR = re.compile(r"^#\s*RAG query:\s*(.+?)\s*$", re.M)
+
+
+def _norm_query(q):
+    return re.sub(r"\s+", " ", str(q or "")).strip().lower()
+
+
 def rag_evidence_issues(plan, job_dir):
-    """found:true retrieval entries must have a stored hit in rag/ containing the cited text:
-    either {hit_file, quote} with the quote in that file, or a stored hit for the same query whose
-    text contains every number quoted in the cite."""
+    """found:true retrieval entries must have a stored hit in rag/ that is THEIR OWN evidence (AUD-1):
+    (a) {hit_file, quote} with the quote verbatim (whitespace-normalised) in that file; or
+    (b) a stored rag/ file whose own query (the '# RAG query:' header line of a text hit, or the JSON 'query'
+        field) equals the row's query, and whose text contains every number quoted in the row's cite.
+    A file with no recorded query, or with a different query, is never evidence for the row -- an unrelated hit
+    that happens to contain the same digits (e.g. '0.75' in 'Ta = 0.075 h^0.75') must not back a quote-less row."""
     out = []
     ret = (plan or {}).get("retrieval") if isinstance(plan, dict) else None
     if not isinstance(ret, list):
@@ -760,21 +847,91 @@ def rag_evidence_issues(plan, job_dir):
         cite = str(h.get("cite") or "")
         ok = False
         hf, quote = h.get("hit_file"), h.get("quote")
+        why = ""
         if hf and quote:
             qn = re.sub(r"\s+", " ", str(quote)).lower()
-            ok = any(rel.endswith(str(hf)) and qn in t for rel, _q, t in texts)
+            hfn = str(hf).replace("\\", "/")
+            ok = any(rel.endswith(hfn) and qn in t for rel, _q, t in texts)
+            why = "its quote is not verbatim in the stored hit_file %s" % hf
         else:
             nums = [n.strip() for n in _NUM.findall(cite)]
-            for rel, q, t in texts:
-                if q is not None and str(q).strip().lower() != str(h.get("query") or "").strip().lower():
-                    continue
-                if nums and all(n in t for n in nums):
-                    ok = True
-                    break
+            rq = _norm_query(h.get("query"))
+            own = [t for rel, q, t in texts if q is not None and rq and _norm_query(q) == rq]
+            if not own:
+                why = "no stored rag/ file records this query (no '# RAG query:' header / JSON query match)"
+            elif not nums:
+                why = "the cite quotes no value to find in the stored hit for this query"
+            else:
+                ok = any(all(n in t for n in nums) for t in own)
+                why = "the stored hit for this query does not contain the cited value(s) %s" % nums
         if not ok:
-            out.append("load_plan.retrieval[%d] (%s) is found:true but no stored rag/ hit contains the cited "
-                       "text/values -- persist the hit (hit_file + quote) or set found:false" % (i, h.get("query")))
+            out.append("evidence: load_plan.retrieval[%d] (%s) is found:true but no stored rag/ hit contains the cited "
+                       "text/values as its own evidence (%s) -- attach hit_file + quote (verbatim text of the stored "
+                       "rag/ hit for this query), or set found:false with an EOR assumption {value, source, cite, "
+                       "verify: True} (AUD-1)" % (i, h.get("query"), why))
     return out
+
+
+def _eor_record_ok(r):
+    """An EOR assumption record: value + source + cite, flagged for verification (verify True)."""
+    return isinstance(r, dict) and r.get("value") is not None and \
+        all(r.get(k) not in (None, "", [], {}) for k in ("source", "cite")) and r.get("verify") is True
+
+
+def retrieval_assumption_issues(plan, cfg=None):
+    """H30 (HR-E-04): a found:false retrieval row must be paired with an EOR assumption record -- either the row
+    itself carries {value, source, cite, verify: True} or cfg['eor_assumptions'] holds a record with the row's
+    query (or retrieval_index) and those fields.  Otherwise the value used for that item is undisclosed."""
+    out = []
+    ret = (plan or {}).get("retrieval") if isinstance(plan, dict) else None
+    if not isinstance(ret, list):
+        return out
+    eor = (cfg or {}).get("eor_assumptions") if isinstance(cfg, dict) else None
+    eor = [eor] if isinstance(eor, dict) else (eor if isinstance(eor, list) else [])
+    for i, h in enumerate(ret):
+        if not isinstance(h, dict) or h.get("found") is not False:
+            continue
+        if _eor_record_ok(h):
+            continue
+        q = str(h.get("query") or "").strip().lower()
+        paired = any(_eor_record_ok(r) and ((q and str(r.get("query") or "").strip().lower() == q)
+                                            or r.get("retrieval_index") == i) for r in eor)
+        if not paired:
+            out.append("load_plan.retrieval[%d] (%s): found:false without EOR assumption -- record the value used "
+                       "with {value, source, cite, verify: True} on the row or in cfg['eor_assumptions']"
+                       % (i, h.get("query") or h.get("stem")))
+    return out
+
+
+def package_warnings(cfg, pkg):
+    """AUD-3 / AUD-4: non-blocking WARN findings on a finished package (reported by design_status['warnings'],
+    never a COMPLETE blocker): a declared diaphragm label that contradicts the 7.6.4 classification computed by the
+    analysis, and the anchorage records (asserted embedment capacity without a derivation; concrete breakout not
+    delegated to the foundation EOR)."""
+    out = []
+    pkg = pkg if isinstance(pkg, dict) else {}
+    d764 = pkg.get("diaphragm_7_6_4")
+    if isinstance(d764, dict) and d764.get("declared_contradicted"):
+        out.append(str(d764.get("warning") or "IS 1893 7.6.4: declared diaphragm label contradicts the analysis"))
+    try:
+        import india_connection_design as _CDw
+        out += [m for s_, m in _CDw.anchorage_findings(cfg if isinstance(cfg, dict) else {}) if s_ == "WARN"]
+    except Exception as ex:
+        out.append("anchorage findings unavailable: %s" % ex)
+    return out
+
+
+def plan_of(cfg, pkg, job_dir):
+    """The job's load_plan: cfg first, then the package, then load_plan.json."""
+    plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None
+    if plan is None and isinstance(pkg, dict):
+        plan = pkg.get("load_plan")
+    if plan is None and job_dir and os.path.exists(os.path.join(job_dir, "load_plan.json")):
+        try:
+            plan = json.load(open(os.path.join(job_dir, "load_plan.json")))
+        except Exception:
+            plan = None
+    return plan
 
 
 _COMPONENT_REQUIRES = (
@@ -820,12 +977,22 @@ def literal_dc_issues(pkg):
             if not isinstance(e, dict):
                 continue
             ch = e.get("checks")
-            recs = [e]
+            kids = []
             if isinstance(ch, list):
-                recs += [c for c in ch if isinstance(c, dict)]
+                kids = [c for c in ch if isinstance(c, dict)]
             elif isinstance(ch, dict):
-                recs += [v for v in ch.values() if isinstance(v, dict)]
+                kids = [v for v in ch.values() if isinstance(v, dict)]
+            # H31: the parent record's DC is its governing child's; when a child check with the same D/C carries
+            # value + limit, the parent is read through that child (no false "literal" flag on the parent)
+            recs = list(kids)
+            pdc = e.get("DC", e.get("dc"))
+            if not (isinstance(pdc, (int, float)) and not isinstance(pdc, bool) and any(
+                    isinstance(k.get("dc", k.get("DC")), (int, float)) and abs(float(k.get("dc", k.get("DC"))) - float(pdc)) < 1e-9
+                    and k.get("value") is not None and k.get("limit") is not None for k in kids)):
+                recs.insert(0, e)
             for c in recs:
+                if c.get("gate") is True:
+                    continue          # geometry fit / boolean detailing gate: no D/C by nature (H31)
                 dc = c.get("DC", c.get("dc"))
                 if isinstance(dc, bool) or not isinstance(dc, (int, float)):
                     continue
@@ -903,15 +1070,9 @@ def india_issues(cfg, pkg, job_dir):
     out += script_grep_issues(job_dir)
     out += bak_issues(job_dir)
     out += report_residue_issues(job_dir)
-    plan = (cfg or {}).get("load_plan") if isinstance(cfg, dict) else None
-    if plan is None and isinstance(pkg, dict):
-        plan = pkg.get("load_plan")
-    if plan is None and job_dir and os.path.exists(os.path.join(job_dir, "load_plan.json")):
-        try:
-            plan = json.load(open(os.path.join(job_dir, "load_plan.json")))
-        except Exception:
-            plan = None
+    plan = plan_of(cfg, pkg, job_dir)
     out += rag_evidence_issues(plan, job_dir)
+    out += retrieval_assumption_issues(plan, cfg)
     return out
 
 

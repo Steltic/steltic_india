@@ -118,7 +118,9 @@ def test_member_wind_combinations_generated():
     plan["member_wind"] = {"patterns": [dict(p, wind_axis="X") for p in r["patterns"][:1]]}
     cs = [c for c in IC.expand_combinations(plan, cfg) if "member_wind" in c.get("tags", [])]
     fams = {c["family"] for c in cs}
-    assert any("0.9DL" in f for f in fams) and len(cs) == 4
+    # H14: each pattern is applied from both sides of its axis (the reversed '<name>R' pattern, sign -1)
+    assert any("0.9DL" in f for f in fams) and len(cs) == 8
+    assert sum(1 for c in cs if c["member_wind"]["name"].endswith("R") and c["sign"] == -1) == 4
     assert all(c["fWM"] in (1.5, 1.2, 0.6) for c in cs)
     plan["member_wind"] = {"patterns": [dict(r["patterns"][0])]}           # no wind_axis
     with pytest.raises(IC.CombinationError):
@@ -169,4 +171,7 @@ def test_dynamic_gate_requires_gust_factor_and_across_wind():
     ok, why, req = E.india_dynamic_wind_gate(cfg, 0.8)
     assert not ok and any("< 10.2 gust-factor" in w for w in why)
     ws["gust_factor"] = {"G": 2.4, "VB_x_kN": 100.0, "VB_y_kN": 100.0}
+    # H12 / ruling R10: an across-wind record with result "n/a" is not an evaluation -> still not ok
+    assert not E.india_dynamic_wind_gate(cfg, 0.8)[0]
+    ws["across_wind"] = {"method": "10.3", "found": True, "Mc_kNm": 850.0, "cite": "IS 875-3 10.3"}
     assert E.india_dynamic_wind_gate(cfg, 0.8)[0]

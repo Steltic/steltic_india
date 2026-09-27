@@ -64,9 +64,14 @@ def example_build(cfg, transf="PDelta"):
 
     # ---- nodes (present[k] is the set of grid points that exist at level k) ----
     present = {k: eng.grid(cfg, k) for k in range(NF+1)}
+    rp = cfg.get("roof_planes")                                 # X02: true-slope pitched roofs (roof_geometry)
+    if rp:
+        import roof_geometry as RG
     for k in range(NF+1):
         for (i, j) in present[k]:
-            x, y = XY(i, j); ops.node(eng.ntag(i, j, k), x, y, z[k])
+            x, y = XY(i, j)
+            zl = RG.lifted_z(cfg, k, x, y) if (rp and k) else None  # grid node under a roof plane -> on the slope
+            ops.node(eng.ntag(i, j, k), x, y, z[k] if zl is None else zl)
 
     # ---- column bases ----
     base = cfg.get("base", "fixed")
@@ -102,15 +107,23 @@ def example_build(cfg, transf="PDelta"):
         for j in range(NY+1):                                   # X-direction girders
             for i in range(NX):
                 if (i, j) in P and (i+1, j) in P:
+                    if rp and RG.plane_spans_segment(cfg, z[k], XY(i, j), XY(i+1, j)):
+                        continue                                # X02: no tie across a pitched roof (rafters below)
                     sec = _beam_sec(cfg, i, j, k, "X"); rel = relf(i, j, k, "X") if relf else None
                     eng.add_beam(et, eng.ntag(i, j, k), eng.ntag(i+1, j, k), sec, releases=rel)
                     eles.append((et, "beam", sec, eng.ntag(i, j, k), eng.ntag(i+1, j, k))); et += 1
         for i in range(NX+1):                                   # Y-direction girders
             for j in range(NY):
                 if (i, j) in P and (i, j+1) in P:
+                    if rp and RG.plane_spans_segment(cfg, z[k], XY(i, j), XY(i, j+1)):
+                        continue
                     sec = _beam_sec(cfg, i, j, k, "Y"); rel = relf(i, j, k, "Y") if relf else None
                     eng.add_beam(et, eng.ntag(i, j, k), eng.ntag(i, j+1, k), sec, releases=rel)
                     eles.append((et, "beam", sec, eng.ntag(i, j, k), eng.ntag(i, j+1, k))); et += 1
+        if rp:                                                  # X02: rafters (eave -> apex -> eave) + ridge members
+            et = RG.add_plane_members(cfg, k, XY, P, et, eles,
+                                      beam_sec=lambda q, kk, d: _beam_sec(cfg, 0 if d == "X" else q,
+                                                                          q if d == "X" else 0, kk, d))
 
     # ---- braces (optional; single concentric diagonal per braced bay/story) ----
     if cfg.get("braces"):
@@ -130,9 +143,11 @@ def example_build(cfg, transf="PDelta"):
     info = {"cm": cm, "present": present, "z": z, "NF": NF, "ele": eles}
     for k in range(1, NF+1):
         sl = [eng.ntag(i, j, k) for (i, j) in present[k]]
-        ops.rigidDiaphragm(3, eng.mtag(k), *sl)
+        if rp:
+            RG.tie_diaphragm(cfg, k, eng.mtag(k), sl, z[k])     # X02: eave spread free (anchor eave line + springs)
+        else:
+            ops.rigidDiaphragm(3, eng.mtag(k), *sl)
         w = eng.floor_w(cfg, k); m = w/eng.g
-        pts = present[k]; xs = [XY(i, j)[0] for i, j in pts]; ys = [XY(i, j)[1] for i, j in pts]
-        Bx = max(xs)-min(xs)+SX; By = max(ys)-min(ys)+SY
-        ops.mass(eng.mtag(k), m, m, 0.0, 0.0, 0.0, m*(Bx**2+By**2)/12.0)
+        Jz = eng.floor_plan_inertia(cfg, k, m, present[k])[0]   # H04: true plan extent (engine helper)
+        ops.mass(eng.mtag(k), m, m, 0.0, 0.0, 0.0, Jz)
     return info

@@ -81,8 +81,11 @@ def test_section12_ebf_branch():
               "11.4.2_intermediate_stiffeners", "12.3.1_link_not_at_column", "12.3.2.2_link_overstrength", "is18168_table2_link",
               "12.3.2.2_brace_axial", "12.3.2.2_column_axial", "12.3.2.2_beam_axial", "is18168_table2_brace", "12.3.4.5_brace_tension",
               "brace_connection_force", "brace_conn_welds", "brace_conn_pinned_12.3.4.6", "is18168_table2_beam", "is18168_table2_column",
-              "12.3.4.4_connection_moment", "12.3.4.4_column_strength"):
+              "12.3.4.4_beam_column"):
         assert k in ids, k
+    # H36: centre-link chevron (braces at the link ends): 12.3.4.4 does not apply (was 'connection_moment' rows)
+    na = [c for c in res["checks"] if c["id"] == "12.3.4.4_beam_column"][0]
+    assert na["ok"] is True and na["applies"] is False
     by = {c["id"]: c for c in res["checks"]}
     # 11.2: WPB300X300X117.03 fy 240 (tf 19): VpL = 240 x (300 - 38) x 11 / sqrt3 = 399.3 kN -> Vd = 363.0 kN (< 2 MpL/e)
     assert abs(by["11.2_link_design_shear"]["value"] / 1e3 - 240.0 * 262 * 11 / 3 ** 0.5 / 1.1 / 1e3) < 0.5
@@ -96,9 +99,14 @@ def test_section12_ebf_branch():
     f = by["brace_connection_force"]
     assert f["ok"] is True and f["value"] > 740e3
     assert "12.3.2.2" in f["clause"]
-    # a pinned brace connection satisfies 12.3.4.6; the beam-column joint develops the beam (CJP)
+    # a pinned brace connection satisfies 12.3.4.6
     assert by["brace_conn_pinned_12.3.4.6"]["ok"] is True
-    assert by["12.3.4.4_connection_moment"]["ok"] is True
+    # a brace that frames into the beam-column joint (node 100): 12.3.4.4 applies; the CJP joint develops the beam
+    md2 = _ebf_model_data()
+    md2["members"][2]["node_i"] = 100
+    res2 = S12.section12_checks("EBF", md2, {"zone": "III", "I": 1.2, "height_m": 32.1, "brace_config": "chevron"})
+    by2 = {c["id"]: c for c in res2["checks"]}
+    assert by2["12.3.4.4_connection_moment"]["ok"] is True and "12.3.4.4_column_strength" in by2
 
 
 def test_is875_2_321_column_reduction_table():
@@ -116,14 +124,14 @@ def test_spec_for_role_group_key():
     assert b["fixed"] is False
 
 
-def test_scbf_table2_opt_in():
-    """IS 18168 Table 2 on SCBF members runs only with cfg['is18168_table2'] (advisory otherwise)."""
+def test_scbf_table2_live():
+    """H05: IS 18168 Table 2 on SCBF members is live whenever IS 18168 applies (was opt-in via cfg['is18168_table2']);
+    the opt-out False is ignored in Zones III-V."""
     md = {"members": [{"id": "e1", "tag": 1, "section": "NPB450X190X67.16", "grade": "E250 B0", "role": "beam", "L_mm": 6000.0,
                        "sfrs": True, "node_i": 1, "node_j": 2}], "forces": {"e1": []}, "connections": [], "bases": [],
           "brace_lines": [], "combos_12_2_3_present": True, "combos_is18168_5_5_present": True}
-    r0 = S12.section12_checks("SCBF", dict(md), {"zone": "IV", "I": 1.2, "brace_config": "X"})
-    assert not [c for c in r0["checks"] if c["id"] == "is18168_table2_beam"]
-    assert any(a.get("live") is False for a in r0["advisories"])
-    r1 = S12.section12_checks("SCBF", dict(md), {"zone": "IV", "I": 1.2, "brace_config": "X", "is18168_table2": True})
-    c = [c for c in r1["checks"] if c["id"] == "is18168_table2_beam"][0]
-    assert c["ok"] is False and c["value"]["d/tw"] > c["limit"]["d/tw"]
+    for extra in ({}, {"is18168_table2": True}, {"is18168_table2": False}):
+        r = S12.section12_checks("SCBF", dict(md), dict({"zone": "IV", "I": 1.2, "brace_config": "X"}, **extra))
+        c = [c for c in r["checks"] if c["id"] == "is18168_table2_beam"][0]
+        assert c["ok"] is False and c["value"]["d/tw"] > c["limit"]["d/tw"]
+        assert not any(a.get("live") is False for a in r["advisories"])

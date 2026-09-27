@@ -214,7 +214,12 @@ class JobWorkspace:
 
         def attempt(label: str, q: str, coll: str, cl: str = "", ch: str = ""):
             """Send one rung. -> (result | None, halt). `None` with halt=False means 'skipped,
-            identical to a rung already sent'; halt=True means the server died and the run stops."""
+            identical to a rung already sent'; halt=True means the server died and the run stops.
+
+            R01: a reply whose note says the SERVER failed ("server error: ...", a traceback, a
+            timeout) is not an empty answer. It is retried once; if it fails again the rung is
+            recorded as errored and carries no hits, and `_not_found` reports kind server_error --
+            never "genuinely absent"."""
             key = (coll, (q or "").strip().lower(), (cl or "").upper(), (ch or "").upper())
             if key in seen:
                 return None, False
@@ -229,60 +234,89 @@ class JobWorkspace:
             if out is None:
                 self.log("search_engineering_standards", d, f"RAG unavailable ({err})")
                 return None, True
+            retried = False
+            if self._is_error_reply(out):              # R01: retry an errored rung once
+                retried = True
+                out, err = self._rag_post(q, coll, cl, ch)
+                if out is None:
+                    self.log("search_engineering_standards", d, f"RAG unavailable ({err})")
+                    return None, True
+            errored = self._is_error_reply(out)
+            if errored:
+                out = dict(out)
+                out["results"] = []                    # an error payload is never a set of hits
             n = len(out.get("results") or [])
-            note = str(out.get("note") or "")
+            note = str(out.get("note") or out.get("error") or "")
             trail.append({"attempt": len(trail) + 1, "how": label, "collection": coll or "(all documents)",
-                          "query": q, "clause": cl, "chapter": ch, "hits": n, "note": note})
+                          "query": q, "clause": cl, "chapter": ch, "hits": n, "note": note,
+                          "error": errored, "retried": retried,
+                          "not_tabulated": bool(out.get("not_tabulated"))})
             if not n:                                  # a hit is logged by finish(), which knows the saved path
-                self.log("search_engineering_standards", d, "0 hits" + (f" -- {note[:120]}" if note else ""))
+                self.log("search_engineering_standards", d,
+                         ("SERVER ERROR (after one retry)" if errored else "0 hits")
+                         + (f" -- {note[:120]}" if note else ""))
             return out, False
 
-        def finish(out: dict, eff_coll: str, label: str, sent_q: str = "") -> dict:
-            """A rung hit. Hand back the hits, plus what it took to get them."""
+        def finish(out: dict, eff_coll: str, label: str, sent_q: str = "", att: int = 0,
+                   thin: bool = False) -> dict:
+            """A rung hit. Hand back the hits, plus what it took to get them.
+
+            `att` is the trail number of the rung that ANSWERED (not the number of rungs sent): the
+            escalation note names that rung, and says what the first attempt actually returned."""
+            att = att or len(trail)
             if len(trail) > 1:
                 out["escalation"] = trail
-                out["escalated"] = (f"Your query as written found nothing; these hits come from attempt "
-                                    f"{len(trail)} ({label}). Read 'escalation' before you cite them -- the "
+            if att > 1 and trail:
+                first = trail[0]
+                said = ("a server error" if first.get("error")
+                        else f"{first.get('hits', 0)} hit(s)")
+                out["escalated"] = (f"Attempt 1 ({first.get('how')}) returned {said}; these hits come from "
+                                    f"attempt {att} ({label}). Read 'escalation' before you cite them -- the "
                                     "wording that worked is the wording to use next time.")
+            errs = [t["attempt"] for t in trail if t.get("error")]
+            if errs:
+                out["retrieval_errors"] = (f"attempt(s) {errs} failed with a server error (after one retry); "
+                                           "they are not evidence of absence.")
             if eff_coll != collection:                 # rung 5: say which document actually answered
-                srcs = []
-                for h in (out.get("results") or []):
-                    s = str(h.get("source") or "").strip() if isinstance(h, dict) else ""
-                    if s and s not in srcs:
-                        srcs.append(s)
-                if out.get("note"):
-                    out["server_note"] = out["note"]
-                out["found_in_documents"] = srcs
-                out["note"] = ("FOUND ONLY WITHOUT THE DOCUMENT FILTER -- this text is from "
-                               + (", ".join(srcs) or "another document in the corpus")
-                               + f", NOT from {collection}. Cite the document that actually supplied it, and "
-                                 "confirm that document governs this member before you use the value.")
+                self._label_widened(out, collection)
             if spec and self.building:
                 return self._save_rag(query, eff_coll, out, log_collection=collection, via=label,
-                                      sent_query=sent_q or query)
+                                      sent_query=sent_q or query, clause=clause)
             n = len(out.get("results") or [])
             d = f"[{collection}] {label}" + (f" as={eff_coll or 'ALL documents'}" if eff_coll != collection else "")
             self.log("search_engineering_standards", d + f" top_k={top_k}: {query}", f"{n} hits")
             return out
 
-        # A rung that comes back with one marginal chunk is not an answer; it is the ladder stopping
-        # one rung too early. The first run after the contract told the agent to name exact ids sent
-        # a nine-term query at IS 800:2007, matched a single chunk straddling the E7/F2 boundary, and
-        # reported success -- the F2.2 lateral-torsional clause it wanted was never reached. So a
-        # rung is accepted on ENOUGH hits; below that it is remembered and the ladder keeps climbing,
-        # and the best rung seen is what gets returned if nothing better turns up.
+        # R02 (L-01): rungs are ranked by CLASS, not by hit count. An exact clause / table / equation
+        # hit is the answer however many records it holds -- every exact lookup in the corpus returns
+        # exactly one -- so it ends the ladder at once. Below that, a filtered full-text rung is
+        # accepted on ENOUGH hits; a thinner one is remembered (count is only the tie-break between
+        # filtered rungs) and the ladder keeps climbing. The unfiltered rung 5 runs only when rungs
+        # 1-4 all came back EMPTY, so an answer from the asked document always outranks another
+        # document's text. (The first ENOUGH rule, from a nine-term query that matched one chunk
+        # straddling two chapters, still holds for full text.)
         ENOUGH = 3
         best: dict = {}
 
-        def consider(out, eff_coll: str, label: str, sent_q: str = ""):
+        def consider(out, eff_coll: str, label: str, sent_q: str = "", cid: str = ""):
             """-> the finished result when this rung is good enough, else None (keep climbing)."""
-            n = len(((out or {}).get("results")) or [])
+            res = ((out or {}).get("results")) or []
+            n = len(res)
             if not n:
+                if out and (out.get("not_tabulated") or out.get("document_not_in_corpus")
+                            or "is not in the corpus" in str(out.get("note") or "")):
+                    # the corpus answered (or said the document is not in it): this is a tabulation gap (e.g. a town in neither annex),
+                    # a definite answer that no rewording will change
+                    return self._not_found(query, collection, trail)
                 return None
+            att = len(trail)
+            if eff_coll == collection and self._is_exact_reply(out, cid):
+                out["exact_match"] = True
+                return finish(out, eff_coll, label, sent_q=sent_q, att=att)
             if n >= ENOUGH:
-                return finish(out, eff_coll, label, sent_q=sent_q)
+                return finish(out, eff_coll, label, sent_q=sent_q, att=att)
             if n > len(((best.get("out") or {}).get("results")) or []):
-                best.update(out=out, coll=eff_coll, label=label, sent=sent_q)
+                best.update(out=out, coll=eff_coll, label=label, sent=sent_q, att=att)
             return None
 
         def best_or_none():
@@ -290,17 +324,25 @@ class JobWorkspace:
             if not best:
                 return None
             out = best["out"]
-            out["thin"] = (f"Every attempt was thin; this is the best of {len(trail)}, from "
-                           f"{best['label']}, with {len(out.get('results') or [])} hit(s). Treat it as a "
-                           "lead rather than an answer -- if it does not contain the provision, ask again "
-                           "with the exact printed clause id and the words the standard itself uses.")
-            return finish(out, best["coll"], best["label"], sent_q=best.get("sent") or "")
+            n = len(out.get("results") or [])
+            if best["att"] == 1:
+                out["thin"] = (f"Your query found only {n} hit(s) and none of the {len(trail) - 1} later "
+                               "attempt(s) did better. Treat it as a lead rather than an answer -- if it does "
+                               "not contain the provision, ask again with the exact printed clause id and the "
+                               "words the standard itself uses.")
+            else:
+                out["thin"] = (f"Every attempt was thin; this is the best of {len(trail)}, from "
+                               f"{best['label']} (attempt {best['att']}), with {n} hit(s). Treat it as a "
+                               "lead rather than an answer -- if it does not contain the provision, ask again "
+                               "with the exact printed clause id and the words the standard itself uses.")
+            return finish(out, best["coll"], best["label"], sent_q=best.get("sent") or "", att=best["att"],
+                          thin=True)
 
         # ---- rung 1: exactly what was asked for -------------------------------------------------
         out, halt = attempt("rung1 as-asked", query, collection, clause, chapter)
         if halt:
             return dict(RAG_HALT)
-        done = consider(out, collection, "rung1 as-asked")
+        done = consider(out, collection, "rung1 as-asked", cid=clause or query)
         if done is not None:
             return done
         # An unknown collection name is the agent's mistake, not a corpus gap: escalating it would
@@ -320,7 +362,7 @@ class JobWorkspace:
             out, halt = attempt("rung2 no-filter", query, collection)
             if halt:
                 return dict(RAG_HALT)
-            done = consider(out, collection, "rung2 no-filter")
+            done = consider(out, collection, "rung2 no-filter", cid=query)
             if done is not None:
                 return done
 
@@ -332,7 +374,7 @@ class JobWorkspace:
             out, halt = attempt(f"rung3 exact-id {cid}", query, collection, cid, chapter)
             if halt:
                 return dict(RAG_HALT)
-            done = consider(out, collection, f"rung3 exact-id {cid}")
+            done = consider(out, collection, f"rung3 exact-id {cid}", cid=cid)
             if done is not None:
                 return done
 
@@ -346,11 +388,13 @@ class JobWorkspace:
                 return done
 
         # ---- rung 5: drop the document filter ----------------------------------------------------
-        # An empty collection makes the server search every specification it holds; for the OpenSees
-        # and example corpora the equivalent widening is the group name without its sub-collection.
+        # Only when rungs 1-4 found NOTHING in the asked document: a thin answer from the document
+        # that governs outranks a fuller one from a document that does not. An empty collection makes
+        # the server search every specification it holds; for the OpenSees and example corpora the
+        # equivalent widening is the group name without its sub-collection.
         low = (collection or "").lower()
         wide = "" if spec else ("opensees" if "opensees" in low else ("examples" if "example" in low else None))
-        if wide is not None:
+        if wide is not None and not best:
             out, halt = attempt("rung5 any-document", query, wide, "", "")
             if halt:
                 return dict(RAG_HALT)
@@ -395,6 +439,95 @@ class JobWorkspace:
                 last_err = e
         return None, last_err
 
+    # ---- R01 / R02 helpers: what a reply IS, before anyone counts its hits ----
+    # A note of this shape is the SERVER failing, not the corpus answering (the 2026-09 harness
+    # returned "server error: SQLite objects created in a thread ..." on every rung, and the ladder
+    # reported the provisions "genuinely absent").
+    _SERVER_ERR_RE = re.compile(r"server error|internal error|exception|traceback|timed? ?out|"
+                                r"sqlite objects|operationalerror|programmingerror|database is locked", re.I)
+
+    def _is_error_reply(self, out) -> bool:
+        """True when a reply reports a server / transport failure instead of an answer."""
+        if not isinstance(out, dict):
+            return False
+        if out.get("results"):
+            return False                       # hits are hits, whatever the note says
+        if out.get("error"):
+            return True
+        return bool(self._SERVER_ERR_RE.search(str(out.get("note") or "")))
+
+    @staticmethod
+    def _norm_id(s) -> str:
+        """'Table 10' / 'table10' / '10' -> '10'; 'Eq. 7-1' -> '7-1'; '7.3.6.' -> '7.3.6'."""
+        t = str(s or "").strip()
+        t = re.sub(r"^\s*(?:table|tab\.?|tbl\.?|section|sec\.?|clause|cl\.?|§|equation|eqn?\.?)\s*", "", t,
+                   flags=re.I)
+        return re.sub(r"\s+", "", t).rstrip(".").casefold()
+
+    def _is_exact_reply(self, out, cid: str = "") -> bool:
+        """R02: the reply IS the exact record asked for.
+
+        Recognised when the server says so (`matched`, or the result `type` it actually ran, as
+        exact_section / exact_table / exact_equation), or when a hit's section / table / equation id
+        equals the id asked for. The id test is what makes an older adapter's replies count: it maps
+        a table hit's `section` to the clause that cites the table, so `table_id` is compared too."""
+        if not isinstance(out, dict):
+            return False
+        res = out.get("results") or []
+        if not res:
+            return False
+        if str(out.get("matched") or "").lower().startswith("exact_"):
+            return True
+        if str(out.get("type") or "").lower().startswith("exact_") and out.get("found") is not False:
+            return True
+        want = self._norm_id(cid)
+        if not want or len(str(cid).split()) > 3:
+            return False                       # a sentence is not an id
+        tm = re.match(r"(?i)^\s*(?:table|tab\.?|tbl\.?)\s*(\S+)", str(cid or ""))
+        for h in res:
+            if not isinstance(h, dict):
+                continue
+            for k in ("section", "section_id", "table_id", "eq_id", "clause"):
+                v = h.get(k)
+                if v not in (None, "") and self._norm_id(v) == want:
+                    return True
+            # an adapter that forwards neither `matched` nor `table_id`: the table's own caption as title
+            if tm and re.match(r"(?i)^\s*table\s+" + re.escape(tm.group(1)) + r"(?![\w.])", str(h.get("title") or "")):
+                return True
+        return False
+
+    def _label_widened(self, out: dict, collection: str) -> None:
+        """Rung 5 answered. Put the asked document's own hits first; say "FOUND ONLY WITHOUT THE
+        DOCUMENT FILTER" only when NO hit comes from the document that was asked for."""
+        res = [h for h in (out.get("results") or [])]
+        stem = self._collection_stem(collection) or ""
+        mine = {x.lower() for x in (stem, collection) if x}
+
+        def src(h):
+            return str(h.get("source") or h.get("doc") or "").strip() if isinstance(h, dict) else ""
+
+        own = [h for h in res if src(h).lower() in mine]
+        others = [h for h in res if src(h).lower() not in mine]
+        srcs = []
+        for h in others:
+            s_ = src(h)
+            if s_ and s_ not in srcs:
+                srcs.append(s_)
+        if out.get("note"):
+            out["server_note"] = out["note"]
+        if own:
+            out["results"] = own + others
+            out["also_found_in"] = srcs
+            out["note"] = (f"Hits 1-{len(own)} are from {stem or collection} (found once the document filter was "
+                           "dropped)" + (f"; the text is also found in: {', '.join(srcs)}" if srcs else "")
+                           + ". Cite the document that actually supplied each hit.")
+        else:
+            out["found_in_documents"] = srcs
+            out["note"] = ("FOUND ONLY WITHOUT THE DOCUMENT FILTER -- this text is from "
+                           + (", ".join(srcs) or "another document in the corpus")
+                           + f", NOT from {collection}. Cite the document that actually supplied it, and "
+                             "confirm that document governs this member before you use the value.")
+
     # rag_server._EQ: the server only routes a `clause` to the EQUATION index when it has a leading
     # letter. A dropped-letter id ("3-1", "1.3.1.1-1") therefore never gets there, which is the one
     # gap in its exact-id handling that rung 3 has to close. Keep in sync with the hub's rag_server.
@@ -405,6 +538,16 @@ class JobWorkspace:
     _QUERY_ID_RE = re.compile(r"\b(?:[A-Za-z]{1,2}\d+(?:\.\d+)*(?:-\d+[a-z]?)?"   # F2 - F2.2 - F2-1 - E1.3.1.1-1
                               r"|\d+\.\d+(?:\.\d+)*(?:-\d+[a-z]?)?"               # 12.8.1 - 12.8-3 - 1.3.1.1-1
                               r"|\d+-\d+[a-z]?)\b")                               # 3-1 (dropped leading letter)
+
+    # NEW-7: unit tokens and material grades are not clause ids ("Steel 78.5 kN/m3" once sent M3).
+    _UNIT_RE = re.compile(r"(?:(?<![\d.])\d+(?:\.\d+)?\s*(?:k?N|kgf?|t|g|mm|cm|m|km|[kKMG]?Pa|%|°)"
+                          r"(?:\s*/\s*(?:mm|cm|m|s|h)\s*[234\u00b2\u00b3\u2074]?)?(?![A-Za-z0-9])"
+                          r"|\b(?:k?N|kgf?|t|g)\s*/\s*(?:mm|cm|m)\s*[234\u00b2\u00b3\u2074]?(?![A-Za-z0-9])"
+                          r"|\b(?:mm|cm|m)\s*[234\u00b2\u00b3\u2074](?![A-Za-z0-9])"
+                          r"|\b(?:m|km)\s*/\s*(?:s|h)\b|\b[kKMG]?Pa\b)")
+    # IS clause / annex ids are upper-case (D-1, E-1.1, F2 in AISC); a lower-case lead is a symbol
+    # (k2, m3, h0) and E250 / Fe410 are steel grades.
+    _NOT_AN_ID_RE = re.compile(r"^(?:[a-z]\w*|E\d{3}\w*|Fe\d{3}\w*)$")
 
     def _query_ids(self, query: str, clause: str = "", chapter: str = "", limit: int = 3) -> list:
         """Ids worth re-sending as an exact `clause`, most promising first.
@@ -420,14 +563,21 @@ class JobWorkspace:
             cands.append(src)
         else:
             stripped = self._DOCNAME_RE.sub(" ", query or "")
-            found = [m.group(0) for m in self._QUERY_ID_RE.finditer(stripped)]
+            stripped = self._UNIT_RE.sub(" ", stripped)      # "kN/m3" is a unit, not clause M3
+            found = [m.group(0) for m in self._QUERY_ID_RE.finditer(stripped)
+                     if not self._NOT_AN_ID_RE.match(m.group(0))]
             lettered = [f for f in found if f[:1].isalpha()]
-            cands += (lettered or found)[:2]
+            # IS annex clause ids (D-1, E-1.1) and printed table ids ("Table 10") are exact ids too
+            annex = [m.group(0) for m in re.finditer(r"\b[A-H]-\d+(?:\.\d+)*\b", stripped)]
+            tables = ["Table " + m.group(1) for m in
+                      re.finditer(r"\bTable\s+(\d+[A-Za-z]?(?:\s*\([a-z]\))?)", stripped, re.I)]
+            cands += ((lettered or found)[:2] + annex[:1] + tables[:1])
         eq = (self._corpus_aliases().get("eq_id_aliases") or {})
         ch = (chapter or "").strip().upper()[:1]
         out = []
         for c in cands:
-            c = c.strip().upper()
+            c = c.strip()
+            c = ("Table " + c[6:].strip()) if c.lower().startswith("table ") else c.upper()
             if not c:
                 continue
             if c not in out and not (clause and c == clause.strip().upper()):
@@ -462,9 +612,11 @@ class JobWorkspace:
             qfm = config.DATA.parent.parent / "grokbot"
             cands += [qfm / "indexes" / "aliases.json",
                       qfm / "engineering_rag_phase2" / "indexes" / "aliases.json"]
-            # India HR: prefer the India corpus aliases on this shared box
-            cands += [pathlib.Path("/workspace/engineering_rag_india/indexes/aliases.json"),
-                      pathlib.Path("/workspace/engineering_rag_india/scripts/aliases.json")]
+            # India HR: the India corpus aliases (INDIA_CORPUS_ROOT, else a sibling checkout, else
+            # /workspace/engineering_rag_india -- see india_collections.india_corpus_root)
+            from .india_collections import india_corpus_root
+            _root = pathlib.Path(india_corpus_root())
+            cands += [_root / "indexes" / "aliases.json", _root / "scripts" / "aliases.json"]
         except Exception:
             pass
         self._aliases_cache = {}
@@ -492,20 +644,44 @@ class JobWorkspace:
         groups = (self._corpus_aliases().get("synonym_groups") or [])
         low = (query or "").lower()
         out = []
+
+        def bounded(m: str):
+            # R04: whole words only -- "load combination" must not match inside "load combinations"
+            return re.compile(r"(?<![A-Za-z0-9])" + re.escape(m) + r"(?![A-Za-z0-9])", re.I)
+
         for g in groups:
             if not isinstance(g, list) or len(out) >= limit:
                 continue
             members = [str(m) for m in g if isinstance(m, str) and m.strip()]
-            hit = next((m for m in members if (" " in m or "-" in m) and len(m) > 4 and m.lower() in low), None)
-            if not hit:
+            # the LONGEST multi-word member that occurs as whole words is the phrase to swap
+            hits = [m for m in members if (" " in m or "-" in m) and len(m) > 4 and bounded(m).search(query or "")]
+            if not hits:
                 continue
+            hit = max(hits, key=len)
             for alt in sorted((m for m in members if m.lower() != hit.lower()), key=len, reverse=True):
-                cand = re.sub(re.escape(hit), lambda _m, _a=alt: _a, query, flags=re.I)
+                if self._symbol_alias(alt):
+                    continue                   # the server already expands symbols / abbreviations
+                cand = bounded(hit).sub(lambda _m, _a=alt: _a, query)
                 if cand.lower() != low and cand not in out:
                     out.append(cand)
                 if len(out) >= limit:
                     break
         return out[:limit]
+
+    @staticmethod
+    def _symbol_alias(alt: str) -> bool:
+        """A symbol-shaped alias ("gamma_m0", "V_b", "V b", "γm0", "Vz") is not a rewording."""
+        a = (alt or "").strip()
+        if not a:
+            return True
+        if re.search(r"[_\\^{}$]|[\u0370-\u03ff]", a):
+            return True
+        toks = a.split()
+        if all(len(t) <= 2 for t in toks):
+            return True
+        if len(toks) == 1 and (len(a) <= 4 or re.search(r"\d", a) or (a.isupper() and len(a) <= 6)):
+            return True
+        return False
 
     _status_cache = None
 
@@ -587,6 +763,28 @@ class JobWorkspace:
                            + ". If one of those governs this check instead, query it. Otherwise name the "
                              "unavailable document in the report and flag every value you take from memory.")
             return out
+        # R01 / HR-C-10: the corpus ANSWERED that the item is not tabulated (a town in neither Annex A
+        # nor Annex E, ...). Pass its note through verbatim -- it names the map or table to use.
+        nt = [t for t in trail if t.get("not_tabulated")]
+        if nt:
+            out["not_found_kind"] = "not_tabulated"
+            out["not_tabulated"] = True
+            out["corpus_gap"] = True
+            out["note"] = str(nt[-1].get("note") or "Not tabulated in the standard (corpus reply had no note).")
+            return out
+        # R01: a rung that failed on the server is not a search that came back empty. If any rung
+        # errored, nothing here is evidence of absence: found is None (unknown), not False.
+        errs = [t for t in trail if t.get("error")]
+        if errs:
+            out["found"] = None
+            out["not_found_kind"] = "server_error"
+            out["corpus_gap"] = False
+            out["server_errors"] = [str(t.get("note") or "")[:300] for t in errs]
+            out["note"] = ("RETRIEVAL ERROR — not evidence of absence; retry. "
+                           f"{len(errs)} of {len(trail)} attempt(s) failed on the grounding server even after one "
+                           f"retry ({errs[0].get('note', '')[:160]}). Re-issue this search; if the error persists, "
+                           "restart the RAG server. Do NOT report the provision as absent from the standard.")
+            return out
         out["not_found_kind"] = "term_absent_from_document"
         out["note"] = (f"NOT FOUND (iii) -- {len(trail)} escalating attempts against a corpus that DOES hold "
                        f"this document all came back empty ({tried}), so the term as you phrased it is "
@@ -661,8 +859,37 @@ class JobWorkspace:
                 break
         return seen
 
+    def _rag_file(self, d: pathlib.Path, query: str, collection: str, clause: str, qtype: str, text: str,
+                  log_collection: str = "") -> pathlib.Path:
+        """R03: the evidence file for one answer. Keyed on collection | clause | type | query, so the same
+        words asked of two documents ("Chennai" on IS 1893 and on IS 875-3) are two files; a file that
+        already exists with DIFFERENT content is never overwritten -- the new answer gets a
+        content-hash suffix instead. -> the path actually written (or already holding this text)."""
+        slug = re.sub(r"[^a-z0-9]+", "-", (query or "").lower()).strip("-")[:40] or "q"
+        key_src = "|".join([log_collection or "", collection or "", (clause or "").strip(),
+                            (qtype or "").strip().lower(), (query or "").strip()])
+        key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:8]
+        chash = hashlib.md5(text.encode("utf-8")).hexdigest()[:6]
+        for name in (f"{slug}-{key}.txt", f"{slug}-{key}-{chash}.txt"):
+            p = d / name
+            if not p.exists():
+                p.write_text(text, encoding="utf-8")
+                return p
+            try:
+                if p.read_text(encoding="utf-8") == text:
+                    return p                   # identical evidence already on disk
+            except Exception:
+                pass
+        i = 2
+        while True:                            # hash-suffixed name taken by other text: never overwrite
+            p = d / f"{slug}-{key}-{chash}-{i}.txt"
+            if not p.exists():
+                p.write_text(text, encoding="utf-8")
+                return p
+            i += 1
+
     def _save_rag(self, query: str, collection: str, out, log_collection: str = "", via: str = "",
-                  sent_query: str = ""):
+                  sent_query: str = "", clause: str = "", qtype: str = ""):
         """Spec RAG: write the full hits to rag/<slug>.txt (provenance + later re-read) and return the FULL
         result tagged with saved/query/clauses_found. The agent uses the hits inline now; once the design
         completes the run loop evicts this result to a small pointer to the saved file (agent._evict_all_rag).
@@ -674,10 +901,8 @@ class JobWorkspace:
         text = self._render_rag(query, collection, out, via=via, sent_query=sent_query)
         d = (self._job_dir() or self.jobs) / "rag"
         d.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "-", (query or "").lower()).strip("-")[:40] or "q"
-        fname = f"{slug}-{hashlib.md5((query or '').encode()).hexdigest()[:6]}.txt"
-        (d / fname).write_text(text, encoding="utf-8")
-        rel = f"rag/{fname}"
+        fp = self._rag_file(d, query, collection, clause, qtype, text, log_collection=log_collection)
+        rel = f"rag/{fp.name}"
         res = out.get("results") if isinstance(out, dict) else out
         nhits = len(res) if isinstance(res, list) else 1
         self.log("search_engineering_standards",
