@@ -476,22 +476,17 @@ detailing (IS 800 Section 12); 10 Connections (IS 800 Section 10); 11 Foundation
 13 QA and grounding.
 
 ## HOW TO ASK THE RAG
-* One collection per call:
-
-| `collection=` | Document | Ask it for |
-|---|---|---|
-| `engineering_standards_IS800` | IS 800:2007 | member limit states, connections, Section 12 |
-| `engineering_standards_IS808` | IS 808:2021 | rolled section dimensions |
-| `engineering_standards_IS816` / `IS9595` / `IS4000` | welding / weld procedure / HSFG bolts | connection detailing |
-| `engineering_standards_IS1161` / `IS2062` | tubes / structural steel | grades, yield by thickness |
-| `engineering_standards_IS875_P1` … `P5` | IS 875 Parts 1-5 | loads — mandatory every job |
-| `engineering_standards_IS1893` | IS 1893 Part 1:2016 (+ Amd 1, 2) | seismic — mandatory where seismic applies |
-| `steel_design_examples` | worked examples | method only, not authoritative |
-| `opensees_buildings_3d`, `openseespy_documentation`, `opensees_documentation` | modelling | API and model references |
-
-* Use the `clause` argument with the id alone: `clause="8.2.2"`, `clause="Table 4"`, `clause="7.6.2"`.
-* Printed wording beats paraphrase ("laterally unsupported beams", "equivalent static method").
-* An equation needs its variable definitions, limits and exceptions — ask for each.
+The full rules are in **HOW TO QUERY THE IS CORPUS** (`contract/QUERYING_IS_CORPUS.md`, in this prompt below the
+contract). They are not style advice: nearly every "the RAG has nothing on this" is a query problem. In short:
+* ONE document per call, by its stem in `doc` (`IS_800_2007`, `IS_1893_Part_1_2016`, `IS_875_Part_3_2015` ...).
+* An EXACT id when you know the provision: `type="exact_section"` / `"exact_table"` and `query` = the id alone
+  (`8.2.2.1`, `Table 4`, `Table 9(c)`, `HB 300`). `type="fts"` only to NAVIGATE, in the standard's printed words.
+  A town's zone / basic wind speed: `type="fts"`, the town name alone, in IS 1893 (Annex E) or IS 875-3 (Annex A).
+* One provision per call; for an expression also its "where:" variables (`context_neighbors=1`), limits, exceptions.
+* The traps (IS 800 Tables 8/9/13 are printed as sub-tables, Table 4 loads vs Table 5 materials, no numbered
+  equations, IS 1893 Tables 8/9 as amended, IS 2062 Table 3 ...) and the id formats are listed there.
+* The collection names (`engineering_standards_IS800`, `_IS875_P1` .. `_P5`, `_IS1893` ...) are the legacy form of
+  `doc`; either counts for the Chapter 13 grounding check.
 * `not_found_kind`: `no_specification_index` / `document_not_in_corpus` are corpus gaps (not evidence of
   absence); `not_tabulated` = the corpus answered that the item has no table row (a town in neither Annex A nor
   Annex E: read the map, or use the ruling R5 site_proxy record); `server_error` (with `found: None` and

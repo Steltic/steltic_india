@@ -38,7 +38,7 @@ class Wire(JobWorkspace):
     def _corpus_status(self):
         return {}
 
-    def _rag_post(self, query, collection, clause="", chapter=""):
+    def _rag_post(self, query, collection, clause="", chapter="", type_="", want_commentary=False, neighbors=None):
         self.sent.append((query, collection, clause))
         return self.reply(query, collection, clause, len(self.sent)), None
 
@@ -55,9 +55,16 @@ def _run(reply, query, coll=COLL, **kw):
 
 # ---------------------------------------------------------------- R02: exact hits are final ----
 def test_a_single_exact_section_hit_is_the_answer():
+    # the policy form: the id alone, typed -- one send, and the one record is the answer
+    ws, out = _run(lambda q, c, cl, n: {"results": _hits(1, section="7.3.6") if cl else _hits(5)},
+                   "7.3.6", type="exact_section", clause="7.3.6")
+    assert len(ws.sent) == 1, ws.sent
+    assert "thin" not in out and out.get("exact_match") is True
+    assert out["results"][0]["section"] == "7.3.6"
+    # a sentence carrying the id: the exact id goes first and leads the answer; one navigation query follows
     ws, out = _run(lambda q, c, cl, n: {"results": _hits(1, section="7.3.6") if cl else _hits(5)},
                    "7.3.6 weight of partition walls", clause="7.3.6")
-    assert len(ws.sent) == 1, ws.sent
+    assert ws.sent[0] == ("", COLL, "7.3.6") and ws.sent[1][0] == "weight of partition walls", ws.sent
     assert "thin" not in out and out.get("exact_match") is True
     assert out["results"][0]["section"] == "7.3.6"
 
@@ -65,13 +72,13 @@ def test_a_single_exact_section_hit_is_the_answer():
 def test_matched_exact_reply_is_final_even_without_ids():
     ws, out = _run(lambda q, c, cl, n: {"results": _hits(1), "matched": "exact_table", "type": "exact_table"},
                    "Table 10", clause="Table 10")
-    assert len(ws.sent) == 1 and "thin" not in out
+    assert len(ws.sent) == 1 and "thin" not in out and out.get("exact_match") is True
 
 
 def test_exact_table_recognised_by_table_id_when_section_is_the_citing_clause():
     # the old adapter maps a table hit's `section` to the clause that cites it (Table 10 -> 7.3.5)
     ws, out = _run(lambda q, c, cl, n: {"results": _hits(1, section="7.3.5", table_id="10") if cl else []},
-                   "percentage of imposed load", clause="Table 10")
+                   "percentage of imposed load", clause="Table 10", type="exact_table")
     assert len(ws.sent) == 1 and out.get("exact_match") is True
 
 
@@ -80,14 +87,17 @@ def test_exact_table_recognised_by_its_caption_title():
     ws, out = _run(lambda q, c, cl, n: {"results": [{"id": "t", "section": "5.3.3", "source": "IS_800_2007",
                                                      "title": "Table 4 Partial Safety Factors for Loads"}] if cl else []},
                    "Table 4 partial safety factors for loads", coll="engineering_standards_IS800")
-    assert out.get("exact_match") is True and "rung3 exact-id Table 4" in out["escalated"]
+    assert out.get("exact_match") is True and out["policy"].startswith("exact-id Table 4")
+    assert ws.sent[0] == ("", "engineering_standards_IS800", "Table 4")
+    # the navigation words carry no table id and no invented chapter ("Table 4" is not chapter T)
+    assert ws.sent[1][0] == "partial safety factors for loads" and "chapter" not in out["policy"]
     ws, out = _run(lambda q, c, cl, n: {"results": [{"id": "t", "title": "Table 45 Something"}] if cl else []},
                    "x", clause="Table 4", coll="engineering_standards_IS800")
     assert not out.get("exact_match")
 
 
-def test_rung3_exact_hit_beats_a_thin_fts_rung_and_stops_the_ladder():
-    # IS 18168 5.6: rung 1 (sentence) finds 1 unrelated chunk, rung 3 exact-id 5.6 finds the clause
+def test_the_exact_id_in_a_sentence_is_asked_first_and_leads():
+    # IS 18168 5.6: the sentence alone finds 1 unrelated chunk; the policy asks exact-id 5.6 FIRST
     def reply(q, c, cl, n):
         if cl == "5.6":
             return {"results": _hits(1, section="5.6")}
@@ -95,7 +105,8 @@ def test_rung3_exact_hit_beats_a_thin_fts_rung_and_stops_the_ladder():
     ws, out = _run(reply, "maximum load effect analysis 5.6", coll="engineering_standards_IS18168")
     assert out["results"][0]["section"] == "5.6"
     assert "thin" not in out
-    assert "rung3 exact-id 5.6" in out["escalated"] and "returned 1 hit" in out["escalated"]
+    assert "exact-id 5.6" in out["policy"] and "escalated" not in out
+    assert ws.sent[0] == ("", "engineering_standards_IS18168", "5.6")
 
 
 # ---------------------------------------------------------------- R02: rung 5 ----

@@ -159,3 +159,4 @@ The BIS standards corpus is not published with this repo, because the standards 
 - Corpus: the IS corpus is the user's own; users build it in the Steltic hub
 - CORPUS_FIX_LLM_INSTRUCTIONS.md: the owner's instructions for the corpus fix pass (replaces the placeholder)
 - CORPUS_FIX_LLM_INSTRUCTIONS.md: final version (matches the hub's bundled corpus module: validate probes, optional scripts/*.json, Import fixed corpus tab)
+- Query instructions: contract/QUERYING_IS_CORPUS.md in the design prompt; search_engineering_standards takes the retrieval policy (type / doc / purpose / context_neighbors) and sends exact ids first

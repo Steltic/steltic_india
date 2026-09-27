@@ -172,8 +172,89 @@ class JobWorkspace:
             counts[r["tool"]] = counts.get(r["tool"], 0) + 1
         return {"total_calls": len(recs), "counts_by_tool": counts, "entries": recs}
 
+    # ---------------- the retrieval policy (contract/QUERYING_IS_CORPUS.md) ----------------------------
+    # The design agents are meant to ask the standards the way that policy says: an EXACT id when the
+    # provision is known (`type` + the id alone + one document), a full-text query in the standard's
+    # own words only to NAVIGATE to an id, one idea per query, never a sentence. The contract now
+    # says so and the tool exposes `type`/`doc`; and because an LLM will still type a sentence some
+    # of the time, the tool applies the policy to every call whatever was typed and records the
+    # policy form: "laterally unsupported beams 8.2.2" goes to the corpus as exact-id 8.2.2 first,
+    # then fts «laterally unsupported beams», and the saved hits say exactly that.
+    POLICY_TYPES = ("exact_section", "exact_equation", "exact_table", "id", "fts", "keyword")
+    _TABLE_ID_RE = re.compile(r"\bTable\s+\d+[A-Za-z]?(?:\s*\([a-z]\))?", re.I)
+    DOC_COLLECTIONS = {              # canonical doc stem -> the collection tag the report counts by
+        "IS_800_2007": "engineering_standards_IS800", "IS800": "engineering_standards_IS800",
+        "IS_18168_2023": "engineering_standards_IS18168", "IS18168": "engineering_standards_IS18168",
+        "IS_808_2021": "engineering_standards_IS808", "IS808": "engineering_standards_IS808",
+        "IS_1161_2014": "engineering_standards_IS1161", "IS1161": "engineering_standards_IS1161",
+        "IS_2062_Part_1_2025": "engineering_standards_IS2062", "IS2062": "engineering_standards_IS2062",
+        "IS_816_1969": "engineering_standards_IS816", "IS816": "engineering_standards_IS816",
+        "IS_4000_1992": "engineering_standards_IS4000", "IS4000": "engineering_standards_IS4000",
+        "IS_9595_1996": "engineering_standards_IS9595", "IS9595": "engineering_standards_IS9595",
+        "IS_875_Part_1_2026": "engineering_standards_IS875_P1",
+        "IS_875_Part_2_1987": "engineering_standards_IS875_P2",
+        "IS_875_Part_3_2015": "engineering_standards_IS875_P3",
+        "IS_875_Part_4_1987": "engineering_standards_IS875_P4",
+        "IS_875_Part_5_1987": "engineering_standards_IS875_P5",
+        "IS_1893_Part_1_2016": "engineering_standards_IS1893", "IS1893": "engineering_standards_IS1893",
+    }
+
+    def _policy_plan(self, query: str, clause: str, chapter: str, qtype: str) -> dict:
+        """What the policy makes of one call: exact lookups first, then at most one navigation query.
+
+        -> {"exact": [(kind, id), ...], "nav": text | "", "chapter": letter, "label": "..."}"""
+        q = (query or "").strip()
+        qtype = (qtype or "").strip().lower()
+        exact: list = []
+        nav = ""
+        ch = (chapter or "").strip().upper()
+        if ch[:1].isalpha():
+            ch = ch[:1]                                 # a lettered chapter (F, E, J); IS sections stay whole ("12")
+        if qtype in ("exact_section", "exact_equation", "exact_table", "id"):
+            # NEW-4: the clause wins over the sentence, and a sentence carrying an id sends the id only
+            exact = [(qtype, self._explicit_id(qtype, (clause or q).strip()))]
+        elif qtype in ("fts", "keyword"):
+            nav = q                                     # the agent chose navigation; send its words
+        else:
+            stripped = self._DOCNAME_RE.sub(" ", q)
+            bare = stripped.strip()
+            if bare and self._QUERY_ID_RE.fullmatch(bare):
+                exact = [("id", bare)]                  # a bare id typed into `query`
+            else:
+                ids = self._query_ids(q, clause, chapter)
+                exact = [("id", i) for i in ids]
+                if clause and clause.strip().upper() not in [i.upper() for _, i in exact]:
+                    exact.insert(0, ("id", clause.strip()))
+                nav = re.sub(r"\s+", " ", self._QUERY_ID_RE.sub(" ", self._TABLE_ID_RE.sub(" ", stripped))).strip(" ,;:-")
+                if len(nav.split()) < 2:
+                    nav = ""                            # nothing left to navigate with
+        steps = [f"{k} {i}" if k != "id" else f"exact-id {i}" for k, i in exact]
+        if nav:
+            steps.append(f"fts «{nav[:60]}»" + (f" chapter {ch}" if ch else ""))
+        return {"exact": exact, "nav": nav, "chapter": ch, "label": " · ".join(steps) or "as-asked"}
+
+    def _explicit_id(self, qtype: str, s: str) -> str:
+        """The id to send for an explicit exact_* type: `s` itself when it is an id, else the id
+        lifted out of it ("Table 10 importance factor" -> "Table 10"; "7.3.6 weight of partition
+        walls" -> "7.3.6"); `s` unchanged when no id is found (the server judges it)."""
+        s = (s or "").strip()
+        if not s or len(s.split()) <= 2:
+            return s                           # "7.3.6", "Table 10", "HB 300", "CLR100X50X15X2"
+        m = re.search(r"\bTable\s+(\d+[A-Za-z]?(?:\s*\([a-z]\))?)", s, re.I)
+        if qtype == "exact_table" and m:
+            return "Table " + m.group(1)
+        stripped = self._UNIT_RE.sub(" ", self._DOCNAME_RE.sub(" ", s))
+        ids = [x.group(0) for x in self._QUERY_ID_RE.finditer(stripped) if not self._NOT_AN_ID_RE.match(x.group(0))]
+        if ids:
+            return ids[0]
+        if m:
+            return "Table " + m.group(1)
+        return s
+
     def search_engineering_standards(self, query: str, collection: str = "engineering_standards_IS800",
-                                     top_k: int = 5, clause: str = "", chapter: str = "") -> dict:
+                                     top_k: int = 5, clause: str = "", chapter: str = "",
+                                     type: str = "", doc: str = "", want_commentary: bool = False,
+                                     context_neighbors=None, purpose: str = "") -> dict:
         """Search the standards corpus, ESCALATING before it is ever allowed to report nothing.
 
         One zero-hit answer is not evidence that a provision is absent -- it is far more often a
@@ -193,8 +274,13 @@ class JobWorkspace:
         it says WHICH of the three kinds of nothing it is (see `_not_found`). A transport failure is
         never a rung: an unreachable RAG still HALTs the run exactly as before, because grounding was
         promised and degrading quietly to memory mid-design is the failure we are preventing."""
+        if doc and str(doc).strip():                  # the policy names ONE document by its canonical stem
+            d = str(doc).strip()
+            collection = self.DOC_COLLECTIONS.get(d.upper(), self.DOC_COLLECTIONS.get(d, collection if d.lower().startswith("engineering_standards") else f"engineering_standards_{d}"))
+        qtype = (type or "").strip().lower()
+        plan = self._policy_plan(query, clause, chapter, qtype)
         flt = (f" clause={clause}" if clause else "") + (f" chapter={chapter}" if chapter else "")
-        detail = f"[{collection}] top_k={top_k}{flt}: {query}"   # the [collection] tag lets report._grounding_check count per-corpus
+        detail = f"[{collection}] {plan['label']}{flt}: {query}"   # the [collection] tag lets report._grounding_check count per-corpus
         # No RAG configured -> soft-disable: tell the agent once to rely on its own cited AISC
         # knowledge. But a RAG that IS configured and then becomes unreachable HALTS the run (the
         # rag_unavailable sentinel below): grounding was promised, so don't silently degrade to
@@ -212,7 +298,7 @@ class JobWorkspace:
         trail: list = []                              # widened rungs -- rung 5 must still save to rag/<slug>.txt
         seen: set = set()
 
-        def attempt(label: str, q: str, coll: str, cl: str = "", ch: str = ""):
+        def attempt(label: str, q: str, coll: str, cl: str = "", ch: str = "", type_: str = ""):
             """Send one rung. -> (result | None, halt). `None` with halt=False means 'skipped,
             identical to a rung already sent'; halt=True means the server died and the run stops.
 
@@ -220,24 +306,27 @@ class JobWorkspace:
             timeout) is not an empty answer. It is retried once; if it fails again the rung is
             recorded as errored and carries no hits, and `_not_found` reports kind server_error --
             never "genuinely absent"."""
-            key = (coll, (q or "").strip().lower(), (cl or "").upper(), (ch or "").upper())
+            key = (coll, (q or "").strip().lower(), (cl or "").upper(), (ch or "").upper(),
+                   "" if type_ in ("", "fts") else type_)   # the server full-texts an untyped query too
             if key in seen:
                 return None, False
             seen.add(key)
-            f = (f" clause={cl}" if cl else "") + (f" chapter={ch}" if ch else "")
+            f = (f" clause={cl}" if cl and not type_ else "") + (f" chapter={ch}" if ch else "")
             # The [collection] tag stays FIRST and stays the collection the AGENT asked for, even on a
             # widened rung: report._grounding_check counts per-corpus off that tag, and four attempts
             # at A341 are four pieces of grounding work done for A341 however they were phrased.
             d = f"[{collection}] {label}" + (f" as={coll or 'ALL documents'}" if coll != collection else "")
-            d += f" top_k={top_k}{f}: {q}"
-            out, err = self._rag_post(q, coll, cl, ch)
+            d += f" top_k={top_k}{f}" + (f": {q}" if q else "")
+            out, err = self._rag_post(q, coll, cl, ch, type_=type_, want_commentary=want_commentary,
+                                      neighbors=context_neighbors)
             if out is None:
                 self.log("search_engineering_standards", d, f"RAG unavailable ({err})")
                 return None, True
             retried = False
             if self._is_error_reply(out):              # R01: retry an errored rung once
                 retried = True
-                out, err = self._rag_post(q, coll, cl, ch)
+                out, err = self._rag_post(q, coll, cl, ch, type_=type_, want_commentary=want_commentary,
+                                          neighbors=context_neighbors)
                 if out is None:
                     self.log("search_engineering_standards", d, f"RAG unavailable ({err})")
                     return None, True
@@ -257,22 +346,23 @@ class JobWorkspace:
                          + (f" -- {note[:120]}" if note else ""))
             return out, False
 
-        def finish(out: dict, eff_coll: str, label: str, sent_q: str = "", att: int = 0,
-                   thin: bool = False) -> dict:
+        base = {"n": 1}        # how many trail entries the policy itself accounts for (not an escalation)
+
+        def finish(out: dict, eff_coll: str, label: str, sent_q: str = "", att: int = 0) -> dict:
             """A rung hit. Hand back the hits, plus what it took to get them.
 
             `att` is the trail number of the rung that ANSWERED (not the number of rungs sent): the
-            escalation note names that rung, and says what the first attempt actually returned."""
+            escalation note names that rung, and says what the policy step actually returned."""
             att = att or len(trail)
-            if len(trail) > 1:
+            if len(trail) > base["n"]:
                 out["escalation"] = trail
-            if att > 1 and trail:
-                first = trail[0]
-                said = ("a server error" if first.get("error")
-                        else f"{first.get('hits', 0)} hit(s)")
-                out["escalated"] = (f"Attempt 1 ({first.get('how')}) returned {said}; these hits come from "
-                                    f"attempt {att} ({label}). Read 'escalation' before you cite them -- the "
-                                    "wording that worked is the wording to use next time.")
+            if att > base["n"] and trail:
+                asked = trail[:base["n"]]
+                got = ("a server error" if all(t.get("error") for t in asked)
+                       else f"{sum(int(t.get('hits') or 0) for t in asked)} hit(s)")
+                out["escalated"] = (f"The query as the policy sent it ({len(asked)} attempt(s)) returned {got}; "
+                                    f"these hits come from attempt {att} ({label}). Read 'escalation' before "
+                                    "you cite them -- the wording that worked is the wording to use next time.")
             errs = [t["attempt"] for t in trail if t.get("error")]
             if errs:
                 out["retrieval_errors"] = (f"attempt(s) {errs} failed with a server error (after one retry); "
@@ -281,7 +371,7 @@ class JobWorkspace:
                 self._label_widened(out, collection)
             if spec and self.building:
                 return self._save_rag(query, eff_coll, out, log_collection=collection, via=label,
-                                      sent_query=sent_q or query, clause=clause)
+                                      sent_query=sent_q or query, clause=clause, qtype=qtype)
             n = len(out.get("results") or [])
             d = f"[{collection}] {label}" + (f" as={eff_coll or 'ALL documents'}" if eff_coll != collection else "")
             self.log("search_engineering_standards", d + f" top_k={top_k}: {query}", f"{n} hits")
@@ -298,7 +388,7 @@ class JobWorkspace:
         ENOUGH = 3
         best: dict = {}
 
-        def consider(out, eff_coll: str, label: str, sent_q: str = "", cid: str = ""):
+        def consider(out, eff_coll: str, label: str, sent_q: str = "", cid: str = "", att: int = 0):
             """-> the finished result when this rung is good enough, else None (keep climbing)."""
             res = ((out or {}).get("results")) or []
             n = len(res)
@@ -309,7 +399,7 @@ class JobWorkspace:
                     # a definite answer that no rewording will change
                     return self._not_found(query, collection, trail)
                 return None
-            att = len(trail)
+            att = att or len(trail)
             if eff_coll == collection and self._is_exact_reply(out, cid):
                 out["exact_match"] = True
                 return finish(out, eff_coll, label, sent_q=sent_q, att=att)
@@ -325,20 +415,81 @@ class JobWorkspace:
                 return None
             out = best["out"]
             n = len(out.get("results") or [])
-            if best["att"] == 1:
-                out["thin"] = (f"Your query found only {n} hit(s) and none of the {len(trail) - 1} later "
-                               "attempt(s) did better. Treat it as a lead rather than an answer -- if it does "
-                               "not contain the provision, ask again with the exact printed clause id and the "
-                               "words the standard itself uses.")
+            if best["att"] <= base["n"]:
+                out["thin"] = (f"The query as the policy sent it found only {n} hit(s) and none of the "
+                               f"{max(0, len(trail) - base['n'])} later attempt(s) did better. Treat it as a "
+                               "lead rather than an answer -- if it does not contain the provision, ask again "
+                               "with the exact printed clause id and the words the standard itself uses.")
             else:
                 out["thin"] = (f"Every attempt was thin; this is the best of {len(trail)}, from "
                                f"{best['label']} (attempt {best['att']}), with {n} hit(s). Treat it as a "
                                "lead rather than an answer -- if it does not contain the provision, ask again "
                                "with the exact printed clause id and the words the standard itself uses.")
-            return finish(out, best["coll"], best["label"], sent_q=best.get("sent") or "", att=best["att"],
-                          thin=True)
+            return finish(out, best["coll"], best["label"], sent_q=best.get("sent") or "", att=best["att"])
 
-        # ---- rung 1: exactly what was asked for -------------------------------------------------
+        # ---- the policy: exact ids first, each one its own lookup ------------------------------
+        # An exact lookup that finds its id IS the answer -- one section record is not "thin".
+        exact_hits: list = []
+        seen_ids: set = set()
+        matched_ids: list = []
+        for kind, cid in plan["exact"]:
+            lbl = f"exact-id {cid}" if kind == "id" else f"{kind} {cid}"
+            out, halt = attempt(lbl, "", collection, cid, "", type_=kind)
+            if halt:
+                return dict(RAG_HALT)
+            hits = ((out or {}).get("results") or [])
+            if not hits and ((out or {}).get("not_tabulated") or (out or {}).get("document_not_in_corpus")
+                             or "is not in the corpus" in str((out or {}).get("note") or "")):
+                return self._not_found(query, collection, trail)
+            # Only a lookup that matched the id is exact. The server says so (`matched`, or the
+            # exact_* `type` it ran); an older server does not, so a hit whose section / table /
+            # equation id IS the id counts too (NEW-2: a table hit's `section` is the clause citing
+            # it, so `table_id` is compared as well). Anything else -- the server's keyword fallback
+            # on an id that does not exist ("W14", "Cv1") -- is not an answer to an exact question
+            # and is left for the navigation step to judge.
+            if not self._is_exact_reply(out, cid):
+                continue
+            matched_ids.append(cid)
+            for h in hits:
+                hid = str(h.get("id") or h.get("section") or id(h)) if isinstance(h, dict) else str(h)
+                if hid not in seen_ids:
+                    seen_ids.add(hid)
+                    exact_hits.append(h)
+        # the navigation query is narrowed to the chapter of the provision that was found
+        nav_ch = plan["chapter"] or next((i[:1].upper() for i in matched_ids if re.match(r"^[A-Za-z]\d", i)), "")
+        if nav_ch and nav_ch != plan["chapter"]:
+            plan["label"] = plan["label"].replace(f"fts «{plan['nav'][:60]}»", f"fts «{plan['nav'][:60]}» chapter {nav_ch}") if plan["nav"] else plan["label"]
+        # ---- then ONE navigation query in the standard's own words, narrowed to the chapter ------
+        nav_hits: list = []
+        nav_out = None
+        if plan["nav"] and (len(exact_hits) < ENOUGH or qtype in ("fts", "keyword")):
+            nav_out, halt = attempt(f"fts «{plan['nav'][:60]}»", plan["nav"], collection, "", nav_ch,
+                                    type_=qtype if qtype in ("fts", "keyword") else "fts")
+            if halt:
+                return dict(RAG_HALT)
+            if not ((nav_out or {}).get("results")) and ((nav_out or {}).get("not_tabulated")
+                                                         or (nav_out or {}).get("document_not_in_corpus")
+                                                         or "is not in the corpus" in str((nav_out or {}).get("note") or "")):
+                return self._not_found(query, collection, trail)
+            for h in ((nav_out or {}).get("results") or []):
+                hid = str(h.get("id") or h.get("section") or id(h)) if isinstance(h, dict) else str(h)
+                if hid not in seen_ids:
+                    seen_ids.add(hid)
+                    nav_hits.append(h)
+        base["n"] = max(1, len(trail))        # the policy's own steps are the question, not an escalation
+        if exact_hits or nav_hits:
+            keep = exact_hits + nav_hits[:max(0, top_k - len(exact_hits))] if exact_hits else nav_hits[:top_k]
+            out = dict(nav_out or {})
+            out["results"] = keep
+            out["policy"] = plan["label"]
+            if exact_hits:
+                out["exact_ids"] = matched_ids
+                out["exact_match"] = True          # an exact clause / table hit is final (R02)
+            if exact_hits or len(nav_hits) >= ENOUGH:
+                return finish(out, collection, f"policy {plan['label']}", sent_q=plan["nav"] or "",
+                              att=base["n"])
+            consider(out, collection, f"policy {plan['label']}", sent_q=plan["nav"] or "", att=base["n"])
+        # ---- rung 1 (legacy): the sentence exactly as typed, for a corpus the policy could not parse -
         out, halt = attempt("rung1 as-asked", query, collection, clause, chapter)
         if halt:
             return dict(RAG_HALT)
@@ -412,7 +563,8 @@ class JobWorkspace:
         return self._not_found(query, collection, trail)
 
     # ---------------- the escalation ladder's parts ----------------
-    def _rag_post(self, query: str, collection: str, clause: str = "", chapter: str = ""):
+    def _rag_post(self, query: str, collection: str, clause: str = "", chapter: str = "",
+                  type_: str = "", want_commentary: bool = False, neighbors=None):
         """One rung on the wire. -> (parsed result, None) or (None, last exception).
 
         The two attempts are the original transport retry that absorbs a cold start; they are NOT
@@ -420,10 +572,19 @@ class JobWorkspace:
         payload = {"query": query, "collection": collection, "top_k": 5}   # fixed at 5
         if clause:  payload["clause"] = clause     # exact-clause / chapter server-side filter; only sent when set
         if chapter: payload["chapter"] = chapter
+        # the policy's fields; a server that predates them ignores unknown keys and still honours
+        # `clause` (its exact-id chain) and `chapter`
+        if type_ and type_ != "id":   payload["type"] = type_
         stem = self._collection_stem(collection)
-        if stem:
-            payload["stem"] = stem                 # India corpus document stem (IS_800_2007, …)
-            payload["doc"] = stem                  # alias some servers expect
+        if stem:                                   # India corpus document stem (IS_800_2007, ...)
+            payload["stem"] = stem
+            payload["doc"] = stem
+        if want_commentary:           payload["want_commentary"] = True
+        if neighbors is not None:
+            try:
+                payload["context_neighbors"] = max(0, min(int(neighbors), 2))
+            except (TypeError, ValueError):
+                pass
         body = json.dumps(payload).encode()
         hdrs = {"Content-Type": "application/json"}
         if config.RAG_API_TOKEN:                   # shared-secret gate on the VM (defense in depth over the VPC rule)
@@ -535,7 +696,7 @@ class JobWorkspace:
     # Document names carry digit-hyphen pairs ("360-22", "S100-16", "7-22") shaped exactly like
     # equation ids; strip them before hunting for the id the engineer actually meant.
     _DOCNAME_RE = re.compile(r"\b(?:IS|BIS|AISC|AISI|ASCE(?:/SEI)?|ANSI)\s*/?\s*[A-Z]?\d+(?:[-–:]\d+)?(?:\s*Part\s*\d+)?\b", re.I)
-    _QUERY_ID_RE = re.compile(r"\b(?:[A-Za-z]{1,2}\d+(?:\.\d+)*(?:-\d+[a-z]?)?"   # F2 - F2.2 - F2-1 - E1.3.1.1-1
+    _QUERY_ID_RE = re.compile(r"\b(?:[A-Za-z]{1,2}\d+(?:\.\d+)*[a-z]?(?:-\d+[a-z]?)?"   # F2 - F2.2 - E3.4a - F2-1 - E1.3.1.1-1
                               r"|\d+\.\d+(?:\.\d+)*(?:-\d+[a-z]?)?"               # 12.8.1 - 12.8-3 - 1.3.1.1-1
                               r"|\d+-\d+[a-z]?)\b")                               # 3-1 (dropped leading letter)
 
@@ -577,18 +738,23 @@ class JobWorkspace:
         out = []
         for c in cands:
             c = c.strip()
-            c = ("Table " + c[6:].strip()) if c.lower().startswith("table ") else c.upper()
+            if c.lower().startswith("table "):
+                c = "Table " + c[6:].strip()
+            else:
+                # The standards print ids as they are (E-1.1, 8.2.2.1, Table 9(a)): keep the case, and
+                # upper-case only a leading annex / chapter letter ("e-1.1" -> "E-1.1").
+                m = re.match(r"^([A-Za-z]{1,2})(\d.*|-.*)$", c)
+                c = (m.group(1).upper() + m.group(2)) if m else c
             if not c:
                 continue
-            if c not in out and not (clause and c == clause.strip().upper()):
+            if c not in out and not (clause and c.upper() == clause.strip().upper()):
                 out.append(c)                      # a clause the agent already sent was tried at rung 1
             if self._SERVER_EQ_RE.match(c):
                 continue                           # the server reaches the equation index unaided
-            alts = eq.get(c) or eq.get(c.lower()) or []
+            alts = eq.get(c) or eq.get(c.upper()) or eq.get(c.lower()) or []
             # prefer the chapter the agent named: "3-1" in chapter E means E3-1, not B3-1
             for a in sorted((str(x) for x in alts), key=lambda s: (not s.upper().startswith(ch) if ch else False)):
-                a = a.upper()
-                if a not in out and not a.startswith("C-"):    # never alias a standard id to commentary
+                if a not in out and not a.upper().startswith("C-"):    # never alias a standard id to commentary
                     out.append(a)
         return out[:limit]
 
@@ -828,6 +994,8 @@ class JobWorkspace:
         if not isinstance(res, list):
             res = [out]
         lines = [f"# RAG query: {query}", f"# collection: {collection}  |  hits: {len(res)}"]
+        if isinstance(out, dict) and out.get("policy"):
+            lines.append(f"# sent to the corpus as: {out['policy']}")
         if via:
             # Which rung of the escalation ladder answered. Without it the saved file silently claims
             # the first phrasing worked, which is the one thing this provenance must never imply.
