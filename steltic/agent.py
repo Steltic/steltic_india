@@ -67,17 +67,30 @@ TOOL_SPECS = [
     _spec("new_activity_log", "Start a fresh activity log for a design run (call ONCE first).",
           {"building": {"type": "string", "description": "building name -> jobs/<name>/"}}, []),
     _spec("search_engineering_standards",
-          "Search the India (IS/BIS) engineering RAG. Design collections: engineering_standards_IS800 "
-          "(primary), plus IS808/IS816/IS9595/IS4000/IS1161/IS2062 as needed. LOAD collections "
-          "(MANDATORY every job before pipeline): engineering_standards_IS875_P1..P5 and "
-          "engineering_standards_IS1893 — write retrieved factors into cfg['load_plan']. "
-          "When you know the exact provision, pass clause or chapter for a pinpoint lookup. "
-          "Returns a 'disabled' note if no RAG is configured -- then rely on your own cited IS 800 knowledge.",
-          {"query": {"type": "string"},
+          "Retrieve a provision from the India (IS/BIS) standards corpus UNDER THE RETRIEVAL POLICY "
+          "(contract/QUERYING_IS_CORPUS.md): one document per call, an EXACT id when you know the provision "
+          "(type=exact_section|exact_table and query=the id ALONE, e.g. 8.2.2, 7.1.2.1, Table 4, Table 9(c), HB 300), "
+          "and a full-text query (type=fts) only to NAVIGATE to an id -- in the standard's own printed words, one "
+          "idea, no sentences. Good: {type:'exact_section', doc:'IS_800_2007', query:'8.2.2'}. "
+          "Bad: {query:'IS 800 clause 8.2.2 lateral torsional buckling of unrestrained beams'}. "
+          "Documents: IS_800_2007 (primary: members, connections, Section 12), IS_18168_2023 (seismic detailing, "
+          "Ry/Ru, Omega), IS_808_2021 / IS_1161_2014 (section properties: exact_table with the designation), "
+          "IS_2062_Part_1_2025 (fy/fu, Table 3), IS_816_1969 / IS_9595_1996 / IS_4000_1992 (welds, HSFG bolts). "
+          "LOAD documents (MANDATORY every job before pipeline): IS_875_Part_1_2026 .. IS_875_Part_5_1987 and "
+          "IS_1893_Part_1_2016 -- write retrieved factors into cfg['load_plan']. A city's zone / basic wind speed: "
+          "type=fts with the town name alone. Returns a 'disabled' note if no RAG is configured -- then rely on your "
+          "own cited IS 800 knowledge, declared as unverified.",
+          {"query": {"type": "string", "description": "for exact types: the id only. For fts: printed spec terminology, one idea (or a town name)."},
+           "type": {"type": "string", "enum": ["exact_section", "exact_equation", "exact_table", "fts"],
+                    "description": "exact_section (8.2.2, 7.1.2.1, E-1.1) / exact_table (Table 4, Table 9(c), Fig. 1, HB 300) / fts (navigation only). IS 800 prints few equation numbers: ask for the clause with exact_section."},
+           "doc": {"type": "string", "description": "canonical document stem: IS_800_2007, IS_18168_2023, IS_808_2021, IS_1161_2014, IS_2062_Part_1_2025, IS_816_1969, IS_9595_1996, IS_4000_1992, IS_875_Part_1_2026 .. IS_875_Part_5_1987, IS_1893_Part_1_2016. One per call."},
+           "purpose": {"type": "string", "description": "why you need it, a few words (goes in the provenance)"},
+           "want_commentary": {"type": "boolean", "description": "default false. BIS documents carry no separate commentary; a foreword or note never supplies a design value."},
+           "context_neighbors": {"type": "integer", "description": "0-2: 1 when an expression needs its surrounding 'where:' list"},
            "collection": {"type": "string",
-                          "description": "default engineering_standards_IS800; use IS875_P* / IS1893 for loads every job"},
-           "clause": {"type": "string", "description": "optional: exact clause code, e.g. 8.2.1, 7.2 -- use when you know the provision"},
-           "chapter": {"type": "string", "description": "optional: restrict to a whole chapter, e.g. F, E, J"},
+                          "description": "legacy alias of doc (engineering_standards_IS800, _IS875_P1.._P5, _IS1893 ...)"},
+           "clause": {"type": "string", "description": "legacy: an exact id sent with a sentence. Prefer type + query=id."},
+           "chapter": {"type": "string", "description": "optional: narrow an fts query to one section of the standard, e.g. 8 or 12"},
            "top_k": {"type": "integer", "description": "chunks to return (default 3, max 5)"}},
           ["query"]),
     _spec("run_python",
@@ -300,7 +313,11 @@ def dispatch(tool, args, ws, executor):
         return ws.search_engineering_standards(args.get("query", ""),
                                                args.get("collection", "engineering_standards_IS800"),
                                                args.get("top_k", config.RAG_TOP_K),
-                                               args.get("clause", ""), args.get("chapter", ""))
+                                               args.get("clause", ""), args.get("chapter", ""),
+                                               type=args.get("type", ""), doc=args.get("doc", ""),
+                                               want_commentary=bool(args.get("want_commentary", False)),
+                                               context_neighbors=args.get("context_neighbors"),
+                                               purpose=args.get("purpose", ""))
     return {"error": f"unknown tool '{tool}'"}
 
 
@@ -831,8 +848,10 @@ def _tool_title(name, args):
     if name == "run_python":
         return f"run_python · {_code_label(a.get('code',''))}"
     if name == "search_engineering_standards":
-        coll = (a.get("collection") or "engineering_standards_IS800").replace("engineering_standards_", "")
+        coll = (a.get("doc") or a.get("collection") or "engineering_standards_IS800").replace("engineering_standards_", "")
         flt = "".join(f" [{k}={a[k]}]" for k in ("clause", "chapter") if a.get(k))
+        if a.get("type"):                                   # the policy form: `exact_section 8.2.2`
+            return f"search {coll} {a['type']} ‹{(a.get('query') or '')[:64]}›{flt}"
         return f"search {coll} ‹{(a.get('query') or '')[:64]}›{flt}"
     if name == "write_file":   return f"write_file {a.get('path','')}"
     if name == "read_file":    return f"read_file {a.get('path','')}"
@@ -865,6 +884,8 @@ def _result_preview(name, result):
         if result.get("disabled"): return "RAG disabled — using cited IS 800 knowledge"
         res = result.get("results") if isinstance(result.get("results"), list) else None
         bits = [f"{len(res) if res is not None else 0} hits"]
+        if result.get("policy"):                             # what actually went to the corpus
+            bits.append("sent as " + str(result["policy"])[:120])
         cl = result.get("clauses_found") or []
         if cl: bits.append("clauses " + ", ".join(cl[:6]))
         if result.get("saved"): bits.append("saved " + result["saved"])

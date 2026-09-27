@@ -47,11 +47,13 @@ def _read(name: str) -> str:
     except Exception as e: return f"[missing {name}: {e}]"
 
 
-CONTRACT_FILES = ("AGENT_START.md", "README_AGENT.md", "IS800_TOC.md", "IS800_WORKED_METHOD.md")
+CONTRACT_FILES = ("AGENT_START.md", "QUERYING_IS_CORPUS.md", "README_AGENT.md", "IS800_TOC.md", "IS800_WORKED_METHOD.md")
 
 
 def system_contract() -> str:
     return (_read("AGENT_START.md")
+            + "\n\n===== HOW TO QUERY THE IS CORPUS (mandatory -- every search_engineering_standards call) =====\n"
+            + _read("QUERYING_IS_CORPUS.md")
             + "\n\n===== WORKFLOW GUIDE (README_AGENT) =====\n" + _read("README_AGENT.md")
             + "\n\n===== IS 800:2007 CLAUSE MAP (use for clause-anchored RAG queries) =====\n"
             + _read("IS800_TOC.md")

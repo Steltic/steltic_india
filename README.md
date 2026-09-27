@@ -97,6 +97,13 @@ never turn a miss into a value: each found:false `load_plan.retrieval` row needs
 an engineer's assumption to verify; a row without one keeps the job PARTIAL. The engine's own table
 transcriptions still compute, and the corpus cross-check tests skip.
 
+**How the agent queries it:** [`contract/QUERYING_IS_CORPUS.md`](contract/QUERYING_IS_CORPUS.md) is part of the
+design agent's prompt. It covers one document per call, an exact clause or table id when the provision is known,
+full text only to navigate, the IS id formats and traps, and what each kind of "not found" means. The
+`search_engineering_standards` tool takes the same fields (`type`, `doc`, `query`, `purpose`, `context_neighbors`),
+applies the policy to every call, and records the form it sent. The same file ships in `steltic_CFS_india` and
+`steltic_nonlinear_india`.
+
 ### Retrieval details
 
 Set `RAG_API_URL` / `RAG_API_TOKEN` / optionally `RAG_ALIASES_FILE` (default `$INDIA_CORPUS_ROOT/indexes/aliases.json`).
