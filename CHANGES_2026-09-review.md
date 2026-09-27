@@ -116,7 +116,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - H52 H05: Section 12 advisories state the IS 18168 applicability basis and list Table 2 / splices as live
 - R02: recognise an exact table reply by the table's own caption title
 - Integration: Ex1 core test reads the interior girder shear after H13 half-bay edge tributary
-- L-08: india_omega_is18168.corpus_root falls back to a sibling corpus folder
+- L-08: india_omega_is18168.corpus_root falls back to a sibling engineering_rag_india checkout
 - X05: IS 875-3 10.3 across-wind load case W_X_across / W_Y_across, 10.4 simultaneous rows (HR-B-09, HR-C-12)
 - X06: shared JSON frame builder steel_engine/frame_build.py (from CFS india_cfs_frame_build), EBF reference example, package-finalize helpers (E11, HR-B-20)
 - X04: pipeline.design_units -- several seismically separated units in one job with IS 1893 7.11.3 joint checks (HR-D-13, HR-C-06)
@@ -135,7 +135,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - RR-BUG-5: name the governing check when IS 800 Table 3 slenderness governs the member D/C
 - RR-BUG-4: order design_status reasons by class, group per-check element rows, never drop a class
 - RR-BUG-6: a declared corpus Ka is per direction or area-checked against Table 4
-- X01: corpus-quote test finds INDIA_CORPUS_ROOT or a sibling corpus folder (skips without a corpus)
+- X01: corpus-quote test finds INDIA_CORPUS_ROOT or sibling engineering_rag_india checkout
 - O1: IS 800 12.12.2 stays code-literal on pinned braced-frame bases (owner ruling O1, 2026-09-26)
 - O2: gantry weight as nodal dead loads, never also as element self-weight (owner ruling O2, 2026-09-26)
 - GOLD-1: minimum-type check rows carry sense '>=' (dc = limit / value) (IN_CFS_Ex13, IN_CFS_Ex7)
@@ -151,3 +151,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - AUD-4: anchorage transparency -- derived bond embedment, asserted capacity needs source + cite, concrete breakout record
 - GOLD-764: IS 1893 7.6.4 diaphragm classification on the code-literal ratio (IN_CFS_Ex9)
 - GOLD-COLL: flexible-diaphragm collectors follow the load path; per-level diaphragm labels; X01 axial is the flexible case (IN_CFS_Ex9)
+- AUD-1 (Windows): match hit_file with POSIX-style relative paths (os.path.relpath yields rag\z.json on Windows)
+- Corpus: drop references to the private corpus repo; users build their own IS corpus in the Steltic hub
+- CORPUS_FIX_LLM_INSTRUCTIONS.md: the owner's instructions for the corpus fix pass (replaces the placeholder)
+- CORPUS_FIX_LLM_INSTRUCTIONS.md: final version (matches the hub's bundled corpus module: validate probes, optional scripts/*.json, Import fixed corpus tab)
