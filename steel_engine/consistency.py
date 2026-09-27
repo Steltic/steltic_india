@@ -818,7 +818,7 @@ def _rag_texts(job_dir):
                 # header line '# RAG query: <query>'; without that header the file has no query (q stays None).
                 m = _RAG_QUERY_HDR.search(raw[:2000])
                 q = m.group(1).strip() if m else None
-            out.append((os.path.relpath(p, job_dir), q, re.sub(r"\s+", " ", raw).lower()))
+            out.append((os.path.relpath(p, job_dir).replace(os.sep, "/"), q, re.sub(r"\s+", " ", raw).lower()))  # POSIX-style rel path (Windows)
     return out
 
 
@@ -850,7 +850,8 @@ def rag_evidence_issues(plan, job_dir):
         why = ""
         if hf and quote:
             qn = re.sub(r"\s+", " ", str(quote)).lower()
-            ok = any(rel.endswith(str(hf)) and qn in t for rel, _q, t in texts)
+            hfn = str(hf).replace("\\", "/")
+            ok = any(rel.endswith(hfn) and qn in t for rel, _q, t in texts)
             why = "its quote is not verbatim in the stored hit_file %s" % hf
         else:
             nums = [n.strip() for n in _NUM.findall(cite)]
