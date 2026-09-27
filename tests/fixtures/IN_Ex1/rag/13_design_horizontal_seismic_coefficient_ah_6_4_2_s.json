@@ -13,5 +13,5 @@
    "text": "atment according to site condition (*see* Table 2). A simplified method is given in Annex F, for evaluation of liquefaction potential. **6.4 Design Acceleration Spectrum** **6.4.1** For the purpose of determining design seismic force, the country is classified into four seismic zones as shown in Fig. 1. **6.4.2** The design horizontal seismic coefficient Ah for a structure shall be determined by: Ah = (Z/2) · (Sa/g) / (R/I) [= (Z/2) · (I/R) · (Sa/g)] where Z = seismic zone factor given in Table 3; I = importance factor given in IS 1893 (Parts 1 to 5) for the corresponding structures; when not specified, the minimum values of I shall be, a) 1.5 for critical and lifeline structures; b) 1.2 for business continuity structures; and c) 1.0 for the rest. R = response reduction factor given in IS 1893 (Parts 1 to 5) for the"
   }
  ],
- "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+ "note": "stored excerpt of a live IS corpus hit, whitespace-normalised"
 }

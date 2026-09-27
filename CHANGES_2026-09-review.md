@@ -42,12 +42,12 @@ New cfg keys are documented in `contract/AGENT_START.md` and `README.md`. The D0
 
 ## Environment
 
-- `RAG_API_URL`: URL of the corpus server, e.g. `http://127.0.0.1:8765`. Start the server with `python3 scripts/serve_http.py --host 127.0.0.1 --port 8765` in engineering_rag_india.
-- `INDIA_CORPUS_ROOT`: path to an engineering_rag_india checkout. If unset, a sibling checkout is used.
+- `RAG_API_URL`: URL of the IS corpus server, e.g. `http://127.0.0.1:8765/query` (the Steltic hub's IS corpus module serves it and sets the variable for the engines it starts).
+- `INDIA_CORPUS_ROOT`: path to your IS corpus, built in the Steltic hub from your own licensed BIS PDFs (see CORPUS_FIX_LLM_INSTRUCTIONS.md). If unset, a sibling corpus folder is used when present.
 
 ## Tests
 
-`python3 -m pytest tests -q -p no:cacheprovider` gives 906 passed and 1 skipped (the fastapi-only test). The X01 corpus-quote test also skips when no corpus checkout is found.
+`python3 -m pytest tests -q -p no:cacheprovider` gives 906 passed and 1 skipped (the fastapi-only test). The corpus-quote tests (X01, H15, the IS 18168 live hit) skip when no IS corpus is found (`INDIA_CORPUS_ROOT` or a sibling corpus folder); that is the published default.
 
 ## Additions from the gold-standard round (2026-09-26/27)
 
@@ -72,6 +72,10 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - **GOLD-COLL:** flexible-diaphragm collectors accumulate along the line to the vertical elements. The X01 axial forces are used for the flexible earthquake case. Diaphragm labels can be set per level (`diaphragm_by_level`).
 
 **Result changes:** every item is stricter, or corrects a reading to the code text. None relaxes a check.
+
+## IS corpus (not distributed)
+
+The BIS standards corpus is not published with this repo, because the standards are copyright BIS. Build your own from your licensed PDFs in the Steltic hub (first pass, Docling). Then have a frontier LLM fix it using `CORPUS_FIX_LLM_INSTRUCTIONS.md`, and import the result back into the hub. See README, "IS corpus (standards grounding)". Without a corpus the engine still runs: retrievals return found:false, and COMPLETE needs EOR records.
 
 ## Commits (oldest first; subjects only — hashes change when the branch is replayed onto GitHub)
 - H17: no IS 875-2 imposed-load reduction in earthquake combinations (IS 875-5 8.1, CFS-C-09)
@@ -116,7 +120,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - H52 H05: Section 12 advisories state the IS 18168 applicability basis and list Table 2 / splices as live
 - R02: recognise an exact table reply by the table's own caption title
 - Integration: Ex1 core test reads the interior girder shear after H13 half-bay edge tributary
-- L-08: india_omega_is18168.corpus_root falls back to a sibling engineering_rag_india checkout
+- L-08: india_omega_is18168.corpus_root falls back to a sibling IS corpus folder
 - X05: IS 875-3 10.3 across-wind load case W_X_across / W_Y_across, 10.4 simultaneous rows (HR-B-09, HR-C-12)
 - X06: shared JSON frame builder steel_engine/frame_build.py (from CFS india_cfs_frame_build), EBF reference example, package-finalize helpers (E11, HR-B-20)
 - X04: pipeline.design_units -- several seismically separated units in one job with IS 1893 7.11.3 joint checks (HR-D-13, HR-C-06)
@@ -135,7 +139,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - RR-BUG-5: name the governing check when IS 800 Table 3 slenderness governs the member D/C
 - RR-BUG-4: order design_status reasons by class, group per-check element rows, never drop a class
 - RR-BUG-6: a declared corpus Ka is per direction or area-checked against Table 4
-- X01: corpus-quote test finds INDIA_CORPUS_ROOT or sibling engineering_rag_india checkout
+- X01: corpus-quote test finds INDIA_CORPUS_ROOT or sibling IS corpus folder
 - O1: IS 800 12.12.2 stays code-literal on pinned braced-frame bases (owner ruling O1, 2026-09-26)
 - O2: gantry weight as nodal dead loads, never also as element self-weight (owner ruling O2, 2026-09-26)
 - GOLD-1: minimum-type check rows carry sense '>=' (dc = limit / value) (IN_CFS_Ex13, IN_CFS_Ex7)
@@ -151,3 +155,7 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 - AUD-4: anchorage transparency -- derived bond embedment, asserted capacity needs source + cite, concrete breakout record
 - GOLD-764: IS 1893 7.6.4 diaphragm classification on the code-literal ratio (IN_CFS_Ex9)
 - GOLD-COLL: flexible-diaphragm collectors follow the load path; per-level diaphragm labels; X01 axial is the flexible case (IN_CFS_Ex9)
+- AUD-1 (Windows): match hit_file with POSIX-style relative paths (os.path.relpath yields rag\z.json on Windows)
+- Corpus: the IS corpus is the user's own; users build it in the Steltic hub
+- CORPUS_FIX_LLM_INSTRUCTIONS.md: the owner's instructions for the corpus fix pass (replaces the placeholder)
+- CORPUS_FIX_LLM_INSTRUCTIONS.md: final version (matches the hub's bundled corpus module: validate probes, optional scripts/*.json, Import fixed corpus tab)

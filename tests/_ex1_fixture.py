@@ -38,7 +38,7 @@ def ex1_cfg(upgrade=True):
 
 
 # H30: every found:true retrieval row names its stored hit (rag/<file> + a verbatim quote from the corpus, see
-# tests/fixtures/IN_Ex1/rag/, generated from engineering_rag_india .search.md); every found:false row carries the
+# tests/fixtures/IN_Ex1/rag/, generated from the IS corpus .search.md); every found:false row carries the
 # EOR assumption actually used (value, source, cite, verify).
 EX1_EOR_ASSUMPTIONS = {
     "snow Delhi": {"value": 0.0, "unit": "kN/m2", "source": "EOR assumption: New Delhi plains, no snowfall",

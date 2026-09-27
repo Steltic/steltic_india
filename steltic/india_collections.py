@@ -1,7 +1,8 @@
 """Map agent RAG collection names → India corpus document stems.
 
-Corpus root: $INDIA_CORPUS_ROOT, else a sibling checkout ../engineering_rag_india, else
-/workspace/engineering_rag_india (stem files under documents/standards/<STEM>/); see india_corpus_root().
+Corpus root: $INDIA_CORPUS_ROOT (your IS corpus, built in the Steltic hub from your own licensed BIS PDFs -- see
+CORPUS_FIX_LLM_INSTRUCTIONS.md), else a sibling corpus folder, else the historical /workspace path (stem files under
+documents/standards/<STEM>/); see india_corpus_root().
 Hosted rag_server may register collections as engineering_standards_IS*; this map is the
 canonical translation for local aliases, escalation, and docs.
 """
@@ -94,9 +95,9 @@ def india_corpus_root() -> str:
     """L-08: the one place the India corpus location is decided.
 
     1. $INDIA_CORPUS_ROOT when set (used as given, even if it does not exist yet);
-    2. a sibling checkout ``<repo parent>/engineering_rag_india`` when it holds ``indexes/`` or
-       ``documents/standards/``;
-    3. the historical ``/workspace/engineering_rag_india``.
+    2. a sibling corpus folder ``<repo parent>/engineering_rag_india`` (named after the hub's IS corpus module)
+       when it holds ``indexes/`` or ``documents/standards/``;
+    3. the historical /workspace path.
     Engine modules that need the corpus (e.g. the vendored india_omega_is18168) should call this
     rather than hard-code a path."""
     env = (os.environ.get("INDIA_CORPUS_ROOT") or "").strip()

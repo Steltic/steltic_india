@@ -1,6 +1,7 @@
 # India RAG collection → corpus stem map
 
-Canonical map: `steltic/india_collections.py`. Corpus: `/workspace/engineering_rag_india`.
+Canonical map: `steltic/india_collections.py`. Corpus: your IS corpus, built in the Steltic hub from your own licensed
+BIS PDFs (`$INDIA_CORPUS_ROOT`, served at `RAG_API_URL`; see CORPUS_FIX_LLM_INSTRUCTIONS.md).
 
 Hosted `rag_server` may register either `engineering_standards_IS*` **or** `engineering_standards_IS*` —
 both resolve to the same stem via `stem_for_collection()`.

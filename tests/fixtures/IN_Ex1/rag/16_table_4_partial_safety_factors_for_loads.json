@@ -13,5 +13,5 @@
    "text": "n loads or design load effects. ### 5.4 Strength The ultimate strength calculation may require consideration of the following: - a) Loss of equilibrium of the structure or any part of it, considered as a rigid body; and - b) Failure by excessive deformation, rupture or <!-- CORPUS-A:p35-T4:start --> <!-- recovered from PDF p.35 by manual transcription 2026-09-20; verified against page image --> **Table 4 Partial Safety Factors for Loads, γf, for Limit States** (*Clauses* 3.5.1 and 5.3.3) Columns (2)–(6) are the Limit State of Strength; columns (7)–(10) are the Limit State of Serviceability. LL = imposed load: \"leading\" and \"accompanying\" per footnote 1). | Combination (1) | Strength: DL (2) | Strength: LL leading¹⁾ (3) | Strength: LL accompanying (4) | Strength: WL/EL (5) | Strength: AL (6) | Serviceability: DL (7) | Serviceability: LL leading¹⁾ (8) "
   }
  ],
- "note": "stored excerpt of the live corpus hit (engineering_rag_india), whitespace-normalised"
+ "note": "stored excerpt of a live IS corpus hit, whitespace-normalised"
 }

@@ -49,9 +49,8 @@ pip install -e .
 ```
 
 First run: open **Settings**, enter your provider's **API base URL**, **API key**, and **model**.
-Point `RAG_API_URL` at a server indexed with the **India** corpus (`/workspace/engineering_rag_india`
-on the builder box — never the USA `/workspace/engineering_rag`). Then paste a brief and click
-**Design building**.
+Point `RAG_API_URL` at your IS corpus (see [IS corpus](#is-corpus-standards-grounding) below; never a USA
+AISC / ASCE corpus). Then paste a brief and click **Design building**.
 
 Offline smoke test: set Model to `MOCK`.
 
@@ -61,7 +60,7 @@ Offline smoke test: set Model to `MOCK`.
 |--|--|--|
 | Design code | AISC 360/341/358 | IS 800:2007 family |
 | Loads | ASCE 7-22 **computed inside the engine** | IS 875 + IS 1893 **RAG every job → cfg['load_plan']** |
-| Corpus | `/workspace/engineering_rag` | `/workspace/engineering_rag_india` |
+| Corpus | the USA corpus (AISC / ASCE / AISI) | your IS corpus (BIS documents), built in the Steltic hub |
 
 The agent must call `search_engineering_standards` against `engineering_standards_IS875_P*` and
 `engineering_standards_IS1893` before `pipeline.design_and_report`, then write retrieved factors into
@@ -72,25 +71,33 @@ The agent must call `search_engineering_standards` against `engineering_standard
 Same as USA: `EXECUTOR=auto|docker|subprocess`. Binds to 127.0.0.1; no auth — don't expose the port.
 Data under `DATA_DIR` (default OS user-data `Steltic` / override for India installs if desired).
 
-## Engineering-standards RAG (required for India)
+## IS corpus (standards grounding)
 
-Ground the agent with the India QFM corpus (IS 800, IS 875 Parts 1–5, IS 1893 Part 1, IS 808, …).
-See `/workspace/handoff/qfm/INDIA_CORPUS_ready.md` for stems and local search:
+The agent grounds every load value, clause and factor in **your IS corpus, built in the Steltic hub from your own
+licensed BIS PDFs** (see [`CORPUS_FIX_LLM_INSTRUCTIONS.md`](CORPUS_FIX_LLM_INSTRUCTIONS.md)). BIS standards are
+copyrighted: no corpus is published with Steltic, and each user builds their own. Recommended workflow:
+
+1. In the Steltic hub, convert your licensed BIS PDFs (first pass, Docling): **Standards** / **Convert**, then
+   **Rebuild index** and **Validate**.
+2. Zip that first-pass corpus with your PDFs and `CORPUS_FIX_LLM_INSTRUCTIONS.md`, and give them to a frontier LLM
+   agent with code execution (the smarter the better). It fixes OCR, tables, figures and metadata, and returns a
+   fixed corpus.
+3. Replace the hub's corpus with it, then **Rebuild index** and **Validate**.
+4. Point the engines at it: the hub sets `RAG_API_URL` (and `INDIA_CORPUS_ROOT`) for every engine it starts;
+   standalone, set them yourself:
 
 ```bash
-cd /workspace/engineering_rag_india
-PYTHONPATH=scripts .venv/bin/python scripts/search.py exact_section 5.4 --doc IS_800_2007 --limit 2
+export RAG_API_URL=http://127.0.0.1:<port>/query      # the hub's IS corpus server (POST /query, GET /healthz)
+export INDIA_CORPUS_ROOT=/path/to/your/is_corpus       # the corpus folder (documents/, indexes/, scripts/)
 ```
 
-Serve the corpus over HTTP for the app's search tool and point the engine at it:
+**Without a corpus** the engine still runs, but every standards retrieval comes back `found: false`. The gates
+never turn a miss into a value: each found:false `load_plan.retrieval` row needs an EOR record
+`{value, source, cite, verify: True}` (on the row or in `cfg['eor_assumptions']`), which the report discloses as
+an engineer's assumption to verify; a row without one keeps the job PARTIAL. The engine's own table
+transcriptions still compute, and the corpus cross-check tests skip.
 
-```bash
-cd /path/to/engineering_rag_india
-python3 scripts/serve_http.py --host 127.0.0.1 --port 8765        # POST /query, GET /healthz
-export RAG_API_URL=http://127.0.0.1:8765/query
-export INDIA_CORPUS_ROOT=/path/to/engineering_rag_india            # default: a sibling ../engineering_rag_india,
-                                                                   # else /workspace/engineering_rag_india
-```
+### Retrieval details
 
 Set `RAG_API_URL` / `RAG_API_TOKEN` / optionally `RAG_ALIASES_FILE` (default `$INDIA_CORPUS_ROOT/indexes/aliases.json`).
 `INDIA_CORPUS_ROOT` is the one place the corpus location is decided (the app's aliases and the engine's own
