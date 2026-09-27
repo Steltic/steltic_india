@@ -1,6 +1,6 @@
 """X01 -- IS 1893 (Part 1):2016 Table 5(ii) (Amd 2) flexible-floor-diaphragm 3-D dynamic analysis.
 
-Corpus (engineering_rag_india, IS_1893_Part_1_2016, Table 5(ii), Amd 2 Nov 2020, last para substituted):
+IS corpus (IS_1893_Part_1_2016, Table 5(ii), Amd 2 Nov 2020, last para substituted):
   'In a building with re-entrant corners, three-dimensional dynamic analysis method with flexible floor diaphragm
    shall be adopted to capture the concentration of forces generated in the re-entrant corners especially in the
    floor diaphragm and special elements adjoining the re-entrant corner. This is in addition to the case of rigid

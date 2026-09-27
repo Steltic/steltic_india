@@ -498,10 +498,10 @@ detailing (IS 800 Section 12); 10 Connections (IS 800 Section 10); 11 Foundation
   `server_errors`) is a retrieval failure — retry, never report the provision as absent; only
   `term_absent_from_document` says the standard lacks the term. A hit with `exact_match` (an exact clause / table /
   equation lookup) is final; `also_found_in` lists other documents that hold the same id.
-* The search tool talks to the corpus server at `RAG_API_URL` (e.g. `http://127.0.0.1:8765/query`; start it in the
-  corpus checkout with `python3 scripts/serve_http.py --host 127.0.0.1 --port 8765`); `INDIA_CORPUS_ROOT` names
-  the corpus checkout for the aliases and the engine's own table lookups (default: a sibling
-  `engineering_rag_india`). Each hit is saved under `rag/` (never overwritten) — cite that file as `hit_file`.
+* The search tool talks to the IS corpus server at `RAG_API_URL` (e.g. `http://127.0.0.1:8765/query`; the Steltic
+  hub's IS corpus module serves it); `INDIA_CORPUS_ROOT` names the corpus folder for the aliases and the engine's own
+  table lookups. The corpus is the user's own, built in the hub from their licensed BIS PDFs. Each hit is saved
+  under `rag/` (never overwritten) — cite that file as `hit_file`.
 * Designing from memory is a last resort and is DECLARED in the report (value, clause believed, "not
   verified against the corpus"). Never invent a clause, table or factor.
 

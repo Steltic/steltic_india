@@ -223,4 +223,4 @@ def test_india_corpus_root_env(monkeypatch, tmp_path):
     assert ic.india_corpus_root() == str(tmp_path)
     assert ic.india_corpus_path("indexes", "aliases.json") == tmp_path / "indexes" / "aliases.json"
     monkeypatch.delenv("INDIA_CORPUS_ROOT")
-    assert ic.india_corpus_root()                      # sibling checkout or /workspace fallback
+    assert ic.india_corpus_root()                      # sibling corpus folder or /workspace fallback

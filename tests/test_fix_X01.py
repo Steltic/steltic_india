@@ -28,12 +28,14 @@ CORPUS_T5II = ("In a building with re-entrant corners, three-dimensional dynamic
 
 def test_quotes_are_corpus_verbatim():
     rel = Path("documents") / "standards" / "IS_1893_Part_1_2016" / "markdown" / "IS_1893_Part_1_2016.search.md"
-    here = Path(__file__).resolve()
+    # the user's own IS corpus: $INDIA_CORPUS_ROOT, else the sibling-folder fallback (india_corpus_root)
+    sys.path.insert(0, str(ROOT))
+    from steltic.india_collections import india_corpus_root
     roots = [Path(os.environ["INDIA_CORPUS_ROOT"])] if os.environ.get("INDIA_CORPUS_ROOT") else []
-    roots += [here.parents[i] / "engineering_rag_india" for i in (2, 3)]
+    roots.append(Path(india_corpus_root()))
     md = next((r / rel for r in roots if (r / rel).exists()), roots[-1] / rel)
     if not md.exists():
-        pytest.skip("corpus checkout not beside the worktree")
+        pytest.skip("no IS corpus (set INDIA_CORPUS_ROOT)")
     txt = " ".join(md.read_text(encoding="utf-8").split())
     q = FD.T5II_QUOTE.split(": '", 1)[1].rstrip("'")
     assert q in txt and CORPUS_T5II in q

@@ -68,10 +68,10 @@ RAG_ALIASES_FILE   = os.environ.get("RAG_ALIASES_FILE", "")
 # evicted from the saved conversation to a file pointer (agent._evict_all_rag) so optimisation runs don't bloat.
 
 
-# --- India corpus collection ↔ stem map (engineering_rag_india) ---
+# --- India corpus collection ↔ stem map (your IS corpus, built in the Steltic hub from your licensed BIS PDFs) ---
 # Prefer the India aliases file on this shared box when RAG_ALIASES_FILE is unset.
-# L-08: the corpus root comes from INDIA_CORPUS_ROOT (fallback: sibling ../engineering_rag_india,
-# then /workspace/engineering_rag_india) -- india_collections.india_corpus_root().
+# L-08: the corpus root comes from INDIA_CORPUS_ROOT (fallback: a sibling corpus folder, then the historical
+# /workspace path) -- india_collections.india_corpus_root().
 if not RAG_ALIASES_FILE:
     try:
         from .india_collections import india_corpus_root as _icr

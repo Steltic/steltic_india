@@ -176,7 +176,7 @@ def test_parse_requires_hit_text_pattern():
 
 @pytest.mark.skipif(
     not IO.corpus_available(),
-    reason="India corpus unavailable at /workspace/engineering_rag_india",
+    reason="no IS corpus (set INDIA_CORPUS_ROOT)",
 )
 def test_live_corpus_probe_is18168_section_55():
     """Optional integration: live exact_section 5.5 → SCBF/EBF/SMRF Ω."""

@@ -11,12 +11,15 @@ import india_wind_tables as W  # noqa: E402
 
 _STEM = "IS_875_Part_3_2015"
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from steltic.india_collections import india_corpus_root  # noqa: E402
+
+# The corpus is the user's own (built in the Steltic hub from licensed BIS PDFs): $INDIA_CORPUS_ROOT, else the
+# sibling-folder fallback of india_corpus_root(). The published default has none, and these tests skip.
 _CANDIDATES = [
+    os.environ.get("INDIA_CORPUS_ROOT") or "",
     os.environ.get("ENGINEERING_RAG_INDIA") or "",
-    os.path.join(_HERE, "..", "..", "engineering_rag_india"),
-    os.path.join(_HERE, "..", "..", "..", "engineering_rag_india"),
-    "/workspace/engineering_rag_india",
-    "/home/claude/work/engineering_rag_india",
+    india_corpus_root(),
 ]
 
 
@@ -29,7 +32,7 @@ def _std_dir():
 
 
 STD = _std_dir()
-needs_corpus = pytest.mark.skipif(STD is None, reason="India corpus (engineering_rag_india) not found")
+needs_corpus = pytest.mark.skipif(STD is None, reason="no IS corpus (set INDIA_CORPUS_ROOT)")
 
 
 def _num(s):

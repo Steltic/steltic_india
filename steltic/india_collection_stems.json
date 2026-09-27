@@ -1,5 +1,5 @@
 {
-  "corpus": "/workspace/engineering_rag_india",
+  "corpus": "resolved at run time: $INDIA_CORPUS_ROOT (your IS corpus, built in the Steltic hub), see india_collections.india_corpus_root()",
   "collection_to_stem": {
     "IS800": "IS_800_2007",
     "IS_800": "IS_800_2007",
