@@ -47,10 +47,33 @@ New cfg keys are documented in `contract/AGENT_START.md` and `README.md`. The D0
 
 ## Tests
 
-`python3 -m pytest tests -q -p no:cacheprovider` gives 830 passed and 1 skipped (the fastapi-only test). The X01 corpus-quote test also skips when no corpus checkout is found.
+`python3 -m pytest tests -q -p no:cacheprovider` gives 906 passed and 1 skipped (the fastapi-only test). The X01 corpus-quote test also skips when no corpus checkout is found.
+
+## Additions from the gold-standard round (2026-09-26/27)
+
+The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twice by an independent auditor. The engine defects found along the way are fixed here.
+
+- **Owner rulings.**
+  - **O1:** IS 800 12.12.2 stays literal. Pinned braced-frame bases take 1.2 Vd.
+  - **O2:** gantry and crane-girder weight goes in `nodal_dead_loads`. Strut elements are listed in `self_weight_in_nodal_loads`, and double counting is a preflight ERROR.
+  - **O3:** the CFS framed area falls back to `geometry.floor_area_m2`.
+- **GOLD-1:** minimum-type check rows (`sense: '>='`) are no longer mis-read by consistency.
+- **GOLD-2:** deck stiffness can be set per level (`diaphragm_stiffness.by_level`).
+- **GOLD-3:** rafter deflection with `roof_planes` uses the analysed frame over the full span.
+- **GOLD-4:** a declared shear key is checked. It takes all shear beyond friction; there is no sharing with the anchors (lead decision).
+- **GOLD-5:** beam-end connections are checked for the V+N resultant, including collector, chord and deck axial forces.
+- **GOLD-6:** a beam that bounds no bay gets no imposed-load tributary.
+- **GOLD-7:** a CJP-only splice gate is accepted without a D/C.
+- **AUD-1:** the evidence gate is stricter. Each row needs its own `hit_file` + `quote`, or a matching stored query.
+- **AUD-2:** plate fy is taken from the IS 2062:2025 thickness band (`plate_grade`, `n_plates`, splice `t_mm`). A declared fy above the band is reduced.
+- **AUD-3:** the 7.6.4 record reports the computed classification and warns when the declared label contradicts it. A rigid light deck with no stiffness basis also warns.
+- **AUD-4:** anchorage can use a derived bond form, π d L τbd, with τbd from IS 456 26.2.1.1 as an EOR input (plain bars get no ×1.6). A `concrete_breakout` record needs a `delegated_design` item. The asserted capacity form now needs `source` + `cite`.
+- **GOLD-764:** the 7.6.4 classification is code-literal: chord deviation ÷ average displacement of the entire diaphragm. The storey-drift ratio is kept as information.
+- **GOLD-COLL:** flexible-diaphragm collectors accumulate along the line to the vertical elements. The X01 axial forces are used for the flexible earthquake case. Diaphragm labels can be set per level (`diaphragm_by_level`).
+
+**Result changes:** every item is stricter, or corrects a reading to the code text. None relaxes a check.
 
 ## Commits (oldest first; subjects only — hashes change when the branch is replayed onto GitHub)
-
 - H17: no IS 875-2 imposed-load reduction in earthquake combinations (IS 875-5 8.1, CFS-C-09)
 - H15: IS 875-3 Table 6 FH -0.8 (30/60 deg mid band), Table 5 printed band edges, EOR Cpe path; corpus-diff test (HR-E-25, L-15, C3)
 - H31: consistency false positives -- governing child D/C, geometry/boolean gates, structured delegated/vibration records (HR-A-05, HR-D-11, HR-E-12, E8 part, HR-A-16, HR-D-16, HR-E-24)
@@ -113,3 +136,18 @@ New cfg keys are documented in `contract/AGENT_START.md` and `README.md`. The D0
 - RR-BUG-4: order design_status reasons by class, group per-check element rows, never drop a class
 - RR-BUG-6: a declared corpus Ka is per direction or area-checked against Table 4
 - X01: corpus-quote test finds INDIA_CORPUS_ROOT or sibling engineering_rag_india checkout
+- O1: IS 800 12.12.2 stays code-literal on pinned braced-frame bases (owner ruling O1, 2026-09-26)
+- O2: gantry weight as nodal dead loads, never also as element self-weight (owner ruling O2, 2026-09-26)
+- GOLD-1: minimum-type check rows carry sense '>=' (dc = limit / value) (IN_CFS_Ex13, IN_CFS_Ex7)
+- GOLD-2 (X01): deck stiffness per level for the Table 5(ii) flexible-diaphragm run (IN_CFS_Ex9)
+- GOLD-3: IS 800 Table 6 rafter deflection of roof_planes portals from the analysed frame over the full span (IN_Ex15)
+- GOLD-4: declared column-base shear key gets a check row with source and cite (IN_Ex8)
+- GOLD-5: beam-end connections of collector / chord beams carry the axial force with the shear (IN_CFS_Ex6)
+- GOLD-6: imposed-load deflection of a beam bounding no floor bay uses a zero tributary (IN_CFS_Ex14)
+- GOLD-7: HR consistency accepts a connection whose checks are all passing gates (CJP splice) without a D/C
+- AUD-1: evidence gate -- a quote-less found:true row is backed only by a stored hit for its own query
+- AUD-2: plate yield stress by thickness per IS 2062:2025 Table 3 in every plate check
+- AUD-3: 7.6.4 record reports the computed diaphragm classification; label contradiction and unsupported light-deck rigid declarations are WARNs
+- AUD-4: anchorage transparency -- derived bond embedment, asserted capacity needs source + cite, concrete breakout record
+- GOLD-764: IS 1893 7.6.4 diaphragm classification on the code-literal ratio (IN_CFS_Ex9)
+- GOLD-COLL: flexible-diaphragm collectors follow the load path; per-level diaphragm labels; X01 axial is the flexible case (IN_CFS_Ex9)
