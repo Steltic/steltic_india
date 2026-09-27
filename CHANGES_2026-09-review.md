@@ -73,6 +73,10 @@ The 30 examples (34 runs) were taken to COMPLETE as a gold set, and checked twic
 
 **Result changes:** every item is stricter, or corrects a reading to the code text. None relaxes a check.
 
+## IS corpus (not distributed)
+
+The BIS standards corpus is not published with this repo, because the standards are copyright BIS. Build your own from your licensed PDFs in the Steltic hub (first pass, Docling). Then have a frontier LLM fix it using `CORPUS_FIX_LLM_INSTRUCTIONS.md`, and import the result back into the hub. See README, "IS corpus (standards grounding)". Without a corpus the engine still runs: retrievals return found:false, and COMPLETE needs EOR records.
+
 ## Commits (oldest first; subjects only — hashes change when the branch is replayed onto GitHub)
 - H17: no IS 875-2 imposed-load reduction in earthquake combinations (IS 875-5 8.1, CFS-C-09)
 - H15: IS 875-3 Table 6 FH -0.8 (30/60 deg mid band), Table 5 printed band edges, EOR Cpe path; corpus-diff test (HR-E-25, L-15, C3)
