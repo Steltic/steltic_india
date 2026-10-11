@@ -330,7 +330,7 @@ def design(name, outdir=None):
                 for s in entry["section12_worksheet"]["slots"]
             }
         elif kind == "col" or "base" in ctype.lower() or "column" in ctype.lower():
-            # complete-gap wave1 / IN_Ex3: base-plate / weld component worksheets
+            # complete-gap wave1 / IN_Ex8: base-plate / weld component worksheets
             # wave4: pass cfg-supplied plate/anchor geometry + RAG formula inputs
             try:
                 import india_is800 as I8
@@ -774,7 +774,7 @@ def sfrs_beam_tags(reg, info0):
             # belongs to the orthogonal frame): a moment-frame beam at its rigid end only (WP6-fix)
             rigid = n2 if rel[t][0] == "I" else n1
             # the rigid end must be at a COLUMN node: a girder made of two elements continuous over a hanging mid
-            # node (no column) is a gravity member, not a moment-frame beam (WP6-fix, Ex11 gym 17 m girder)
+            # node (no column) is a gravity member, not a moment-frame beam (WP6-fix, IN_Ex12 gym 17 m girder)
             if rigid in info0.get("moment_nodes", set()) and rigid in col_nodes:
                 out.add(t)
     return out
@@ -1251,7 +1251,7 @@ def design_india(name, cfg, outdir):
         _os_conn = bool(amp1223)
 
     def _beam_end_resultant(tags):
-        """GOLD-5 (IN_CFS_Ex6): the beam-end connection transfers the member's axial force -- the collector / chord
+        """GOLD-5 (IN_CFS_Ex11): the beam-end connection transfers the member's axial force -- the collector / chord
         force of the diaphragm load path (IS 1893 7.6.4 load path; india_diaphragm, in the records) or the
         flexible-deck axial (Table 5(ii)) -- together with the shear: R = sqrt(V^2 + N^2) per combination
         (concurrent V and N of the same record).  The overstrength (12.2.3 / IS 18168 5.5) rows count where

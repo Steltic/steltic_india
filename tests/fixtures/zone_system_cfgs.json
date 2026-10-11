@@ -1,5 +1,5 @@
 {
- "Ex3": {
+ "Ex8": {
   "system": "OMRF steel ordinary moment resisting portal",
   "R": 3.0,
   "load_plan": {
@@ -12,9 +12,9 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "IN_Ex3_Industrial_portal_Chennai_wind_COMPLETE/IN_Ex3_Industrial_portal_Chennai_wind/load_plan.json"
+  "_source": "IN_Ex8_Industrial_portal_Chennai_wind_COMPLETE/IN_Ex8_Industrial_portal_Chennai_wind/load_plan.json"
  },
- "Ex15": {
+ "Ex9": {
   "system": "OMRF+OBF gable warehouse (transverse OMRF portals + longitudinal OBF/rod; OCBF Zone IV ban disclosed)",
   "R": 3.0,
   "load_plan": {
@@ -27,9 +27,9 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "IN_Ex15_Gable_warehouse_snow_Shimla_COMPLETE/IN_Ex15_Gable_warehouse_snow_Shimla/load_plan.json"
+  "_source": "IN_Ex9_Gable_warehouse_snow_Shimla_COMPLETE/IN_Ex9_Gable_warehouse_snow_Shimla/load_plan.json"
  },
- "Ex5": {
+ "Ex6": {
   "system": "OMRF steel ordinary moment resisting frame (multi-bay warehouse + mezzanine)",
   "R": 3.0,
   "load_plan": {
@@ -42,9 +42,9 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "IN_Ex5_OMRF_warehouse_mezzanine_Hyderabad_COMPLETE/IN_Ex5_OMRF_warehouse_mezzanine_Hyderabad/load_plan.json"
+  "_source": "IN_Ex6_OMRF_warehouse_mezzanine_Hyderabad_COMPLETE/IN_Ex6_OMRF_warehouse_mezzanine_Hyderabad/load_plan.json"
  },
- "legacy_Ex13_OCBF_ZoneII": {
+ "legacy_Ex10_OCBF_ZoneII": {
   "system": "OCBF / steel OBF concentric perimeter (flexible roof diaphragm)",
   "R": 4.0,
   "load_plan": {
@@ -57,9 +57,9 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "LEGACY (renamed from 'Ex13', D02 / HR-D-18 B13): the retired pre-2026-09 Indore big-box variant (OCBF, Zone II, R 4.0) from IN_Ex13_OCBF_bigbox_flexdiaphragm_Indore_COMPLETE/load_plan.json. It is NOT the current brief IN_Ex13 (SCBF, Zone III by the Fig. 1 map, R 4.5, Table 9 (ii)(b); see the 'Ex13' entry). Kept as a Zone II OBF zone-gate case (Table 9 Note 1 bans OBF in III-V only)."
+  "_source": "LEGACY (renamed from 'Ex13', D02 / HR-D-18 B13): the retired pre-2026-09 Indore big-box variant (OCBF, Zone II, R 4.0) from IN_Ex10_OCBF_bigbox_flexdiaphragm_Indore_COMPLETE/load_plan.json. It is NOT the current brief IN_Ex10 (SCBF, Zone III by the Fig. 1 map, R 4.5, Table 9 (ii)(b); see the 'Ex13' entry). Kept as a Zone II OBF zone-gate case (Table 9 Note 1 bans OBF in III-V only)."
  },
- "Ex13": {
+ "Ex10": {
   "system": "SCBF steel special concentrically braced frame (perimeter, flexible roof diaphragm)",
   "R": 4.5,
   "load_plan": {
@@ -72,9 +72,9 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "test_buildings/IN_Ex13_SCBF_bigbox_flexdiaphragm_Indore.txt (brief values: Zone III map reading, R 4.5 Table 9 (ii)(b), I 1.2 by owner ruling D8)"
+  "_source": "test_buildings/IN_Ex10_SCBF_bigbox_flexdiaphragm_Indore.txt (brief values: Zone III map reading, R 4.5 Table 9 (ii)(b), I 1.2 by owner ruling D8)"
  },
- "Ex14": {
+ "Ex7": {
   "system": "OMRF+OCBF crane bay (transverse OMRF portals + longitudinal OCBF)",
   "R": 3.0,
   "load_plan": {
@@ -87,6 +87,6 @@
     "soil": "medium / stiff (Type II)"
    }
   },
-  "_source": "IN_Ex14_Crane_bay_IMF_Vizag_COMPLETE/IN_Ex14_Crane_bay_IMF_Vizag/load_plan.json"
+  "_source": "IN_Ex7_Crane_bay_IMF_Vizag_COMPLETE/IN_Ex7_Crane_bay_IMF_Vizag/load_plan.json"
  }
 }

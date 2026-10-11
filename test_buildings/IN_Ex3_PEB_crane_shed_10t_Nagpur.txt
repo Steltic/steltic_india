@@ -1,0 +1,56 @@
+IN_Ex3 — PEB crane shed: 24 m span, 10 t EOT crane on column brackets, fixed bases, Nagpur (Zone II)
+
+PEB release: this brief needs welded plate I-sections and web-tapered members (cfg['custom_sections'] types
+  'welded_I' and 'tapered_I', the stepped tapered-member model and cfg['flange_braces'];
+  docs/PEB_TAPERED_SCOPE.md). If the engine does not accept these section types, stop with design_status 'blocked'
+  and say why. Do not substitute rolled IS 808 sections for the frames.
+
+Site: Nagpur (MIDC Hingna / Butibori). Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE Zone (Annex E)
+  and Z (Table 3); soil medium (Type II, EOR assumption).
+Occupancy: steel fabrication and machine shop (manufacturing, no food stored, no hazardous process) -> I = 1.0
+  (Table 8 (iii)).
+Lateral system: transverse — steel OMRF portals (IS 800:2007 12.10; Table 9 i)(c), permitted in Zone II by Note 1) —
+  RETRIEVE R; longitudinal — ordinary concentrically braced bays (IS 800 12.7; Table 9 ii)(a)) in both long walls,
+  below and above the crane girder, carrying the crane longitudinal (traction) force to the bases; roof-plane bracing
+  in the same bays. Per-direction R: cfg['R_x'] / cfg['R_y'] with cfg['system_x'] / cfg['system_y']. IS 18168:2023
+  optional in Zone II (1.2) — not applied.
+
+Geometry (metres; the engine works in N-mm):
+- clear span 24 m; length 60 m: 9 frames at 7.5 m; eave height 10.0 m; roof slope 1:10 (rise 1.2 m, apex 11.2 m);
+  rafters at their true slope through cfg['roof_planes']
+- columns: prismatic welded I for the full height (a crane bracket on a tapered column is outside this release),
+  fixed bases; welded crane brackets with the rail at 7.5 m and the rail centreline 0.50 m inside the column
+  centreline
+- rafters: tapered from each knee over about 20 % of the span, then prismatic; bolted end-plate knees, apex and one
+  rafter splice each side; plates IS 2062 (Part 1) E350 for the frame flanges and webs, E250 for end plates,
+  stiffeners, brackets and base plates
+- end walls: post-and-beam bearing frames with wind columns at 6.0 m; the crane does not run into the end bays
+  beyond the last main frame
+- secondary members: cold-formed Z purlins at about 1.5 m and girts at about 1.8 m (CFS engine per D-T5 or
+  cfg['delegated_design']); flange braces at every purlin within 5 m of each knee and at every second purlin elsewhere
+- walls: profiled steel sheeting full height (elastic cladding); one 6 m x 6 m roller-shutter door in each gable
+
+Crane (owner values from the crane vendor's data sheet; the EOR confirms): one double-girder EOT crane, capacity
+  100 kN, crab 15 kN, bridge 60 kN, span 22.5 m, minimum hook approach 0.9 m, end carriages with 2 wheels per rail at
+  3.0 m centres, electric, pendant-operated, crane class per the vendor (Class II); gantry girders 7.5 m simple
+  spans between the brackets, rail and fixings 0.30 kN/m. RETRIEVE the vertical impact, surge and traction allowances
+  (IS 875 (Part 2) 6.3 / 6.4 and IS 800 3.5.3 as the corpus gives them) and the maximum wheel load with the crab at
+  the hook approach; place the loads on the loaded frame's bracket nodes at rail level (cfg['crane']).
+Loads (RETRIEVE — do not invent): dead IS 875 (Part 1):2026 (sheeting, purlins, girts, bracing, gantry girders; the
+  frame self-weight from the plate areas); collateral 0.10 kN/m² (lights, cable trays; owner value) as the named roof
+  dead-load component 'collateral'; imposed IS 875 (Part 2) Table 2, roof with access for maintenance only; wind
+  IS 875 (Part 3):2015 — Annex A Vb, terrain category per 6.3.2 (state it), k1 / k3 / k4 by clause, Ka (7.2.2), wall
+  Cpe Table 5, roof Cpe Table 6 at the real pitch, Cpi per 7.3.2 for the door openings; member-level wind cases
+  incl. roof uplift with 0.9 DL. Seismic: equivalent static (7.6) with the crane bridge and crab in the seismic
+  weight as the corpus directs (RETRIEVE). No snow.
+Design: IS 800:2007 LSD with the IS 800 Table 4 crane rows (RETRIEVE the factors); OMRF joints per 12.10.2 (D-T7 for
+  the Mp at a tapered knee face), HSFG bolts 12.4.1, weld rule 12.4.2 per D-T6; fixed bases per 12.12; OCBF braces per
+  12.7; tapered rafters checked at every segment end (Table 2 welded rows, 3.7.2 (d) for slender webs, LTB per D-T1);
+  gantry girder per 8.2.2 with its top-flange lateral load, 8.7 web bearing and buckling under the wheel, Section 13
+  fatigue with the cycle count and detail category the EOR declares from the crane class (cfg['crane']['fatigue']);
+  IS 800 Table 6 crane rows — gantry vertical (electric crane up to 50 t), gantry lateral and the column / frame
+  lateral limit under crane + wind for a pendant-operated crane — RETRIEVE all three.
+Deliverable: report.html + viewer_3d.html; design/member_schedule.csv (plate sizes, start / end depth, mass_kg);
+  design/bom.csv; design/reactions.csv (unfactored, per basic load case incl. the crane cases, per column line) and
+  design/anchor_bolt_plan.svg; model.std (STAAD.Pro export); steel tonnage and kg/m² split primary / crane (girders
+  and brackets) / bracing / secondary. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.

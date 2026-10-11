@@ -66,23 +66,23 @@
         <span class="info" tabindex="0" data-tip="Up to 3 files, 5 MB each. Text / Markdown (.txt, .md) is read into the brief. PDFs (.pdf) have their text extracted into the brief (text-based PDFs only — scanned pages have no text layer). Images (.png, .jpg, .jpeg, .gif, .webp) are attached as references and sent to the model — but not all LLMs can read images.">i</span>
         <select id="exampleSelect" class="ghost" title="Load an example design brief into the prompt">
           <option value="" selected>Example briefs (India)…</option>
-          <option value="in1">IN_Ex1 — SCBF 5levels Delhi</option>
-          <option value="in2">IN_Ex2 — SMF office Mumbai</option>
-          <option value="in3">IN_Ex3 — Industrial portal Chennai wind</option>
-          <option value="in4">IN_Ex4 — Dual SMF SCBF hospital Kolkata</option>
-          <option value="in5">IN_Ex5 — OMRF warehouse mezzanine Hyderabad</option>
-          <option value="in6">IN_Ex6 — EBF 8levels Lplan Pune</option>
-          <option value="in7">IN_Ex7 — BRBF 10levels Ahmedabad</option>
-          <option value="in8">IN_Ex8 — OCBF 4levels splitlevel Jaipur</option>
-          <option value="in9">IN_Ex9 — SPSW 12levels Tplan Guwahati</option>
-          <option value="in10">IN_Ex10 — Dual SMF BRBF 18levels Noida</option>
-          <option value="in11">IN_Ex11 — IMF 3levels Zplan school Chandigarh</option>
-          <option value="in12">IN_Ex12 — SMF softstory podium Kochi</option>
-          <option value="in13">IN_Ex13 — OCBF bigbox flexdiaphragm Indore</option>
-          <option value="in14">IN_Ex14 — Crane bay IMF Vizag</option>
-          <option value="in15">IN_Ex15 — Gable warehouse snow Shimla</option>
+          <option value="in6">IN_Ex6 — OMRF warehouse + mezzanine, Hyderabad (Zone II)</option>
+          <option value="in7">IN_Ex7 — Crane bay, OMRF portals + OCBF end bays, Visakhapatnam</option>
+          <option value="in8">IN_Ex8 — SMF portal shed, Chennai (wind-governed, cyclone belt)</option>
+          <option value="in9">IN_Ex9 — Gable warehouse + lean-to, snow (IS 875-4), Shimla</option>
+          <option value="in10">IN_Ex10 — SCBF big-box, flexible roof diaphragm (7.6.4), Indore</option>
+          <option value="in11">IN_Ex11 — OCBF, 4 levels, split-level, Jaipur (Zone II)</option>
+          <option value="in12">IN_Ex12 — SMF, 3 levels, Z-plan school, Chandigarh (I = 1.5)</option>
+          <option value="in13">IN_Ex13 — SCBF, 5 levels, office, New Delhi (Zone IV)</option>
+          <option value="in14">IN_Ex14 — SCBF, 8 levels, hospital, Kolkata (I = 1.5)</option>
+          <option value="in15">IN_Ex15 — EBF, 8 levels, L-plan, Pune (IS 18168 links)</option>
+          <option value="in16">IN_Ex16 — SMF, 9 levels, office, Mumbai (Zone III)</option>
+          <option value="in17">IN_Ex17 — SCBF, 10 levels, Ahmedabad</option>
+          <option value="in18">IN_Ex18 — SMF, 11 levels, open podium storey, Kochi</option>
+          <option value="in19">IN_Ex19 — EBF (IS 18168: Zone V), 12 levels, T-plan, Guwahati</option>
+          <option value="in20">IN_Ex20 — SCBF (sole SFRS, IS 18168 1.3), 18 levels, slender, Noida (Zone IV)</option>
         </select>
-        <span class="info" tabindex="0" data-tip="Load a ready-made India design brief (15 examples: IS 800 / IS 875 / IS 1893 systems, irregular plans and specialty cases). Edit it if you like, then click Design building.">i</span>
+        <span class="info" tabindex="0" data-tip="Load a ready-made India design brief, most common building types first (IN_Ex6 … IN_Ex20 here; the PEB sheds IN_Ex1 … IN_Ex5 arrive with the PEB release): IS 800 / IS 875 / IS 1893 systems, irregular plans and specialty cases. Edit it if you like, then click Design building.">i</span>
         <label class="ghost" for="restoreFile" style="cursor:pointer;padding:.45rem .8rem;border:1px solid var(--line);border-radius:8px" title="Recover a session: re-upload a previously downloaded design .zip, then click Continue">Restore session…</label>
         <input id="restoreFile" type="file" accept=".zip,application/zip" style="display:none">
         <span class="info" tabindex="0" data-tip="Moved machines or reinstalled? Type the same project name, choose the design .zip you downloaded, and it restores so you can Continue.">i</span>

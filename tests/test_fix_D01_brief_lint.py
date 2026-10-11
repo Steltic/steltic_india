@@ -1,4 +1,4 @@
-"""D01 brief lint (HR-E-23, HR-A-12, L-14, brief defects B1-B24; rulings R2, R5, R6, R7, R10): the 15 India briefs in
+"""D01 brief lint (HR-E-23, HR-A-12, L-14, brief defects B1-B24; rulings R2, R5, R6, R7, R10): the 20 India briefs in
 test_buildings/ cite steel IS 1893 Table 9 rows only, never a 'nearest listed city', state the importance factor (the
 area rule labelled as owner ruling D8), state k4 and the 6.3.4 class inside the cyclone belt, state the stored goods of
 warehouses, k1 for the hospital (Table 1 iv), the one-model / deck-stiffness wording of re-entrant plans, the snow zone
@@ -11,8 +11,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 TB = ROOT / "test_buildings"
 GLOB = "IN_Ex*_*.txt"
-CYCLONE = {"Ex3", "Ex14"}                    # inside the IS 875-3 6.3.4 belt (Chennai, Visakhapatnam)
-REENTRANT = {"Ex6"}                          # one 3-D model of a re-entrant plan (Ex8 / Ex9 / Ex11 are split by joints)
+CYCLONE = {"Ex8", "Ex7"}                     # inside the IS 875-3 6.3.4 belt (Chennai, Visakhapatnam)
+REENTRANT = {"Ex15"}                         # one 3-D model of a re-entrant plan (Ex11 / Ex19 / Ex12 are split by joints)
 BANNED = ("office floor of the lean-to 4.0", "one R: R = 3.0 in both directions", "Table 8 (ii), D8",
           "until fixed", "IS 811 cold-formed Z as secondary members", "(i)(b) SMRF")
 
@@ -34,7 +34,7 @@ def _flat(t):
 
 
 def test_all_briefs_found():
-    assert len(BRIEFS) == 15, [p.name for p in BRIEFS]
+    assert len(BRIEFS) == 20, [p.name for p in BRIEFS]
 
 
 @pytest.mark.parametrize("p", BRIEFS, ids=IDS)
@@ -121,20 +121,20 @@ def test_banned_stale_phrases(p):
         assert ph not in t, "%s still says %r" % (p.name, ph)
 
 
-def test_ex4_hospital_k1():
+def test_ex14_hospital_k1():
     """B7: IS 875-3 Table 1 iv) hospitals, 100-year life: k1 = 1.08 at Vb 50 m/s (Kolkata)."""
-    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex4")))
+    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex14")))
     assert re.search(r"k1 = 1\.08 \(IS 875-3 6\.3\.1, Table 1 iv\)", t)
 
 
-def test_ex15_true_slope_and_per_direction_R_wording():
-    """B4-B6: Ex15 uses the X02 roof planes and the H06 per-direction R; no lean-to floor load; channel purlins (H38)."""
-    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex15")))
+def test_ex9_true_slope_and_per_direction_R_wording():
+    """B4-B6: Ex9 (Shimla) uses the X02 roof planes and the H06 per-direction R; no lean-to floor load; channel purlins (H38)."""
+    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex9")))
     assert "cfg['roof_planes']" in t and "cfg['R_x']" in t and "cfg['system_x']" in t
     assert "slabs on grade" in t and "ISMC" in t
     assert "i)(d) steel SMRF" in t
 
 
-def test_ex14_steel_omrf_row():
-    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex14")))
+def test_ex7_steel_omrf_row():
+    t = _flat(_text(next(p for p in BRIEFS if _id(p) == "Ex7")))
     assert "R = 3.0 (Table 9 i)(c))" in t

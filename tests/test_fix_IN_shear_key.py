@@ -1,4 +1,4 @@
-"""IN-SHEAR-KEY (gold issue IN_Ex8): a declared column-base shear key / lug (shear_key_N subtracted from the anchor
+"""IN-SHEAR-KEY (gold issue IN_Ex11): a declared column-base shear key / lug (shear_key_N subtracted from the anchor
 shear) gets an explicit check row: the shear beyond friction (IS 800:2007 7.4.1, 0.45 x bearing compression; with
 the 12.12.2 demand on SFRS bases) <= the declared capacity, with the EOR source and cite.  Without source or cite the
 row is not evaluated (found:false) and the base is not a pass."""

@@ -48,8 +48,8 @@ Evaluate every combination with its OWN P, Mz, My (never the envelope maxima of 
 * 9.3.2.2: P/Pdy + Ky Cmy My/Mdy + KLT Mz/Mdz <= 1 and P/Pdz + 0.6 Ky Cmy My/Mdy + Kz Cmz Mz/Mdz <= 1,
   Cm from Table 18 using the end moments of that combination.
 
-Hand values: Ex10 element 73 (WPB800X300X317.36, L 5400, P = 7213 kN, Mz = 159 kNm, My = 15.5 kNm):
-P/Pdy = 1.21. Ex12 level-1 WPB800 at 6.6 m: 9.3.2.2 ~ 1.52.
+Hand values: IN_Ex20 element 73 (WPB800X300X317.36, L 5400, P = 7213 kN, Mz = 159 kNm, My = 15.5 kNm):
+P/Pdy = 1.21. IN_Ex18 level-1 WPB800 at 6.6 m: 9.3.2.2 ~ 1.52.
 
 ## 7. Earthquake systems -- IS 800 Section 12 (after the member checks)
 1. Combinations: IS 800 12.2.3 (1.2DL + 0.5LL +- 2.5EL and 0.9DL +- 2.5EL) for columns with P/Pd > 0.4 and for

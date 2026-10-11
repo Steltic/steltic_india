@@ -8,7 +8,7 @@ writes ONE combined STATUS (worst unit status + the joint checks), a units index
 summary json in <jobs root>/<name>/.  Units are NOT combined into one OpenSees domain (no shared diaphragm groups).
 
     import pipeline
-    res = pipeline.design_units("IN_Ex11", {"A": cfg_a, "B": cfg_b, "C": cfg_c},
+    res = pipeline.design_units("IN_Ex12", {"A": cfg_a, "B": cfg_b, "C": cfg_c},
                                 joints=[{"units": ["A", "B"], "direction": "X", "gap_mm": 100.0},
                                         {"units": ["B", "C"], "direction": "Y", "gap_mm": 75.0,
                                          "base_mm": {"C": 1200.0}}])

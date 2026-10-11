@@ -206,7 +206,7 @@ def test_india_is800_module_exported_cites():
     assert I8.GAMMA_M0_DEFAULT == 1.10
 
 
-# ----- IN_Ex3 fold-ins --------------------------------------------------------
+# ----- IN_Ex8 fold-ins --------------------------------------------------------
 
 def test_resolve_k4_eor_documented_when_ocr_miss():
     import india_loads as IL

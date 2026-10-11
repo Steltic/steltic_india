@@ -310,7 +310,7 @@ Before `pipeline.design_and_report`:
   W, modal mass, one-way beam gravity shears (the gantry module still designs the girder for its own weight).
   Preflight: ERROR when an off-diaphragm beam or a gantry-section beam with `nodal_dead_loads` at an end node
   still carries self-weight (weight counted twice); ERROR when a listed element has no nodal dead load at either
-  end (weight lost) or a listed section also matches columns / braces (e.g. IN_Ex14, where the gantry and the
+  end (weight lost) or a listed section also matches columns / braces (e.g. IN_Ex7, where the gantry and the
   portal columns are one section: list the gantry element tags); WARN when gantry-section beams carry
   their own self-weight without nodal loads (accepted: the self-weight is then the gantry weight, but the ruling
   prefers nodal loads) or a listed tag / section matches no element.

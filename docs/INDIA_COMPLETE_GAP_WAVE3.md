@@ -1,5 +1,7 @@
 # India complete-gap wave3
 
+> **Numbering note (2026-10):** this is a dated record. Example brief numbers in it (IN_ExN, IN_CFS_ExN and short forms such as Ex9) use the numbering **before** the 2026-10 renumbering. Map: `steltic_india/test_buildings/RENUMBERING_2026-10.md`.
+
 Closes remaining COMPLETE blockers folded from **IN_Ex1–Ex3** and **IN_Ex5**
 (IN_Ex4 COMPLETE on wave2). Tip ~`7ca9ca0`. USA steltic **not** modified. **No push.**
 

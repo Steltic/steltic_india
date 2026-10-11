@@ -1016,7 +1016,7 @@ def _isnum(x):
 
 
 def shear_key_check(V_key_N, shear_key, *, job_steel_grade=None):
-    """GOLD-4 (IN_Ex8): the declared base shear key / lug.  Row: V_key (shear beyond friction) <= capacity_N, the
+    """GOLD-4 (IN_Ex11): the declared base shear key / lug.  Row: V_key (shear beyond friction) <= capacity_N, the
     EOR capacity with its source and cite (IS 456 bearing / lug shear, bending and weld are outside the IS 800 base
     rules the engine checks: the capacity is an EOR record, VERIFY).  Missing capacity, source or cite -> not
     evaluated (ok None, found:false): a capacity that is subtracted from the anchor shear must be traceable."""

@@ -1,4 +1,4 @@
-"""IN-DEFL-NOBAY (gold issue IN_CFS_Ex14): IS 800:2007 5.6.1 / Table 6 imposed-load deflection of a beam that
+"""IN-DEFL-NOBAY (gold issue IN_CFS_Ex6): IS 800:2007 5.6.1 / Table 6 imposed-load deflection of a beam that
 bounds no present floor bay (grade tie between stepped bases, edge of a partial footprint).  The gravity analysis
 (static_model.apply_gravity_state: width = nb x bay / 2 = 0) puts no floor load on it; the deflection screen loaded it
 with a FULL bay (w_LL = L x bay).  Now its imposed-load tributary is 0 (no Table 6 row for it); beams that bound a

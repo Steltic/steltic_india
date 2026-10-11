@@ -408,7 +408,7 @@ def _design_basis_issues(cfg, name=None, pkg=None):
         elif Ie>=1.25 and dl>0.0151 and not _relief_on:
             out.append("Risk Category III (Ie=%.2f): allowable story drift is 0.015 h_sx (Table 12.12-1) -- set cfg['drift_limit']=0.015"%Ie+_mfrho)
     if R is not None and float(R)<=3.0:
-        # complete-gap wave1 / IN_Ex3: do not always-on "CONFIRM wind or seismic" when the
+        # complete-gap wave1 / IN_Ex8: do not always-on "CONFIRM wind or seismic" when the
         # package already computed wind_vs_seismic (wind ≫ EQ documented). Still note R≤3
         # detailing scope once, without the open CONFIRM action item.
         _wvs = None
@@ -431,7 +431,7 @@ def _design_basis_issues(cfg, name=None, pkg=None):
             if _wvs.get("ratio_X") is not None or _wvs.get("ratio_wind_over_seis") is not None:
                 _gov_done = True
         if _gov_done:
-            # IN_Ex3: wind≫EQ already proven in package — do not emit standing R=3 FAIL reminder.
+            # IN_Ex8: wind≫EQ already proven in package — do not emit standing R=3 FAIL reminder.
             pass
         else:
             out.append("R=%.2f is a 'not specifically detailed for seismic' system -- AISC 341 does NOT apply (no SCWB / "

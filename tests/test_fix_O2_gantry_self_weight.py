@@ -6,7 +6,7 @@ loads at their ends still carry self-weight (double count); ERROR when a listed 
 (weight lost); WARN when gantry elements carry their own self-weight without nodal loads (accepted, ruling prefers
 nodal loads).
 
-Hand model (IN_Ex14 pattern): 1 x 2 bays (21 m x 9 m), one level at 11.5 m, crane brackets at 8.0 m with off-grid
+Hand model (IN_Ex7 pattern): 1 x 2 bays (21 m x 9 m), one level at 11.5 m, crane brackets at 8.0 m with off-grid
 tags 200000 + 100 i + j (tag level 2 > NF = 1), pinned 9 m gantry struts between the brackets of line i = 0."""
 import sys
 from pathlib import Path
@@ -146,7 +146,7 @@ def test_preflight_error_when_listed_weight_would_be_lost(E):
     # a listed section shared with the floor beams (no nodal loads there) is caught the same way
     err = _msgs(E, _cfg(self_weight_in_nodal_loads={"sections": ["NPB450X190X67.16", GANTRY]}), "ERROR")
     assert len(err) == 1 and "would be lost" in err[0]
-    # a listed section shared with columns (IN_Ex14: gantry and portal columns are one section) -> list tags
+    # a listed section shared with columns (IN_Ex7: gantry and portal columns are one section) -> list tags
     err = _msgs(E, _cfg(self_weight_in_nodal_loads={"sections": ["WPB300X300X100.85"]}), "ERROR")
     assert any("also match non-beam" in m and "tags" in m for m in err)
     warn = _msgs(E, _cfg(self_weight_in_nodal_loads={"tags": list(GTAGS) + [12345]}), "WARN")

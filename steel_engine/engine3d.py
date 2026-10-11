@@ -714,7 +714,7 @@ def self_weight_nodal_findings(cfg, info=None):
       (element self-weight in the gravity state, W and modal mass + the nodal load): list it under
       cfg['self_weight_in_nodal_loads'].
     * ERROR: an element listed under the key has no nodal_dead_loads at either end node -> its weight would be lost;
-      a listed section that also matches columns / braces (e.g. gantry and portal columns of one section, IN_Ex14)
+      a listed section that also matches columns / braces (e.g. gantry and portal columns of one section, IN_Ex7)
       -> list the gantry element tags instead.
     * WARN: gantry-section elements modelled with neither nodal loads nor the key (self-weight is then the gantry
       weight; accepted) -- the ruling prefers nodal loads; listed tags / sections that match no element."""
@@ -2033,7 +2033,7 @@ RAFTER_DEFL_BASIS = ("IS 800:2007 5.6.1 / Table 6: vertical deflection of the ra
 
 
 def rafter_service_deflection(cfg, div, cite, nseg=6):
-    """GOLD-3 (IN_Ex15): IS 800 Table 6 rafter deflection for true-slope roof planes (cfg['roof_planes']).
+    """GOLD-3 (IN_Ex9): IS 800 Table 6 rafter deflection for true-slope roof planes (cfg['roof_planes']).
     Every rafter line (plane, frame line) is taken from the analysed static model under the service roof imposed load
     (Lr, snow, declared partial snow -- one case at a time, gamma_f 1.0, no dead load: the Table 6 'Live load' row);
     the rafter span is the plan distance between consecutive supports on the line (nodes with a column), the

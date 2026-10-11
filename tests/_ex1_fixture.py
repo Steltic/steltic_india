@@ -1,4 +1,4 @@
-"""Shared IN_Ex1 fixture (tests/fixtures/IN_Ex1 = the shipped build_and_run.py + load_plan.json).
+"""Shared IN_Ex13 fixture (tests/fixtures/IN_Ex13 = the shipped build_and_run.py + load_plan.json).
 
 `ex1_cfg(upgrade=True)` returns the Ex1 cfg upgraded to the WP1 schema the way an agent must now
 write it: explicit story_forces_units, fE/fW on every lateral combination (read from the label),
@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FIX = ROOT / "tests" / "fixtures" / "IN_Ex1"
+FIX = ROOT / "tests" / "fixtures" / "IN_Ex13"
 for p in (str(ROOT / "steel_engine"), str(FIX)):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -38,7 +38,7 @@ def ex1_cfg(upgrade=True):
 
 
 # H30: every found:true retrieval row names its stored hit (rag/<file> + a verbatim quote from the corpus, see
-# tests/fixtures/IN_Ex1/rag/, generated from the IS corpus .search.md); every found:false row carries the
+# tests/fixtures/IN_Ex13/rag/, generated from the IS corpus .search.md); every found:false row carries the
 # EOR assumption actually used (value, source, cite, verify).
 EX1_EOR_ASSUMPTIONS = {
     "snow Delhi": {"value": 0.0, "unit": "kN/m2", "source": "EOR assumption: New Delhi plains, no snowfall",
@@ -131,7 +131,7 @@ def releases(i, j, k, dirn):
 
 
 def apply_wave2_design(cfg, *, embedment=None):
-    """Wave-2 design inputs for IN_Ex1 (HR-INTEGRATE): I 1.2, office 4.0 kN/m2, partitions, RSA, plastic SCBF
+    """Wave-2 design inputs for IN_Ex13 (HR-INTEGRATE): I 1.2, office 4.0 kN/m2, partitions, RSA, plastic SCBF
     columns, IS 808 E250 B0 braces, declared connections / bases / splices, composite scope.  `embedment` =
     {capacity_N, cite} is the EOR anchorage input (None -> found:false, blocks COMPLETE)."""
     import engine3d as E
@@ -247,7 +247,7 @@ def apply_wave2_design(cfg, *, embedment=None):
                                             "1.0 kN/m2 imposed",
                                 "interface_forces": "deck bears on the beams (gravity by tributary width); deck "
                                                     "fastener spacing 600 mm restrains the beam top flange (LLT_sag)"}]
-    cfg["notes"] = ("IN_Ex1 5-storey office perimeter SCBF (X-bracing), New Delhi Zone IV, I 1.2, RSA. IS 808 sections, "
+    cfg["notes"] = ("IN_Ex13 5-storey office perimeter SCBF (X-bracing), New Delhi Zone IV, I 1.2, RSA. IS 808 sections, "
                     "IS 2062 E250 B0. Composite metal deck: bare-steel scope (IS 11384 not in corpus) + construction stage. "
                     "Anchorage embedment: EOR input required (IS 456 not in corpus).")
     return cfg

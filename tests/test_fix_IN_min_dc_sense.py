@@ -1,4 +1,4 @@
-"""IN-MIN-SENSE (gold issue IN_CFS_Ex13 / IN_CFS_Ex7): minimum-type check rows (value >= limit) carry
+"""IN-MIN-SENSE (gold issue IN_CFS_Ex9 / IN_CFS_Ex13): minimum-type check rows (value >= limit) carry
 `sense: '>='` (or '>' for a strict inequality) so that a consumer recomputing the stored D/C uses limit / value.
 
 Rows: IS 1893 7.7.5.2 modal mass ("at least 90 percent") and 7.7.3.1 scaled base shear of the flexible run

@@ -57,8 +57,8 @@ def test_system_zone_findings_examples():
     from pathlib import Path
     fx = json.load(open(Path(__file__).parent / "fixtures" / "zone_system_cfgs.json"))
     err = lambda c: [m for s, m in G.system_zone_findings(c) if s == "ERROR"]
-    assert err(fx["Ex3"]) and err(fx["Ex15"])
-    assert not err(fx["Ex5"])
+    assert err(fx["Ex8"]) and err(fx["Ex9"])
+    assert not err(fx["Ex6"])
 
 
 def test_ex1_live_load_deflection():
@@ -78,8 +78,8 @@ def ex1_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is()
-    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_core"))              # H30: stored rag/ hits
-    out = P.design_and_report("IN_Ex1_core", cfg, do_report=True)
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex13_core"))              # H30: stored rag/ hits
+    out = P.design_and_report("IN_Ex13_core", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
     return out, root, pkg
@@ -139,8 +139,8 @@ def ex1_complete_job(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is(design=True, embedment=EOR_EMBEDMENT)
-    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_complete"))              # H30: stored rag/ hits
-    out = P.design_and_report("IN_Ex1_complete", cfg, do_report=True)
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex13_complete"))              # H30: stored rag/ hits
+    out = P.design_and_report("IN_Ex13_complete", cfg, do_report=True)
     root = out.get("root")
     pkg = json.load(open(os.path.join(root, "design", "calc_package.json")))
     return out, root, pkg

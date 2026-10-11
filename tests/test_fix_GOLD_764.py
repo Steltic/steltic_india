@@ -1,4 +1,4 @@
-"""GOLD-764 (IN_CFS_Ex9, lead decision 1): IS 1893 (Part 1):2016 7.6.4 is classified code-literally --
+"""GOLD-764 (IN_CFS_Ex14, lead decision 1): IS 1893 (Part 1):2016 7.6.4 is classified code-literally --
 'flexible, if it deforms such that the maximum lateral displacement measured from the chord of the deformed shape at
 any point of the diaphragm is more than 1.2 times the average displacement of the entire diaphragm (see Fig. 6)'.
 The deviation / average storey drift is kept as an informative record and never classifies (X01 drift_and_764,
