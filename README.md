@@ -1,12 +1,29 @@
 # Steltic India (HR)
 
-A free, open-source **India (IS/BIS) hot-rolled steel-design agent** that runs locally.
-Paste a design brief and watch the agent build an OpenSees model + a stamped-style HTML report +
-an interactive 3D viewer — **bringing your own LLM** (API base-url + key, held in memory only).
+[![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Steltic/steltic_india?color=orange)](https://github.com/Steltic/steltic_india/releases)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
+
+![Steltic India HR](docs/img/social_hr.png)
+
+Free, open-source AI agent that designs hot-rolled steel buildings to **IS 800:2007** with **IS 875** loads,
+**IS 1893 (Part 1):2016** seismic and **IS 18168:2023** detailing, on your own machine. Paste a design brief and
+get an OpenSees model, a calculation report written for senior review, and an interactive 3D viewer. Bring your
+own LLM API key.
+
+- **Start with the Hub:** most people install this module through
+  [Steltic Hub India](https://github.com/Steltic/steltic_hub_india), which sets everything up.
+- **See the output first:** 19 worked Indian designs with reports and 3D models at
+  [stelticai.com/india.html](https://stelticai.com/india.html).
+- **Setup video:** [YouTube](https://www.youtube.com/watch?v=lcKjj9wLcno).
+
+> Steltic assists with structural design but does not replace a licensed professional engineer. All output
+> must be independently verified.
+
 
 This repository is the **India HR variant** of [Steltic/steltic](https://github.com/Steltic/steltic)
 (USA AISC/ASCE). Do **not** confuse the two. Design authority: **IS 800:2007** (+ IS 808, IS 816/9595,
-IS 4000, IS 2062, IS 1161). Loads: **IS 875 Parts 1–5** and **IS 1893 Part 1:2016**: the job's load VALUES
+IS 4000, IS 2062 (Part 1), IS 1161). Loads: **IS 875 Parts 1–5** and **IS 1893 Part 1:2016**: the job's load VALUES
 (Vb, zone / Z, I, R, imposed and dead loads, snow, Cpe for the building) are retrieved LIVE via RAG every job into
 `cfg['load_plan']`. The engine carries transcriptions of the code tables it computes with — IS 875-3 Tables 4 / 5 /
 6, 6.3.4 k4 and 7.3.2.2 Cpi (`india_wind_tables`), IS 1893 Tables 3 / 7 / 9 and the Table 8 keyword rules
