@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Steltic India (HR): AI steel design to IS 800"
+authors:
+  - name: "Steltic"
+version: "0.3.0"
+date-released: "2026-10-11"
+license: MIT
+repository-code: "https://github.com/Steltic/steltic_india"
+url: "https://stelticai.com/india.html"
+keywords: [structural engineering, steel design, IS 800, IS 1893, Indian Standards, OpenSees, AI agent]
