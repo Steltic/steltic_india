@@ -657,6 +657,12 @@ def build_report_india(name, root):
     # 6
     parts.append(_chapter(6))
     parts.append(_members(pkg))
+    if (pkg or {}).get("peb"):
+        try:
+            import peb_report as _PR
+            parts.append(_PR.section(cfg, pkg, root))
+        except Exception as ex:
+            parts.append(f"<p class='note'>[PEB section failed: {ex}]</p>")
     # 7
     parts.append(_chapter(7))
     n_not = sum(1 for c in cases if (getattr(c, "meta", {}) or {}).get("notional"))

@@ -338,6 +338,62 @@ Before `pipeline.design_and_report`:
   storey drift <= 0.08 rad (12.3.3.1), 12.3.2.2 capacity-protected braces / beams / columns for the link
   overstrength, 12.3.4.4 beam-to-column joints where a brace or gusset frames in. `frame_build` writes the whole
   record for every `gold['ebf_bays']` bay; `example_build_ebf.py` (`ebf_example_cfg()`) is a complete reference job.
+* **PEB: welded and web-tapered portal frames (2026-10, `docs/PEB_TAPERED_SCOPE.md`):**
+  - Sections: `custom_sections` type `welded_I` {D_mm, bf_mm, tf_mm, tw_mm} (label `WI<D>X<bf>X<tf>X<tw>`) and
+    `tapered_I` {D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm, n_seg} (label `TI<D0>-<D1>X<bf>X<tf>X<tw>`); the default
+    segment count is `taper_nseg` (8). Properties come from the plates; the welded rows of IS 800 Table 2, Table 10,
+    alpha_LT 0.49 and the 3.7.2(d) effective section of a slender web apply automatically. Doubly symmetric only
+    (owner ruling D-T3).
+  - Stepped model (`peb_build`): in the custom_build call `PB.reset()`, build columns with
+    `PB.column(et, eles, n_base, n_top, [(to_mm, label), ...], strong_dir, i=i, j=j, releases=None | 'I' | 'J' |
+    'both')` and return `PB.finish(info)`. Rafters come from the roof plane keys `rafter_members`
+    {'lo': [(plan distance from the eave, label), ...], 'hi': [...] (default the mirror)},
+    `rafter_members_by_line` {line: layout} (gable rafters), `gravity_lines` [line, ...] (post-and-beam end frames:
+    shear connections, not moment frames) and `braced_lines` [line, ...] (roof nodes of those lines tied to the
+    diaphragm across the span: the end-bay roof wind girder). Member boundaries inside a rafter are bolted end-plate
+    splices; the boundary at the ridge is the apex joint. `engine3d.add_column(..., releases=...)` pins column ends
+    about both axes (a column pinned at its top is a gravity column).
+  - Checks: every stepped element is also checked at both ends with the exact local section (owner ruling D-T1);
+    LTB lengths, Ly, Lz and the major-axis buckling section come from `flange_braces` = {'rafter': {'purlins_mm':
+    [plan distances from each eave], 'fly_braces_mm': [...]}, 'column': {'girts_mm': [heights], 'fly_braces_mm':
+    [...]}, 'members': {'rafter' | 'column': {section (single angle), L_mm, angle_deg, n_bolts, fixity, fy_MPa,
+    bolt {d_mm, grade, t_mm, e_mm, d0_mm}}}} (IS 800 8.3.2 restraint force 2.5 % / 1 %, 7.5.1.2 angle check).
+    Explicit `member_overrides` 'e<tag>' win. Joints use the section at the joint face (D-T7: knee and apex for
+    1.2 Mp of that section, in either sign). The frame stability record gives lambda_cr by IS 800 4.6.2(b) on the
+    stepped model.
+  - Joints. An `end_plate` dict is {rows [{h_mm, n_pairs}] (the tension rows for ONE sign of moment, lever arms from
+    the compression-flange centre; declare only the rows in the tension half, h >= hf/2), d_mm, grade, t_plate_mm, fy_plate_MPa,
+    plate_grade, be_mm (<= the row pitch and b/2), lv_mm (bolt centre to the weld toe), le_mm, pretensioned,
+    bolt_type, and for rows inside the flanges web_t_mm (member web + any web plate), web_fy_MPa, hf_mm}: IS 800
+    10.4.7 strip per bolt with prying (Q >= 0), each inner row capped by the web strip be x t_web x fy / gamma_m0.
+    * `connections['rafter_splice']`, looked up by a section of the joint, then the kind ('apex' | 'rafter_splice' |
+      'canopy_root'), then 'default': {end_plate, symmetric (the same rows at the other flange), shear_bolts {n_bolts,
+      d_mm, grade, surface}, bolt_type, weld_type, plate_b_mm, bom_plates [{item, part, size, qty_per_joint,
+      kg_each}]; a joint on a column flange (the canopy root) adds column_section, column_flange_t_mm,
+      column_flange_grade, gauge_mm, column_web_doubler_mm for the column-flange T-stub row}. Apex: max(1.2 Mp,
+      M analysis) in both signs (x 1.8 on the analysis moment under IS 18168); rafter splices: the analysis moment, both
+      signs (IS 18168 6.5: x 1.8 and >= 3 db from a column face); gravity lines and the canopy root: the analysis
+      moment.
+    * Knee end plate: `connections['beam_column'][<rafter face section> | 'default']` type 'end_plate' with the
+      end_plate dict and symmetric, plate_b_mm, gauge_mm, column_flange_t_mm (a knee-zone column flange plate),
+      column_flange_grade, column_flange_lv_mm, column_weld_mm, bom_plates. Checked in both signs at 1.2 Mp of the
+      face section (D-T7; IS 18168 route B 8.4: 1.1 Ry fy Zpb), with the column flange as a T-stub on the same bolt
+      rows and the column web (plus the knee_panel doubler) feeding the inner rows.
+    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa}, flange_stiffener {n, b_mm, t_mm,
+      fy_MPa} (sized for the connection-moment flange force), doubler_t_mm, weld_mm}; the panel shear is checked on
+      the analysis moment.
+  - Secondary members designed by the CFS engine (owner decision D-T5) are imported as `peb_secondary` =
+    [{id, kind, section, checks [{name, value, limit, dc, ok, clause}], mass_kg, file, sha256, source}] (the file is
+    re-hashed every run). Tonnage groups: `peb_mass_groups` {group: {tags | sections}} (crane, canopy) and
+    `peb_connection_mass_kg`; a `secondary_members` strut record may carry `group` (e.g. 'crane' for the crane
+    brackets; default 'bracing'). A column whose girts differ from the main frame takes its own restraints:
+    `PB.column(..., restraints={'girts_mm': [...], 'fly_braces_mm': [...]})`; canopy cantilevers are
+    `PB.beam(et, eles, nodes, label, kind='canopy', member_id=...)` (root splice 'canopy_root').
+    Outputs: `design/reactions.csv`, `design/bom.csv` (with the take-off by category and kg/m2),
+    `design/anchor_bolt_plan.svg`, `model.std` (STAAD.Pro: stepped TAPERED members, supports, releases, the roof
+    diaphragm as SLAVE commands to the level master, DL / LL member loads, EQ joint loads and the DL / LL / EQ
+    combinations; member wind, crane and notional loads are listed as not exported), and member_schedule columns
+    start / end depth, plates, mass_kg.
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels
   {unit: k}, base_mm {unit: mm above a common datum}, level_tol_mm (50), id}])` runs each unit as its own job

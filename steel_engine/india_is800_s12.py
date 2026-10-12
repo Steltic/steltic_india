@@ -147,7 +147,7 @@ def zone_gate(system, cfg):
                 is800_only_ban=(zone in ("IV", "V") or (zone == "III" and (I or 1.0) > 1.0)))
 
 
-def material_gate(member, *, clause, props=None):
+def material_gate(member, *, clause, props=None, cfg=None, system=None):
     """IS 2062 E250B requirement (12.8.2.1 SCBF braces; 12.11.1 SMF). E250B of IS 800:2007 maps to IS 2062:2025
     E250 with an impact-tested quality (B0 or C; BR only when the RT impact test is specified - Table 3 Note 3).
     IS 1161 YSt tubes are not IS 2062 and fail; IS 18168:2023 5.2 (which governs where applicable) also admits
@@ -164,6 +164,17 @@ def material_gate(member, *, clause, props=None):
         return _na("material_E250B", clause="IS 800:2007 " + clause, cite=cite, member=member.get("id"),
                    reason="grade not declared")
     key, q = I8.parse_is2062_grade(grade)
+    a18 = is18168_status(system, cfg)["applies"] if (cfg is not None and system) else False
+    if a18 and key in ("E275", "E300", "E350"):
+        # PEB (2026-10, owner ruling D-T2 route B): where IS 18168:2023 applies it governs the material (Foreword /
+        # 5.2(a)): E250 / E275 / E300 / E350 of IS 2062 in quality B0 or C.  E250 keeps the IS 800 E250B check below
+        # (the same B0 / C qualities), so the jobs designed before this branch existed report unchanged rows.
+        return _chk("material_E250B", grade, "IS 18168:2023 5.2(a): E250-E350 (B0 or C)",
+                    clause="IS 18168:2023 5.2(a) (governs; IS 800:2007 %s)" % clause,
+                    cite="IS 18168:2023 5.2(a) structural steel sections and plates of grades E250 (B0 or C), E275 (B0 "
+                         "or C), E300 (B0 or C) or E350 (B0 or C) as per IS 2062",
+                    member=member.get("id"), ok=(q in ("B0", "C")),
+                    reason=None if q in ("B0", "C") else "IS 18168 5.2(a) needs quality B0 or C (got %s)" % (q or "none"))
     if key != "E250":
         return _chk("material_E250B", grade, "IS 2062 E250B", clause="IS 800:2007 " + clause, cite=cite,
                     member=member.get("id"), ok=False,
@@ -248,7 +259,7 @@ def brace_member_checks(system, m, model_data, cfg):
     fy, fu = _fy(m, p)
     sec_cl = "12.7" if sysn == "OCBF" else "12.8"
     if sysn == "SCBF":
-        out.append(material_gate(m, clause="12.8.2.1", props=p))
+        out.append(material_gate(m, clause="12.8.2.1", props=p, cfg=cfg, system=sysn))
     if not fy:
         out.append(_na("brace_fy", clause="IS 800:2007 " + sec_cl, cite="fy from grade", member=m["id"],
                        reason="grade not resolved (no default fy)"))
@@ -594,7 +605,7 @@ def column_checks(system, model_data, cfg):
                             cite="column sections used in SCBF shall be plastic (3.7.2)", member=m["id"],
                             ok=(sc["section_class"] == "plastic") if sc["section_class"] else None))
         if sysn == "SMF":
-            out.append(material_gate(m, clause="12.11.1", props=p))
+            out.append(material_gate(m, clause="12.11.1", props=p, cfg=cfg, system=sysn))
             sc = I8.section_class_table2(p, fy) if fy else {"section_class": None}
             out.append(_chk("smf_column_class", sc["section_class"], "plastic or compact",
                             clause="IS 800:2007 12.11.3.1", member=m["id"],
@@ -621,8 +632,14 @@ def column_checks(system, model_data, cfg):
             out.append(_na("12.5.1_column", clause="IS 800:2007 12.5.1", cite="P/Pd > 0.4 -> 12.2.3",
                            member=m["id"], reason="fy or L_mm missing"))
             continue
-        comp = I8.compression_capacity(p, fy, KLz_mm=(m.get("Kz") or 1.0) * m["L_mm"],
-                                       KLy_mm=(m.get("Ky") or 1.0) * m["L_mm"], process=m.get("process"))
+        # PEB (2026-10): member lengths between restraints (Lz_mm / Ly_mm overrides, e.g. a stepped tapered column
+        # base-knee in plane, fly-brace spacing out of plane) and the member's buckling section (D-T1)
+        _peb_m = bool(m.get("buckling_section"))
+        KLz_ = (m.get("Kz") or 1.0) * float((m.get("Lz_mm") if _peb_m else None) or m["L_mm"])
+        KLy_ = (m.get("Ky") or 1.0) * float((m.get("Ly_mm") if _peb_m else None) or m["L_mm"])
+        comp = I8.compression_capacity(p, fy, KLz_mm=KLz_, KLy_mm=KLy_, process=m.get("process"))
+        if m.get("buckling_section") and comp.get("found"):
+            comp = I8.peb_buckling_section(comp, p, m["buckling_section"], fy, KLz_, KLy_, process=m.get("process"))
         a18 = is18168_status(sysn, cfg)
         if a18["applies"] and comp.get("found"):
             # IS 18168 7.2 (alone: IS 800 Table 3 gives 180 for the same member) -> cite IS 18168
@@ -883,6 +900,15 @@ def mpc_9_3_1_2(p, fy, P, axis, welded=None):
     return max(Mpc, 0.0), n_, "IS 800 9.3.1.2(c) standard I/H"
 
 
+def _jm(model_data, x):
+    """Joint member record; PEB (2026-10, owner ruling D-T7): a stepped tapered member enters the joint with the
+    section at the joint face (x['face_section'], set by the pipeline from peb_build)."""
+    m = _member(model_data, x["member_id"]) or x
+    if x.get("face_section") and x["face_section"] != m.get("section"):
+        m = dict(m, section=x["face_section"], face_section_basis="D-T7: section at the joint face")
+    return m
+
+
 def scwb_joint(joint, model_data):
     """12.11.3.2 sum(Mpc)/sum(Mpb) >= 1.2 at one joint, columns above/below with the axis in the frame plane and
     Mpc reduced for the joint column axial load (12.2.3 family when present, else the Table 4 maximum)."""
@@ -892,7 +918,7 @@ def scwb_joint(joint, model_data):
                    member=joint.get("id"), reason="joint has no columns or beams")
     sMpc, terms_c = 0.0, []
     for c in cols:
-        m = _member(model_data, c["member_id"]) or c
+        m = _jm(model_data, c)
         p = _props(m)
         fy, _ = _fy(m, p)
         if not fy:
@@ -907,7 +933,7 @@ def scwb_joint(joint, model_data):
         terms_c.append({"member": m["id"], "section": m["section"], "axis": axis, "P_N": P, "n": n, "Mpc_Nmm": Mpc})
     sMpb, terms_b = 0.0, []
     for b in beams:
-        m = _member(model_data, b["member_id"]) or b
+        m = _jm(model_data, b)
         p = _props(m)
         fy, _ = _fy(m, p)
         Mpb = p["Zx"] * fy
@@ -942,7 +968,7 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
                    reason="joint has no columns or beams")
     sMpc, terms_c = 0.0, []
     for c in cols:
-        m = _member(model_data, c["member_id"]) or c
+        m = _jm(model_data, c)
         p = _props(m)
         fy, _ = _fy(m, p)
         if not fy or not m.get("L_mm"):
@@ -965,7 +991,7 @@ def scwb_joint_is18168(joint, model_data, cfg=None):
                         "Mpc_Nmm": Mpc})
     sMbo, terms_b = 0.0, []
     for b in beams:
-        m = _member(model_data, b["member_id"]) or b
+        m = _jm(model_data, b)
         p = _props(m)
         fy, _ = _fy(m, p)
         if not fy:
@@ -991,7 +1017,7 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
     beams = joint.get("beams") or []
     Mp_list = []
     for b in beams:
-        m = _member(model_data, b["member_id"]) or b
+        m = _jm(model_data, b)
         p = _props(m)
         fy, _ = _fy(m, p)
         if not fy:
@@ -1001,7 +1027,7 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
         Mp = p["Zx"] * fy
         Mp_list.append((b, m, p, fy, Mp))
         if sysn == "SMF":
-            out.append(material_gate(m, clause="12.11.1", props=p))
+            out.append(material_gate(m, clause="12.11.1", props=p, cfg=cfg, system=sysn))
             sc = I8.section_class_table2(p, fy)
             out.append(_chk("smf_beam_class", sc["section_class"], "plastic (hinge) / compact",
                             clause="IS 800:2007 12.11.3.1", cite="plastic or compact; plastic at hinge locations",
@@ -1037,7 +1063,7 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
     cols = joint.get("columns") or []
     below = next((c for c in cols if c.get("position") == "below"), cols[0] if cols else None)
     if sysn == "SMF" and below and Mp_list:
-        cm = _member(model_data, below["member_id"]) or below
+        cm = _jm(model_data, below)
         cp = _props(cm)
         fyc, _ = _fy(cm, cp)
         strong = cm.get("major_axis_plane") in (None, joint.get("frame_dir"))
@@ -1121,6 +1147,9 @@ def joints_from_model(nodes, elements, *, frame_members=None):
             other = e["node_j"] if e["node_i"] == nid else e["node_i"]
             x1, y1, z1 = nodes[other]
             if e.get("role") == "column":
+                crel = e.get("release_end") or "none"
+                if crel == "both" or (crel == "I" and e["node_i"] == nid) or (crel == "J" and e["node_j"] == nid):
+                    continue          # PEB (2026-10): column pinned at this end delivers no moment to the joint
                 cols.append({"member_id": e["id"], "position": "above" if z1 > z0 else "below"})
             elif e.get("role") == "beam":
                 rel = e.get("release_major") or "none"

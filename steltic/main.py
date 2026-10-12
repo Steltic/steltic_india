@@ -173,8 +173,8 @@ async def set_creds(request: Request):
 
 
 EXAMPLE_BRIEFS = {
-    # India briefs (WP2.10; renumbered 2026-10, most common building types first: the PEB sheds in1-in5 need the
-    # PEB release -- docs/PEB_TAPERED_SCOPE.md -- and are not in the UI picker until it lands)
+    # India briefs (WP2.10; renumbered 2026-10, most common building types first: the PEB sheds in1-in5 run on the
+    # PEB release -- docs/PEB_TAPERED_SCOPE.md, CHANGES_2026-10-peb.md)
     "in1": "IN_Ex1_PEB_factory_shed_tapered_Bengaluru.txt",
     "in2": "IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi.txt",
     "in3": "IN_Ex3_PEB_crane_shed_10t_Nagpur.txt",

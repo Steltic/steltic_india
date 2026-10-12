@@ -62,7 +62,8 @@ Old → new: Ex1 → Ex7, Ex2 → Ex1, Ex3 → Ex10, Ex4 → Ex12, Ex5 → Ex3, 
   `usa_reference/` originals and EOR memos, test fixtures such as `tests/fixtures/IN_Ex13/`, the nonlinear fixtures
   `IN_Ex13_pkg/` and `IN_Ex16_pkg/`) and in every text file, in one pass (`scripts/renumber_2026-10.py`). The vendored HR engine copies in steltic_CFS_india and steltic_nonlinear_india changed identically.
 - **Example pickers:** `/api/example/inN` serves `IN_ExN` (HR, in1 … in20) and `IN_CFS_ExN` (CFS, in1 … in15). The HR
-  UI pickers (hub manifest and the engine's own page) offer in6 … in20 until the PEB release makes in1 … in5 runnable.
+  UI pickers (hub manifest and the engine's own page) offered in6 … in20 until the PEB release (2026-10) made in1 … in5
+  runnable; they now offer in1 … in20.
 - **Short forms that clearly meant an India brief** in live code comments and agent contracts (for example "Ex5" for
   the all-CFS portal) were rewritten to the full new id. Test data keys were renamed with their briefs (the zone /
   system fixture keys `Ex8`, `Ex9`, `Ex6`, `Ex10`, `Ex7`, `legacy_Ex10_OCBF_ZoneII`; the brief-lint id sets).

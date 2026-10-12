@@ -8,11 +8,11 @@ moment-frame buildings by height. The numbering changed on 2026-10; the old-to-n
 
 | # | Brief | Building | Status |
 |---|---|---|---|
-| 1 | `IN_Ex1_PEB_factory_shed_tapered_Bengaluru.txt` | PEB factory shed, 30 m clear span, tapered welded portals, pinned bases, brick dado (Zone II) | PEB release |
-| 2 | `IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi.txt` | Grade A logistics warehouse, 4 x 24 m modular frames, 12 m clear height, dock canopy, solar-ready roof (Zone III) | PEB release, D-T2 |
-| 3 | `IN_Ex3_PEB_crane_shed_10t_Nagpur.txt` | PEB crane shed, 24 m span, 10 t EOT crane on column brackets, fixed bases (Zone II) | PEB release |
-| 4 | `IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR.txt` | PEB fulfilment warehouse in Zone IV, SMRF portals — the D4 gate on a PEB (Farrukhnagar, NCR) | PEB release, D-T2 |
-| 5 | `IN_Ex5_PEB_rooftop_solar_check_Bengaluru.txt` | Rooftop PV on the existing IN_Ex1 shed: check as built, PV capacity of the roof | PEB release, needs IN_Ex1 gold |
+| 1 | `IN_Ex1_PEB_factory_shed_tapered_Bengaluru.txt` | PEB factory shed, 30 m clear span, tapered welded portals, pinned bases, brick dado (Zone II) | runs (PEB release) |
+| 2 | `IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi.txt` | Grade A logistics warehouse, 4 x 24 m modular frames, 12 m clear height, dock canopy, solar-ready roof (Zone III) | runs (PEB release, D-T2 route B) |
+| 3 | `IN_Ex3_PEB_crane_shed_10t_Nagpur.txt` | PEB crane shed, 24 m span, 10 t EOT crane on column brackets, fixed bases (Zone II) | runs (PEB release) |
+| 4 | `IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR.txt` | PEB fulfilment warehouse in Zone IV, SMRF portals — the D4 gate on a PEB (Farrukhnagar, NCR) | runs (PEB release, D-T2 route B) |
+| 5 | `IN_Ex5_PEB_rooftop_solar_check_Bengaluru.txt` | Rooftop PV on the existing IN_Ex1 shed: check as built, PV capacity of the roof | runs (PEB release; a check of the IN_Ex1 gold) |
 | 6 | `IN_Ex6_OMRF_warehouse_mezzanine_Hyderabad.txt` | Multi-bay OMRF warehouse + storage mezzanine (Zone II) | runs today |
 | 7 | `IN_Ex7_Crane_bay_OMRF_OCBF_Vizag.txt` | Crane-bay industrial building, 200 kN EOT crane, cyclone belt | runs today |
 | 8 | `IN_Ex8_SMF_portal_Chennai_wind.txt` | Single-storey SMF portal shed, wind-governed, cyclone belt (Zone III) | runs today |
@@ -29,10 +29,11 @@ moment-frame buildings by height. The numbering changed on 2026-10; the old-to-n
 | 19 | `IN_Ex19_EBF_12levels_Tplan_Guwahati.txt` | 12-storey EBF residential, two units (Zone V) | runs today |
 | 20 | `IN_Ex20_SCBF_18levels_slender_Noida.txt` | 18-storey slender SCBF office tower (Zone IV) | runs today |
 
-**PEB release:** IN_Ex1 … IN_Ex5 need welded plate I-sections, web-tapered members, flange braces and the owner
-decisions listed in [`docs/PEB_TAPERED_SCOPE.md`](../docs/PEB_TAPERED_SCOPE.md). Until that release lands they are
-served by the API (`/api/example/in1` … `in5`) but not offered in the UI picker, and each brief tells the agent to stop
-with design_status 'blocked' if the engine cannot take tapered sections.
+**PEB release (2026-10):** IN_Ex1 … IN_Ex5 use welded plate I-sections, web-tapered members, flange braces and the
+owner decisions recorded in [`docs/PEB_TAPERED_SCOPE.md`](../docs/PEB_TAPERED_SCOPE.md) and
+[`CHANGES_2026-10-peb.md`](../CHANGES_2026-10-peb.md) (D-T1 … D-T7). They are served by the API (`/api/example/in1` …
+`in5`) and offered in the UI pickers. Each brief still tells the agent to stop with design_status 'blocked' on an
+engine without tapered sections.
 
 The shipped US-basis briefs and the retired EXAMPLE memos live under `usa_reference/` and are not loaded.
 Retired EOR EXAMPLE memos (not loaded, **not-for-construction**; numbers as renumbered 2026-10):

@@ -1481,13 +1481,17 @@ def prying_10_4_7(*, Te_N, lv_mm, le_mm, t_mm, be_mm, fo_MPa, fy_MPa, pretension
 
 def end_plate_moment_capacity(*, rows, d_mm, grade="8.8", t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
                               pretensioned=True, bolt_type="HSFG", Anb_mm2=None, fub_MPa=None, fyb_MPa=None,
-                              plate_grade=None, job_steel_grade=None):
+                              plate_grade=None, job_steel_grade=None, web_t_mm=None, web_fy_MPa=None, hf_mm=None):
     """Bolted end-plate moment connection: capacity = sum over tension bolt rows of (2 Te_row x h_row) where the
     bolt tension Te per bolt is limited by (i) 10.3.5 Tdb with the 10.4.7 prying force added (Te + Q <= Tdb) and
     (ii) the end-plate bending at the bolt line per pair, M = Te lv - Q le <= 1.2 (be t^2/6) fy/gamma_m0 (8.2.1.2
     cap on a plate strip).  rows = [{h_mm (lever arm from the compression flange centre), n_pairs (default 1)}].
     The compression side (flange bearing / column continuity / panel zone) is checked at the joint (12.11.2.3-.5).
-    AUD-2: the end-plate fy is the IS 2062 Table 3 value for t_plate_mm (plate_fy_is2062) when the declared is higher."""
+    AUD-2: the end-plate fy is the IS 2062 Table 3 value for t_plate_mm (plate_fy_is2062) when the declared is higher.
+    PEB (2026-10): the prying force is Q = a (Te - K) >= 0 (no 'negative prying' when Te < K: the plate check is then
+    Te lv <= Mp_strip).  Optional web tension (web_t_mm, web_fy_MPa, hf_mm): a row inside the flange (h < hf) is fed
+    through a web strip of length be, so its force is capped at be tw fy / gamma_m0 (IS 800 6.2, gross yielding of the
+    strip); rows beyond the flange (h >= hf) are fed by the flange."""
     fy_plate_MPa, _pfy = plate_fy_is2062(fy_plate_MPa, t_plate_mm, plate_grade, job_grade=job_steel_grade,
                                          what="end plate")
     one = bolt_capacity_is800(d_mm, grade, nn=1, ns=0, e_mm=None, p_mm=None, Anb_mm2=Anb_mm2, fub_MPa=fub_MPa,
@@ -1504,24 +1508,42 @@ def end_plate_moment_capacity(*, rows, d_mm, grade="8.8", t_plate_mm, fy_plate_M
     a = float(lv_mm) / (2.0 * le)
     # (i) bolt: Te + a (Te - K) <= Tdb  ->  Te <= (Tdb + a K)/(1 + a)   (prying active when Te > K)
     Te_bolt = min((Tdb + a * K) / (1.0 + a), Tdb) if Tdb > K else Tdb
-    # (ii) plate: Te lv - Q le <= Mp_strip, Q = a (Te - K)  ->  Te (lv - a le) + a K le <= Mp_strip
+    # (ii) plate: Te lv - Q le <= Mp_strip, Q = a (Te - K) >= 0  ->  Te (lv - a le) + a K le <= Mp_strip when the
+    # plate reaches Mp_strip with prying active (Te > K); otherwise (Q = 0) Te lv <= Mp_strip
     coef = float(lv_mm) - a * le
-    Te_plate = (Mp_strip - a * K * le) / coef if coef > 0 else float("inf")
+    Te_noq = Mp_strip / float(lv_mm)
+    if Te_noq <= K:
+        Te_plate = Te_noq
+    else:
+        Te_plate = (Mp_strip - a * K * le) / coef if coef > 0 else float("inf")
     Te = max(min(Te_bolt, Te_plate), 0.0)
     Q = prying_10_4_7(Te_N=Te, lv_mm=lv_mm, le_mm=le_mm, t_mm=t_plate_mm, be_mm=be_mm, fo_MPa=fo, fy_MPa=fy_plate_MPa,
                       pretensioned=pretensioned)["Q_N"]
     Mcap, terms = 0.0, []
+    web_cap = (float(be_mm) * float(web_t_mm) * float(web_fy_MPa) / GAMMA_M0
+               if (web_t_mm and web_fy_MPa and hf_mm) else None)
+    n_web = 0
     for r in rows:
         n = int(r.get("n_pairs") or 1)
-        Mcap += 2.0 * n * Te * float(r["h_mm"])
-        terms.append({"h_mm": float(r["h_mm"]), "n_pairs": n, "Te_per_bolt_N": Te})
+        F_row = 2.0 * n * Te
+        capped = False
+        if web_cap is not None and float(r["h_mm"]) < float(hf_mm) and web_cap < F_row:
+            F_row, capped = web_cap, True
+            n_web += 1
+        Mcap += F_row * float(r["h_mm"])
+        terms.append({"h_mm": float(r["h_mm"]), "n_pairs": n, "Te_per_bolt_N": Te, "F_row_N": F_row,
+                      "web_tension_governs": capped})
     out = {"found": True, "capacity_Nmm": Mcap, "Te_per_bolt_N": Te, "Q_per_bolt_N": Q, "Tdb_N": Tdb,
            "governing": "bolt tension + prying" if Te_bolt <= Te_plate else "end-plate bending", "Te_bolt_N": Te_bolt,
            "Te_plate_N": Te_plate, "Mp_strip_Nmm": Mp_strip, "le_used_mm": le, "rows": terms, "cite": cite,
            "bolt_type": bolt_type, "type": "end_plate", "plate_fy": _pfy}
+    if web_cap is not None:
+        out["web_tension_row_cap_N"] = web_cap
+        out["rows_web_tension_governs"] = n_web
+        out["cite"] = cite + "; web strip in tension be tw fy/gamma_m0 (IS 800 6.2) for the rows inside the flange"
     if _pfy and _pfy.get("reduced"):
         out["note"] = _pfy["note"]
-        out["cite"] = cite + "; fy by thickness: " + PLATE_FY_CLAUSE
+        out["cite"] = out["cite"] + "; fy by thickness: " + PLATE_FY_CLAUSE
     g = hsfg_gate(bolt_type)
     out["12.4.1"] = g
     return out

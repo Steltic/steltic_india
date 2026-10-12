@@ -11,6 +11,10 @@ cfg['roof_planes'] = [ {                      # every length in mm (whatever cfg
     'rafter_sec', 'ridge_sec',                 # optional builder sections (default cfg beam_sec / beam)
     'rafter_releases', 'ridge_releases',       # optional (relz, rely); default rigid rafters, pinned ridge members
     'D', 'Lr', 'snow',                         # optional kN/m2 overrides of the roof pressures on this plane
+    'braced_lines': [line, ...],               # PEB (2026-10): lines held across the span by the roof plan bracing
+    'rafter_members': {'lo': [(to_mm, label), ...], 'hi': [...]}   # PEB (2026-10): welded / web-tapered rafter members
+                                               # from each eave (plan distance; the last reaches the ridge), stepped
+                                               # with station nodes by peb_build.rafter_line ('hi' = mirror of 'lo')
   }, ... ]
 cfg['roof_regions'] = {k: [(i, j), ...] | {'bays': [(i, j)], 'D': .., 'Lr': .., 'snow': ..}}
     grid cells (i, j) = the bay with lower-left grid corner (i, j) of an INTERMEDIATE level k that are roof
@@ -48,6 +52,8 @@ AUX_ELE_BASE = 7_000_000   # zeroLength spring tags 7_000_000 + k*1000 + n (8M =
 AUX_MAT_BASE = 990_000     # uniaxialMaterial Elastic tags 990_000 + k
 AUX_K = 1.0e9              # N/mm: spring stiffness across the span (rigid compared with any frame, F/K ~ 1e-4 mm)
 TOL = 2.0                  # mm
+TIES = {}                  # PEB (2026-10): the last tie_diaphragm of each level {k: {master, full, across, along,
+                           # across_dof, along_dof}} -- read by peb_outputs.write_staad (SLAVE commands)
 
 
 def apex_tag(k, p, line):
@@ -448,6 +454,8 @@ def tie_diaphragm(cfg, k, master, slaves, zk):
     pls = planes_at(cfg, k)
     if not pls:
         ops.rigidDiaphragm(3, master, *slaves)
+        TIES[int(k)] = {"master": master, "full": list(slaves), "across": [], "along": [], "across_dof": None,
+                        "along_dof": None}
         return {"full": list(slaves), "spring": [], "ridge": []}
     ax = pls[0]["ax"]
     full, eave = [], []
@@ -461,8 +469,26 @@ def tie_diaphragm(cfg, k, master, slaves, zk):
     ridge = ridge_nodes(k, pls)
     if not ridge:                                     # no rafters (preflight ERROR): keep the model stable --
         full += eave; eave = []                       # tie the eaves fully (tied portal)
+    # PEB (2026-10): plane key 'braced_lines' = frame lines held ACROSS the span by the roof plan bracing (the gable
+    # wind girder of a post-and-beam end frame): every roof-surface node of those lines (lifted wind-column tops,
+    # rafter stations, apex) is tied to the diaphragm across the span like an eave node
+    for pl in pls:
+        bl = {int(v) for v in (pl["raw"].get("braced_lines") or [])}
+        if not bl:
+            continue
+        cs = {pl["lcoord"][q] for q in bl if q in pl["lcoord"]}
+        seen = set(eave) | set(full)
+        for t in ops.getNodeTags():
+            if t // 100000 != int(k) or (t % 100000) >= AUX_BASE or t in seen:
+                continue
+            c = ops.nodeCoord(t)
+            if (any(abs(c[pl["oax"]] - cc) <= TOL for cc in cs) and pl["lo"] + TOL < c[pl["ax"]] < pl["hi"] - TOL
+                    and c[2] > zk + TOL):
+                eave.append(t)
     across = 2 if ax == 0 else 1
     along = 1 if ax == 0 else 2
+    TIES[int(k)] = {"master": master, "full": list(full), "across": list(eave), "along": list(ridge),
+                    "across_dof": across, "along_dof": along}
     springs = []
     n = 0
     for grp, dof in ((eave, across), (ridge, along)):
@@ -519,6 +545,11 @@ def add_plane_members(cfg, k, XY, present_k, et, eles, beam_sec=None, add_beam=N
                 apex[q] = t
                 on.append((pl["ridge"], t))
             on.sort()
+            if r.get("rafter_members"):
+                # PEB (2026-10): stepped tapered / welded rafter members with station nodes (peb_build)
+                import peb_build as _PB
+                et = _PB.rafter_line(cfg, pl, q, on, k, et, eles, add_beam, rel_r)
+                continue
             for (a0, n0), (a1, n1) in zip(on, on[1:]):
                 sec = r.get("rafter_sec") or (beam_sec(q, k, pl["axis"]) if beam_sec else cfg.get("beam"))
                 add_beam(et, n0, n1, sec, releases=rel_r)

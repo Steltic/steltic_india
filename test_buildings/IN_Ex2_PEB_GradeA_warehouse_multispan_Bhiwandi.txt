@@ -7,9 +7,11 @@ PEB release: this brief needs welded plate I-sections and web-tapered members (c
 
 Location: Bhiwandi (Thane district, Mumbai Metropolitan Region), logistics park at 19.30 N, 73.06 E. Bhiwandi is not
   listed in IS 1893 (Part 1):2016 Annex E: read the zone from Fig. 1 at the site (zone_source = 'derived_from_map'
-  with lat / long, VERIFY) — the brief is written for Zone III; if the reading differs, stop and report it. Z from
-  Table 3. Soil medium (Type II, EOR assumption pending the geotechnical report). Basic wind speed: the site is not
-  listed in IS 875 (Part 3) Annex A — read Fig. 1 at the site and record the source the same way.
+  with lat / long, VERIFY) — the brief is written for Zone III; if the reading differs, stop and report it. Where
+  the corpus holds no reading of Fig. 1 at the site (the figure is image-only), use the site_proxy route of ruling
+  R5: a tabulated town close to the site, with its distance, VERIFY. Z from Table 3. Soil medium (Type II, EOR
+  assumption pending the geotechnical report). Basic wind speed: the site is not listed in IS 875 (Part 3)
+  Annex A — read Fig. 1 at the site, or use the R5 site_proxy route, and record the source the same way.
 Occupancy: third-party logistics (3PL) warehouse for general non-food goods (consumer durables, packaged non-food
   FMCG); a food-grain or food store would be Table 8 (i) — not this building -> I = 1.0 (Table 8 (iii)).
 Lateral system: OMRF and ordinary braced frames are not permitted in Zone III (IS 1893 Table 9 Note 1 as amended by
@@ -19,21 +21,26 @@ Lateral system: OMRF and ordinary braced frames are not permitted in Zone III (I
   5.2 (E350 allowed), the Table 2 width-to-thickness limits and doubly symmetric sections. Either way no slender
   element in an SMRF member, and the 12.11.3.2 strong-column check at every joint (IS 18168 8.2.1 relief at the
   roof level only under route B). Longitudinal — special concentrically braced frames (Table 9 ii)(b), IS 800 12.8):
-  X-braced bays in both long walls and the roof plane, braces designed for compression (no tension-only rods).
+  X-braced bays in both long walls and the roof plane (and on an interior column line where the span of the roof
+  wind girder needs it), braces designed for compression (no tension-only rods).
   Per-direction R: cfg['R_x'] / cfg['R_y'] with cfg['system_x'] / cfg['system_y'].
 
 Geometry (metres; the engine works in N-mm):
 - plan 96 m x 108 m (10,368 m²): modular frames of 4 spans x 24 m with 3 interior column lines; 13 frames at 9.0 m
 - eave height 13.0 m (12.0 m clear under the haunches, the tenant's racking specification); single ridge on the
   centre line; roof slope 1:20 (rise 2.4 m, apex 15.4 m); rafters at their true slope through cfg['roof_planes']
-- exterior columns: web-tapered welded I, pinned bases; interior columns: prismatic welded I, pinned at the base and
-  at the rafter (gravity columns; the frame moment is carried at the exterior knees and by rafter continuity)
+- exterior columns: welded I, web-tapered or prismatic; pinned or fixed bases as the design needs — state the choice
+  and why (the column lateral limit for the brick dado under the D-T2 route decides it); interior columns: prismatic
+  gravity columns (welded I or tubes), pinned at the base and at the rafter, except where an interior line carries
+  longitudinal bracing (the frame moment is carried at the exterior knees and by rafter continuity)
 - rafters continuous over the interior columns: tapered at the exterior knees, deepened over the interior columns
   only as the design needs; bolted end-plate splices placed by the design near the points of contraflexure
-- plates per the D-T2 route; end plates, stiffeners and base plates IS 2062 E250
+- plates per the D-T2 route; end plates, stiffeners and base plates IS 2062 E250 (E350 B0 where a moment end plate
+  needs it: IS 18168 5.2(a))
 - end walls: post-and-beam bearing frames with wind columns at 8.0 m (both gables); one gable designed as a full main
   frame is a variation, not the base
-- secondary members: cold-formed Z purlins at about 1.5 m (lapped), Z girts at about 1.8 m above the dado — CFS engine
+- secondary members: cold-formed Z purlins (lapped) and Z girts above the dado at the spacing the IS 801 design needs
+  (start from about 1.5 m and 1.8 m; the 9 m bays may need closer spacing) — CFS engine
   per D-T5 or cfg['delegated_design']; flange braces at every purlin within 6 m of the knees and of each interior
   column, and at every second purlin elsewhere (cfg['flange_braces'])
 - roof plan bracing in the braced bays; the sheeting is not relied on as a diaphragm (classify per IS 1893 7.6.4)
@@ -55,7 +62,10 @@ Loads (RETRIEVE — do not invent): dead IS 875 (Part 1):2026 (roof assembly, in
   the 20 dock doors on one wall (state the opening ratio of each wall); the canopy as an attached canopy with its
   own uplift and down-load case (where the corpus is silent on attached canopies, record an EOR assumption with
   source, cite and verify). Wind as member-level cases incl. roof and canopy uplift with 0.9 DL on the rafters,
-  purlins, flange braces and anchor bolts. Seismic: equivalent static (7.6) with the dead, collateral and PV loads
+  purlins, flange braces and anchor bolts; check the first sway mode against IS 875 (Part 3) 9.1 (dynamic effects,
+  RETRIEVE). Seismic: the method IS 1893 7.7.1 requires for this zone and building (RETRIEVE whether the equivalent
+  static method of 7.6 is permitted; otherwise the response spectrum method scaled per 7.7.3) with the dead,
+  collateral and PV loads
   in the seismic weight (RETRIEVE how roof imposed load enters it); 7.8.2 accidental eccentricity; drift 0.004 h
   (7.11.1.1). No crane, no snow.
 Design: IS 800:2007 LSD; tapered members checked at every segment end with the local section (Table 2 welded rows,

@@ -55,9 +55,9 @@ def test_frontend_lists_only_india_briefs():
     i0 = html.index('id="exampleSelect"')
     sel = html[i0:html.index("</select>", i0)]
     vals = re.findall(r'<option value="([^"]*)"', sel)
-    # 2026-10 renumbering: most common building types first; the PEB sheds in1-in5 need the PEB release and are not
-    # offered in the UI picker until it lands (docs/PEB_TAPERED_SCOPE.md); the engine serves in1-in20
-    assert [v for v in vals if v] == ["in%d" % i for i in range(6, 21)]
+    # 2026-10 renumbering: most common building types first; the PEB sheds in1-in5 are offered with the PEB release
+    # (docs/PEB_TAPERED_SCOPE.md); the engine serves in1-in20
+    assert [v for v in vals if v] == ["in%d" % i for i in range(1, 21)]
     assert not re.search(r"\bpsf\b|\bmph\b|\bSDC\b", html)
     tb = ROOT / "test_buildings"
     assert not list(tb.glob("Ex*.txt"))

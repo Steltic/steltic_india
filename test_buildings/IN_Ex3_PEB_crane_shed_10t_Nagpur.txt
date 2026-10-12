@@ -19,8 +19,8 @@ Geometry (metres; the engine works in N-mm):
 - clear span 24 m; length 60 m: 9 frames at 7.5 m; eave height 10.0 m; roof slope 1:10 (rise 1.2 m, apex 11.2 m);
   rafters at their true slope through cfg['roof_planes']
 - columns: prismatic welded I for the full height (a crane bracket on a tapered column is outside this release),
-  fixed bases; welded crane brackets with the rail at 7.5 m and the rail centreline 0.50 m inside the column
-  centreline
+  fixed bases; welded crane brackets with the rail at 7.5 m and the rail centreline 0.75 m inside the column
+  centreline (the 22.5 m crane span inside the 24 m column grid)
 - rafters: tapered from each knee over about 20 % of the span, then prismatic; bolted end-plate knees, apex and one
   rafter splice each side; plates IS 2062 (Part 1) E350 for the frame flanges and webs, E250 for end plates,
   stiffeners, brackets and base plates

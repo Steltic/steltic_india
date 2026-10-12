@@ -17,7 +17,8 @@ Lateral system: transverse — steel ordinary moment resisting frame portals (OM
   IS 18168:2023 is optional in Zone II (1.2) — not applied.
 
 Geometry (metres; the engine works in N-mm):
-- clear span 30 m between column centrelines; length 72 m: 11 frames at 7.5 m; eave height 10.0 m; roof slope 1:10
+- clear span 30 m between column centrelines; length 75 m: 11 frame lines at 7.5 m (10 bays); eave height 10.0 m;
+  roof slope 1:10
   (rise 1.5 m, apex 11.5 m); rafters at their true slope through cfg['roof_planes'] (eave and ridge lines, apex nodes,
   loads per plan area)
 - main frames: web-tapered welded columns, shallow at the pinned base and deep at the knee; rafters tapered from each

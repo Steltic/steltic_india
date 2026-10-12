@@ -1210,6 +1210,15 @@ def member_wind_loads(cfg, model, pat, f):
                 w = f * float(pp) * width / 1000.0                      # N/mm, + downward
                 ops.eleLoad("-ele", t, "-type", "-beamUniform", 0.0, -w, 0.0)
                 tot["roof_N"] += w * (s1 - s0)
+    # PEB (2026-10): pattern nodal loads (attached canopy wind, EOR coefficients): [{node, F: [Fx, Fy, Fz, Mx, My, Mz]
+    # (N, N-mm at factor 1.0), sign: +1 | -1 | None (the pattern direction it belongs to; None = both)}]
+    for nl in pat.get("nodal_loads") or []:
+        sg_ = nl.get("sign")
+        if sg_ is not None and (1.0 if float(sg_) >= 0 else -1.0) != sgn_w:
+            continue
+        F_ = [f * float(v) for v in (list(nl["F"]) + [0.0] * 6)[:6]]
+        ops.load(int(nl["node"]), *F_)
+        tot["nodal_N"] = tot.get("nodal_N", 0.0) + abs(F_[2])
     qw, ql = pat.get("wall_windward_kNm2"), pat.get("wall_leeward_kNm2")
     if qw is not None and ql is not None:
         # wall pressure as a DISTRIBUTED load on the exposed column elements (every piece of the column, full

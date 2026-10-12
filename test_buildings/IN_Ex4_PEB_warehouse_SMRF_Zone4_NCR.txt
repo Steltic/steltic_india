@@ -8,8 +8,10 @@ PEB release: this brief needs welded plate I-sections and web-tapered members (c
 Location: Farrukhnagar (Gurugram district, Haryana), on the KMP Expressway logistics belt at 28.45 N, 76.82 E. The site
   is not listed in IS 1893 (Part 1):2016 Annex E: read the zone from Fig. 1 at the site (zone_source =
   'derived_from_map' with lat / long, VERIFY) — the brief is written for Zone IV; if the reading differs, stop and
-  report it. Z from Table 3. Soil medium (Type II, EOR assumption). Basic wind speed: the site is not listed in
-  IS 875 (Part 3) Annex A — read Fig. 1 at the site and record the source the same way.
+  report it. Where the corpus holds no reading of Fig. 1 at the site (the figure is image-only), use the
+  site_proxy route of ruling R5: a tabulated town close to the site, with its distance, VERIFY. Z from Table 3.
+  Soil medium (Type II, EOR assumption). Basic wind speed: the site is not listed in IS 875 (Part 3) Annex A —
+  read Fig. 1 at the site (a corpus Fig. 1 reading record, where one exists) and record the source the same way.
 Occupancy: e-commerce fulfilment warehouse for general non-food parcels; a food store would be Table 8 (i) — not this
   building -> I = 1.0 (Table 8 (iii)).
 Lateral system — this brief tests the D4 gate on a PEB: OMRF and ordinary braced frames are not permitted in Zone IV
@@ -25,10 +27,13 @@ Lateral system — this brief tests the D4 gate on a PEB: OMRF and ordinary brac
 Geometry (metres; the engine works in N-mm):
 - clear span 30 m; length 90 m: 13 frames at 7.5 m; eave height 10.5 m; roof slope 1:10 (rise 1.5 m, apex 12.0 m);
   rafters at their true slope through cfg['roof_planes']
-- columns web-tapered welded I, pinned bases; rafters tapered from each knee over about 20 % of the span, then
+- columns web-tapered welded I; pinned or fixed bases as the design needs — state the choice and why (the column
+  lateral limit for the brick dado under the D-T2 route decides it); rafters tapered from each knee over about 20 %
+  of the span, then
   prismatic; bolted end-plate knees, apex and one rafter splice each side
 - end walls: post-and-beam bearing frames with wind columns at 7.5 m
-- secondary members: cold-formed Z purlins at about 1.5 m and girts at about 1.8 m (CFS engine per D-T5 or
+- secondary members: cold-formed Z purlins and girts at the spacing the IS 801 design needs (start from about 1.5 m
+  and 1.8 m) (CFS engine per D-T5 or
   cfg['delegated_design']); flange braces at every purlin within 6 m of each knee and at every second purlin elsewhere
   (and wherever the SMRF lateral-support rules of the chosen route require them)
 - walls: 230 mm brick masonry dado to 3.0 m all round; profiled steel sheeting above; 10 dock doors 3.0 m x 3.5 m in
@@ -40,7 +45,9 @@ Loads (RETRIEVE — do not invent): dead IS 875 (Part 1):2026 (roof assembly, in
   value) as the named roof dead-load component 'collateral'; imposed IS 875 (Part 2) Table 2, roof with access for
   maintenance only; wind IS 875 (Part 3):2015 — Vb as above, terrain category per 6.3.2 (state it), k1 / k3 / k4 by
   clause, Ka (7.2.2), wall Cpe Table 5, roof Cpe Table 6 at the real pitch, Cpi per 7.3.2 with the dock doors
-  classified; member-level wind cases incl. roof uplift with 0.9 DL. Seismic: equivalent static (7.6), 7.8.2
+  classified; member-level wind cases incl. roof uplift with 0.9 DL. Seismic: the method IS 1893 7.7.1 requires for
+  this zone and building (RETRIEVE whether the equivalent static method of 7.6 is permitted; otherwise the response
+  spectrum method scaled per 7.7.3), 7.8.2
   accidental eccentricity, drift 0.004 h (7.11.1.1); the seismic weight from the dead and collateral loads (RETRIEVE
   how roof imposed load enters it). No crane, no snow.
 Design: IS 800:2007 LSD; SMRF joints per 12.11.2 (1.2 Mp — D-T7 for the Mp at a tapered joint face; shear 12.11.2.2;

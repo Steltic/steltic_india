@@ -620,7 +620,8 @@ def provenance_record(job_dir):
                                     "(engine-generated model files excluded)"}
 
 
-_OVERRIDE_FIELDS = ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm", "grade", "process")
+_OVERRIDE_FIELDS = ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm", "grade", "process",
+                    "buckling_section", "c1")     # PEB (2026-10): tapered-member segments (owner ruling D-T1)
 
 
 def _is_tube(sec):
@@ -633,11 +634,20 @@ def member_override(cfg, t, kind, sec, role):
     lateral_col | gravity_col), '<kind>:<SECTION>' (kind = col | beam | brace, or column) or '<SECTION>'.  The
     more specific key wins field by field (tag > role:section > kind:section > section).  Returns (fields, keys)."""
     mo = cfg.get("member_overrides") or {}
+    out, used = {}, []
+    try:
+        import peb_build as _PB
+        pb = _PB.overrides(cfg, t) if _PB.active() else {}
+    except Exception:
+        pb = {}
+    if pb:
+        # PEB (2026-10, D-T1): restraint-derived LLT / Ly / Lz / buckling section of a stepped tapered-member element
+        out.update({f: pb[f] for f in _OVERRIDE_FIELDS if pb.get(f) is not None})
+        used.append("peb_build (D-T1 restraints, cfg['flange_braces'])")
     if not isinstance(mo, dict) or not mo:
-        return {}, []
+        return out, used
     keys = [str(sec), "%s:%s" % (_ROLE_TO_I8.get(kind, kind), sec), "%s:%s" % (kind, sec), "%s:%s" % (role, sec),
             "e%d" % t]
-    out, used = {}, []
     for k in keys:
         v = mo.get(k)
         if isinstance(v, dict):
@@ -681,9 +691,11 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
             v = cfg.get(key)
             m[key] = (v.get(role) if isinstance(v, dict) else v)
     # H19: per-member overrides for every kind, including columns (girt / fly-brace restraint -> column LTB length)
-    for f in ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm"):
+    for f in ("Kz", "Ky", "LLT_sag_mm", "LLT_hog_mm", "Lz_mm", "Ly_mm", "c1"):
         if ov.get(f) is not None:
             m[f] = float(ov[f])
+    if ov.get("buckling_section"):
+        m["buckling_section"] = str(ov["buckling_section"])
     if used:
         m["overrides"] = used
     if kind == "col":
@@ -717,6 +729,44 @@ def member_checks_is800(cfg, elem):
         return f(elem["member"], cf, cfg=cfg)
     except Exception as ex:
         return {"found": False, "ok": None, "dc": None, "reason": "member_check_is800 failed: %s" % ex}
+
+
+def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
+    """PEB (2026-10, owner ruling D-T1): a stepped element of a web-tapered member is also checked at its two ends
+    (stations) with the EXACT local section there and the end forces of each combination (the end moment taken as
+    uniform over the check, Cm = 1.0; LTB length = the restraint spacing, buckling over the member with the
+    member's governing section).  The element result returned is the governing of {element (mid-depth section,
+    span moments), station i, station j}; the three are listed under 'stations'."""
+    import static_model as SM
+    import india_is800 as I8
+    cf = SM.combo_forces_for_member_check(_top_records(recs), kind)
+    out = [("element (mid-depth section)", mem["section"], res_el)]
+    for end, sec_e in (("i", stations[0]), ("j", stations[1])):
+        cfe = []
+        for c in cf:
+            m_ = c.get("Mz_%s_Nmm" % end) or 0.0
+            my_ = c.get("My_%s_Nmm" % end) or 0.0
+            cfe.append(dict(c, Mz_i_Nmm=m_, Mz_j_Nmm=m_, My_i_Nmm=my_, My_j_Nmm=my_, Mz_mid_Nmm=None))
+        m2 = dict(mem, section=sec_e, id="%s@%s" % (mem.get("id"), end))
+        try:
+            r_ = I8.member_check_is800(m2, cfe, cfg=cfg)
+        except Exception as ex:
+            r_ = {"found": False, "ok": None, "dc": None, "reason": "station check failed: %s" % ex}
+        out.append(("station %s (%s)" % (end, sec_e), sec_e, r_))
+    gov = None
+    for nm, sec_e, r_ in out:
+        d_ = r_.get("dc")
+        if d_ is None:
+            gov = (nm, sec_e, r_)
+            break
+        if gov is None or d_ > (gov[2].get("dc") or -1):
+            gov = (nm, sec_e, r_)
+    res = dict(gov[2])
+    res["stations"] = [{"where": nm, "section": sec_e, "dc": r_.get("dc"), "governing_check": r_.get("governing_check"),
+                        "governing_combo": r_.get("governing_combo")} for nm, sec_e, r_ in out]
+    res["station_governs"] = gov[0]
+    res["flags"] = list(res.get("flags") or []) + ["PEB station checks (D-T1): governing %s" % gov[0]]
+    return res
 
 
 def _check_rows(res):
@@ -797,6 +847,42 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
                      ("service" if m.get("service") else "table4"))
     sfrs_beams = per_case_tags.get("lateral_beams") or set()
     NF = len(cfg["heights"])
+    _peb_span = lambda t: None
+    try:
+        import peb_build as _PB
+        if _PB.active():
+            col_nodes = {nd for t_, (k_, s_, a_, b_) in reg.items() if k_ == "col" for nd in (a_, b_)}
+            _PB.set_column_nodes(col_nodes)
+
+            def _peb_span(t):
+                if not _PB.element(t) or _PB.member_of(t)["kind"] != "rafter":
+                    return None
+                L_sup = _PB.support_span(t)
+                fs_ = _PB.chain_frame_span(t)
+                sf_ = fs_[1] if fs_ else 1.0
+                ln_ = (_PB.snapshot()["rafter_lines"] or {}).get((_PB.member_of(t)["plane"], _PB.member_of(t)["line"]))
+                import roof_geometry as _RG
+                pl_ = [p_ for p_ in _RG.planes(cfg) if p_["idx"] == _PB.member_of(t)["plane"]][0]
+                trib_ = _RG.rafter_trib_mm(pl_, ops.nodeCoord(reg[t][2])[pl_["oax"]])
+                # column depths at the two supports (face sections, D-T7)
+                dd = 0.0
+                for nd in (ln_ or {}).get("nodes") or []:
+                    pass
+                cols_ = [tc for tc in reg if reg[tc][0] == "col"]
+                a_el = 0.5 * sum(_PB.element(t)["pos_mm"])
+                sup = sorted(set([ln_["lo"], ln_["hi"]] + [a for a, nd in zip(ln_["a_mm"], ln_["nodes"]) if nd in col_nodes]))
+                for p0, p1 in zip(sup, sup[1:]):
+                    if p0 - 1e-6 <= a_el <= p1 + 1e-6:
+                        for a_s in (p0, p1):
+                            nd = [nd for a, nd in zip(ln_["a_mm"], ln_["nodes"]) if abs(a - a_s) < 1.0]
+                            if nd:
+                                ds_ = [S.props(_PB.face_section(tc, nd[0]) or reg[tc][1])["d"] for tc in cols_
+                                       if reg[tc][3] == nd[0]]
+                                dd += 0.5 * max(ds_ or [0.0])
+                        break
+                return L_sup, sf_, dd, trib_
+    except ImportError:
+        pass
     for t, (kind, sec, n1, n2) in reg.items():
         mid = "e%d" % t
         rec = _member_input_record(cfg, t, kind, sec, n1, n2, length[t], role_of[t])
@@ -813,7 +899,28 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
             ls = cfg.get("column_lateral_support_both_flanges")
             if ls is not None:
                 rec["lateral_support_both_flanges"] = bool(ls)
-        if kind == "beam":
+        if kind == "col":
+            cr_ = (info0.get("col_rel") or {}).get(t)
+            if cr_:
+                rec["release_end"] = cr_               # PEB (2026-10): pinned column end(s), both axes
+        if kind == "beam" and _peb_span(t):
+            # PEB (2026-10): a rafter piece of a stepped chain -- the 12.10.2.4 / 12.11.2.2 clear span is the rafter
+            # between its column supports less the column depths at the faces (D-T7), and the 1.2DL + 0.5LL simple-
+            # span shear is the roof strip on that span (frame spacing x the support span)
+            try:
+                L_sup, sf_, dfaces, trib_ = _peb_span(t)
+                rec["L_clear_mm"] = L_sup * sf_ - dfaces
+                import roof_geometry as _RG
+                pls_ = _RG.planes(cfg)
+                D_, _L0, Lr_, S_ = _RG.plane_pressures(cfg, pls_[0]) if pls_ else (float(cfg.get("D_roof") or 0), 0, 0, 0)
+                w_ = (1.2 * D_ + 0.5 * max(Lr_, S_)) * trib_ / 1000.0 + 1.2 * S.props(sec)["A"] * 7.85e-5
+                rec["V_gravity_N"] = w_ * L_sup / 2.0
+                rec["V_gravity_cite"] = ("1.2DL + 0.5LL simple-span end shear of the rafter between its column supports "
+                                         "(%.0f mm plan, trib %.0f mm) (12.10.2.4 / 12.11.2.2)" % (L_sup, trib_))
+                rec["peb_rafter"] = True
+            except Exception:
+                pass
+        elif kind == "beam":
             try:
                 c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
                 d_ = "X" if abs(c2[0] - c1[0]) >= abs(c2[1] - c1[1]) else "Y"
@@ -958,6 +1065,14 @@ def ebf_links_model_data(cfg, info0, reg, members, forces, run=None):
     return out
 
 
+def _combo_record(c):
+    """calc_package['load_combinations'] row of one analysed combination (source record + lateral meta)."""
+    meta = getattr(c, "meta", {}) or {}
+    return _jsonable(dict(meta.get("source") or {"label": c[0]}, lateral_kind=meta.get("kind"),
+                          direction=meta.get("direction"), sign=meta.get("sign"),
+                          fE=meta.get("fLat") if meta.get("kind") == "EQ" else None))
+
+
 def design_india(name, cfg, outdir):
     """India demand + check package (N-mm)."""
     import static_model as SM
@@ -1043,6 +1158,20 @@ def design_india(name, cfg, outdir):
 
     link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
 
+    col_rel = info0.get("col_rel") or {}
+    try:
+        import peb_build as _PB
+        _peb = info0.get("peb") or (_PB.snapshot() if _PB.active() else None)
+    except ImportError:
+        _PB, _peb = None, None
+    # PEB (2026-10): a column chain pinned at its top (gravity column of a multi-span portal, gable wind column) is a
+    # gravity column unless its line is a brace line
+    pinned_top_lines = set()
+    for t_, rr_ in col_rel.items():
+        if rr_ in ("J", "both"):
+            n_ = reg.get(t_, (None, None, 0, 0))[3]
+            pinned_top_lines.add(((n_ % 100000) // 100, n_ % 100))
+
     def _role(kind, n1, n2, t=None):
         if kind == "brace":
             return "brace"
@@ -1050,12 +1179,17 @@ def design_india(name, cfg, outdir):
             return "link"
         if kind == "beam":
             return "roof" if (n1 // 100000) >= NFlev else "floor"
-        return "lateral_col" if ((n1 % 100000) // 100, n1 % 100) in lateral_lines else "gravity_col"
+        ln_ = ((n1 % 100000) // 100, n1 % 100)
+        if ln_ in pinned_top_lines and ln_ not in brace_lines:
+            return "gravity_col"
+        return "lateral_col" if ln_ in lateral_lines else "gravity_col"
     role_of = {t: _role(reg[t][0], reg[t][2], reg[t][3], t) for t in reg}
     envt = {t: env.get(frozenset((reg[t][2], reg[t][3])), dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="",
                                                               records={}, conn={})) for t in reg}
     zero = [t for t in reg if all(abs(x) < 1e-6 for r in (envt[t].get("records") or {}).values() for x in r[:4])]
     sfrs_beams = sfrs_beam_tags(reg, info0)
+    if _PB is not None and _peb:
+        sfrs_beams -= {t for t in sfrs_beams if _PB.is_gravity(t)}
     tagof = {c[0]: ((getattr(c, "meta", {}) or {}).get("tags") or []) for c in cases}
     # serviceability cases (IS 800 10.4.3 service-load slip of HSFG connections): {label: {fset: rec}}
     try:
@@ -1075,13 +1209,21 @@ def design_india(name, cfg, outdir):
     # ---- member_schedule.csv + per-element combination forces for HR-MEMBERS ----
     with open(os.path.join(outdir, "member_schedule.csv"), "w", newline="") as f:
         w = csv.writer(f)
+        _pebcols = bool(_PB is not None and _peb)
         w.writerow(["ele_tag", "member", "role", "section", "length_mm", "P_comp_kN", "P_tens_kN",
-                    "M_major_kNm", "M_minor_kNm", "V_kN", "governing_combo"])
+                    "M_major_kNm", "M_minor_kNm", "V_kN", "governing_combo"]
+                   + (["start_depth_mm", "end_depth_mm", "plates_mm", "mass_kg", "peb_member"] if _pebcols else []))
+        if _pebcols:
+            import peb_outputs as PO
         for t in sorted(reg):
             kind, sec, n1, n2 = reg[t]; e = envt[t]
-            w.writerow([t, kind, role_of[t], sec, round(length[t], 1), round(e["comp"] / 1e3, 2),
-                        round(e["tens"] / 1e3, 2), round(e["Mz"] / _mdiv, 3), round(e["My"] / _mdiv, 3),
-                        round(e["V"] / 1e3, 2), e["combo"]])
+            row_ = [t, kind, role_of[t], sec, round(length[t], 1), round(e["comp"] / 1e3, 2),
+                    round(e["tens"] / 1e3, 2), round(e["Mz"] / _mdiv, 3), round(e["My"] / _mdiv, 3),
+                    round(e["V"] / 1e3, 2), e["combo"]]
+            if _pebcols:
+                d0_, d1_, pl_, kg_, pm_ = PO.schedule_extra(t, sec, length[t])
+                row_ += [d0_, d1_, pl_, round(kg_, 1), pm_]
+            w.writerow(row_)
     json.dump({"fields": list(SM.REC_FIELDS), "units": "N, N-mm (Mmaj sagging + for beams)",
                "elements": {str(t): {"kind": reg[t][0], "section": reg[t][1], "role": role_of[t],
                                      "L_mm": round(length[t], 1), "records": envt[t].get("records") or {},
@@ -1110,6 +1252,8 @@ def design_india(name, cfg, outdir):
                 recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {}) or keep(l)}
             mem = _member_input_record(cfg, t, kind, sec, reg[t][2], reg[t][3], length[t], role)
             res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
+            if _PB is not None and _peb and _PB.stations(t):
+                res = peb_station_checks(cfg, mem, kind, recs, res, _PB.stations(t))
             elem_results[t] = res
             if worst is None or (res.get("dc") or -1) > (worst[1].get("dc") or -1) or res.get("dc") is None:
                 worst = (t, res)
@@ -1176,6 +1320,16 @@ def design_india(name, cfg, outdir):
         nodes = {nd: tuple(ops.nodeCoord(nd)) for nd in ops.getNodeTags()}
         frame = {m["id"] for m in md["members"] if m.get("sfrs")}
         md["joints"] = S12.joints_from_model(nodes, md["members"], frame_members=frame)
+        if _PB is not None and _peb:
+            # PEB (2026-10, owner ruling D-T7): members enter the joint with the section at the joint face
+            for j in md["joints"]:
+                for x in (j.get("beams") or []) + (j.get("columns") or []):
+                    try:
+                        fs_ = _PB.face_section(int(str(x["member_id"]).lstrip("e")), j["node"])
+                    except (TypeError, ValueError):
+                        fs_ = None
+                    if fs_:
+                        x["face_section"] = fs_
         for j in md["joints"]:
             bm = mem_by_id.get(j["beams"][0]["member_id"]) if j.get("beams") else None
             j["roof"] = bool(bm and bm.get("roof"))
@@ -1187,6 +1341,10 @@ def design_india(name, cfg, outdir):
                     bm = bm_
                     break
             if bm:
+                bsec_ = next((bb.get("face_section") for bb in (j.get("beams") or [])
+                              if bb.get("member_id") == bm["id"] and bb.get("face_section")), None)
+                if bsec_ and CD.spec_for(cfg, "beam_column", bsec_, "beam"):
+                    bm = dict(bm, section=bsec_)        # D-T7: the joint is declared for the face section
                 pb = S.props(bm["section"])
                 fyb = CD._fy(bm, pb)[0]
                 cn = CD.beam_column_connection(cfg, bm, pb, fyb)
@@ -1287,6 +1445,18 @@ def design_india(name, cfg, outdir):
                      % (R_ / 1e3, V_ / 1e3, what, N_ / 1e3, lab_))
         return R_, "(V + N resultant) "
 
+    _joint_nodes = {j.get("node") for j in (md.get("joints") or [])}
+
+    def _peb_continuous_group(tags):
+        if _PB is None or not _peb:
+            return False
+        for t in tags:
+            if not _PB.element(t) or _PB.is_gravity(t) or (_PB.member_of(t) or {}).get("kind") != "rafter":
+                return False
+            if reg[t][2] in _joint_nodes or reg[t][3] in _joint_nodes:
+                return False
+        return True
+
     def _conn_group(key, tags):
         kind, sec, role = key
         g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
@@ -1310,6 +1480,19 @@ def design_india(name, cfg, outdir):
                                                           "reason": "no IS 18168 link checks for this link group"}))
             notes.append("link continuous with the beam outside the link: no end connection of its own; excluded from "
                          "the beam-to-column shear demand (H39)")
+        elif kind == "beam" and _peb_continuous_group(tags):
+            # PEB (2026-10): stepped pieces of a welded / tapered rafter that meet no column -- continuous plate girder
+            # through the station nodes (no connection); the bolted end-plate splices and the apex joint on the chain
+            # are checked as their own connection records (conn-peb-splice-*, peb_checks.splice_checks)
+            ctype = "PEB rafter piece (continuous; no beam-to-column connection)"
+            dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
+            spl_ = sorted({nd for t in tags for nd in reg[t][2:4] if nd in (_peb.get("splices") or {})})
+            checks.append(_row("continuity of the stepped tapered member", {
+                "ok": True, "gate": True, "clause": "docs/PEB_TAPERED_SCOPE.md (stepped model); IS 800:2007 10.5",
+                "cite": "the station nodes are depth changes inside one welded plate girder (continuous flange and web "
+                        "plates, shop flange-to-web fillet welds, D-T6): no connection at the station"}))
+            if spl_:
+                notes.append("end-plate splice / apex joint at node(s) %s: see conn-peb-splice-<node>" % spl_)
         elif kind == "beam":
             ctype = "beam-to-column"
             dem = {"V_N": round(g["V"], 1), "M_Nmm": round(g["Mz"], 1), "P_N": round(max(g["comp"], g["tens"]), 1)}
@@ -1467,6 +1650,13 @@ def design_india(name, cfg, outdir):
                 checks.append(_row("IS 800 7.4 / 12.12 column base", {"ok": None, "clause": "IS 800:2007 7.4 / 12.12",
                                                                         "reason": "cfg['connections']['column_base'] not declared for %s" % sec}))
             upper = [t for t in tags if t not in base_tags]
+            if _PB is not None and _peb:
+                cont_ = [t for t in upper if _PB.is_continuous(reg[t][2]) and reg[t][2] not in (_peb.get("splices") or {})]
+                if cont_:
+                    checks.append(_row("continuity of the stepped tapered column", {
+                        "ok": True, "gate": True, "clause": "docs/PEB_TAPERED_SCOPE.md (stepped model)",
+                        "cite": "station nodes are depth changes inside one welded column (continuous plates): no splice"}))
+                upper = [t for t in upper if t not in cont_]
             if upper:
                 m0 = mem_by_id["e%d" % upper[0]]
                 p0 = S.props(sec); fy0 = CD._fy(m0, p0)[0]
@@ -1538,6 +1728,93 @@ def design_india(name, cfg, outdir):
                                        "DC": None, "found": False, "error": err,
                                        "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": [err]})
 
+    # ---- PEB (2026-10): splices / apex joints, flange braces, frame stability, tonnage ----
+    if _PB is not None and _peb:
+        import peb_checks as PC
+        peb_out = {"stations": {}, "chains": {}, "splices": {}, "errors": []}
+        try:
+            # column half depth at the knee for the IS 18168 6.5 splice location (face of the column)
+            for nd, spl in (_peb.get("splices") or {}).items():
+                ln_ = (_peb.get("rafter_lines") or {}).get((spl.get("plane"), spl.get("line")))
+                if ln_:
+                    cols_ = [tc for tc in reg if reg[tc][0] == "col" and reg[tc][3] in (ln_["supports"] or [])]
+                    spl["col_half_depth_mm"] = 0.5 * max([S.props(_PB.face_section(tc, reg[tc][3]) or reg[tc][1])["d"]
+                                                          for tc in cols_] or [0.0])
+                    nc_ = _PB.nearest_column_face_mm(nd)
+                    if nc_:
+                        dcs_ = [S.props(_PB.face_section(tc, nc_[1]) or reg[tc][1])["d"] for tc in reg
+                                if reg[tc][0] == "col" and reg[tc][3] == nc_[1]]
+                        spl["col_face_dist_mm"] = nc_[0] - 0.5 * max(dcs_ or [0.0])
+                        spl["nearest_column_node"] = nc_[1]
+            pkg["connections"] += PC.splice_records(cfg, _peb, reg, envt, s12_cfg, cfg.get("system"))
+        except Exception as ex:
+            peb_out["errors"].append("splice checks: %s: %s" % (type(ex).__name__, ex))
+            pkg["connections"].append({"id": "conn-peb-splices", "type": "PEB splices", "DC": None, "found": False,
+                                       "demand": {}, "inputs": {},
+                                       "checks": [{"name": "PEB splice checks", "ok": None, "found": False,
+                                                   "dc": None, "reason": str(ex)}], "error": str(ex)})
+        try:
+            pkg["connections"] += PC.knee_records(cfg, _peb, md.get("joints"), reg, envt, cfg.get("system"), s12_cfg)
+        except Exception as ex:
+            peb_out["errors"].append("knee checks: %s: %s" % (type(ex).__name__, ex))
+            pkg["connections"].append({"id": "conn-peb-knees", "type": "PEB knees", "DC": None, "found": False,
+                                       "demand": {}, "inputs": {},
+                                       "checks": [{"name": "PEB knee checks", "ok": None, "found": False,
+                                                   "dc": None, "reason": str(ex)}]})
+        try:
+            pkg["connections"] += PC.flange_brace_records(cfg, _peb, reg, envt)
+        except Exception as ex:
+            peb_out["errors"].append("flange braces: %s: %s" % (type(ex).__name__, ex))
+            pkg["connections"].append({"id": "conn-peb-flange-braces", "type": "PEB flange braces", "DC": None,
+                                       "demand": {}, "inputs": {},
+                                       "found": False, "checks": [{"name": "flange brace checks", "ok": None,
+                                                                   "found": False, "dc": None, "reason": str(ex)}]})
+        try:
+            peb_out["frame_stability"] = PC.frame_stability(cfg)
+            if peb_out["frame_stability"].get("checks"):
+                rows_ = peb_out["frame_stability"]["checks"]
+                gov_ = max(rows_, key=lambda r_: r_.get("dc") or 0)
+                pkg["connections"].append({"id": "peb-frame-stability", "type": "frame stability (IS 800 4.6)",
+                                           "section": "-", "demand": {}, "inputs": {}, "checks": rows_,
+                                           "DC": gov_.get("dc"), "governing_check": gov_.get("name"),
+                                           "clause": gov_.get("clause"), "limit_state": "IS 800:2007 4.6",
+                                           "cited": "IS 800:2007 4.6.2", "notes": [],
+                                           "design_basis": peb_out["frame_stability"]["method"]})
+            info0 = E.build(cfg, "PDelta")                     # restore the design domain (frame_stability rebuilt)
+        except Exception as ex:
+            peb_out["errors"].append("frame stability: %s: %s" % (type(ex).__name__, ex))
+        for t in reg:
+            st_ = (elem_results.get(t) or {}).get("stations")
+            if st_:
+                peb_out["stations"][str(t)] = st_
+        peb_out["chains"] = _jsonable(_peb.get("chains"))
+        peb_out["members"] = _jsonable(_peb.get("members"))
+        peb_out["splices"] = _jsonable({str(k): v for k, v in (_peb.get("splices") or {}).items()})
+        try:
+            peb_out["tonnage"] = PC.tonnage(cfg, info0, length, role_of, _peb)
+        except Exception as ex:
+            peb_out["errors"].append("tonnage: %s: %s" % (type(ex).__name__, ex))
+        # deliverables: reactions.csv, bom.csv, anchor_bolt_plan.svg, model.std (peb_outputs)
+        import peb_outputs as PO
+        peb_out["outputs"] = {}
+        for nm_, fn_ in (("reactions", lambda: PO.write_reactions(cfg, outdir)),):
+            try:
+                peb_out["outputs"][nm_] = fn_()
+            except Exception as ex:
+                peb_out["errors"].append("%s: %s: %s" % (nm_, type(ex).__name__, ex))
+        try:
+            info0 = E.build(cfg, "PDelta")
+            peb_out["outputs"]["bom"] = PO.write_bom(cfg, info0, length, outdir, pkg,
+                                                      tonnage=peb_out.get("tonnage"))
+            peb_out["outputs"]["anchor_bolt_plan"] = PO.write_anchor_plan(cfg, info0, outdir,
+                                                                          peb_out["outputs"].get("reactions"))
+            peb_out["outputs"]["staad"] = PO.write_staad(cfg, info0, os.path.join(job_dir, "model.std"),
+                                                          {"load_combinations": [_combo_record(c) for c in cases]})
+        except Exception as ex:
+            peb_out["errors"].append("outputs: %s: %s" % (type(ex).__name__, ex))
+        info0 = E.build(cfg, "PDelta")
+        pkg["peb"] = peb_out
+
     # ---- composite floors (WP2.9) ----
     _blob = (str(cfg.get("floor_system", "")) + " " + str(cfg.get("notes", "")) + " " + str(cfg.get("arch", ""))).lower()
     if "composite" in _blob or cfg.get("composite") or cfg.get("composite_scope"):
@@ -1589,12 +1866,7 @@ def design_india(name, cfg, outdir):
                            "mass_participation": round(rsa[d]["mass_participation"], 4)} for d in ("X", "Y")}
         sa["modes"] = [{k: (round(v, 5) if isinstance(v, float) else v) for k, v in m_.items()} for m_ in rsa["modes"][:15]]
     pkg["seismic_analysis"] = sa
-    pkg["load_combinations"] = [_jsonable(dict((getattr(c, "meta", {}) or {}).get("source") or {"label": c[0]},
-                                               lateral_kind=(getattr(c, "meta", {}) or {}).get("kind"),
-                                               direction=(getattr(c, "meta", {}) or {}).get("direction"),
-                                               sign=(getattr(c, "meta", {}) or {}).get("sign"),
-                                               fE=(getattr(c, "meta", {}) or {}).get("fLat") if (getattr(c, "meta", {}) or {}).get("kind") == "EQ" else None))
-                                for c in cases]
+    pkg["load_combinations"] = [_combo_record(c) for c in cases]
     pkg["drift_table"] = []
     for d, rec in (run.get("drift") or {}).items():
         for i, x in enumerate(rec["drift"]):
@@ -1902,9 +2174,12 @@ def _secondary_member_demands(cfg, pkg, run, envt, reg):
     """WP2.7 secondary members (joists / purlins / girts) -- simple-span demands per combination + the
     IS 800 checks (WP6-fix: the demand-only record blocked COMPLETE for every job that declared them)."""
     sec = cfg.get("secondary_members") or []
-    if not sec:
+    peb_sec = cfg.get("peb_secondary") or []
+    if not sec and not peb_sec:
         return
     out = []
+    for r_ in peb_sec:
+        out.append(peb_secondary_record(cfg, r_))
     for s_ in sec:
         if str(s_.get("kind") or "").lower() == "strut":
             out.append(secondary_strut_checks(cfg, s_))            # declared compression member (lean-to column, WP6-fix)
@@ -1915,6 +2190,35 @@ def _secondary_member_demands(cfg, pkg, run, envt, reg):
     pkg["secondary_members"] = out
 
 
+def peb_secondary_record(cfg, r_):
+    """PEB (2026-10, owner decision D-T5): a cold-formed secondary member (lapped Z purlin / girt) designed by the
+    CFS engine (steltic_CFS_india india_cfs_members, IS 801 / IS 811) and imported with its governing check rows.
+    cfg['peb_secondary'] = [{id, kind, section, checks: [{name, value, limit, dc, ok, clause, combo}], mass_kg,
+    file (job-relative result file), sha256, source}].  The file is re-hashed: a missing or changed file makes the
+    record found:false (the design must be re-run, never trusted stale)."""
+    import hashlib
+    rec = {"id": r_.get("id"), "kind": r_.get("kind"), "section": r_.get("section"), "source": r_.get("source"),
+           "design_basis": r_.get("design_basis") or "IS 801:1975 working stress (CFS engine)",
+           "limit_state": "IS 801:1975 (india_cfs_members)", "mass_kg": r_.get("mass_kg"),
+           "span_mm": r_.get("span_mm"), "spacing_mm": r_.get("spacing_mm"), "continuity": r_.get("continuity")}
+    rows = [dict(c) for c in (r_.get("checks") or [])]
+    f = r_.get("file")
+    if f:
+        try:
+            h = hashlib.sha256(open(f, "rb").read()).hexdigest()
+            if r_.get("sha256") and h != r_["sha256"]:
+                rows.append({"name": "result file integrity", "value": None, "limit": None, "dc": None, "ok": None,
+                             "found": False, "clause": "provenance", "reason": "%s changed since import (sha256)" % f})
+            rec["file_sha256"] = h
+        except OSError as ex:
+            rows.append({"name": "result file", "value": None, "limit": None, "dc": None, "ok": None, "found": False,
+                         "clause": "provenance", "reason": "result file not readable: %s" % ex})
+    rec["checks"] = rows
+    dcs = [c["dc"] for c in rows if isinstance(c.get("dc"), (int, float))]
+    rec["DC"] = (max(dcs) if dcs and all(c.get("ok") is not None for c in rows) else None)
+    return rec
+
+
 def secondary_strut_checks(cfg, s_):
     """IS 800 7.1.2 check of a declared secondary compression member (e.g. the columns of an attached lean-to whose
     beams are secondary members): {kind: 'strut', id, section, L_mm, Kz, Ky, demands: [{combo, P_N, M_Nmm?}],
@@ -1922,11 +2226,15 @@ def secondary_strut_checks(cfg, s_):
     import india_is800 as I8
     sec = s_.get("section")
     L = float(s_["L_mm"])
+    # PEB (2026-10): optional LLT_mm -- the lateral-torsional buckling length between restraints of a strut that also
+    # carries bending (e.g. a gable rafter acting as the roof-girder chord, its top flange held by the purlins)
+    llt = float(s_.get("LLT_mm") or L)
     mem = {"id": s_.get("id"), "section": sec, "grade": s_.get("grade") or cfg.get("steel_grade"), "role": "column",
-           "L_mm": L, "Kz": float(s_.get("Kz") or 1.0), "Ky": float(s_.get("Ky") or 1.0), "LLT_sag_mm": L, "LLT_hog_mm": L,
+           "L_mm": L, "Kz": float(s_.get("Kz") or 1.0), "Ky": float(s_.get("Ky") or 1.0), "LLT_sag_mm": llt, "LLT_hog_mm": llt,
            "process": s_.get("process")}
     cf = [{"combo": d["combo"], "P_N": abs(float(d["P_N"])), "Mz_i_Nmm": float(d.get("M_Nmm") or 0.0), "Mz_j_Nmm": 0.0,
-           "Mz_mid_Nmm": 0.0, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0, "Vy_N": 0.0, "Vz_N": 0.0} for d in (s_.get("demands") or [])]
+           "Mz_mid_Nmm": 0.0, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0, "Vy_N": abs(float(d.get("V_N") or 0.0)), "Vz_N": 0.0}
+          for d in (s_.get("demands") or [])]                     # PEB (2026-10): optional V_N (e.g. a crane bracket)
     try:
         res = I8.member_check_is800(mem, cf, cfg=cfg)
     except Exception as ex:
