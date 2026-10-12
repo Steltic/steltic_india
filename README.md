@@ -49,27 +49,55 @@ browser ──▶ FastAPI app (localhost) ──▶ your LLM (key in app memory,
 
 ## Install & run
 
-With [uv](https://docs.astral.sh/uv/) (recommended):
+Most people should start with [Steltic Hub](https://github.com/Steltic/steltic_hub_india), which clones and installs
+this module for you. To run this module on its own, install it from GitHub. It needs **Python 3.10–3.12**
+(openseespy, the analysis engine, ships compiled binaries for those versions only); 3.12 is recommended.
 
-```bash
-uv tool install --python 3.12 steltic-india
-steltic-india                 # starts on http://127.0.0.1:8000 and opens your browser
-```
+**Windows (PowerShell)**
 
-Or from a checkout:
-
-```bash
-git clone https://github.com/Steltic/steltic_india && cd steltic_india
-python -m venv .venv && . .venv/bin/activate
+```powershell
+git clone https://github.com/Steltic/steltic_india
+cd steltic_india
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -e .
-./run_local.sh               # http://localhost:8000
+steltic-india                # starts on http://127.0.0.1:8000 and opens your browser
 ```
+
+**macOS / Linux**
+
+```bash
+git clone https://github.com/Steltic/steltic_india
+cd steltic_india
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+steltic-india                # starts on http://127.0.0.1:8000 and opens your browser
+```
+
+The install brings the full engine (openseespy, numpy, scipy, matplotlib, about 400 MB), so designs run without
+Docker. To run with a `.env` file of settings, use `./run_local.sh` instead of `steltic-india`.
+
+**Update:** in the repo folder, `git pull`, then `pip install -e .` again (needed only when `pyproject.toml`
+changed, harmless otherwise).
 
 First run: open **Settings**, enter your provider's **API base URL**, **API key**, and **model**.
 Point `RAG_API_URL` at your IS corpus (see [IS corpus](#is-corpus-standards-grounding) below; never a USA
 AISC / ASCE corpus). Then paste a brief and click **Design building**.
 
 Offline smoke test: set Model to `MOCK`.
+
+**Windows note:** if starting fails with *"Application Control policy has blocked this file"* or
+*"os error 4551"*, Windows **Smart App Control** is blocking an unsigned Python. Use the signed python.org
+build and recreate the environment:
+
+```powershell
+winget install Python.Python.3.12       # then open a new terminal in the repo folder
+Remove-Item -Recurse -Force .venv
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .
+```
 
 ## Critical difference from USA steltic: loads are retrieved
 
