@@ -1,5 +1,7 @@
 # steltic-india 0.3.0 — 2026-09 review fixes
 
+> **Numbering note (2026-10):** this is a dated record. Example brief numbers in it (IN_ExN, IN_CFS_ExN and short forms such as Ex9) use the numbering **before** the 2026-10 renumbering. Map: `steltic_india/test_buildings/RENUMBERING_2026-10.md`.
+
 Branch `fix/2026-09-review`, based on the delivered 0.2.2 tree. Scope rows H01–H52 (P0/P1), X01–X07 (phase-2 capabilities), D01–D05 (docs, briefs, contract lint) and RR-BUG-1..6 (defects found by re-running the 30 reference jobs on the fixed engine). Rulings R1–R12 applied as recommended in the fix scope (R12 was met with fly and knee braces in the CFS repo, because no heavier IS 811 column exists).
 
 ## Results that change for existing jobs

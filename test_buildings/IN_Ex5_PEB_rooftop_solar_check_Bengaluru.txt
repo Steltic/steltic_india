@@ -1,0 +1,36 @@
+IN_Ex5 — Rooftop solar on an existing PEB shed: check the IN_Ex1 factory as built for a C&I rooftop PV array, Bengaluru
+
+PEB release: this brief needs the tapered-member model (docs/PEB_TAPERED_SCOPE.md) and the IN_Ex1 gold package. If
+  either is missing, stop with design_status 'blocked' and say which.
+
+What this job is: a CHECK of an existing building, not a design. The building is the IN_Ex1 factory shed exactly as
+  designed: take every member, plate, depth, splice, connection, flange brace, purlin, girt and anchor bolt from the
+  IN_Ex1 gold package (design/member_schedule.csv, the connection schedule and cfg.py) and do not resize anything.
+  Site, occupancy (manufacturing, no food stored; I = 1.0, Table 8 (iii)), lateral system, geometry, cladding and every
+  IN_Ex1 load stay as briefed in IN_Ex1; the only change is the PV array below.
+
+Rooftop PV (owner values from the PV vendor; the EOR confirms):
+- monocrystalline modules flush to the roof slope on short aluminium rails clamped to the sheeting ribs, about 100 mm
+  clear of the sheeting; no penetrations through the purlins
+- array on both roof slopes, 0.6 m walkways kept clear along the eaves and the ridge and one 1.0 m walkway across the
+  roof at mid-length; about 75 % of the roof plan area covered
+- PV dead load 0.15 kN/m² over the covered area (modules about 11.5 kg/m² plus rails and clamps) as the named roof
+  dead-load component 'solar_pv'; inverters and cable trays on the ground (no extra roof load)
+- wind: IS 875 (Part 3):2015 gives no pressure coefficients for roof-mounted PV arrays. Keep the IN_Ex1 roof wind
+  cases (the array treated as part of the roof) and record that as an EOR assumption (source, cite, verify: True);
+  the rails, clamps and their fixing to the sheeting are the PV vendor's design and are not checked here
+- seismic: the PV dead load joins the seismic weight
+
+Checks (IS 800:2007 LSD, the IN_Ex1 basis unchanged): every member, joint, flange brace, purlin / girt (when the CFS
+  engine is in this release; otherwise the delegated rows with the new load) and anchor bolt, at the same stations as
+  IN_Ex1; IS 800 Table 6 deflection and sway limits as in IN_Ex1; foundations delegated (report the change in each
+  reaction).
+Deliverable: report.html + viewer_3d.html, plus:
+- a before / after table: each member's governing D/C in IN_Ex1 and with the PV array, and the governing check;
+- every item above D/C 1.0 with the strengthening options (no option is designed here);
+- the PV capacity of the roof as built: the largest uniform 'solar_pv' load for which every D/C stays at or below 1.0,
+  found by bisection to 0.01 kN/m², and the member that limits it;
+- design/reactions.csv for the PV case and the change from IN_Ex1;
+- a one-page structural adequacy note addressed to the PV installer (it is not a stability certificate; the EOR
+  signs any certificate).
+Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.

@@ -1,4 +1,4 @@
-"""GOLD-COLL (IN_CFS_Ex9, lead decision 2): flexible-diaphragm collector forces follow the load path -- the deck
+"""GOLD-COLL (IN_CFS_Ex14, lead decision 2): flexible-diaphragm collector forces follow the load path -- the deck
 shear accumulates along each braced / frame line from the free end (or the previous vertical element) and is
 delivered to each braced / frame bay by tributary length of the line (IS 1893 (Part 1):2016 7.6.4 flexible
 diaphragm, tributary distribution); the whole-line-shear upper bound is kept only when the vertical-element

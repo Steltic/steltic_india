@@ -67,7 +67,7 @@ def test_status_md_left_alone_when_not_engine_owned(tmp_path):
     assert not P._status_md_engine_owned(str(p))
     p.write_text(P.ENGINE_STATUS_MARK + "\n# x -- design status: PARTIAL\n")
     assert P._status_md_engine_owned(str(p))
-    p.write_text("# IN_Ex1 -- design status: PARTIAL\n\nAuthority: x\n")  # pre-H44 engine file
+    p.write_text("# IN_Ex13 -- design status: PARTIAL\n\nAuthority: x\n")  # pre-H44 engine file
     assert P._status_md_engine_owned(str(p))
 
 

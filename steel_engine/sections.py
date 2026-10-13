@@ -320,13 +320,109 @@ def register_box(name, B_mm, D_mm, tf_mm, tw_mm, *, source="built-up welded box 
     return props_
 
 
+def _fmt_mm(v):
+    v = float(v)
+    return ("%d" % round(v)) if abs(v - round(v)) < 1e-6 else ("%g" % v)
+
+
+def welded_I_label(D_mm, bf_mm, tf_mm, tw_mm):
+    """Self-describing designation of a welded plate I-section: WI<D>X<bf>X<tf>X<tw> (mm)."""
+    return "WI%sX%sX%sX%s" % tuple(_fmt_mm(v) for v in (D_mm, bf_mm, tf_mm, tw_mm))
+
+
+def register_welded_I(name, D_mm, bf_mm, tf_mm, tw_mm, *, source=None):
+    """PEB (2026-10): doubly symmetric welded plate I-section -- two flange plates bf x tf and a web plate
+    (D - 2 tf) x tw, fillet welded (weld size does not enter the properties).  Properties from the plates, never from
+    a catalogue.  section_type 'I' with welded=True, so india_is800 uses the welded rows: Table 2 flange outstand
+    8.4 / 9.4 / 13.6 eps and web d = D - 2 tf, Table 10 welded I class, alpha_LT 0.49 (8.2.2), shear area d tw
+    (8.4.1.1).  Returns the mm property dict (also stored in CUSTOM under the normalised label)."""
+    D, B, tf, tw = float(D_mm), float(bf_mm), float(tf_mm), float(tw_mm)
+    if not (D > 2.0 * tf and B > tw and tf > 0 and tw > 0):
+        raise ValueError("welded I %r: inconsistent plates D %.1f, bf %.1f, tf %.1f, tw %.1f" % (name, D, B, tf, tw))
+    hw = D - 2.0 * tf
+    A = 2.0 * B * tf + hw * tw
+    Ix = (B * D ** 3 - (B - tw) * hw ** 3) / 12.0
+    Iy = 2.0 * tf * B ** 3 / 12.0 + hw * tw ** 3 / 12.0
+    Sx, Sy = 2.0 * Ix / D, 2.0 * Iy / B
+    Zx = B * tf * (D - tf) + tw * hw ** 2 / 4.0
+    Zy = tf * B ** 2 / 2.0 + hw * tw ** 2 / 4.0
+    J = (2.0 * B * tf ** 3 + hw * tw ** 3) / 3.0                  # thin-walled open section, plate widths
+    ho = D - tf
+    Cw = tf * B ** 3 * ho ** 2 / 24.0                              # doubly symmetric I: Iw = If ho^2 / 2, If = tf B^3 / 12
+    props_ = {"_units": "mm", "section_type": "I", "Type": "WELDED_I",
+              "source": source or "welded plate I-section from IS 2062 plates (declared in cfg)",
+              "A": A, "Ix": Ix, "Iy": Iy, "Zx": Zx, "Zy": Zy, "Sx": Sx, "Sy": Sy, "rx": math.sqrt(Ix / A),
+              "ry": math.sqrt(Iy / A), "r_min": math.sqrt(min(Ix, Iy) / A), "d": D, "bf": B, "tf": tf, "tw": tw,
+              "J": J, "Cw": Cw, "ho": ho, "Aw": hw * tw, "R1": 0.0, "Mass_kg_m": A * 7850.0 / 1e6, "welded": True,
+              "plates": {"flange_mm": [B, tf], "web_mm": [hw, tw]}}
+    CUSTOM[normalize_label(name)] = props_
+    return props_
+
+
+# PEB (2026-10): web-tapered I members, modelled as n_seg stepped prismatic welded I segments (properties at each
+# segment's mid-length; the depth varies linearly; flanges constant per member).  TAPERED[name] = the member record.
+TAPERED = {}
+
+
+def tapered_label(D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm):
+    """TI<D_start>-<D_end>X<bf>X<tf>X<tw> (mm)."""
+    return "TI%s-%sX%sX%sX%s" % tuple(_fmt_mm(v) for v in (D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm))
+
+
+def register_tapered_I(name, D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm, n_seg=8, *, source=None, round_mm=1.0):
+    """Register the n_seg stepped segments of a web-tapered welded I member (start = node i end).  Each segment is a
+    prismatic welded I at the depth of its mid-length, rounded to `round_mm`; its label is the WI designation.
+    Returns the member record {name, D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm, n_seg, segments: [label, ...],
+    depths_mm: [...], stations: [0, 1/n, ..., 1]} (also in TAPERED)."""
+    n = int(n_seg)
+    if n < 1:
+        raise ValueError("tapered I %r: n_seg must be >= 1" % name)
+    D0, D1 = float(D_start_mm), float(D_end_mm)
+    segs, depths = [], []
+    for s in range(n):
+        Dm = D0 + (D1 - D0) * (s + 0.5) / n
+        if round_mm:
+            Dm = round(Dm / float(round_mm)) * float(round_mm)
+        lab = welded_I_label(Dm, bf_mm, tf_mm, tw_mm)
+        if normalize_label(lab) not in CUSTOM:
+            register_welded_I(lab, Dm, bf_mm, tf_mm, tw_mm,
+                              source=(source or "segment of web-tapered welded I %s (IS 2062 plates)" % name))
+        segs.append(lab)
+        depths.append(Dm)
+    rec = {"name": name, "D_start_mm": D0, "D_end_mm": D1, "bf_mm": float(bf_mm), "tf_mm": float(tf_mm),
+           "tw_mm": float(tw_mm), "n_seg": n, "segments": segs, "depths_mm": depths,
+           "stations": [s / float(n) for s in range(n + 1)],
+           "mass_kg_per_m_avg": sum(CUSTOM[normalize_label(sg)]["Mass_kg_m"] for sg in segs) / n,
+           "source": source or "web-tapered welded I from IS 2062 plates (declared in cfg)"}
+    TAPERED[normalize_label(name)] = rec
+    return rec
+
+
+def tapered(name):
+    """The registered tapered member record (KeyError when unknown)."""
+    return TAPERED[normalize_label(name)]
+
+
 def register_custom_sections(cfg):
-    """cfg['custom_sections'] = {name: {'type': 'box', 'B_mm', 'D_mm', 'tf_mm', 'tw_mm', 'source'}} -> CUSTOM."""
+    """cfg['custom_sections'] = {name: spec} -> CUSTOM.  spec 'type':
+      'box'       {B_mm, D_mm, tf_mm, tw_mm, source}            built-up welded box (WP6-fix)
+      'welded_I'  {D_mm, bf_mm, tf_mm, tw_mm, source}           welded plate I (PEB, 2026-10)
+      'tapered_I' {D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm, n_seg (default cfg['taper_nseg'] or 8), source}
+                  web-tapered welded I, registered as its stepped welded I segments (PEB, 2026-10)."""
+    nseg_default = int(cfg.get("taper_nseg") or 8)
     for nm, spec in (cfg.get("custom_sections") or {}).items():
-        if str(spec.get("type", "box")).lower() != "box":
-            raise KeyError("custom section %r: only built-up welded 'box' sections are supported" % nm)
-        register_box(nm, spec["B_mm"], spec["D_mm"], spec["tf_mm"], spec["tw_mm"],
-                     source=spec.get("source") or "built-up welded box from IS 2062 plates (declared in cfg)")
+        typ = str(spec.get("type", "box")).lower()
+        if typ == "box":
+            register_box(nm, spec["B_mm"], spec["D_mm"], spec["tf_mm"], spec["tw_mm"],
+                         source=spec.get("source") or "built-up welded box from IS 2062 plates (declared in cfg)")
+        elif typ in ("welded_i", "i_welded"):
+            register_welded_I(nm, spec["D_mm"], spec["bf_mm"], spec["tf_mm"], spec["tw_mm"], source=spec.get("source"))
+        elif typ in ("tapered_i", "i_tapered"):
+            register_tapered_I(nm, spec["D_start_mm"], spec["D_end_mm"], spec["bf_mm"], spec["tf_mm"], spec["tw_mm"],
+                               spec.get("n_seg") or nseg_default, source=spec.get("source"),
+                               round_mm=spec.get("round_mm", 1.0))
+        else:
+            raise KeyError("custom section %r: type %r is not supported (box | welded_I | tapered_I)" % (nm, typ))
 
 
 def props(name, SEC=None, unit_system=None, *, grade=None, process=None):

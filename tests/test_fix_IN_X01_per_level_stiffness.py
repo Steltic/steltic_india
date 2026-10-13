@@ -1,4 +1,4 @@
-"""IN-X01-LEVEL (gold issue IN_CFS_Ex9): cfg['diaphragm_stiffness'] per level for the IS 1893 Table 5(ii) (Amd 2)
+"""IN-X01-LEVEL (gold issue IN_CFS_Ex14): cfg['diaphragm_stiffness'] per level for the IS 1893 Table 5(ii) (Amd 2)
 flexible-floor-diaphragm run -- each floor diaphragm with its own flexibility (e.g. a composite podium under light CFS
 floors).  Forms: {'by_level': {k | 'a-b': rec}, 'default': rec}, top-level record + by_level, or a list per level.
 

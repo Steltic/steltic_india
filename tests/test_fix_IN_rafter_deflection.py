@@ -1,4 +1,4 @@
-"""IN-RAFTER-DEFL (gold issue IN_Ex15): IS 800:2007 Table 6 rafter deflection with cfg['roof_planes'].
+"""IN-RAFTER-DEFL (gold issue IN_Ex9): IS 800:2007 Table 6 rafter deflection with cfg['roof_planes'].
 
 IS 800 5.6.1: "Deflections are to be checked for the most adverse but realistic combination of service loads and their
 arrangement, by elastic analysis, using a load factor of 1.0"; Table 6: "Rafter supporting | Profiled metal sheeting |

@@ -1,4 +1,4 @@
-"""IN-COLLECTOR-CONN (gold issue IN_CFS_Ex6): the beam-end connection of a collector / chord beam transfers the
+"""IN-COLLECTOR-CONN (gold issue IN_CFS_Ex11): the beam-end connection of a collector / chord beam transfers the
 collector axial force (IS 1893 (Part 1):2016 7.6.4 load path; IS 18168:2023 12.2.4.5 / 6.4: collector forces from the
 overstrength earthquake load where IS 18168 applies) together with the shear: the bolt / plate / block-shear / weld
 rows are checked for R = sqrt(V^2 + N^2) per combination (concurrent V and N of the same record).

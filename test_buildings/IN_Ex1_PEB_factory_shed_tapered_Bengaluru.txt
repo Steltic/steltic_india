@@ -1,0 +1,69 @@
+IN_Ex1 — PEB factory shed: 30 m clear-span tapered welded portal frames, pinned bases, brick dado, Bengaluru
+
+PEB release: this brief needs welded plate I-sections and web-tapered members (cfg['custom_sections'] types
+  'welded_I' and 'tapered_I', the stepped tapered-member model and cfg['flange_braces'];
+  docs/PEB_TAPERED_SCOPE.md). If the engine does not accept these section types, stop with design_status 'blocked'
+  and say why. Do not substitute rolled IS 808 sections (that is a separate variation).
+
+Site: Bengaluru (Peenya / Bommasandra industrial belt). Seismic per IS 1893 (Part 1):2016 + Amd 1 + Amd 2 — RETRIEVE
+  Zone (Annex E) and Z (Table 3); soil medium (Type II, EOR assumption pending the geotechnical report).
+Occupancy: light engineering assembly and machining (no hazardous process, no food stored) -> I = 1.0 (Table 8 (iii):
+  industrial = all other buildings).
+Lateral system: transverse — steel ordinary moment resisting frame portals (OMRF, IS 800:2007 12.10; Table 9 i)(c),
+  permitted in Zone II by Note 1) — RETRIEVE R; longitudinal — X-braced end bays on both side walls and in the roof
+  plane (ordinary concentrically braced frame, IS 800 12.7; Table 9 ii)(a)). Brace type per owner decision D-T4:
+  tension-only round bars only where the corpus admits them for the declared system, otherwise single angles or CHS
+  designed for compression. Per-direction R: cfg['R_x'] / cfg['R_y'] with cfg['system_x'] / cfg['system_y'].
+  IS 18168:2023 is optional in Zone II (1.2) — not applied.
+
+Geometry (metres; the engine works in N-mm):
+- clear span 30 m between column centrelines; length 75 m: 11 frame lines at 7.5 m (10 bays); eave height 10.0 m;
+  roof slope 1:10
+  (rise 1.5 m, apex 11.5 m); rafters at their true slope through cfg['roof_planes'] (eave and ridge lines, apex nodes,
+  loads per plan area)
+- main frames: web-tapered welded columns, shallow at the pinned base and deep at the knee; rafters tapered from each
+  knee over about 20 % of the span, then prismatic to the apex; bolted extended end-plate joints at the knees and the
+  apex and one bolted rafter splice each side; flange plates constant within a member (a flange change is a new
+  member at a splice). Depths and plates are the design's choice within the fabrication limits declared in cfg
+  (minimum web 4 mm unless the design needs more; standard plate thicknesses)
+- plates: IS 2062 (Part 1) E350 for flanges and webs; E250 for end plates, stiffeners and base plates
+- pinned column bases, 4 anchor bolts per column; thrust by friction or a shear key as the corpus permits
+- end walls: post-and-beam bearing frames at both gables, wind columns at 7.5 m (the end rafters sit on the wind
+  columns; they are not main frames)
+- secondary members: cold-formed Z purlins at about 1.5 m, lapped over the frames; Z girts at about 1.8 m above the
+  dado. IS 801 / IS 811 members designed by the CFS engine when owner decision D-T5 says so; otherwise listed in
+  cfg['delegated_design'] with spacing, span, loads and the flange restraint they provide
+- flange (fly) braces from the purlins and girts to the inner flange at every purlin and girt within 6 m of each knee
+  and at every second purlin elsewhere (cfg['flange_braces']); outer flange restrained at every purlin and girt
+- walls: 230 mm brick masonry dado to 3.0 m on a plinth beam all round (self-supporting, tied to the columns for
+  out-of-plane load only); profiled steel sheeting above; 4 roller-shutter doors 5 m x 5 m, two in each long side
+- roof: 0.5 mm profiled steel sheeting (single skin), 3 % polycarbonate daylight sheets, a ridge ventilator
+
+Loads (RETRIEVE — do not invent): dead IS 875 (Part 1):2026 (sheeting, purlins, girts, bracing; the frame self-weight
+  from the plate areas); collateral (lights, cable trays, fire sprinkler mains) 0.15 kN/m² on plan as the named roof
+  dead-load component 'collateral' (owner value); imposed IS 875 (Part 2) Table 2, sloping roof with access for
+  maintenance only; wind IS 875 (Part 3):2015 — Annex A Vb; terrain category per 6.3.2 for an industrial site (state
+  the category chosen and why); k1, k3 and k4 by clause; Ka (7.2.2, Table 4) on the frame tributary and on the
+  purlins; Kc only where 7.3.3.13 permits it; wall Cpe Table 5; pitched-roof Cpe Table 6 at the real pitch; Cpi per
+  7.3.2 for the door openings. Apply wind as member-level cases, including roof uplift with 0.9 DL on the rafters,
+  purlins, flange braces and anchor bolts. Seismic: equivalent static (7.6), with the seismic weight from the dead and
+  collateral loads (RETRIEVE how roof imposed load enters the seismic weight). No crane, no snow.
+Design: IS 800:2007 LSD.
+- Tapered members: checked at every segment end with the local section — Table 2 class (welded rows), slender webs by
+  the effective section of 3.7.2 (d), 8.2.1 / 8.2.2 bending and LTB between restraints per owner decision D-T1, 8.4.2
+  shear with web buckling, 9.3 combined, 7.1.2 axial.
+- Frame stability: second-order elastic analysis (4.4.3) or the frame buckling analysis of 4.6, with the elastic
+  buckling load factor of the stepped model.
+- Section 12 for the OMRF portals: 12.4.1 fully tensioned HSFG bolts (IS 4000) in the knee, splice and apex joints;
+  joint design moment per 12.10.2.1 (owner decision D-T7: which Mp counts at a tapered joint face); flange-to-web
+  welds per owner decision D-T6 (scope of 12.4.2).
+- Flange braces: designed for the restraint force the corpus gives (8.3.2 and what it points to — retrieve; do not
+  assume a percentage).
+- Serviceability: IS 800 Table 6 rows for an industrial building — rafter supporting profiled metal sheeting, and the
+  column lateral limit for masonry / brittle cladding (the brick dado). RETRIEVE both.
+- Bases: anchor bolts in tension for uplift and in shear for the frame thrust; foundations delegated with the
+  interface forces.
+Deliverable: report.html + viewer_3d.html; design/member_schedule.csv (plate sizes, start / end depth, mass_kg);
+  design/bom.csv; design/reactions.csv (unfactored, per basic load case and column line) and
+  design/anchor_bolt_plan.svg; model.std (STAAD.Pro export of the stepped analysis model); steel tonnage and kg/m² of
+  plan area split primary / bracing / secondary. Fill cfg['load_plan'] from the corpus (rag/) before the pipeline.

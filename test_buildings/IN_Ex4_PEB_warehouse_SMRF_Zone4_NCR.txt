@@ -1,0 +1,63 @@
+IN_Ex4 — PEB fulfilment warehouse in seismic Zone IV: 30 m clear-span SMRF portals, Farrukhnagar (Delhi NCR)
+
+PEB release: this brief needs welded plate I-sections and web-tapered members (cfg['custom_sections'] types
+  'welded_I' and 'tapered_I', the stepped tapered-member model and cfg['flange_braces'];
+  docs/PEB_TAPERED_SCOPE.md) and the owner's ruling D-T2 on Zones III-V. If either is missing, stop with design_status
+  'blocked' and list what is missing with the clauses.
+
+Location: Farrukhnagar (Gurugram district, Haryana), on the KMP Expressway logistics belt at 28.45 N, 76.82 E. The site
+  is not listed in IS 1893 (Part 1):2016 Annex E: read the zone from Fig. 1 at the site (zone_source =
+  'derived_from_map' with lat / long, VERIFY) — the brief is written for Zone IV; if the reading differs, stop and
+  report it. Where the corpus holds no reading of Fig. 1 at the site (the figure is image-only), use the
+  site_proxy route of ruling R5: a tabulated town close to the site, with its distance, VERIFY. Z from Table 3.
+  Soil medium (Type II, EOR assumption). Basic wind speed: the site is not listed in IS 875 (Part 3) Annex A —
+  read Fig. 1 at the site (a corpus Fig. 1 reading record, where one exists) and record the source the same way.
+Occupancy: e-commerce fulfilment warehouse for general non-food parcels; a food store would be Table 8 (i) — not this
+  building -> I = 1.0 (Table 8 (iii)).
+Lateral system — this brief tests the D4 gate on a PEB: OMRF and ordinary braced frames are not permitted in Zone IV
+  (IS 1893 Table 9 Note 1 as amended by Amd 2; owner ruling D4). Transverse — steel special moment resisting frame
+  portals (Table 9 i)(d)) by the D-T2 route: (A) IS 800:2007 12.11 alone, IS 2062 E250 B plates (12.11.1); or (B)
+  IS 18168:2023 adopted voluntarily — then 1.3 also governs: SMRF in Zone IV only for buildings below 15 m (apex
+  12.0 m here), the 5.2 grades, the Table 2 limits and doubly symmetric sections. No slender element in an SMRF
+  member. Longitudinal — special concentrically braced frames (Table 9 ii)(b), IS 800 12.8), X-braced bays in both
+  long walls and the roof plane, braces designed for compression. Per-direction R: cfg['R_x'] / cfg['R_y'] with
+  cfg['system_x'] / cfg['system_y'].
+  The outcome is either a compliant design or a documented stop that cites the clause that blocks it.
+
+Geometry (metres; the engine works in N-mm):
+- clear span 30 m; length 90 m: 13 frames at 7.5 m; eave height 10.5 m; roof slope 1:10 (rise 1.5 m, apex 12.0 m);
+  rafters at their true slope through cfg['roof_planes']
+- columns web-tapered welded I; pinned or fixed bases as the design needs — state the choice and why (the column
+  lateral limit for the brick dado under the D-T2 route decides it); rafters tapered from each knee over about 20 %
+  of the span, then
+  prismatic; bolted end-plate knees, apex and one rafter splice each side
+- end walls: post-and-beam bearing frames with wind columns at 7.5 m
+- secondary members: cold-formed Z purlins and girts at the spacing the IS 801 design needs (start from about 1.5 m
+  and 1.8 m) (CFS engine per D-T5 or
+  cfg['delegated_design']); flange braces at every purlin within 6 m of each knee and at every second purlin elsewhere
+  (and wherever the SMRF lateral-support rules of the chosen route require them)
+- walls: 230 mm brick masonry dado to 3.0 m all round; profiled steel sheeting above; 10 dock doors 3.0 m x 3.5 m in
+  the west long wall
+- roof: 0.5 mm profiled steel sheeting with 50 mm insulation; 3 % skylights
+
+Loads (RETRIEVE — do not invent): dead IS 875 (Part 1):2026 (roof assembly, insulation, purlins, girts, bracing; the
+  frame self-weight from the plate areas); collateral 0.20 kN/m² (roof sprinklers, lighting, conveyor hangers — owner
+  value) as the named roof dead-load component 'collateral'; imposed IS 875 (Part 2) Table 2, roof with access for
+  maintenance only; wind IS 875 (Part 3):2015 — Vb as above, terrain category per 6.3.2 (state it), k1 / k3 / k4 by
+  clause, Ka (7.2.2), wall Cpe Table 5, roof Cpe Table 6 at the real pitch, Cpi per 7.3.2 with the dock doors
+  classified; member-level wind cases incl. roof uplift with 0.9 DL. Seismic: the method IS 1893 7.7.1 requires for
+  this zone and building (RETRIEVE whether the equivalent static method of 7.6 is permitted; otherwise the response
+  spectrum method scaled per 7.7.3), 7.8.2
+  accidental eccentricity, drift 0.004 h (7.11.1.1); the seismic weight from the dead and collateral loads (RETRIEVE
+  how roof imposed load enters it). No crane, no snow.
+Design: IS 800:2007 LSD; SMRF joints per 12.11.2 (1.2 Mp — D-T7 for the Mp at a tapered joint face; shear 12.11.2.2;
+  panel zone 12.11.2.3), lateral support 12.11.3.3, strong column 12.11.3.2 (and IS 18168 8.2 under route B), HSFG
+  bolts 12.4.1, weld rule 12.4.2 per D-T6, bases 12.12; SCBF braces 12.8 with their connections; tapered members
+  checked at every segment end (Table 2 welded rows; LTB per D-T1); frame stability by 4.4.3 or 4.6 on the stepped
+  model; IS 800 Table 6 — rafter supporting profiled metal sheeting and the column lateral limit for masonry /
+  brittle cladding (RETRIEVE both); anchor bolts for uplift and thrust; foundations delegated.
+Deliverable: report.html + viewer_3d.html; design/member_schedule.csv (plate sizes, start / end depth, mass_kg);
+  design/bom.csv; design/reactions.csv (unfactored, per basic load case and column line) and
+  design/anchor_bolt_plan.svg; model.std (STAAD.Pro export); steel tonnage and kg/m² split primary / bracing /
+  secondary, so a Zone II design of the same shed can be compared. Fill cfg['load_plan'] from the corpus (rag/)
+  before the pipeline.

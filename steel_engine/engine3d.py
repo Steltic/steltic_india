@@ -312,6 +312,7 @@ def release_args(relz="none", rely="none"):
 _MOMENT_NODES = set()    # B3: nodes a RIGID (moment) beam frames into -> used to auto-role lateral vs gravity columns
 _BEAM_REL = {}           # viewer3d: beam tag -> (relz, rely) end-release codes ("none" = fixed-ended)
 _COL_DIR = {}            # viewer3d: column tag -> strong_dir ("X"/"Y") web orientation
+_COL_REL = {}            # PEB (2026-10): column tag -> 'I' | 'J' | 'both' (pinned column ends, both axes)
 _SI_UNIT_WORDS = ("n-mm", "n-mm-s", "n-mm-sec", "m", "mm", "si", "metric", "india_metric", "india_si")
 _KIP_UNIT_WORDS = ("kip-in", "kip+inch", "kip_in", "imperial", "usa", "in")
 
@@ -360,7 +361,7 @@ def build(cfg,transf="Linear"):
         # the ACTUAL framed plan (non-rectangular safe). The real build below then re-runs the
         # builder with that footprint visible to any floor_w()/floor_grav() calls it makes.
         try:
-            _MOMENT_NODES.clear(); _BEAM_REL.clear(); _COL_DIR.clear()
+            _MOMENT_NODES.clear(); _BEAM_REL.clear(); _COL_DIR.clear(); _COL_REL.clear()
             probe = cb(cfg, transf)
             cfg["present"] = {int(kk): {tuple(p) for p in v}
                               for kk, v in (probe.get("present") or {}).items()}
@@ -368,6 +369,12 @@ def build(cfg,transf="Linear"):
             cfg["present"] = None          # don't re-probe every build; fall back to plan/full grid
     _MOMENT_NODES.clear()                  # repopulated by add_beam for THIS build (B3)
     _BEAM_REL.clear(); _COL_DIR.clear()    # repopulated by add_beam/add_column for THIS build (viewer3d)
+    _COL_REL.clear()
+    try:
+        import peb_build as _PB                        # PEB (2026-10): stepped tapered-member registry of THIS build
+        _PB.reset()
+    except ImportError:
+        pass
     if cb is not None:
         info = cb(cfg, transf)
     else:
@@ -393,6 +400,7 @@ def build(cfg,transf="Linear"):
     info["moment_nodes"] = set(_MOMENT_NODES)   # snapshot: nodes with a rigid (moment) beam framing in
     info["beam_rel"] = dict(_BEAM_REL)          # snapshot: per-beam end releases (viewer3d)
     info["col_dir"] = dict(_COL_DIR)            # snapshot: per-column strong-axis direction (viewer3d)
+    info["col_rel"] = dict(_COL_REL)            # PEB (2026-10): pinned column ends
     return info
 
 
@@ -461,14 +469,24 @@ def _ensure_col_transf(transf="PDelta"):
                 pass
 
 
-def add_column(tag, n1, n2, sec, strong_dir):
+def add_column(tag, n1, n2, sec, strong_dir, releases=None):
     """FOOLPROOF column for custom_build: orients the STRONG axis to resist lateral in `strong_dir`
     and gets the (Iy_weak, Iz_strong) element ordering right for you. AUTO-REGISTERS the standard
     transforms if missing -- you do NOT need to call register_col_transf(). e.g.
-    add_column(et, n1, n2, "W14X159", "X")."""
+    add_column(et, n1, n2, "W14X159", "X").
+    PEB (2026-10): releases = 'I' | 'J' | 'both' pins the column end(s) about BOTH bending axes (a column pinned at
+    the rafter / base -- the gravity columns of a multi-span portal); the joint builder (india_is800_s12.
+    joints_from_model) then sees no column moment at that end and the pipeline gives a column pinned at its top the
+    role gravity_col."""
     _ensure_col_transf()                      # self-register transforms before the first element
     A, Ix, Iy, J = Ipack(sec)                 # Ix = strong, Iy = weak
-    ops.element("elasticBeamColumn", tag, n1, n2, A, E, Gmod, J, Iy, Ix, col_transf(strong_dir))
+    ra = []
+    if releases not in (None, "none"):
+        if releases not in ("I", "J", "both"):
+            raise ValueError("add_column releases must be 'I', 'J' or 'both' (got %r)" % (releases,))
+        ra = release_args(releases, releases)
+        _COL_REL[tag] = releases
+    ops.element("elasticBeamColumn", tag, n1, n2, A, E, Gmod, J, Iy, Ix, col_transf(strong_dir), *ra)
     _COL_DIR[tag] = strong_dir                # viewer3d: web orientation
     return tag
 
@@ -714,7 +732,7 @@ def self_weight_nodal_findings(cfg, info=None):
       (element self-weight in the gravity state, W and modal mass + the nodal load): list it under
       cfg['self_weight_in_nodal_loads'].
     * ERROR: an element listed under the key has no nodal_dead_loads at either end node -> its weight would be lost;
-      a listed section that also matches columns / braces (e.g. gantry and portal columns of one section, IN_Ex14)
+      a listed section that also matches columns / braces (e.g. gantry and portal columns of one section, IN_Ex7)
       -> list the gantry element tags instead.
     * WARN: gantry-section elements modelled with neither nodal loads nor the key (self-weight is then the gantry
       weight; accepted) -- the ruling prefers nodal loads; listed tags / sections that match no element."""
@@ -1783,7 +1801,7 @@ def _single_frame_model(cfg, cr, ax):
             fixd[n] = set()
     flex = {n for e in eles if e[1] != "brace" for n in e[3:5]}
     col_dir = dict(info.get("col_dir") or {}); rel = dict(info.get("beam_rel") or {})
-    saved = (set(_MOMENT_NODES), dict(_BEAM_REL), dict(_COL_DIR))
+    saved = (set(_MOMENT_NODES), dict(_BEAM_REL), dict(_COL_DIR), dict(_COL_REL))
     ops.wipe(); ops.model("basic", "-ndm", 3, "-ndf", 6)
     for n, c in crd.items():
         ops.node(n, *c)
@@ -1801,6 +1819,7 @@ def _single_frame_model(cfg, cr, ax):
             add_beam(t, n1, n2, sec, releases=rel.get(t))
     _MOMENT_NODES.clear(); _MOMENT_NODES.update(saved[0])
     _BEAM_REL.clear(); _BEAM_REL.update(saved[1]); _COL_DIR.clear(); _COL_DIR.update(saved[2])
+    _COL_REL.clear(); _COL_REL.update(saved[3])
     return {"ele": eles, "nodes": sorted(nodes)}
 
 
@@ -1836,10 +1855,37 @@ def india_crane_sway(cfg):
         for nd in (cr["bracket_nodes"]["L"], cr["bracket_nodes"]["R"]):
             worst = max(worst, abs(ops.nodeDisp(int(nd), ax + 1)))
     lim = Hr / div
-    return {"sway_mm": worst, "limit_mm": lim, "ratio": worst / lim, "operation": op,
-            "sway_model": model, "sway_model_basis": basis,
-            "cite": "IS 800:2007 Table 6: crane frame sway at rail level H/%d (%s), crane surge at gamma 1.0; %s model"
-                    % (div, op, model)}
+    out = {"sway_mm": worst, "limit_mm": lim, "ratio": worst / lim, "operation": op,
+           "sway_model": model, "sway_model_basis": basis,
+           "cite": "IS 800:2007 Table 6: crane frame sway at rail level H/%d (%s), crane surge at gamma 1.0; %s model"
+                   % (div, op, model)}
+    if cr.get("check_rail_spread"):
+        # PEB (2026-10, opt-in): change of the rail gauge -- the relative displacement of the two bracket (rail) nodes
+        # along the crane span under the full crane frame case (vertical with impact and the R e moments + surge), at
+        # gamma 1.0, against the IS 800 Table 6 'relative displacement between rails' limit (gantry_girder_demands)
+        lim_r = float(IL.gantry_girder_demands(cfg).get("lateral_relative_rails_limit_mm") or 10.0)
+        rel, pat_w = 0.0, None
+        for side in ("L", "R"):
+            for sg in ("S+", "S-"):
+                if model == "single_frame":
+                    _single_frame_model(cfg, cr, ax)
+                else:
+                    build(cfg, "Linear")
+                ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
+                for nd, v in IL.crane_frame_loads(cfg, (side, sg)).items():
+                    ops.load(int(nd), *[float(x) for x in v])
+                ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+                ops.test("NormDispIncr", 1e-8, 50); ops.algorithm("Linear")
+                ops.integrator("LoadControl", 1.0); ops.analysis("Static"); ops.analyze(1)
+                d_ = abs(ops.nodeDisp(int(cr["bracket_nodes"]["L"]), ax + 1)
+                         - ops.nodeDisp(int(cr["bracket_nodes"]["R"]), ax + 1))
+                if d_ > rel:
+                    rel, pat_w = d_, (side, sg)
+        out["rail_spread"] = {"mm": rel, "limit_mm": lim_r, "ratio": rel / lim_r, "ok": rel <= lim_r,
+                              "pattern": "Rmax at %s, surge %s" % pat_w if pat_w else None, "model": model,
+                              "cite": "IS 800:2007 Table 6: relative displacement between the rails (crane vertical "
+                                      "with impact, R e moments and surge, gamma 1.0); %s model" % model}
+    return out
 
 
 def india_dynamic_wind_gate(cfg, f1_hz):
@@ -2033,7 +2079,7 @@ RAFTER_DEFL_BASIS = ("IS 800:2007 5.6.1 / Table 6: vertical deflection of the ra
 
 
 def rafter_service_deflection(cfg, div, cite, nseg=6):
-    """GOLD-3 (IN_Ex15): IS 800 Table 6 rafter deflection for true-slope roof planes (cfg['roof_planes']).
+    """GOLD-3 (IN_Ex9): IS 800 Table 6 rafter deflection for true-slope roof planes (cfg['roof_planes']).
     Every rafter line (plane, frame line) is taken from the analysed static model under the service roof imposed load
     (Lr, snow, declared partial snow -- one case at a time, gamma_f 1.0, no dead load: the Table 6 'Live load' row);
     the rafter span is the plan distance between consecutive supports on the line (nodes with a column), the
@@ -2708,6 +2754,15 @@ def support_nodes():
     return out
 
 
+def _lifted_purlin_line(cfg, z, pa, pb):
+    """PEB (2026-10): two lifted roof-surface grid nodes (gable wind-column tops at the same height on the two end
+    frames) are not a missing floor beam -- the line between them lies on the roof surface across the span (a purlin
+    line, carried by the purlins / roof bracing, not a girder)."""
+    import roof_geometry as _RG
+    cl = _RG.classify(cfg, (pa[0], pa[1], z), (pb[0], pb[1], z))
+    return bool(cl and cl[1] == "longitudinal" and z > cl[0]["ez"] + 1.0)
+
+
 def floor_beam_gaps(cfg, transf="Linear"):
     """Column-line floor-grid beam positions that have NO beam element in the model = the un-modelled
     gravity girders. Coordinate-based, so it works for the parametric builder AND any custom_build.
@@ -2784,7 +2839,8 @@ def floor_beam_gaps(cfg, transf="Linear"):
                 nb = at.get((gi+di, gj+dj))
                 if nb and frozenset((t, nb[2])) not in modelled and not _chained(t, nb[2]) \
                         and not (_omitted(t) or _omitted(nb[2])) and not (t in sup and nb[2] in sup) \
-                        and not (_rp_on and _RG.plane_spans_segment(cfg, z, (x, y), (nb[0], nb[1]), under_roof=True)):   # X02
+                        and not (_rp_on and _RG.plane_spans_segment(cfg, z, (x, y), (nb[0], nb[1]), under_roof=True)) \
+                        and not (_rp_on and _lifted_purlin_line(cfg, z, (x, y), (nb[0], nb[1]))):   # X02 / PEB
                     gaps.append((z, (x, y), (nb[0], nb[1])))
     return gaps
 

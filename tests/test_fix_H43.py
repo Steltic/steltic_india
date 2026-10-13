@@ -57,8 +57,8 @@ def ex1_pkg(tmp_path_factory):
     os.environ["STELTIC_TEST_JOBS"] = str(jobs)
     os.environ["STEEL_BUILDER_JOBS"] = str(jobs)
     cfg, _ = ex1_cfg_is()
-    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex1_H43"))
-    out = P.design_and_report("IN_Ex1_H43", cfg, do_report=False)
+    stage_ex1_rag(os.path.join(str(jobs), "IN_Ex13_H43"))
+    out = P.design_and_report("IN_Ex13_H43", cfg, do_report=False)
     return cfg, json.load(open(os.path.join(out["root"], "design", "calc_package.json")))
 
 
