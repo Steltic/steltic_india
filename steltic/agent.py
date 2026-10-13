@@ -745,7 +745,8 @@ def run_design(ws, executor, base_url, api_key, model, building, brief, max_tok=
             except Exception:
                 args = {}
             sig = _sig(nm, args); sig_counts[sig] = sig_counts.get(sig, 0) + 1; n = sig_counts[sig]
-            if n >= config.REPEAT_LIMIT:                       # PAUSE -- but keep the conversation valid for Continue
+            limit = config.REPEAT_LIMIT_SEARCH if nm == "search_engineering_standards" else config.REPEAT_LIMIT
+            if n >= limit:                                     # PAUSE -- but keep the conversation valid for Continue
                 pause = (nm, n)
                 for rest in tcs[idx:]:                         # synthetic results so no tool_call is left dangling
                     messages.append({"role": "tool", "tool_call_id": rest["id"], "name": rest["function"]["name"],
