@@ -40,6 +40,8 @@ SANDBOX_PIDS    = os.environ.get("SANDBOX_PIDS", "256")
 # --- agent loop ---
 MAX_STEPS       = int(os.environ.get("MAX_STEPS", "200"))
 REPEAT_LIMIT    = int(os.environ.get("REPEAT_LIMIT", "10"))     # PAUSE if one tool-call signature recurs this many times
+REPEAT_LIMIT_SEARCH = int(os.environ.get("REPEAT_LIMIT_SEARCH", "50"))  # the same PAUSE for IS-corpus searches: an India
+                    # design needs many related clause lookups, and the coarse search signature groups them
 REPEAT_NUDGE    = int(os.environ.get("REPEAT_NUDGE", "3"))      # soft-nudge once when a signature recurs this many times
 PROGRESS_STALL_NUDGE = int(os.environ.get("PROGRESS_STALL_NUDGE", "10"))  # steps w/ no new file or rc=0 -> nudge
 PROGRESS_STALL_PAUSE = int(os.environ.get("PROGRESS_STALL_PAUSE", "20"))  # steps w/ no progress -> pause for review
