@@ -739,7 +739,16 @@ def load(job, purlin, girt):
             L["Lr"] = job["Lr"]
         npd = job.get("nonpermanent_kNm2") or {}
         extra = float(job.get("extra_pv_kNm2") or 0.0)
-        if (npd or extra) and not job.get("collateral_in_uplift"):
+        if "collateral_kNm2" in L or "pv_kNm2" in L:
+            # new-style script (2026-10 first wave): collateral / PV passed as non-permanent dead loads already
+            if job.get("collateral_in_uplift"):
+                # PEB-LEVERS collateral_in_uplift True: the old treatment -- back into D_roof (every dead-load row)
+                L["D_roof"] = round(float(L["D_roof"]) + float(L.get("collateral_kNm2") or 0.0)
+                                    + float(L.get("pv_kNm2") or 0.0) + extra, 6)
+                L["collateral_kNm2"], L["pv_kNm2"] = 0.0, 0.0
+            else:
+                L["pv_kNm2"] = float(L.get("pv_kNm2") or 0.0) + extra
+        elif (npd or extra) and not job.get("collateral_in_uplift"):
             # PEB-LEVERS collateral_in_uplift False: collateral / PV are non-permanent dead (CFS engine
             # nonpermanent_dead): in the gravity combinations, out of the rows where the dead load resists uplift.
             # npd: inside the script's D_roof (taken out of it); extra: a PV load the script does not carry
@@ -801,6 +810,22 @@ main()
 '''
 
 
+def secondary_gold(script, consts):
+    """The purlin / girt dicts of the job's secondary script as written (top-level PURLIN / GIRT; expressions such as
+    os.environ.get(name, default) evaluated with the defaults)."""
+    tree = ast.parse(open(script, encoding="utf-8").read(), filename=script)
+    want = {consts["purlin"]: "purlin", consts["girt"]: "girt"}
+    out = {}
+    env = {"os": type("_os", (), {"environ": {}})(), "float": float, "int": int, "str": str, "dict": dict}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
+                and node.targets[0].id in want:
+            out[want[node.targets[0].id]] = eval(compile(ast.Expression(node.value), script, "eval"), env)
+    if set(out) != {"purlin", "girt"}:
+        raise KeyError("%s: PURLIN / GIRT constants not found (%s)" % (script, consts))
+    return out
+
+
 def secondary_candidates(family, cfs_root, gold_section, span_mm):
     """Candidate zed sections of a family, lightest first: 'IS811_Fy240' -- the IS 811 lipped zeds (LZ) with a depth
     >= span / 45 (and not deeper than 300 mm); 'thin_G350' -- the generic thin zeds of cfs_generic_sections."""
@@ -836,7 +861,7 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
     script = os.path.join(run_dir, sec["script"])
     fam = rules.get("purlins", "IS811_Fy240")
     fy = 350.0 if fam == "thin_G350" else float(sec.get("fy_IS811", 240.0))
-    gold = sec["gold"]
+    gold = secondary_gold(script, sec["consts"])
     npd = {}
     for k, nm in (sec.get("nonpermanent") or {}).items():
         npd[k] = float(nm)
