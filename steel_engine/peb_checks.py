@@ -144,6 +144,7 @@ def splice_records(cfg, peb, reg, envt, s12_cfg=None, system=None):
     """Connection records (pkg['connections'] format) for every PEB rafter splice and apex joint."""
     import india_connections as C
     import india_is800_s12 as S12
+    import peb_levers as _PL                     # PEB-LEVERS: joint_demand switch
     recs = []
     is18 = _is18_smf(cfg, s12_cfg, system)
     for nd, spl in sorted((peb.get("splices") or {}).items()):
@@ -179,6 +180,13 @@ def splice_records(cfg, peb, reg, envt, s12_cfg=None, system=None):
                                                   "; IS 18168 6.5: >= 1.80 x the analysis moment" if is18 else ""))
             clause_m = "IS 800:2007 12.10.2.1 / 12.11.2.1 (by owner ruling D-T7) + 10.3.5 / 10.4.7" + \
                 ("; IS 18168:2023 6.5" if is18 else "")
+            # PEB-LEVERS: joint_demand 'deliverable' (OMF route A only; peb_levers.joint_demand)
+            _Md, _bas, _on = _PL.joint_demand(cfg, Mp, M_an, is18=is18, system=system)
+            if _on:
+                Mdem = max(_Md, M_an)
+                basis = _bas + " (apex, %s, %s)" % (sec_min, lab_m)
+                clause_m = "IS 800:2007 12.10.2.1 (deliverable moment) + 10.3.5 / 10.4.7"
+            # PEB-LEVERS: end
         elif is18:
             Mdem = 1.8 * M_an
             basis = "IS 18168:2023 6.5: design strength >= 1.80 x the required strength (%.1f kN-m, %s)" % (M_an / 1e6, lab_m)
@@ -210,6 +218,11 @@ def splice_records(cfg, peb, reg, envt, s12_cfg=None, system=None):
                 Mdem_r = max(1.2 * Mp, (1.8 if is18 else 1.0) * M_rev)
                 basis_r = "D-T7: 1.2 Mp in either sign; analysis reverse %.1f kN-m (%s)%s" % (
                     M_rev / 1e6, lab_rev, " x 1.80 (IS 18168 6.5)" if is18 else "")
+                # PEB-LEVERS: joint_demand 'deliverable' in the reverse sign (the reverse analysis moment)
+                _Mr, _br, _on = _PL.joint_demand(cfg, Mp, M_rev, is18=is18, system=system)
+                if _on:
+                    Mdem_r, basis_r = max(_Mr, M_rev), _br + " (reverse sign, %s)" % lab_rev
+                # PEB-LEVERS: end
             elif is18 and kind == "rafter_splice":
                 Mdem_r = 1.8 * M_rev
                 basis_r = "IS 18168 6.5: 1.80 x the reverse required strength %.1f kN-m (%s)" % (M_rev / 1e6, lab_rev)
@@ -476,6 +489,9 @@ def tonnage(cfg, info, length, role_of, peb=None):
     for (t, kind, sec, n1, n2) in info["ele"]:
         L = length.get(t, 0.0)
         kg = element_mass_kg(sec, L)
+        if kind == "brace" and str(sec).upper().startswith("ROD"):
+            import peb_levers as _PL                   # PEB-LEVERS: a tension rod is a half-area bar in the model
+            kg *= 2.0 if _PL.is_rod(sec) else 1.0
         grp = None
         for g, sel in mg.items():
             if g == "secondary":
@@ -599,6 +615,14 @@ def knee_records(cfg, peb, joints, reg, envt, system=None, s12_cfg=None):
             fac, dem_basis = 1.2, "owner ruling D-T7: 1.2 Mp(%s) = %.0f kN-m" % (bsec, 1.2 * Mp_f / 1e6)
             dem_clause = "IS 800:2007 12.10.2.1 / 12.11.2.1 (owner ruling D-T7)"
         Mconn = fac * Mp_f if kep.get("rows") else 0.0
+        # PEB-LEVERS: joint_demand 'deliverable' (OMF route A only): min(1.2 Mp, f x the largest knee moment Mk over
+        # every strength combination, 12.2.3 rows included), used for both signs (peb_levers.joint_demand)
+        import peb_levers as _PL
+        _Mc, _bas, _on = _PL.joint_demand(cfg, Mp_f, Mk, is18=is18, system=system, fac_default=fac)
+        if _on and kep.get("rows"):
+            Mconn, dem_basis = _Mc, _bas
+            dem_clause = "IS 800:2007 12.10.2.1 (deliverable moment, PEB-LEVERS)"
+        # PEB-LEVERS: end
         F = Mk / lever
         Vp = F - Vc
         # the panel is a web field bounded by the stiffeners at both rafter flange levels: c = d_b (8.4.2.2, Kv)
@@ -652,6 +676,8 @@ def knee_records(cfg, peb, joints, reg, envt, system=None, s12_cfg=None):
                     if lay["reverse_rows"] else None
             cap_ep = min(c_ for c_ in (cap_p, cap_r) if c_) if (cap_p and cap_r) else None
             rows.append(_row("knee end plate, both signs (%s)" % ("IS 18168 8.4: 1.1 Ry Mp" if is18 else
+                                                                  # PEB-LEVERS: the deliverable-moment label
+                                                                  "12.10.2.1: deliverable moment" if _on else
                                                                   "D-T7: 1.2 Mp of the face section"),
                              Mconn, cap_ep, clause=dem_clause + "; IS 800:2007 10.3.5 / 10.4.7",
                              cite="%s bolt pattern, %d M%d %s flange bolts; %s" % (

@@ -2983,10 +2983,12 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     Md_z_sec = design_moment_8_2_1(p["Zx"], p["Sx"], fy, sc0["section_class"], support=member.get("support", "simple"))
     ltb_cache = {}
 
-    def _mdz(LLT, psi=None):
-        key = (LLT, None if psi is None else round(psi, 3))
+    def _mdz(LLT, psi=None, c1_seg=None):
+        key = (LLT, None if psi is None else round(psi, 3)) + ((round(c1_seg, 4),) if c1_seg is not None else ())
         if key not in ltb_cache:
-            if member.get("c1") is not None:
+            if c1_seg is not None:
+                c1 = float(c1_seg)              # PEB-LEVERS: ltb_c1 'gradient' -- C1 of the restrained length
+            elif member.get("c1") is not None:
                 c1 = float(member["c1"])        # PEB (2026-10): C1 over the restrained length, declared (D-T1)
             else:
                 c1 = c1_from_end_moments(psi) if psi is not None and member.get("use_c1", True) else 1.0
@@ -3025,7 +3027,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
                 LLT = L if member.get("LLT_default_to_L", True) else None
                 if LLT is not None:
                     res["flags"].append("LLT_%s not declared: element length used" % sign[:3])
-            ltb = _mdz(LLT, psi)
+            ltb = _mdz(LLT, psi, ((member.get("c1_by_combo") or {}).get(cf.get("combo")) or {}).get(sign))  # PEB-LEVERS
             if not ltb.get("found"):
                 checks.append({"moment_sign": sign, "found": False, "ltb": ltb})
                 continue

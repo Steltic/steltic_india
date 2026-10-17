@@ -1689,6 +1689,9 @@ def _wind_limits(cfg):
             key = "frame_crane_cab_brittle" if cab else "frame_crane_pendant_elastic"
         else:
             key = "column_no_crane_brittle" if brittle else "column_no_crane_elastic"
+            if cfg.get("peb_rules"):                     # PEB-LEVERS: sway_limit switch (peb_levers.sway_key)
+                import peb_levers as _PL
+                key = _PL.sway_key(cfg, key)[0]
         return None, T6[key], key
     key = "building_wind_brittle" if brittle else "building_wind_elastic"
     return T6["storey_wind"], T6[key], key
@@ -1723,6 +1726,7 @@ def india_wind_serviceability(cfg):
                                                                         Fa.get(k, (0.0, 0.0, 0.0))))
                                   for k in set(F) | set(Fa)}))
         drift, top = None, 0.0
+        dado = None                                       # PEB-LEVERS: (u at the dado top, dado height, column line)
         for sa, FF in sets:
             info = build(cfg, "PDelta"); NF = info["NF"]
             ops.timeSeries("Linear", 1); ops.pattern("Plain", 1, 1)
@@ -1746,6 +1750,12 @@ def india_wind_serviceability(cfg):
                                    for (i, j) in lines] or [0.0]))
                 drift = dr if drift is None else [max(a, b) for a, b in zip(drift, dr)]
                 top = max(top, max(abs(disp[(i, j, NF)]) for (i, j) in info["present"][NF]))
+                if cfg.get("peb_rules") and di == (0 if d == "X" else 1):   # PEB-LEVERS: the dado-top drift
+                    import peb_levers as _PL
+                    if _PL.dado_check_on(cfg):
+                        u_d, h_d, at_d = _PL.dado_drift(cfg, info, d, ntag)
+                        if dado is None or u_d > dado[0]:
+                            dado = (u_d, h_d, at_d)
         H = float(sum(cfg["heights"]))
         rec = {"storey_drift": drift, "top_mm": top, "H_mm": H, "limit_top_mm": H / div_H,
                "ratio_top": top / (H / div_H), "basis": key,
@@ -1754,6 +1764,18 @@ def india_wind_serviceability(cfg):
         if div_st:
             rec["limit_storey"] = 1.0 / div_st
             rec["ratio_storey"] = max(drift) * div_st
+        if dado is not None:                              # PEB-LEVERS: sway_limit 'H150_with_dado_check'
+            import peb_levers as _PL
+            lim_d = dado[1] / 240.0
+            rec.update(dado_top_mm=dado[0], dado_height_mm=dado[1], dado_limit_mm=lim_d, ratio_dado=dado[0] / lim_d,
+                       dado_column_line=list(dado[2]) if dado[2] else None,
+                       dado_cite="%s: masonry / brittle cladding Height/240 applied over the dado height %.0f mm "
+                                 "(PEB-LEVERS sway_limit 'H150_with_dado_check'; column displacement at the dado top "
+                                 "by Hermite interpolation of the station nodes)" % (IL.IS800_TABLE6_CITE, dado[1]))
+            rec["cite"] += "; " + (_PL.sway_key(cfg, "column_no_crane_brittle")[1] or "")
+        elif cfg.get("peb_rules") and key == "column_no_crane_elastic" and cfg.get("cladding_brittle"):
+            import peb_levers as _PL                      # PEB-LEVERS: H/150 without the dado check (market)
+            rec["cite"] += "; " + (_PL.sway_key(cfg, "column_no_crane_brittle")[1] or "")
         if Fa:
             rec["across_wind"] = {"pattern": "W_%s_across" % d, "signs": [1, -1], "axes": ["X", "Y"],
                                   "cite": "IS 875 (Part 3):2015 10.3 / 10.4 (along + across applied simultaneously)"}
@@ -2224,8 +2246,9 @@ def _run_india(cfg, name=None):
         extra["torsion_ratio_" + d] = max(dr[d]["ratio"])
     wsv = india_wind_serviceability(cfg)
     for d, r in wsv.items():
-        chk["wind_defl_" + d] = r["ratio_top"] <= 1.0 and r.get("ratio_storey", 0.0) <= 1.0
-        extra["wind_defl_ratio_" + d] = max(r["ratio_top"], r.get("ratio_storey", 0.0))
+        chk["wind_defl_" + d] = r["ratio_top"] <= 1.0 and r.get("ratio_storey", 0.0) <= 1.0 \
+            and r.get("ratio_dado", 0.0) <= 1.0                     # PEB-LEVERS: the dado-top check when declared
+        extra["wind_defl_ratio_" + d] = max(r["ratio_top"], r.get("ratio_storey", 0.0), r.get("ratio_dado", 0.0))
     f1 = (1.0 / max(T)) if T and max(T) > 0 else None
     dw_ok, dw_why, dw_req = india_dynamic_wind_gate(cfg, f1)
     if dw_req:

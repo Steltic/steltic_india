@@ -111,6 +111,11 @@ def design_and_report(name, cfg=None, do_report=True):
 
     root = _root(name); os.makedirs(root, exist_ok=True)
     out = {"name": name, "root": root}
+    if E.CFG[name].get("peb_rules"):
+        # PEB-LEVERS: collateral_in_uplift True folds D_roof_collateral / D_roof_pv into D_roof (peb_levers)
+        import peb_levers as _PL
+        _PL.rules(E.CFG[name])                # validate the switches before any solve
+        out["peb_rules_note"] = _PL.fold_collateral(E.CFG[name])[1]
     # R22 preflight: cheap cfg lint BEFORE any solve (units, factors vs system, drift limit vs Ie,
     # height limits, model/diaphragm declarations). Findings print and return; ERRORs mean the cfg
     # is mis-declared -- fix them first rather than debugging analysis output.
