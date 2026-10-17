@@ -48,7 +48,16 @@ def schedule_extra(t, sec, L_mm):
 def basic_cases(cfg):
     """[(label, kind, data)] -- DL, LL (roof imposed), every member-wind pattern both ways, EQ_X / EQ_Y."""
     plan = cfg.get("load_plan") or {}
-    out = [("DL", "D", None), ("LL (roof imposed)", "Lr", None)]
+    out = [("DL", "D", None)]
+    import engine3d as E
+    if E.roof_nonpermanent_kNm2(cfg) > 0.0:
+        # first wave item 8: vendors list collateral (and PV) apart from the dead load
+        out.append(("DL collateral + PV", "DNP", None))
+    out.append(("LL (roof imposed)", "Lr", None))
+    if cfg.get("crane") or cfg.get("cranes"):
+        for cp in (("L", None), ("R", None), ("L", "S+"), ("L", "S-"), ("R", "S+"), ("R", "S-"), ("L", "T+"),
+                   ("L", "T-")):
+            out.append(("CL %s%s" % (cp[0], (" " + cp[1]) if cp[1] else " vertical"), "C", cp))
     for p in plan.get("member_wind") or []:
         signs = [p["sign"]] if p.get("sign") is not None else [1, -1]
         for sg in signs:
@@ -71,7 +80,12 @@ def base_reactions(cfg, nseg=6):
         ops.timeSeries("Linear", 1)
         ops.pattern("Plain", 1, 1)
         if kind == "D":
+            SM.apply_gravity_state(dict(cfg, D_roof_collateral=0.0, D_roof_pv=0.0), model, 1.0, 0.0, 0.0, 0.0, 0.0,
+                                   0.0, self_weight=cfg.get("self_weight", True))
+        elif kind == "DNP":                             # full dead minus the permanent case (linear analysis)
             SM.apply_gravity_state(cfg, model, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, self_weight=cfg.get("self_weight", True))
+        elif kind == "C":
+            SM.apply_gravity_state(cfg, model, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, self_weight=False, crane_pattern=data)
         elif kind == "Lr":
             SM.apply_gravity_state(cfg, model, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, self_weight=False)
         elif kind == "W":
@@ -98,6 +112,8 @@ def base_reactions(cfg, nseg=6):
             if not fx:
                 continue
             rr[n] = tuple(ops.nodeReaction(n))
+        if kind == "DNP" and isinstance(res.get("DL"), dict) and "_error" not in res["DL"]:
+            rr = {n: tuple(a - b for a, b in zip(v, res["DL"].get(n, (0.0,) * 6))) for n, v in rr.items()}
         res[lab] = rr
     return res
 
@@ -133,8 +149,9 @@ def write_reactions(cfg, outdir):
                 s["H_max_kN"] = max(s["H_max_kN"], math.hypot(Fx, Fy) / 1e3)
     return {"file": "design/reactions.csv", "cases": list(R), "summary": {str(k): v for k, v in summ.items()},
             "basis": "linear static analysis of the stepped model for each basic load case at gamma_f = 1.0 "
-                     "(self-weight + roof / cladding dead; roof imposed; every IS 875-3 member-wind pattern both ways; "
-                     "IS 1893 ESM storey forces)"}
+                     "(self-weight + permanent roof / cladding dead; collateral + PV apart; roof imposed; crane "
+                     "patterns with impact, surge and traction where a crane is declared; every IS 875-3 member-wind "
+                     "pattern both ways; IS 1893 ESM storey forces)"}
 
 
 # ------------------------------------------------------------------------------------------- BOM
