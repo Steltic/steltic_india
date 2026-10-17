@@ -913,6 +913,11 @@ def package_warnings(cfg, pkg):
     d764 = pkg.get("diaphragm_7_6_4")
     if isinstance(d764, dict) and d764.get("declared_contradicted"):
         out.append(str(d764.get("warning") or "IS 1893 7.6.4: declared diaphragm label contradicts the analysis"))
+    if isinstance(cfg, dict) and cfg.get("apply_is18168") and pkg.get("peb"):
+        # first wave item 6: the IS 18168 6.5 splice reading (owner ruling D-T9) is not settled -- say so
+        out.append("open ruling D-T9: IS 18168:2023 6.5 asks each flange splice plate to develop 1.2 Ry fy Af; it is "
+                   "applied to flange-plate splices only (an end-plate splice has no flange splice plate). If it is "
+                   "read as applying to end-plate splices too, the end-plate splices need more bolts at each flange.")
     try:
         import india_connection_design as _CDw
         out += [m for s_, m in _CDw.anchorage_findings(cfg if isinstance(cfg, dict) else {}) if s_ == "WARN"]

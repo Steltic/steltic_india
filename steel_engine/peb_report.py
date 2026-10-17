@@ -23,6 +23,28 @@ OWNER_RULINGS = [
 ]
 
 
+DT9_OPEN = ("D-T9 (open)", "IS 18168:2023 6.5 splices: placed at least 3 db from the column face and designed for 1.8 "
+             "times the required strength (both applied). Its third sentence asks each flange splice plate to develop "
+             "1.2 Ry fy Af; an end-plate splice has no flange splice plate, so this is applied to flange-plate splices "
+             "only. If it is read as applying to end-plate splices too, the rafter end-plate splices need more bolts "
+             "at each flange. The reading is not settled and is listed as an open item.")
+
+
+def rulings_applied(cfg):
+    """First wave item 6: list only the rulings that apply to this building, and disclose D-T9 where IS 18168 is
+    applied."""
+    cfg = cfg or {}
+    is18 = bool(cfg.get("apply_is18168"))
+    out = []
+    for k, v in OWNER_RULINGS:
+        if k == "D-T2" and not is18:
+            continue
+        out.append([k, v])
+    if is18:
+        out.append(list(DT9_OPEN))
+    return out
+
+
 def _e(x):
     return html.escape(str(x))
 
@@ -38,7 +60,7 @@ def _f(v, d=1):
     try:
         return ("%." + str(d) + "f") % float(v)
     except (TypeError, ValueError):
-        return "&mdash;" if v is None else str(v)
+        return "\u2014" if v is None else str(v)       # plain dash: _tab escapes text, so no HTML entity here
 
 
 def section(cfg, pkg, root):
@@ -49,8 +71,9 @@ def section(cfg, pkg, root):
            "<p>Every web-tapered member is modelled as prismatic welded-I segments (depth at each segment's "
            "mid-length); every segment end (station) is checked with the exact local section (IS 800 Table 2 welded "
            "rows, 3.7.2(d) effective section of a slender web, 8.2.2 LTB between restraints, 8.4.2 shear buckling, "
-           "9.3 interaction, 7.1.2 compression). Owner rulings applied:</p>",
-           _tab(["ruling", "as applied"], [[k, v] for k, v in OWNER_RULINGS])]
+           "9.3 interaction, 7.1.2 compression). Design rulings applied (Steltic India defaults for PEB; the design "
+           "engineer can change each one):</p>",
+           _tab(["ruling", "as applied"], rulings_applied(cfg))]
     # members
     rows = []
     for mid, m in sorted((peb.get("members") or {}).items()):
@@ -121,7 +144,18 @@ def section(cfg, pkg, root):
     if po:
         li = []
         for k, v in po.items():
-            if isinstance(v, dict):
+            if isinstance(v, dict) and k == "staad":
+                txt = ("%s primary load cases and %s load combinations (every engine case: dead, collateral + PV, "
+                       "imposed, crane, member wind, storey forces with accidental torsion, vertical earthquake, "
+                       "notional)" % (v.get("n_primary_cases"), v.get("n_combinations")))
+                if v.get("rsa_combinations_as_static"):
+                    txt += ("; %s combinations used response-spectrum forces in Steltic and carry the equivalent "
+                            "static storey forces in the file" % v["rsa_combinations_as_static"])
+                if v.get("missing_terms") or v.get("unmapped_loads") or v.get("error"):
+                    txt += "; <b>incomplete</b>: %s" % _e(v.get("error") or "%s missing terms, %s unmapped loads"
+                                                      % (v.get("missing_terms"), v.get("unmapped_loads")))
+                li.append("<li><b>STAAD.Pro input</b>: %s &mdash; %s</li>" % (_e(v.get("file")), txt))
+            elif isinstance(v, dict):
                 li.append("<li><b>%s</b>: %s %s</li>" % (_e(k), _e(v.get("file")), _e(v.get("basis") or v.get("note") or "")))
         out.append("<h3>Deliverables</h3><ul>%s</ul>" % "".join(li))
         svg = os.path.join(root, "design", "anchor_bolt_plan.svg")

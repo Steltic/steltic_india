@@ -900,6 +900,66 @@ def mpc_9_3_1_2(p, fy, P, axis, welded=None):
     return max(Mpc, 0.0), n_, "IS 800 9.3.1.2(c) standard I/H"
 
 
+IS18168_6_2_CITE = ("IS 18168:2023 6.2: Lb/ry shall not exceed 25 for a distance of 2 db from the end of the beam to "
+                    "column connection; Lb/ry for the remaining portion of the beam shall not exceed 0.10 E/(Ry fy)")
+
+
+def is18168_6_2_beam_checks(model_data, cfg):
+    """First wave item 6: IS 18168:2023 6.2 lateral bracing of SMRF beams (rolled / welded prismatic beams; the PEB
+    stepped rafters are checked in peb_checks.is18168_6_2_records from cfg['flange_braces']).  The bracing is a drawing
+    requirement, so it is declared: cfg['beam_lateral_bracing'] = {role or 'default': {'near_end_mm', 'elsewhere_mm',
+    'basis'}} -- the spacing of points where both flanges are braced (deck / purlins on the top flange, stays or fly
+    braces on the bottom flange) within 2 db of the beam-to-column connection and elsewhere.  Undeclared -> not
+    evaluated (blocks COMPLETE)."""
+    out, seen = [], set()
+    decl = (cfg or {}).get("beam_lateral_bracing")
+    for j in model_data.get("joints") or []:
+        for b in j.get("beams") or []:
+            m = _jm(model_data, b)
+            mid = m.get("id")
+            if not mid or mid in seen or m.get("buckling_section"):
+                continue
+            seen.add(mid)
+            p = _props(m)
+            fy, _ = _fy(m, p)
+            ry_mm = p.get("ry")
+            if not fy or not ry_mm:
+                out.append(_na("is18168_6_2_beam_bracing", clause="IS 18168:2023 6.2", cite=IS18168_6_2_CITE,
+                               member=mid, reason="beam grade or ry not resolved"))
+                continue
+            Ry, ry_note = _ry(m, p)
+            lim_far = 0.10 * 2.0e5 / (Ry * fy)
+            spec = None
+            if isinstance(decl, dict):
+                spec = decl.get(m.get("role")) or decl.get("default") or (decl if "elsewhere_mm" in decl else None)
+            if not spec:
+                out.append(_na("is18168_6_2_beam_bracing", clause="IS 18168:2023 6.2", cite=IS18168_6_2_CITE,
+                               member=mid, reason="declare cfg['beam_lateral_bracing'] (spacing of the points where "
+                               "both flanges are braced, within 2 db of the joint and elsewhere): needs Lb <= %.0f mm "
+                               "within %.0f mm of the column face and Lb <= %.0f mm elsewhere for %s"
+                               % (25.0 * ry_mm, 2.0 * p["d"], lim_far * ry_mm, m.get("section"))))
+                continue
+            if spec.get("provide_at_required"):
+                # the design engineer adopts the 6.2 spacings as a drawing requirement: stays / fly braces to the
+                # compression flange at the largest 50 mm multiple inside each limit (a detailing output, stated)
+                Ln = max(50.0, math.floor(25.0 * ry_mm / 50.0) * 50.0)
+                Lf = max(Ln, math.floor(lim_far * ry_mm / 50.0) * 50.0)
+                basis = ("%s -- adopted at the 6.2 spacings: compression-flange restraints at <= %.0f mm within %.0f mm "
+                         "of each column face and <= %.0f mm elsewhere (drawing requirement)"
+                         % (spec.get("basis") or "cfg['beam_lateral_bracing'] provide_at_required", Ln, 2.0 * p["d"], Lf))
+            else:
+                Ln = float(spec.get("near_end_mm") or spec.get("elsewhere_mm"))
+                Lf = float(spec.get("elsewhere_mm") or Ln)
+                basis = spec.get("basis") or "declared cfg['beam_lateral_bracing']"
+            out.append(_chk("is18168_6_2_beam_bracing_2db", Ln / ry_mm, 25.0, clause="IS 18168:2023 6.2",
+                            cite=IS18168_6_2_CITE, member=mid, Lb_mm=Ln, ry_mm=round(ry_mm, 2), db_mm=p["d"],
+                            zone_mm=2.0 * p["d"], basis=basis))
+            out.append(_chk("is18168_6_2_beam_bracing", Lf / ry_mm, lim_far, clause="IS 18168:2023 6.2",
+                            cite=IS18168_6_2_CITE + "; %s, fy %.0f MPa" % (ry_note, fy), member=mid, Lb_mm=Lf,
+                            ry_mm=round(ry_mm, 2), basis=basis))
+    return out
+
+
 def _jm(model_data, x):
     """Joint member record; PEB (2026-10, owner ruling D-T7): a stepped tapered member enters the joint with the
     section at the joint face (x['face_section'], set by the pipeline from peb_build)."""
@@ -1565,6 +1625,8 @@ def section12_checks(system, model_data, cfg=None):
                               cite="every frame joint from model connectivity", reason="no joints in model_data"))
         for j in joints:
             checks += smf_joint_checks(j, model_data, cfg, system=sys_mf)
+        if sys_mf == "SMF" and a18["applies"]:                    # first wave item 6: IS 18168 6.2
+            checks += is18168_6_2_beam_checks(model_data, cfg)
     # IS 18168:2023 advisories (governs over IS 800 Section 12 where applicable - lead/EOR decision)
     zone = _zone_roman(cfg.get("zone") or cfg.get("Z"))
     if a18["applies"]:

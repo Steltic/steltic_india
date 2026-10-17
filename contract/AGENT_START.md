@@ -402,6 +402,19 @@ Before `pipeline.design_and_report`:
   writes one combined STATUS (the worst unit status + the joint checks), `units_index.html` and
   `units_summary.json`. In a single-unit job, `adjacent_units` = [{id, direction, gap_mm, R2, delta2_mm,
   same_floor_levels, level | n_levels}] checks one joint against a displacement you supply.
+- **Non-permanent roof dead loads (2026-10)**: `D_roof_collateral` (services hung from the roof) and `D_roof_pv`
+  (solar PV modules and mounting), kN/m² of plan, are declared apart from the permanent `D_roof`.  They take the
+  dead-load factor where they add to the effect and are left out of the IS 800 Table 4 0.9 DL rows (they cannot be
+  relied on to resist uplift or overturning); both count in the IS 1893 7.4 seismic weight.  Do not add them into
+  `D_roof` as well.
+- **Crane bracket (2026-10)**: `crane.bracket` = {section, projection_mm (column face to the rail centreline),
+  rail_height_mm, dead_N (girder + rail on one bracket), weld_leg_mm, electrode_fu_MPa, gamma_mw, column_section,
+  column_fy_MPa, column_stiffeners {b_mm, t_mm, n, fy_MPa} (optional), fy_MPa, mass_kg (optional), basis} adds the
+  bracket record (section with the seat forces, fillet weld group, column web 8.7.4) to the connections.
+- **IS 18168:2023 6.2 beam bracing (2026-10)**: `beam_lateral_bracing` = {role | 'default': {near_end_mm,
+  elsewhere_mm, basis}} gives the spacing of the compression-flange restraints of SMRF beams within 2 db of the
+  column face and elsewhere; {'provide_at_required': True, basis} adopts the 6.2 spacings as a drawing requirement
+  (printed per beam).  Undeclared, the check is not evaluated and the job cannot be COMPLETE.
 
 ## What the framework computes and what YOU do
 Framework: preflight; model; seismic weight; modal and response-spectrum analysis; all combinations;
