@@ -13,7 +13,8 @@ own LLM API key.
 
 - **Start with the Hub:** most people install this module through
   [Steltic Hub India](https://github.com/Steltic/steltic_hub_india), which sets everything up.
-- **See the output first:** 19 worked Indian designs with reports and 3D models at
+- **See the output first:** 24 worked Indian buildings (20 briefs plus four sub-units, five of them PEB sheds) with reports,
+  3D models, and for the PEB sheds the reactions, bill of materials and STAAD.Pro file, at
   [stelticai.com/india.html](https://stelticai.com/india.html).
 - **Setup video:** [YouTube](https://www.youtube.com/watch?v=lcKjj9wLcno).
 

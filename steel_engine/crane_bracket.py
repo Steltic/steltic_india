@@ -128,7 +128,7 @@ def bracket_record(cfg):
             if pc:
                 Fc = Mz / (d - tf) + N / 2.0
                 Fw = (tf + 5.0 * (pc["tf"] + s_w)) * pc["tw"] * fyc / GAMMA_M0 + A_st * fy_st / GAMMA_M0
-                cases["column_web"] = (Fc, Fw)
+                cases["column_web"] = (Fc / 1e3, Fw / 1e3)        # kN
             for k_, (v_, l_) in cases.items():
                 if k_ not in worst or v_ / l_ > worst[k_][0]:
                     worst[k_] = (v_ / l_, v_, l_, lab, hz, V, N, Mz, My, Tq)
@@ -142,7 +142,7 @@ def bracket_record(cfg):
         "weld": ("fillet weld group at the column face, combined fe (MPa)", "IS 800:2007 10.5.7 / 10.5.10.1.1",
                  "throat 0.7 s = %.1f mm; flanges and web welded both sides; fe = sqrt(fa^2 + 3 q^2) <= fu / "
                  "(sqrt 3 gamma_mw), fu %.0f MPa, gamma_mw %.2f" % (a_w, fu_w, g_mw)),
-        "column_web": ("column web opposite the bracket compression flange, F = Mz/(d - tf) + N/2", "IS 800:2007 8.7.4",
+        "column_web": ("column web opposite the bracket compression flange, F = Mz/(d - tf) + N/2 (kN)", "IS 800:2007 8.7.4",
                        "Fw = (b1 + n2) tw fyw / gamma_m0, b1 = %.0f mm, n2 = 5 (tf,c + s) = %.0f mm%s"
                        % (tf, 5.0 * ((pc or {}).get("tf", 0.0) + s_w),
                           ("; + stiffener pair A_st fy / gamma_m0 = %.0f kN" % (A_st * fy_st / GAMMA_M0 / 1e3)) if A_st else "")),

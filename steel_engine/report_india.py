@@ -735,7 +735,7 @@ def build_report_india(name, root):
     parts.append(_chapter(6))
     parts.append(_members(pkg))
     parts.append(FW.crane_runway_section(cfg, pkg))
-    parts.append(FW.takeoff_section(cfg, pkg))
+    parts.append(FW.takeoff_section(cfg, pkg, root))
     if (pkg or {}).get("peb"):
         try:
             import peb_report as _PR

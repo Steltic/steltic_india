@@ -508,6 +508,9 @@ def _is_numeric(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
+_DELEGATED_KEYS = ("delegated_criteria", "delegated_item")
+
+
 def _gather_uncomputed_text(obj, acc):
     """Like _gather_text, but a record that carries a numeric value / limit / dc IS a computed check: its
     clause / cite formula strings (e.g. '(V/Vdb)^2+(T/Tdb)^2 <= 1') are the requirement it evaluated, not an
@@ -519,6 +522,8 @@ def _gather_uncomputed_text(obj, acc):
         for k, v in obj.items():
             if computed and isinstance(v, str):
                 continue
+            if k in _DELEGATED_KEYS:
+                continue                 # first wave: the criteria handed to a delegated designer are not a check here
             _gather_uncomputed_text(v, acc)
     elif isinstance(obj, list):
         for v in obj:

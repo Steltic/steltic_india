@@ -634,9 +634,10 @@ def column_checks(system, model_data, cfg):
             continue
         # PEB (2026-10): member lengths between restraints (Lz_mm / Ly_mm overrides, e.g. a stepped tapered column
         # base-knee in plane, fly-brace spacing out of plane) and the member's buckling section (D-T1)
-        _peb_m = bool(m.get("buckling_section"))
-        KLz_ = (m.get("Kz") or 1.0) * float((m.get("Lz_mm") if _peb_m else None) or m["L_mm"])
-        KLy_ = (m.get("Ky") or 1.0) * float((m.get("Ly_mm") if _peb_m else None) or m["L_mm"])
+        # first wave (2026-10): the same lengths for every member that declares them (cfg['member_overrides'] Lz_mm /
+        # Ly_mm), so the Section 12 / IS 18168 7.2 slenderness and the member check use one unbraced length
+        KLz_ = (m.get("Kz") or 1.0) * float(m.get("Lz_mm") or m["L_mm"])
+        KLy_ = (m.get("Ky") or 1.0) * float(m.get("Ly_mm") or m["L_mm"])
         comp = I8.compression_capacity(p, fy, KLz_mm=KLz_, KLy_mm=KLy_, process=m.get("process"))
         if m.get("buckling_section") and comp.get("found"):
             comp = I8.peb_buckling_section(comp, p, m["buckling_section"], fy, KLz_, KLy_, process=m.get("process"))
@@ -962,12 +963,14 @@ def is18168_6_2_beam_checks(model_data, cfg):
                 Ln = float(spec.get("near_end_mm") or spec.get("elsewhere_mm"))
                 Lf = float(spec.get("elsewhere_mm") or Ln)
                 basis = spec.get("basis") or "declared cfg['beam_lateral_bracing']"
+            # adopted at the 6.2 spacings: a drawing requirement met by construction -> a gate, not a D/C near 1.0
+            gate = {"dc": None, "ok": True, "gate": True} if spec.get("provide_at_required") else {}
             out.append(_chk("is18168_6_2_beam_bracing_2db", Ln / ry_mm, 25.0, clause="IS 18168:2023 6.2",
                             cite=IS18168_6_2_CITE, member=mid, Lb_mm=Ln, ry_mm=round(ry_mm, 2), db_mm=p["d"],
-                            zone_mm=2.0 * p["d"], basis=basis))
+                            zone_mm=2.0 * p["d"], basis=basis, **gate))
             out.append(_chk("is18168_6_2_beam_bracing", Lf / ry_mm, lim_far, clause="IS 18168:2023 6.2",
                             cite=IS18168_6_2_CITE + "; %s, fy %.0f MPa" % (ry_note, fy), member=mid, Lb_mm=Lf,
-                            ry_mm=round(ry_mm, 2), basis=basis))
+                            ry_mm=round(ry_mm, 2), basis=basis, **gate))
     return out
 
 

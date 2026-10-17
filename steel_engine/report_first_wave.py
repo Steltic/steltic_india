@@ -172,7 +172,13 @@ def crane_runway_section(cfg, pkg):
             ["deflection limits", "%s; lateral %s mm (relative between rails %s mm)" % (
                 _e(dm.get("defl_limit_basis") or ""), _f(dm.get("lateral_limit_mm"), 1),
                 _f(dm.get("lateral_relative_rails_limit_mm"), 0))]]))
-        crow = [[_e(c.get("name")), _f(c.get("value"), 3), _f(c.get("limit"), 3), _f(c.get("dc"), 3), _ok(c.get("ok")),
+        def _vl(c, key):
+            # web bearing / buckling rows carry forces in N: print kN
+            v = c.get(key)
+            if isinstance(v, (int, float)) and ("web bearing" in str(c.get("name")) or "web buckling" in str(c.get("name"))):
+                return _f(v / 1e3, 1) + " kN"
+            return _f(v, 3)
+        crow = [[_e(c.get("name")), _vl(c, "value"), _vl(c, "limit"), _f(c.get("dc"), 3), _ok(c.get("ok")),
                  _e(c.get("clause") or "")] for c in (g.get("checks") or [])]
         out.append(_tab(["gantry girder check", "value", "limit", "D/C", "status", "clause"], crow))
     br = next((c for c in (pkg or {}).get("connections") or [] if c.get("id") == "conn-crane-bracket"), None)
@@ -246,16 +252,61 @@ def pv_check_section(cfg, root):
         out.append(_tab(["option", "what changes", "added steel", "result"],
                         [[_e(s.get("option")), _e(s.get("what")), _e(s.get("added_steel") or ""),
                           _e(s.get("result") or "")] for s in st]))
+    rc = _csv(os.path.join(d, "pv_reactions_change.csv"))
+    def _fl(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+    chg = [r for r in rc or [] if any(abs(_fl(v)) > 0.005 for k, v in r.items() if k.endswith("_change"))]
+    if chg:
+        out.append("<h3>Change in the support reactions (unfactored, per column line and load case; only the rows "
+                   "the PV changes)</h3>")
+        out.append(_tab(["line", "case", "Fz with PV (kN)", "ΔFz (kN)", "ΔFx (kN)", "ΔFy (kN)", "ΔMx (kN·m)",
+                         "ΔMy (kN·m)"],
+                        [[_e(r.get("line")), _e(r.get("case")), _e(r.get("Fz_kN_PV")), _e(r.get("Fz_kN_change")),
+                          _e(r.get("Fx_kN_change")), _e(r.get("Fy_kN_change")), _e(r.get("Mx_kNm_change")),
+                          _e(r.get("My_kNm_change"))] for r in chg[:60]]))
     note = os.path.join(d, "pv_installer_note.md")
     if os.path.exists(note):
-        out.append("<p>The note to the PV installer is in <code>design/pv_installer_note.md</code>; the reaction changes "
-                   "per column line are in <code>design/pv_reactions_change.csv</code>.</p>")
+        out.append("<h3>Note to the PV installer</h3>" + _md_lite(open(note, encoding="utf-8").read()))
     return "".join(out)
 
 
+def _md_lite(md):
+    """The installer note (plain markdown: '#' title, paragraphs, '- ' bullets, **bold**) as HTML."""
+    import re as _re
+    html_, ul = [], False
+    for block in md.strip().split("\n"):
+        ln = block.rstrip()
+        if ln.startswith("- "):
+            if not ul:
+                html_.append("<ul>")
+                ul = True
+            html_.append("<li>%s</li>" % _bold(_e(ln[2:]), _re))
+            continue
+        if ul:
+            html_.append("</ul>")
+            ul = False
+        if not ln:
+            continue
+        if ln.startswith("#"):
+            html_.append("<p><b>%s</b></p>" % _e(ln.lstrip("# ")))
+        else:
+            html_.append("<p>%s</p>" % _bold(_e(ln), _re))
+    if ul:
+        html_.append("</ul>")
+    return "".join(html_)
+
+
+def _bold(t, _re):
+    return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+
+
 # ------------------------------------------------------------------------------------------------ take-off
-def takeoff_section(cfg, pkg):
-    """Steel take-off of the analysis members for a non-PEB job: kg by member role and kg/m2 of floor area."""
+def takeoff_section(cfg, pkg, root=None):
+    """Steel take-off of the analysis members for a non-PEB job: kg by member role and kg/m2 of floor area (also
+    written to design/takeoff.json when the job folder is given, for the example index)."""
     if (pkg or {}).get("peb"):
         return ""
     import openseespy.opensees as ops
@@ -283,6 +334,17 @@ def takeoff_section(cfg, pkg):
     NF = len(cfg["heights"])
     area = sum(E.floor_area_mm2(cfg, k) for k in range(1, NF + 1)) / 1e6
     tot = sum(kg.values()) + extra
+    if root:
+        try:
+            import json as _json
+            import os as _os
+            _json.dump({"kg": {k: round(v, 1) for k, v in kg.items()}, "total_kg": round(tot, 1),
+                        "floor_area_m2": round(area, 1), "kg_per_m2": round(tot / area, 2) if area else None,
+                        "basis": "modelled members + declared secondary members and crane brackets; connections, "
+                                 "deck and unmodelled secondary beams not included"},
+                       open(_os.path.join(root, "design", "takeoff.json"), "w"), indent=1)
+        except Exception:
+            pass
     rows = [[k, _f(v, 0), _f(v / area, 1) if area else "—"] for k, v in sorted(kg.items())]
     rows.append(["<b>TOTAL (modelled members)</b>", "<b>%s</b>" % _f(tot, 0), "<b>%s</b>" % (_f(tot / area, 1) if area else "—")])
     return ("<h3>Steel take-off (analysis members)</h3><p>Mass of the members in the analysis model from their section "
@@ -300,17 +362,17 @@ def premium_note(cfg, pkg):
         return ""
     k = tn.get("kg_per_m2") or {}
     return ("<h3>Why this shed is heavier than a typical vendor quote</h3><p>This design is %s kg/m² (primary %s, "
-            "bracing %s, purlins and girts %s, connections %s). A typical vendor quote for a shed of this size is often "
-            "well below that. The difference comes from design rules this report applies on purpose, not from the "
-            "analysis:</p><ul>"
+            "bracing %s, purlins and girts %s, connections %s). Vendor quotes for sheds of this kind are often lighter. "
+            "The difference comes from design rules this report applies on purpose, not from the analysis:</p><ul>"
             "<li>IS 18168:2023 ductile detailing (route B, adopted for Zones III–V): compact webs (Table 2 d/tw) instead "
-            "of 5–8 mm slender webs, and 1.1 R<sub>y</sub> M<sub>p</sub> knees and 1.8 × splices;</li>"
+            "of 5–8 mm slender webs, knee and apex joints for 1.2 M<sub>p</sub> of the section at the joint face "
+            "(ruling D-T7) and splices for 1.8 times the required strength (6.5);</li>"
             "<li>IS 800 Table 6 H/240 sway for a brick dado, which forces fixed bases and their base plates and anchors; "
             "many tenders use H/150 for metal cladding;</li>"
             "<li>base shear keys for 1.2 times the column shear capacity (IS 800 12.12 reading), compression bracing "
             "instead of rods, and purlins limited to the IS 811 range at F<sub>y</sub> 240 MPa;</li>"
-            "<li>a code-compliant load basis: IS 875-2 roof imposed load 0.75 kN/m² (not 0.57), collateral and PV kept "
-            "off the uplift cases.</li></ul><p>The Steltic PEB lever study re-sizes this shed for each of these choices "
+            "<li>the IS 875-2 roof imposed load of 0.75 kN/m² on the whole roof, and collateral and PV kept off the "
+            "uplift cases.</li></ul><p>The Steltic PEB lever study re-sizes this shed for each of these choices "
             "in turn and shows the steel each one costs.</p>"
             % (_f(k.get("total"), 1), _f(k.get("primary"), 1), _f(k.get("bracing"), 1), _f(k.get("secondary"), 1),
                _f(k.get("connections"), 1)))

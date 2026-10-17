@@ -45,6 +45,13 @@ def rulings_applied(cfg):
     return out
 
 
+def _ln(path):
+    """A deliverable as a link relative to report.html (the job folder), so it opens next to the report."""
+    if not path:
+        return ""
+    return "<a href='%s' download>%s</a>" % (html.escape(str(path), quote=True), html.escape(str(path)))
+
+
 def _e(x):
     return html.escape(str(x))
 
@@ -154,9 +161,9 @@ def section(cfg, pkg, root):
                 if v.get("missing_terms") or v.get("unmapped_loads") or v.get("error"):
                     txt += "; <b>incomplete</b>: %s" % _e(v.get("error") or "%s missing terms, %s unmapped loads"
                                                       % (v.get("missing_terms"), v.get("unmapped_loads")))
-                li.append("<li><b>STAAD.Pro input</b>: %s &mdash; %s</li>" % (_e(v.get("file")), txt))
+                li.append("<li><b>STAAD.Pro input</b>: %s &mdash; %s</li>" % (_ln(v.get("file")), txt))
             elif isinstance(v, dict):
-                li.append("<li><b>%s</b>: %s %s</li>" % (_e(k), _e(v.get("file")), _e(v.get("basis") or v.get("note") or "")))
+                li.append("<li><b>%s</b>: %s %s</li>" % (_e(k), _ln(v.get("file")), _e(v.get("basis") or v.get("note") or "")))
         out.append("<h3>Deliverables</h3><ul>%s</ul>" % "".join(li))
         svg = os.path.join(root, "design", "anchor_bolt_plan.svg")
         if os.path.exists(svg):
