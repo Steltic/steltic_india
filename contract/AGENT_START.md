@@ -394,6 +394,15 @@ Before `pipeline.design_and_report`:
     diaphragm as SLAVE commands to the level master, DL / LL member loads, EQ joint loads and the DL / LL / EQ
     combinations; member wind, crane and notional loads are listed as not exported), and member_schedule columns
     start / end depth, plates, mass_kg.
+  - PEB-LEVERS (2026-10 variations study, `steel_engine/peb_levers.py`): `peb_rules` = {joint_demand '1.2Mp' |
+    'deliverable' (IS 800 12.10.2.1, OMF only: min(1.2 Mp, 1.2 x the largest factored joint moment incl. 12.2.3);
+    deliverable_factor 1.2 | 1.0), ltb_c1 'unity' | 'gradient' (Table 42 C1 over each restrained length), sway_limit
+    'H240_brittle_dado' | 'H150_with_dado_check' (+ dado_height_mm: eave H/150, dado top H/240) |
+    'H150_no_dado_check' (market practice, not compliant), base_shear_key '1.2Vd' | 'analysis', bracing
+    'compression' | 'tension_rods' (Zone II OCBF only, labels ROD<d>, not compliant with Section 12), purlins
+    'IS811_Fy240' | 'thin_G350' (secondary design), collateral_in_uplift False | True (True: D_roof_collateral /
+    D_roof_pv also in the 0.9 DL rows -- the old treatment)}.  Every default is the gold ruling; leave `peb_rules`
+    out for a strict design.  Only for a variations study the brief asks for; state the switch and its status.
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels
   {unit: k}, base_mm {unit: mm above a common datum}, level_tol_mm (50), id}])` runs each unit as its own job

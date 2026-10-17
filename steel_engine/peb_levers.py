@@ -54,7 +54,8 @@ What each switch does (and what the code says), in plain terms:
   not by the frame engine.
 * collateral_in_uplift True -- the collateral and rooftop PV loads (cfg 'D_roof_collateral', 'D_roof_pv', kN/m2 on plan,
   not included in 'D_roof') also count in the 0.9DL rows: they are folded into D_roof (fold_collateral).  False (the
-  default) leaves them to the engine, which applies them with the dead-load factor except in the 0.9DL rows.
+  default) leaves them to the engine, which (2026-10 first wave) applies them with the dead-load factor except in the
+  0.9DL rows.  True is therefore the OLD treatment, unconservative for uplift; the study reports it as such.
 
 Brief-level variants (not engine switches; peb_autosize / scripts/peb_lever_study.py re-run the job's cfg.py):
 'seismic_route' ('as_briefed' | 'OMRF_R3') and the 'market_practice' bundle; their code status is from
@@ -104,8 +105,9 @@ STATUS = {
                                                    "(tension braces 30-70 %) are not met by rod X-bracing"),
     ("purlins", "thin_G350"): ("compliant", "IS 801:1975 Table 2 36 kgf/mm2 row (Fy 350 MPa), IS 801 5.2 section "
                                             "properties by conventional methods (generic thin zeds)"),
-    ("collateral_in_uplift", True): ("conservative", "collateral / PV also resist uplift in the 0.9DL rows (the "
-                                                     "pre-2026-10 treatment)"),
+    ("collateral_in_uplift", True): ("old treatment (unconservative)",
+                                     "collateral / PV also resist uplift in the 0.9DL rows (the treatment before the "
+                                     "2026-10 first wave; the engine now leaves them out of the 0.9DL rows)"),
     ("purlin_free_flange", "sheeting_braced"): ("not compliant", "the purlin's free flange taken as braced by the "
                                                                  "sheeting under uplift (IS 801 6.3 needs the "
                                                                  "unbraced length of the compression flange)"),

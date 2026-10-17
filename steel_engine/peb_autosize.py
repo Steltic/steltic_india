@@ -72,6 +72,8 @@ BOLT_D_MM = (20, 24, 30, 36)
 KEY_B_MM = (150.0, 200.0, 250.0, 300.0, 400.0, 500.0, 600.0, 800.0)
 KEY_H_MM = (150.0, 200.0, 250.0, 300.0, 340.0, 400.0, 450.0)
 LOG = []
+# design_status reasons that need the report (not built in a sizing run): never a reason to reject a design
+REPORT_ONLY_WAIVERS = (r"grounding record not available \(report not built\)",)
 
 
 def log(*a):
@@ -600,6 +602,8 @@ def frame_worker(run_dir):
             res["faces"] = faces
             res["connection_items"] = connection_items(cfg, counts, faces)
             res["connection_design"] = read_conn_design_full(cfg, faces)
+            res["rafter_lines"] = {"%s,%s" % k: v for k, v in (snap.get("rafter_lines") or {}).items()}
+            res["gravity_elements"] = sorted(int(t) for t in snap.get("gravity") or [])
             res["cfg_values"] = {"D_roof": cfg.get("D_roof"), "Lr": cfg.get("Lr"), "system": cfg.get("system"),
                                  "R_x": cfg.get("R_x"), "R_y": cfg.get("R_y"),
                                  "peb_connection_mass_kg": cfg.get("peb_connection_mass_kg"),
@@ -734,12 +738,16 @@ def load(job, purlin, girt):
         if job.get("Lr") is not None:
             L["Lr"] = job["Lr"]
         npd = job.get("nonpermanent_kNm2") or {}
-        if npd and not job.get("collateral_in_uplift"):
+        extra = float(job.get("extra_pv_kNm2") or 0.0)
+        if (npd or extra) and not job.get("collateral_in_uplift"):
             # PEB-LEVERS collateral_in_uplift False: collateral / PV are non-permanent dead (CFS engine
-            # nonpermanent_dead): in the gravity combinations, out of the rows where the dead load resists uplift
+            # nonpermanent_dead): in the gravity combinations, out of the rows where the dead load resists uplift.
+            # npd: inside the script's D_roof (taken out of it); extra: a PV load the script does not carry
             L["D_roof"] = round(float(L["D_roof"]) - sum(npd.values()), 6)
             L["collateral_kNm2"] = float(npd.get("collateral", 0.0))
-            L["pv_kNm2"] = float(npd.get("pv", 0.0))
+            L["pv_kNm2"] = float(npd.get("pv", 0.0)) + extra
+        elif extra:
+            L["D_roof"] = round(float(L["D_roof"]) + extra, 6)
         return cc
     mod.cfs_cfg = cfs_cfg
     if job.get("free_flange_braced"):
@@ -821,7 +829,7 @@ def secondary_candidates(family, cfs_root, gold_section, span_mm):
 
 
 def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_braced=False, log_fn=log,
-                     start=None):
+                     start=None, extra_pv=0.0):
     """Lightest passing purlin and girt of the switch's family for this job (the job's secondary script with the
     CFS engine); writes the final secondary/*.json into run_dir.  Returns {'purlin', 'girt', 'evaluated', ...}."""
     sec = spec["secondary"]
@@ -835,7 +843,8 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
     job = {"script": script, "cfs_root": cfs_root, "consts": sec["consts"], "purlin0": gold["purlin"],
            "girt0": gold["girt"], "fy": fy, "Lr": Lr, "nonpermanent_kNm2": npd,
            "collateral_in_uplift": bool(rules.get("collateral_in_uplift")),
-           "free_flange_braced": bool(free_flange_braced), "out": os.path.join(run_dir, "secondary_eval.json")}
+           "free_flange_braced": bool(free_flange_braced), "extra_pv_kNm2": float(extra_pv or 0.0),
+           "out": os.path.join(run_dir, "secondary_eval.json")}
     worker = os.path.join(run_dir, "_secondary_worker.py")
     open(worker, "w").write(SECONDARY_WORKER)
     cands = secondary_candidates(fam, cfs_root, gold["purlin"]["section"], float(sec["span_mm"]))
@@ -1225,6 +1234,42 @@ class LocalModel:
         M = [c.get("value") for c in ch if c.get("id") == "connection_moment" and c.get("member") == mem
              and isinstance(c.get("value"), (int, float))]
         return (float(v), float(M[0]) if M else None)
+
+    def is18168_6_2_dc(self, x):
+        """IS 18168 6.2 (route B rafters) for the labels x: peb_checks.is18168_6_2_records on a registry rebuilt from
+        the run with the candidate sections at the element ends (the check reads only geometry and sections)."""
+        if not self.is18:
+            return 0.0, None
+        key = tuple(sorted((c, x[c]) for c in x))
+        if key in self._t2_cache:
+            return self._t2_cache[key]
+        import peb_build as PB
+        import peb_checks as PC
+        saved = dict(PB._REG)
+        try:
+            els = {}
+            for t, e in self.dump.items():
+                pe = e.get("peb")
+                if not pe:
+                    continue
+                lab = self.lab_of_member(pe["member"], x)
+                f0, f1 = pe["f"]
+                els[int(t)] = dict(pe, sec_i=PB.section_at(lab, f0), sec_j=PB.section_at(lab, f1),
+                                   section=PB.section_at(lab, 0.5 * (f0 + f1)))
+            rl = {}
+            for k, v in (self.res.get("rafter_lines") or {}).items():
+                a, b = k.split(",")
+                rl[(int(a), int(b))] = v
+            PB._REG.clear()
+            PB._REG.update(elements=els, members=self.members, chains=self.chains, splices={}, continuous=set(),
+                           frame_nodes=set(), gravity=set(self.res.get("gravity_elements") or []), rafter_lines=rl)
+            recs = PC.is18168_6_2_records(self.cfg, self.cfg.get("system"), self.s12_cfg())
+        finally:
+            PB._REG.clear()
+            PB._REG.update(saved)
+        out = (max([r.get("DC") or 0.0 for r in recs] or [0.0]), recs[0].get("governing_check") if recs else None)
+        self._t2_cache[key] = out
+        return out
 
     def face_sections(self, x):
         """(knee column face, knee rafter face) of the labels x (the first knee: all knees share the sections)."""
@@ -1842,6 +1887,13 @@ class Evaluator:
             if dc > mg:
                 viol += dc - mg
                 out["why"] = out["why"] or "member %s D/C %.3f > %.3f (%s)" % ("+".join(cl), dc, mg, gov)
+        if lm.is18:
+            dc62, gov62 = lm.is18168_6_2_dc(x)
+            mg = self.margin("is18168_6_2", 1.0)
+            if dc62 > mg:
+                viol += dc62 - mg
+                out["why"] = out["why"] or "IS 18168 6.2 %.3f > %.3f (%s)" % (dc62, mg, gov62)
+            dcs[("IS18168_6.2",)] = (dc62, gov62)
         pr = lm.predicted(x)
         for k, v in pr.items():
             if k.startswith("lambda_"):
@@ -1998,20 +2050,28 @@ def evaluate_run(run_dir, waivers=()):
     return out
 
 
-def feedback(margins, ev_run, lm, log_fn=log):
-    """Tighten the local margins of what a failed full run says failed."""
+def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
+    """Tighten the local margins of what a failed full run says failed (each margin at most once per run)."""
     hit = False
+    done = set()
 
     def tighten(key, by=0.03, default=1.0):
+        if key in done:
+            return
+        done.add(key)
         margins[key] = round(float(margins.get(key, default)) - by, 4)
         log_fn("    feedback: margin %s -> %.3f" % (key, margins[key]))
 
     sec2cl = {}
     if lm is not None:
+        import peb_build as PB
         for c in lm.x0:
             for mid in lm.mem_of_const[c]:
                 for t in lm.el_of_mem[mid]:
                     sec2cl[lm.dump[t]["member"]["section"]] = lm.cluster[c]
+                    pe = lm.dump[t].get("peb") or {}
+                    if x_run and c in x_run and pe.get("f"):
+                        sec2cl[PB.section_at(x_run[c], 0.5 * (pe["f"][0] + pe["f"][1]))] = lm.cluster[c]
     for dc, kind, ident, _gov in ev_run.get("fail_items") or []:
         if kind == "member":
             sec = ident.split("-", 1)[1] if "-" in ident else ident
@@ -2019,6 +2079,8 @@ def feedback(margins, ev_run, lm, log_fn=log):
             if cl:
                 tighten("member:" + "+".join(cl), default=float(margins.get("member", 0.99)))
                 hit = True
+        elif kind == "connection" and "6.2" in ident:
+            tighten("is18168_6_2"); hit = True
         elif kind == "connection":
             if "knee" in ident:
                 tighten("conn:knee"); hit = True
@@ -2127,10 +2189,11 @@ def save_best(run_dir, dst):
 
 def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=None, cfg_patch=None, rods=None,
              Lr=None, free_flange=False, waivers=(), start=None, start_conn=None, calib=None, max_full_runs=8,
-             resize_secondary=True, log_fn=log):
+             resize_secondary=True, extra_pv=0.0, secondary_cache=None, log_fn=log):
     """Auto-size one variant of a PEB job.  Returns a record with the passing design of least mass ('best'), the
     history of full runs and the calibration of the connection take-off ('calib', reused by later variants)."""
     t0 = time.time()
+    waivers = tuple(waivers or ()) + REPORT_ONLY_WAIVERS
     vdir = os.path.join(work_dir, name)
     run_dir = os.path.join(vdir, "run")
     if os.path.isdir(run_dir):
@@ -2142,11 +2205,24 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
            "x_gold": x_gold}
     log_fn("== %s / %s" % (spec["job"], name))
     if resize_secondary:
-        out["secondary"] = design_secondary(run_dir, spec, rules, cfs_root=cfs_root, Lr=Lr, free_flange_braced=free_flange,
-                                            log_fn=log_fn)
+        skey = json.dumps([rules.get("purlins", "IS811_Fy240"), bool(rules.get("collateral_in_uplift")), Lr,
+                           bool(free_flange), float(extra_pv or 0.0)])
+        hit = (secondary_cache or {}).get(skey)
+        if hit:
+            for f, txt in hit["files"].items():
+                open(os.path.join(run_dir, "secondary", f), "w").write(txt)
+            out["secondary"] = hit["record"]
+            log_fn("    secondary: reused (%s / %s)" % (hit["record"]["purlin"]["section"], hit["record"]["girt"]["section"]))
+        else:
+            out["secondary"] = design_secondary(run_dir, spec, rules, cfs_root=cfs_root, Lr=Lr,
+                                                free_flange_braced=free_flange, extra_pv=extra_pv, log_fn=log_fn)
+            if secondary_cache is not None:
+                secondary_cache[skey] = {"record": out["secondary"], "files": {
+                    f: open(os.path.join(run_dir, "secondary", f)).read()
+                    for f in ("secondary_result.json", "peb_secondary.json")}}
     x_last = dict(start or x_gold)
     conn_run = start_conn
-    margins = {"member": 0.99, "sway": 0.98, "defl": 0.98, "lambda": 0.97}
+    margins = {"member": 1.0, "sway": 0.98, "defl": 0.98, "lambda": 0.98}
     best, lm = None, None
     groups = dim_groups(spec, x_last)
     for it in range(max_full_runs):
@@ -2193,8 +2269,8 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
             elif it > 0:
                 log_fn("    passing but not lighter (%.0f >= %.0f kg): stop" % (tot, best["total_kg"]))
                 break
-        else:
-            feedback(margins, R, lm, log_fn=log_fn)
+        elif it > 0:
+            feedback(margins, R, lm, log_fn=log_fn, x_run=x_run)   # the start design was not proposed by the sizer
         x_last = x_run
     out.update(best=best, calib=calib, elapsed_s=round(time.time() - t0, 1), n_full_runs=len(out["history"]))
     json.dump(out, open(os.path.join(vdir, "autosize.json"), "w"), indent=1, default=str)
