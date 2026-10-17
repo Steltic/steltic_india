@@ -798,3 +798,75 @@ def _collector_forces_flexible(cfg, kind="EQ", levels=None):
                         out["rows"].append({"dir": d, "level": k, "beam": t, "role": "chord", "N_N": round(T, 1),
                                             "span_mm": span, "B_mm": B, "basis": "flexible panel w s^2/(8 B)"})
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# First wave item 6 (2026-10): a flexible diaphragm declared over a rigid analysis model.  The braced walls / frames
+# are designed from the rigid model (7.8.2 torsion); a flexible deck sends each line its tributary share instead.  The
+# comparison says, line by line, whether the rigid design covers the flexible distribution.
+# ---------------------------------------------------------------------------------------------------------------------
+RIGID_VS_TRIB_TEXT = ("Each lateral line's ground-storey shear from the rigid-diaphragm model (storey forces at the mass "
+                      "centre with the IS 1893 7.8.2 accidental torsion +/- 0.05 b) against the tributary-width share "
+                      "of a flexible deck (7.6.4; the 0.05 b mass shift both ways).  Ratio > 1: the line receives more "
+                      "under the flexible distribution than it was designed for.")
+
+
+def rigid_vs_tributary(cfg, kind="EQ"):
+    """{'rows': [{dir, line_mm, V_rigid_kN, V_tributary_kN, ratio}], 'max_ratio', 'text'} per unit lateral factor
+    (story forces of the load plan).  Base reactions of the columns on each line give the rigid line shear."""
+    import engine3d as E
+    trib = flexible_diaphragm_line_shears(cfg, kind)
+    rows = []
+    for d in ("X", "Y"):
+        lines = (trib.get("lines") or {}).get(d) or []
+        if not lines:
+            continue
+        F = _story_forces(cfg, d, kind)
+        if not F:
+            continue
+        di = 0 if d == "X" else 1
+        ax = 1 if d == "X" else 0                      # line coordinate perpendicular to the force
+        tr = {}
+        for tag in ("e0", "ea", "eb"):
+            for k, sh in ((trib.get(tag) or {}).get(d) or {}).items():
+                for pos, V in sh.items():
+                    tr.setdefault(tag, {}).setdefault(round(float(pos), 1), 0.0)
+                    tr[tag][round(float(pos), 1)] += abs(V)
+        rig = {}
+        for sgn in (+1.0, -1.0):
+            info = E.build(cfg, "Linear")
+            NF = info["NF"]
+            ops.timeSeries("Linear", 1)
+            ops.pattern("Plain", 1, 1)
+            for k in range(1, NF + 1):
+                f = [0.0] * 6
+                fk = float(F.get(k, (0.0, 0.0, 0.0))[di])
+                Bx_, By_ = E.plan_extent(cfg, k, info["present"][k])
+                B = By_ if d == "X" else Bx_
+                f[di] = fk
+                f[5] = sgn * fk * 0.05 * B
+                ops.load(E.mtag(k), *f)
+            ops.constraints("Transformation"); ops.numberer("RCM"); ops.system("UmfPack")
+            ops.test("NormDispIncr", 1e-9, 50); ops.algorithm("Linear"); ops.integrator("LoadControl", 1.0)
+            ops.analysis("Static")
+            ops.analyze(1)
+            ops.reactions()
+            for (i, j) in info["present"][0]:
+                n = E.ntag(i, j, 0)
+                c = ops.nodeCoord(n)
+                for pos in lines:
+                    if abs(c[ax] - pos) <= 1.0:
+                        R = -ops.nodeReaction(n, di + 1)
+                        key = round(float(pos), 1)
+                        rig.setdefault(sgn, {}).setdefault(key, 0.0)
+                        rig[sgn][key] += R
+            ops.wipe()
+        for pos in lines:
+            key = round(float(pos), 1)
+            vr = max(abs((rig.get(s) or {}).get(key, 0.0)) for s in (+1.0, -1.0))
+            vt = max((tr.get(t) or {}).get(key, 0.0) for t in ("e0", "ea", "eb"))
+            rows.append({"dir": d, "line_mm": key, "V_rigid_kN": round(vr / 1e3, 1), "V_tributary_kN": round(vt / 1e3, 1),
+                         "ratio": round(vt / vr, 3) if vr > 0 else None})
+    mr = max([r["ratio"] for r in rows if r["ratio"] is not None] or [None]) if rows else None
+    return {"rows": rows, "max_ratio": mr, "text": RIGID_VS_TRIB_TEXT, "kind": kind,
+            "cite": "IS 1893 (Part 1):2016 7.6.4 / 7.8.2"}

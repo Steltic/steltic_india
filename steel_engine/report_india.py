@@ -7,6 +7,7 @@ code: a missing input is shown as "not evaluated" with the reason.
 """
 from __future__ import annotations
 
+import report_first_wave as FW
 import datetime
 import json
 import os
@@ -61,7 +62,7 @@ CHAPTERS_IN = {
         "Drawings and specifications consistent with this package (outside the analysis package)."]),
     13: ("QA / professional acceptance", [
         "Analysis gates, design status, grounding in the Indian Standards corpus, numerical self-consistency.",
-        "Independent check and the EOR seal (outside the automated package)."]),
+        "Independent check and the design engineer's signature (outside the automated package)."]),
 }
 
 
@@ -84,7 +85,7 @@ def _chapter(n, status=None):
 
 def _toc():
     rows = "".join(f"<li><b>Chapter {n}</b> &mdash; {CHAPTERS_IN[n][0]}</li>" for n in range(1, 14))
-    return ("<h2>Report structure &mdash; EOR review checklist</h2><p>One chapter per checklist section. "
+    return ("<h2>Report structure &mdash; checking engineer's review checklist</h2><p>One chapter per checklist section. "
             "Appendix A: member checks by group; Appendix B: combinations; Appendix C: activity log.</p>"
             "<ol class='toc'>" + rows + "</ol>")
 
@@ -166,12 +167,15 @@ def _codes_table(cfg, pkg):
     rows = [["IS 800:2007", "General construction in steel &mdash; limit state design"],
             ["IS 875 (Part 1):2026 / Part 2:1987", "Dead loads / imposed loads"],
             ["IS 875 (Part 3):2015", "Wind loads"],
-            ["IS 875 (Part 4):1987 / Part 5:1987", "Snow loads / special loads and combinations"],
-            ["IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020)", "Earthquake resistant design"],
-            ["IS 808:2021 / IS 2062:2025 / IS 1161:2014", "Rolled sections / structural steel / steel tubes"],
+            ["IS 875 (Part 4):2021 / Part 5:1987", "Snow loads / special loads and combinations"],
+            ["IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020)", "Earthquake resistant design (in force: BIS withdrew "
+             "the 2025 revision in March 2026)"],
+            ["IS 808:2021 / IS 2062 (Part 1):2025 / IS 1161:2014", "Rolled sections / structural steel / steel tubes"],
             ["IS 816 / IS 4000", "Welding / high-strength friction grip bolts (where used)"]]
-    if str(cfg.get("system") or "").upper() in ("EBF",):
-        rows.append(["IS 18168:2023", "Eccentrically braced frames (EOR basis)"])
+    if cfg.get("apply_is18168") or str(cfg.get("system") or "").upper() in ("EBF",):
+        rows.append(["IS 18168:2023", "Ductile design and detailing of steel structures (seismic)"])
+    if (pkg or {}).get("peb") or cfg.get("peb_secondary"):
+        rows.append(["IS 801:1975 (reaffirmed 2021) / IS 811:1987", "Cold-formed purlins and girts (working stress)"])
     return _t(["Standard", "Scope"], rows)
 
 
@@ -180,21 +184,32 @@ def _status_block(pkg):
     if not st:
         return "<p class='note'>Design status not recorded (run the pipeline).</p>"
     reasons = st.get("reasons") or []
+    # Indian usage in the printed text: "design engineer", not "EOR" (the package keeps the engine wording)
+    warns = [re.sub(r"\bEORs?\b", "design engineer", str(w)) for w in (st.get("warnings") or []) if w]
     head = (f"<p><b>Design status: {st.get('status', '?').upper()}</b> "
             f"(authority: <code>{st.get('authority', 'india_seismic_gates.design_status')}</code>; "
-            f"{st.get('n_reasons', len(reasons))} open reason(s)).</p>")
+            f"{st.get('n_reasons', len(reasons))} open reason(s)"
+            + (f", {len(warns)} point(s) for the checking engineer" if warns else "") + ").</p>")
+    # first wave item 6: the non-blocking points are printed too, so COMPLETE never hides an open reading
+    wtab = (("<p>Points the checking engineer should note (they do not block the status):</p>"
+             + _t(["#", "note"], [[i + 1, w] for i, w in enumerate(warns)])) if warns else "")
     if not reasons:
-        return head
+        return head + wtab
     rows = [[i + 1, r] for i, r in enumerate(reasons[:60])]
     more = f"<p class='note'>&hellip; {len(reasons) - 60} further reasons in calc_package.json.</p>" if len(reasons) > 60 else ""
-    return head + _t(["#", "open reason"], rows) + more
+    return head + _t(["#", "open reason"], rows) + more + wtab
 
 
 def _systems(cfg, pkg):
     import india_seismic_gates as G
     ss = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
-    rows = [["Seismic force-resisting system", str(cfg.get("system") or "&mdash;")],
-            ["Response reduction factor R (IS 1893 Table 9)", _num(G.declared_R(cfg))],
+    sx, sy = cfg.get("system_x"), cfg.get("system_y")
+    rx, ry_ = cfg.get("R_x"), cfg.get("R_y")
+    rows = [["Seismic force-resisting system", str(cfg.get("system") or "&mdash;") +
+             ((" (X: %s, Y: %s)" % (sx or "&mdash;", sy or "&mdash;")) if (sx or sy) else "")],
+            ["Response reduction factor R (IS 1893 Table 9)",
+             ("X %s / Y %s" % (_num(rx), _num(ry_))) if (rx is not None and ry_ is not None and rx != ry_)
+             else _num(G.declared_R(cfg))],
             ["Importance factor I (IS 1893 Table 8)", _num(G.importance_of(cfg))],
             ["Zone / Z", "%s / %s" % (G.zone_of(cfg), _num(ss.get("Z")))],
             ["Soil type", str(ss.get("soil") or (cfg.get("seis") or {}).get("soil") or "&mdash;")],
@@ -218,8 +233,11 @@ def _collectors(pkg):
         if k not in best or abs(r["N_N"]) > abs(best[k]["N_N"]):
             best[k] = r
     tab = [[k[0], k[1], k[2], k[3], _kN(abs(v["N_N"]))] for k, v in sorted(best.items(), key=lambda kv: str(kv[0]))]
+    flex = any("tributary" in str(r.get("cite") or r.get("basis") or "") for r in rows)
     return ("<p>Axial forces in collectors (drag struts) and chords per unit lateral factor from the diaphragm "
-            "load path (equilibrium of the analysed rigid-diaphragm model); they are multiplied by each "
+            + ("load path (flexible deck: storey shear to the braced lines by tributary width, IS 1893 7.6.4); "
+               if flex else "load path (equilibrium of the analysed rigid-diaphragm model); ") +
+            "they are multiplied by each "
             f"combination's f<sub>E</sub> / f<sub>W</sub> and added to the beam checks ({c.get('n_beams_with_axial', 0)} "
             "beams).</p>" + _t(["load", "dir", "level", "role", "max |N| (kN)"], tab[:40]))
 
@@ -237,16 +255,23 @@ def _irregularity(pkg):
 
 
 def _gravity_table(cfg):
-    rows = [["Floor dead load D_floor", _num(cfg.get("D_floor")), "kN/m2"],
-            ["Roof dead load D_roof", _num(cfg.get("D_roof")), "kN/m2"],
-            ["Floor imposed load (IS 875 Part 2)", _num(cfg.get("L_floor")), "kN/m2"],
-            ["Partition allowance (IS 875-2 3.1.2)", _num(cfg.get("partition_load_kNm2")), "kN/m2"],
-            ["Roof imposed load Lr (IS 875-2 Table 2)", _num(cfg.get("Lr")), "kN/m2"],
-            ["Snow (IS 875 Part 4)", _num(cfg.get("snow")), "kN/m2"],
-            ["Cladding", _num(cfg.get("clad")), "kN/m2 of wall"],
-            ["Member self-weight", "from the sections (78.5 kN/m3)", ""],
-            ["Floor system", "%s%s" % (cfg.get("floor_system") or "one-way",
-                                        (", deck spans " + str(cfg.get("deck_span"))) if cfg.get("deck_span") else ""), ""]]
+    import report_first_wave as FW
+    shed = len(cfg.get("heights") or []) == 1 and not float(cfg.get("L_floor") or 0.0)
+    rows = [] if shed else [["Floor dead load D_floor", _num(cfg.get("D_floor")), "kN/m2"]]
+    rows.append(["Roof dead load D_roof (permanent)", _num(cfg.get("D_roof")), "kN/m2"])
+    rows += FW.dead_load_rows(cfg)
+    if not shed:
+        rows += [["Floor imposed load (IS 875 Part 2)", _num(cfg.get("L_floor")), "kN/m2"],
+                 ["Partition allowance (IS 875-2 3.1.2)", _num(cfg.get("partition_load_kNm2")), "kN/m2"]]
+    rows += [["Roof imposed load Lr (IS 875-2 Table 2)", _num(cfg.get("Lr")), "kN/m2"],
+             ["Snow (IS 875 Part 4:2021)", _num(cfg.get("snow")), "kN/m2"],
+             ["Cladding", _num(cfg.get("clad")), "kN/m2 of wall"],
+             ["Member self-weight", "from the sections (78.5 kN/m3)", ""]]
+    if not shed:
+        rows.append(["Floor system", "%s%s" % (cfg.get("floor_system") or "one-way",
+                                               (", deck spans " + str(cfg.get("deck_span"))) if cfg.get("deck_span") else ""), ""])
+    else:
+        rows.append(["Roof system", "purlins and profiled metal sheeting", ""])
     return _t(["Load", "Value", "Unit"], rows)
 
 
@@ -370,9 +395,11 @@ def _governing(cfg):
     ss = plan.get("seismic_summary") or {}
     ws = plan.get("wind_summary") or {}
     rows = []
+    import report_first_wave as FW
+    wb = FW.wind_base_shear(cfg)
     for d in ("X", "Y"):
         eq = ss.get("VB_%s_kN" % d.lower(), ss.get("VB_kN"))
-        w = ws.get("VB_%s_kN" % d.lower())
+        w = ws.get("VB_%s_kN" % d.lower(), wb.get(d))
         gov = "&mdash;"
         if eq is not None and w is not None:
             gov = "earthquake (1.5 EL)" if 1.5 * float(eq) >= 1.5 * float(w) else "wind (1.5 WL)"
@@ -380,6 +407,38 @@ def _governing(cfg):
     return ("<p>Characteristic base shears; both are carried through every combination, so the governing "
             "effect is taken member by member.</p>" + _t(["dir", "V_B earthquake (kN)", "V_B wind (kN)",
                                                            "larger lateral"], rows))
+
+
+def _flexible_vs_rigid(pkg):
+    rvt = ((pkg or {}).get("diaphragm_7_6_4") or {}).get("rigid_vs_tributary") or {}
+    if not rvt.get("rows"):
+        return ""
+    rows = [[r["dir"], _m(r["line_mm"]), _num(r["V_rigid_kN"], 1), _num(r["V_tributary_kN"], 1), _num(r["ratio"], 3)]
+            for r in rvt["rows"]]
+    lm = [[x["id"], _num(x["strength_DC"], 3), _num(x["scaled_DC"], 3)] for x in rvt.get("lateral_members") or []]
+    return ("<h3>Flexible deck against the rigid model (IS 1893 7.6.4 / 7.8.2)</h3><p>" + rvt.get("text", "") +
+            " Base shears per unit earthquake factor.</p>" +
+            _t(["force dir", "line at (m)", "rigid model (kN)", "tributary (kN)", "ratio"], rows) +
+            (_t(["lateral member group", "strength ratio", "x worst line ratio"], lm) if lm else "") +
+            "<p><b>Conclusion:</b> %s.</p>" % rvt.get("conclusion", ""))
+
+
+def _diaphragm_as_modelled(cfg, pkg):
+    """First wave item 6: say what the analysis did, not what the brief asked for."""
+    decl = str(cfg.get("diaphragm") or "rigid").lower()
+    fd = ((pkg or {}).get("seismic_analysis") or {}).get("flexible_diaphragm")
+    if isinstance(fd, dict) and fd.get("status") == "run":
+        return ("rigid in-plane (master node per level) AND a flexible-diaphragm 3-D dynamic run; members designed for "
+                "the envelope of the two (see Chapter 3)")
+    if decl.startswith("flex"):
+        rvt = ((pkg or {}).get("diaphragm_7_6_4") or {}).get("rigid_vs_tributary") or {}
+        if rvt.get("conclusion"):
+            return ("declared flexible (IS 1893 7.6.4): collectors, chords and the deck shear by tributary width; the "
+                    "braced lines analysed with a rigid in-plane master node and the 7.8.2 torsion, then compared line "
+                    "by line with the tributary shares (Chapter 3): " + rvt["conclusion"])
+        return ("declared flexible, analysed with a rigid in-plane master node per level: the flexible-diaphragm "
+                "distribution was <b>not compared</b> with the rigid model")
+    return "rigid in-plane, master node per level"
 
 
 def _modal_table(run):
@@ -450,12 +509,25 @@ def _connections(pkg):
     rows = []
     for c in con:
         dem = c.get("demand") or {}
-        dtxt = "; ".join(f"{k.replace('_N', '').replace('_Nmm', '')} = "
-                         + (_kNm(v) + " kN-m" if k.endswith("_Nmm") else _kN(v) + " kN")
+        dtxt = "; ".join((f"{k[:-4]} = " + _kNm(v) + " kN-m") if k.endswith("_Nmm") else
+                         (f"{k[:-2]} = " + _kN(v) + " kN") if k.endswith("_N") else
+                         (f"{k[:-3]} = " + _num(v, 0) + " mm") if k.endswith("_mm") else f"{k} = {_num(v)}"
                          for k, v in dem.items() if isinstance(v, (int, float)))
-        n_ok = sum(1 for x in (c.get("checks") or []) if isinstance(x, dict) and x.get("ok") is True)
-        rows.append([c.get("id"), c.get("type"), dtxt, len(c.get("checks") or []), n_ok,
-                     _num(c.get("DC")) if isinstance(c.get("DC"), (int, float)) else "not designed"])
+        _ck = c.get("checks") or []
+        chks = [x for x in (_ck.values() if isinstance(_ck, dict) else _ck) if isinstance(x, dict)]
+        n_ok = sum(1 for x in chks if x.get("ok") is True)
+        if isinstance(c.get("DC"), (int, float)):
+            dc_txt = _num(c.get("DC"))
+        elif chks and all(x.get("ok") is True for x in chks):
+            # no strength ratio by design: a continuous member (no joint), a declared 'no splice' or a CJP
+            # full-strength splice that is deemed to comply -- say which
+            nm = str(chks[0].get("name") or "")
+            dc_txt = ("no joint (continuous member)" if "continuity" in nm else
+                      "CJP full strength: deemed to comply" if "cjp" in nm.lower() else
+                      "no splice (continuous)" if "no_splice" in nm or "no splice" in nm.lower() else "n/a (%s)" % nm)
+        else:
+            dc_txt = "<b>not designed</b>"
+        rows.append([c.get("id"), c.get("type"), dtxt, len(chks), n_ok, dc_txt])
     return _t(["connection", "type", "demand (incl. IS 800 12.2.3 where tagged)", "checks", "passing", "D/C"], rows)
 
 
@@ -590,21 +662,24 @@ def build_report_india(name, root):
     except Exception as ex:
         parts.append(f"<p class='note'>[model figures failed: {ex}]</p>")
 
+    parts.append(FW.pv_check_section(cfg, root))
     # 1
     parts.append(_chapter(1))
     parts.append(_status_block(pkg))
     parts.append("<h3>Codes</h3>" + _codes_table(cfg, pkg))
-    Lx = max(E._xy_in(cfg, i, j)[0] for (i, j) in E.grid(cfg, 1))
-    Ly = max(E._xy_in(cfg, i, j)[1] for (i, j) in E.grid(cfg, 1))
+    _pts = [E._xy_in(cfg, i, j) for k_ in range(1, NF + 1) for (i, j) in E.grid(cfg, k_)]
+    Lx = max(p_[0] for p_ in _pts) - min(p_[0] for p_ in _pts)
+    Ly = max(p_[1] for p_ in _pts) - min(p_[1] for p_ in _pts)
     parts.append("<h3>Building description</h3>" + _t(["Item", "Value"], [
-        ["Archetype", cfg.get("arch", "")], ["Storeys", NF],
+        ["Building type", cfg.get("arch", "")], ["Levels in the model", NF],
         ["Plan extents", f"{_m(Lx)} m (X) &times; {_m(Ly)} m (Y)"],
         ["Grid", f"{cfg['NX']} &times; {cfg['NY']} bays @ {_m(cfg['SX'])} m / {_m(cfg['SY'])} m"],
         ["Storey heights (m)", ", ".join(_m(h) for h in cfg["heights"])],
         ["Height", f"{_m(sum(cfg['heights']))} m"],
-        ["Occupancy", json.dumps(cfg.get("occupancy") or {})]]))
+        ["Occupancy", FW.occupancy_text(cfg)]]))
     parts.append("<h3>Materials</h3>" + _t(["Item", "Value"], [
-        ["Rolled sections", "IS 2062 %s (fy by thickness per IS 2062 Table 3)" % (cfg.get("steel_grade") or "&mdash;")],
+        ["Steel (rolled sections and welded plates)", "IS 2062 (Part 1) %s (fy by thickness per IS 2062 Table 3)"
+         % (cfg.get("steel_grade") or "&mdash;")],
         ["Braces", "%s %s" % (cfg.get("brace_grade") or cfg.get("steel_grade") or "&mdash;", cfg.get("brace_process") or "")],
         ["E", "200 000 MPa"]]))
     try:
@@ -617,6 +692,7 @@ def build_report_india(name, root):
     parts.append(_chapter(2))
     parts.append(_systems(cfg, pkg))
     parts.append("<h3>Collectors and chords</h3>" + _collectors(pkg))
+    parts.append(_flexible_vs_rigid(pkg))
     parts.append("<h3>Irregularity screens (IS 1893 Tables 5 and 6, Amd 2)</h3>" + _irregularity(pkg))
     try:
         import viewer3d
@@ -626,6 +702,7 @@ def build_report_india(name, root):
     # 3
     parts.append(_chapter(3))
     parts.append("<h3>Gravity loads</h3>" + _gravity_table(cfg))
+    parts.append(FW.imposed_reduction_section(cfg))
     parts.append("<h3>Earthquake (IS 1893 Part 1)</h3>" + _seismic_table(cfg, pkg, run))
     parts.append("<h3>Wind (IS 875 Part 3)</h3>" + _wind_table(cfg))
     parts.append("<h3>Governing lateral load</h3>" + _governing(cfg))
@@ -644,7 +721,7 @@ def build_report_india(name, root):
     parts.append(_t(["Assumption", "As modelled"], [
         ["Column bases", str((cfg.get("model") or {}).get("bases", cfg.get("base")))],
         ["Joints", str((cfg.get("model") or {}).get("joints", "&mdash;"))],
-        ["Diaphragm", "rigid in-plane, master node per level"],
+        ["Diaphragm", _diaphragm_as_modelled(cfg, pkg)],
         ["Second order", "P-&Delta; on every gravity state (Newton), laterals as linear increments"],
         ["Floor load distribution", str(cfg.get("floor_system") or "one-way")],
         ["Erection sequence (braces)", _erection_text(pkg)]]))
@@ -657,12 +734,15 @@ def build_report_india(name, root):
     # 6
     parts.append(_chapter(6))
     parts.append(_members(pkg))
+    parts.append(FW.crane_runway_section(cfg, pkg))
+    parts.append(FW.takeoff_section(cfg, pkg))
     if (pkg or {}).get("peb"):
         try:
             import peb_report as _PR
             parts.append(_PR.section(cfg, pkg, root))
         except Exception as ex:
             parts.append(f"<p class='note'>[PEB section failed: {ex}]</p>")
+        parts.append(FW.premium_note(cfg, pkg))
     # 7
     parts.append(_chapter(7))
     n_not = sum(1 for c in cases if (getattr(c, "meta", {}) or {}).get("notional"))

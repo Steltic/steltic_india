@@ -1332,7 +1332,7 @@ def design_india(name, cfg, outdir):
                    height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
                    apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
                    is18168_table2=cfg.get("is18168_table2"))
-    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis") if k in cfg})     # H52 / H46 (rulings R8, R3)
+    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis", "beam_lateral_bracing") if k in cfg})  # H52 / H46; first wave 6.2
     if cfg.get("peb_rules"):                                        # PEB-LEVERS: base_shear_key switch (base_checks)
         s12_cfg["peb_rules"] = cfg["peb_rules"]
     joint_conn = {}
@@ -1758,6 +1758,19 @@ def design_india(name, cfg, outdir):
                                        "DC": None, "found": False, "error": err,
                                        "limit_state": "IS 800:2007 10 / 7.4 / 12", "cited": None, "notes": [err]})
 
+    # ---- first wave item 2: crane bracket at the column face (cfg['crane']['bracket']) ----
+    if (cfg.get("crane") or {}).get("bracket"):
+        try:
+            import crane_bracket as _CB
+            _rec = _CB.bracket_record(cfg)
+            if _rec:
+                pkg["connections"].append(_rec)
+        except Exception as ex:
+            pkg["connections"].append({"id": "conn-crane-bracket", "type": "crane bracket", "DC": None, "found": False,
+                                       "demand": {}, "inputs": {}, "error": str(ex),
+                                       "checks": [{"name": "crane bracket checks", "ok": None, "found": False,
+                                                   "dc": None, "reason": "%s: %s" % (type(ex).__name__, ex)}]})
+
     # ---- PEB (2026-10): splices / apex joints, flange braces, frame stability, tonnage ----
     if _PB is not None and _peb:
         import peb_checks as PC
@@ -1791,6 +1804,10 @@ def design_india(name, cfg, outdir):
                                        "demand": {}, "inputs": {},
                                        "checks": [{"name": "PEB knee checks", "ok": None, "found": False,
                                                    "dc": None, "reason": str(ex)}]})
+        try:
+            pkg["connections"] += PC.is18168_6_2_records(cfg, cfg.get("system"), s12_cfg)   # first wave item 6
+        except Exception as ex:
+            peb_out["errors"].append("IS 18168 6.2: %s: %s" % (type(ex).__name__, ex))
         try:
             pkg["connections"] += PC.flange_brace_records(cfg, _peb, reg, envt)
         except Exception as ex:
@@ -2098,6 +2115,7 @@ def design_india(name, cfg, outdir):
             hook(cfg, pkg, run, envt, reg)
         except Exception as ex:
             pkg.setdefault("hook_errors", []).append("%s: %s" % (hook.__name__, ex))
+    _flexible_over_rigid(cfg, pkg)
     pkg["provenance"] = provenance_record(job_dir)
     json.dump(cfg_snapshot(cfg), open(os.path.join(outdir, "cfg_snapshot.json"), "w"), indent=1, default=str)
     st = G.design_status(cfg, pkg, job_dir=job_dir)
@@ -2303,8 +2321,9 @@ def secondary_member_demand(cfg, s_):
     if up > 0:
         cases.append(("0.9DL+1.5WL(uplift)", 0.9, 0.0, 0.0, 1.5))
     rows = []
+    Dn = E.roof_nonpermanent_kNm2(cfg) if (roof and s_.get("D_kNm2") is None) else 0.0   # first wave item 5
     for lab, fD, fL, fS, fW in cases:
-        wv = (fD * D + fL * Lp + fS * S_ - fW * up) * sp / 1000.0 + fD * wsw     # N/mm (+ down)
+        wv = (fD * D + E.nonpermanent_factor(fD) * Dn + fL * Lp + fS * S_ - fW * up) * sp / 1000.0 + fD * wsw
         rows.append({"combo": lab, "w_N_per_mm": round(wv, 3), "M_Nmm": round(wv * L * L / 8.0, 1),
                      "V_N": round(abs(wv) * L / 2.0, 1), "sign": "sagging" if wv >= 0 else "hogging"})
     for ex in (s_.get("extra_cases") or []):                    # e.g. IS 875-4 5.2.4 drift snow on a lean-to
@@ -2313,7 +2332,7 @@ def secondary_member_demand(cfg, s_):
                      "V_N": round(abs(wv) * L / 2.0, 1), "sign": "sagging" if wv >= 0 else "hogging",
                      "cite": ex.get("cite")})
     return {"id": s_.get("id"), "section": s_.get("section"), "span_mm": L, "spacing_mm": sp, "level": s_.get("level"),
-            "loads_kNm2": {"D": D, "L": Lp, "S": S_, "wind_uplift": up}, "self_weight_N_per_mm": round(wsw, 4),
+            "loads_kNm2": {"D": D, "D_collateral_pv": Dn, "L": Lp, "S": S_, "wind_uplift": up}, "self_weight_N_per_mm": round(wsw, 4),
             "demands": rows, "check": "india_is800.member_check_is800 with LLT_sag = deck restraint, "
                                       "LLT_hog = fly-brace spacing (IS 800 8.2.2)"}
 
@@ -2523,6 +2542,59 @@ def gantry_girder_checks(cfg, gd):
             "factored": {"Mz_Nmm": round(Mz, 1), "M_surge_Nmm": round(My, 1), "V_N": round(V, 1), "wheel_with_impact_N": round(W, 1)},
             "self_weight_N_per_mm": round(wsw, 4), "LLT_mm": LLT, "grade": grade, "fy_MPa": fy,
             "member_result": _jsonable({k: v for k, v in res.items() if k != "per_combo"})}
+
+
+def _strength_dc(m):
+    """Largest strength ratio of a member record (IS 800 9.3 / 7.1 / 8 rows), slenderness and detailing rows left out."""
+    best = None
+    for c in (m.get("checks") or []):
+        if not isinstance(c, dict) or not isinstance(c.get("dc"), (int, float)):
+            continue
+        nm = str(c.get("name") or "").lower()
+        if "slenderness" in nm or "table 3" in nm or "kl/r" in nm or "width" in nm or "b/t" in nm:
+            continue
+        if any(w in nm for w in ("interaction", "resistance", "compression", "tension", "shear", "bending")):
+            best = c["dc"] if best is None else max(best, c["dc"])
+    return best
+
+
+def _flexible_over_rigid(cfg, pkg):
+    """First wave item 6: a diaphragm declared flexible (IS 1893 7.6.4) but analysed with the rigid in-plane
+    constraint (no Table 5(ii) flexible run).  The lateral lines' shears from the rigid model are compared with the
+    tributary-width shares; where a line receives more under the flexible distribution, the lateral members'
+    strength ratios are scaled by that factor (forces in a braced / frame line are proportional to the line shear
+    for the EQ part, so scaling the whole ratio is conservative).  A scaled ratio above 1.0 becomes an open reason."""
+    d764 = pkg.get("diaphragm_7_6_4") or {}
+    sa = pkg.get("seismic_analysis") or {}
+    if not d764.get("flexible") or sa.get("flexible_diaphragm_run"):
+        return
+    try:
+        import india_diaphragm as DIA
+        rec = DIA.rigid_vs_tributary(cfg, "EQ")
+    except Exception as ex:
+        d764["rigid_vs_tributary"] = {"error": "%s: %s" % (type(ex).__name__, ex)}
+        return
+    ratio = rec.get("max_ratio") or 1.0
+    lat = []
+    for m in pkg.get("members") or []:
+        inp = m.get("inputs") or {}
+        role = str(inp.get("role") or "")
+        if inp.get("kind") == "brace" or role.startswith("lateral") or m.get("sfrs"):
+            sdc = _strength_dc(m)
+            if sdc is not None:
+                lat.append({"id": m.get("id"), "strength_DC": round(sdc, 3),
+                            "scaled_DC": round(sdc * max(ratio, 1.0), 3)})
+    rec["lateral_members"] = lat
+    worst = max([r["scaled_DC"] for r in lat] or [0.0])
+    rec["ok"] = worst <= 1.0
+    rec["conclusion"] = (("the rigid-model design covers the flexible distribution: the worst lateral line takes %.1f %% "
+                          "more under tributary sharing and the largest lateral-member strength ratio scaled by that is "
+                          "%.3f" % (100.0 * (max(ratio, 1.0) - 1.0), worst)) if worst <= 1.0 else
+                         ("NOT covered: a lateral line takes %.1f %% more under tributary sharing and a lateral member's "
+                          "strength ratio scaled by that is %.3f" % (100.0 * (ratio - 1.0), worst)))
+    d764["rigid_vs_tributary"] = rec
+    if worst > 1.0:
+        pkg.setdefault("_extra_reasons", []).append("IS 1893 7.6.4 flexible diaphragm: " + rec["conclusion"])
 
 
 def _deformation_compatibility(cfg, pkg, run, envt, reg):

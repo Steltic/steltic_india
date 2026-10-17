@@ -938,7 +938,7 @@ def embedded_base_checks(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, embedded=None)
 IS456_BOND_CITE = ("IS 456:2000 26.2.1 / 26.2.1.1 development length Ld = phi sigma_s / (4 tau_bd): bond capacity "
                    "pi d L tau_bd, tau_bd increased by 60 percent for deformed bars (IS 1786) -- IS 456 is not in the "
                    "corpus: tau_bd, the bar type and L are EOR inputs (VERIFY)")
-BREAKOUT_NOTE = "not covered by IS 800/IS 456 in the corpus: foundation EOR (delegated design)"
+BREAKOUT_NOTE = "not covered by IS 800 / IS 456 within the corpus: foundation EOR (delegated design)"
 def _nonempty(x):
     return isinstance(x, str) and bool(x.strip())
 
