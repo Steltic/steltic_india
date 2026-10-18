@@ -80,6 +80,14 @@ It has one LOAD COMBINATION per engine combination. Response-spectrum combinatio
 forces of the same direction, and the file says so. The parse-back test checks that each case's parsed resultant
 equals the engine's recorded total.
 
+## Fixes found by the cold-formed re-runs (vendored engine)
+
+- `consistency`: the criteria handed to a delegated designer (`delegated_criteria`, `delegated_item` in base rows and
+  the `delegated_design` register copied into `capacity_design`) are not read as an unevaluated symbolic check. This
+  had made the CFS lateral jobs PARTIAL.
+- `india_seismic`: the D8 importance-factor row reads "Table 8 (ii) by floor area: persons not stated, > 2,000 m²
+  taken as > 200 persons (Steltic ruling D8, an assumption for the design engineer to confirm)".
+
 ## Tests
 
 - `tests/test_first_wave_2026_10.py` (new): the 0.9 DL rule, the seismic weight, the crane bracket, 6.2 declared /
@@ -90,4 +98,42 @@ equals the engine's recorded total.
 
 ## Gold re-runs
 
-See the table at the end of this file (filled in from the re-run of every gold).
+All 24 golds were re-run with reports, with no LLM. Every job is COMPLETE except IN_Ex5, which is the rooftop-PV check
+and is partial on purpose. The worst member D/C is unchanged except where a first-wave fix moved it. kg/m² is new in
+the non-PEB reports: modelled members plus declared secondary members, with no connections. Before → after:
+
+| Job | Status | Worst member D/C before → after | kg/m² before → after |
+|---|---|---|---|
+| IN_Ex1_PEB_factory_shed_tapered_Bengaluru | complete | 0.961 → 0.961 | 34.5 → 34.5 |
+| IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi | complete | 0.918 → 0.930 | 54.2 → 56.2 |
+| IN_Ex3_PEB_crane_shed_10t_Nagpur | complete | 0.849 → 0.849 | 57.0 → 57.0 |
+| IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR | complete | 0.884 → 0.890 | 62.5 → 63.8 |
+| IN_Ex5_PEB_rooftop_solar_check_Bengaluru | partial | 1.102 → 1.102 | 34.5 → 34.5 |
+| IN_Ex6_OMRF_warehouse_mezzanine_Hyderabad | complete | 0.887 → 0.887 | — → 47.6 |
+| IN_Ex7_Crane_bay_OMRF_OCBF_Vizag | complete | 0.953 → 0.953 | — → 73.8 |
+| IN_Ex8_SMF_portal_Chennai_wind | complete | 0.804 → 0.804 | — → 72.1 |
+| IN_Ex9_Gable_warehouse_SMF_SCBF_snow_Shimla | complete | 0.865 → 0.865 | — → 52.8 |
+| IN_Ex10_SCBF_bigbox_flexdiaphragm_Indore | complete | 0.920 → 0.920 | — → 29.6 |
+| IN_Ex11_OCBF_4levels_splitlevel_Jaipur | complete | 0.947 → 0.947 | — → 42.4 |
+| IN_Ex11_OCBF_4levels_splitlevel_Jaipur/units/workshop | complete | 0.947 → 0.947 | — → 50.0 |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh | complete | 0.983 → 0.983 | — → 63.8 |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitB_link | complete | 0.983 → 0.983 | — → 64.5 |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitC_gym | complete | 0.960 → 0.960 | — → 116.4 |
+| IN_Ex13_SCBF_5levels_Delhi | complete | 0.970 → 0.970 | — → 58.1 |
+| IN_Ex14_SCBF_hospital_Kolkata | complete | 0.864 → 0.864 | — → 69.4 |
+| IN_Ex15_EBF_8levels_Lplan_Pune | complete | 0.999 → 0.999 | — → 66.2 |
+| IN_Ex16_SMF_office_Mumbai | complete | 0.774 → 0.774 | — → 74.5 |
+| IN_Ex17_SCBF_10levels_Ahmedabad | complete | 0.933 → 0.933 | — → 62.4 |
+| IN_Ex18_SMF_podium_11levels_Kochi | complete | 0.889 → 0.889 | — → 79.9 |
+| IN_Ex19_EBF_12levels_Tplan_Guwahati | complete | 0.972 → 0.972 | — → 88.0 |
+| IN_Ex19_EBF_12levels_Tplan_Guwahati/units/stem | complete | 0.946 → 0.946 | — → 105.3 |
+| IN_Ex20_SCBF_18levels_slender_Noida | complete | 0.967 → 0.967 | — → 88.3 |
+
+Gold changes made so the fixes hold (the gold pack's FIRST_WAVE_2026-10.md has the detail):
+
+- PEB purlins: collateral is now off the uplift rows, which pushed some purlins over 1.0. IN_Ex1 / IN_Ex5 get a second
+  sag-rod line. IN_Ex2 purlins move to 1.05 m (LZ250X75X20X3.15 is the largest IS 811 zed). IN_Ex4 purlins and fly
+  braces move to 1.25 m, which also satisfies IS 18168 6.2 at the knee.
+- Crane brackets declared in IN_Ex3 and IN_Ex7.
+- IS 18168 6.2 adopted spacings declared in IN_Ex8, Ex9, Ex12 (+ units B and C), Ex16 and Ex18.
+- IN_Ex9 restraint lengths written as absolute lengths, with a mid-height fly brace on the lean-to SMF columns.
