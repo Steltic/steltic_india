@@ -237,3 +237,14 @@ def test_pv_section_reads_the_capacity_record(tmp_path):
                                                     "capacity_H150_kNm2": 0.08, "capacity_strength_kNm2": 0.04}))
     h = FW.pv_check_section({"name": "x"}, str(tmp_path))
     assert "0.02" in h and "H/150" in h
+
+
+def test_delegated_register_is_not_an_unevaluated_check():
+    """CFS re-runs (HR-1): criteria handed to a delegated designer are not read as a symbolic requirement left
+    uncomputed, whether in a base record or in the register copied into capacity_design."""
+    import consistency as CC
+    crit = "pedestal: V / Vd <= 1 and T / Td <= 1 (IS 456; foundation designer)"
+    pkg = {"capacity_design": {"delegated_design": [{"item": "pedestal", "criteria": crit}],
+                               "bases": [{"component": "concrete_breakout", "delegated_criteria": crit}]}}
+    assert CC._named_not_computed_issues(pkg) == []
+    assert CC._named_not_computed_issues({"capacity_design": {"rows": [{"note": crit}]}})
