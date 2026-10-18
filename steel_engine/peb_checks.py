@@ -383,6 +383,112 @@ def flange_brace_records(cfg, peb, reg, envt):
     return out
 
 
+# ------------------------------------------------------------------------------------------- IS 18168 6.2
+IS18168_6_2_CITE = ("IS 18168:2023 6.2: Lb/ry shall not exceed 25 for a distance of 2 db from the end of the beam to "
+                    "column connection; Lb/ry for the remaining portion of the beam shall not exceed 0.10 E/(Ry fy)")
+
+
+def is18168_6_2_records(cfg, system=None, s12_cfg=None):
+    """First wave item 6: IS 18168:2023 6.2 lateral bracing of the SMRF rafters (route B).  A PEB rafter is braced at
+    both flanges where a fly brace meets the inner flange (the purlin holds the outer flange there), so Lb is the
+    fly-brace spacing along the slope; ry is the smaller of the sections in the bay; db is the rafter depth at the
+    knee.  Bays overlapping 2 db from a knee (eave column face) use Lb/ry <= 25, the others 0.10 E / (Ry fy).
+    One record: the governing rafter line's rows."""
+    if not _is18_smf(cfg, s12_cfg, system):
+        return []
+    import peb_build as PB
+    import india_is800_s12 as S12
+    reg = PB._REG
+    fb = (cfg or {}).get("flange_braces") or {}
+    rb = fb.get("rafter") or {}
+    fly_decl = rb.get("fly_braces_mm") or []
+    E_ = 2.0e5
+    best = None
+    for key, ln in (reg.get("rafter_lines") or {}).items():
+        els = [(t, e) for t, e in reg["elements"].items()
+               if (reg["members"].get(e["member"]) or {}).get("kind") == "rafter"
+               and (reg["members"][e["member"]].get("plane"), reg["members"][e["member"]].get("line")) == key
+               and not PB.is_gravity(t)]
+        if not els:
+            continue
+        lo, hi, sf = ln["lo"], ln["hi"], float(ln.get("slope_factor") or 1.0)
+        pts = set([lo, hi, ln["ridge"]])
+        for d in fly_decl:
+            for a in (lo + float(d), hi - float(d)):
+                if lo - 1 <= a <= hi + 1:
+                    pts.add(a)
+        pts |= {a for a, nd in zip(ln["a_mm"], ln["nodes"]) if nd in ln["supports"]}
+        pts = sorted(pts)
+
+        def secs_in(p0, p1):
+            out_ = []
+            for t, e in els:
+                a0, a1 = sorted(e["pos_mm"])
+                if a1 > p0 + 1e-6 and a0 < p1 - 1e-6:
+                    out_ += [e["sec_i"], e["sec_j"]]
+            return out_
+        # rafter depth at each knee (the eave ends of the line)
+        def depth_at(a):
+            cand = []
+            for t, e in els:
+                a0, a1 = e["pos_mm"]
+                if abs(a0 - a) < 1.0:
+                    cand.append(e["sec_i"])
+                if abs(a1 - a) < 1.0:
+                    cand.append(e["sec_j"])
+            return max([S.props(s_)["d"] for s_ in cand] or [0.0])
+        db_lo, db_hi = depth_at(lo), depth_at(hi)
+
+        def col_half_depth(a):
+            # the beam end is the column face: half the column depth at its top (knee) at plan position a
+            nd = next((n_ for a_, n_ in zip(ln["a_mm"], ln["nodes"]) if abs(a_ - a) < 1.0), None)
+            best_ = 0.0
+            for t_, e_ in reg["elements"].items():
+                mm_ = reg["members"].get(e_["member"]) or {}
+                if mm_.get("kind") != "column" or nd is None:
+                    continue
+                if mm_.get("node_end") == nd and abs(e_["s_mm"][1] - mm_.get("L_mm", e_["s_mm"][1])) < 1.0:
+                    best_ = max(best_, 0.5 * S.props(e_["sec_j"])["d"])
+            return best_
+        face_lo, face_hi = lo + col_half_depth(lo), hi - col_half_depth(hi)
+        rows = []
+        for p0, p1 in zip(pts, pts[1:]):
+            secs = secs_in(p0, p1)
+            if not secs:
+                continue
+            ps = [S.props(s_) for s_ in secs]
+            k_min = min(range(len(ps)), key=lambda i_: ps[i_]["ry"])
+            ry_mm, sec_min = ps[k_min]["ry"], secs[k_min]
+            fy = _fy_plate(sec_min, cfg)
+            Ry, ry_note = S12._ry({"grade": ((cfg or {}).get("grade_by_section") or {}).get(sec_min)
+                                   or (cfg or {}).get("steel_grade")}, ps[k_min])
+            q0, q1 = max(p0, face_lo) if p0 <= lo + 1.0 else p0, min(p1, face_hi) if p1 >= hi - 1.0 else p1
+            Lb = (q1 - q0) * sf                       # the end bays start at the column face (beam end)
+            near = (p0 < face_lo + 2.0 * db_lo / sf - 1e-6 and db_lo > 0) or \
+                   (p1 > face_hi - 2.0 * db_hi / sf + 1e-6 and db_hi > 0)
+            lim = 25.0 if near else 0.10 * E_ / (Ry * fy)
+            val = Lb / ry_mm
+            rows.append(_row("rafter bay %.2f-%.2f m from the eave line (%s): Lb/ry, Lb = %.0f mm, ry = %.1f mm (%s)"
+                             % ((p0 - lo) / 1000.0, (p1 - lo) / 1000.0,
+                                "within 2 db of the knee" if near else "remaining portion", Lb, ry_mm, sec_min),
+                             val, lim, clause="IS 18168:2023 6.2", cite=IS18168_6_2_CITE + (
+                                 "" if near else "; Ry = %.2f (%s), fy = %.0f MPa" % (Ry, ry_note, fy)),
+                             Lb_mm=round(Lb, 1), ry_mm=round(ry_mm, 2), zone="2db" if near else "remaining"))
+        if rows:
+            dc = max(r_["dc"] for r_ in rows)
+            if best is None or dc > best[0]:
+                best = (dc, key, rows)
+    if not best:
+        return []
+    dc, key, rows = best
+    gov = max(rows, key=lambda r_: r_["dc"])
+    return [{"id": "peb-is18168-6.2-rafter-bracing", "type": "IS 18168 6.2 lateral bracing of the SMRF rafters",
+             "section": "-", "demand": {}, "inputs": {"fly_braces_mm": fly_decl, "rafter_line": list(key)},
+             "checks": rows, "DC": dc, "governing_check": gov["name"], "clause": "IS 18168:2023 6.2",
+             "limit_state": "IS 18168:2023 6.2", "cited": "IS 18168:2023 6.2", "notes": [],
+             "design_basis": "fly braces brace both flanges (purlin on the outer flange); governing rafter line shown"}]
+
+
 # ------------------------------------------------------------------------------------------- frame stability
 def frame_stability(cfg, fD=1.5, fL=1.5, ratio=0.005):
     """IS 800 4.6.2(b) rational elastic buckling load factor of the stepped model in each plan direction: on the

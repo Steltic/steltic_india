@@ -801,6 +801,9 @@ def apply_gravity_state(cfg, model, fD, fL, fLr, fS=0.0, fC=0.0, fEv=0.0, self_w
             continue
         D, Lf, Lr, S = floor_pressures(cfg, k)
         p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+        if k >= NF or k in roofs:                    # first wave item 5: collateral + PV (not in D_roof)
+            _Dn = eng.roof_nonpermanent_kNm2(cfg)
+            p += eng.nonpermanent_factor(fD) * _Dn + fEv * _Dn
         p_nosnow = p - fS * S
         nb, trib1 = _beam_floor_width(model, b, cfg)
         if _use_reg and k not in _regs:
@@ -973,6 +976,9 @@ def _region_groups(cfg, model, b, reg, factors, ds):
             [([c], RG.roof_pressures(cfg, k, reg[c]), True) for c in adj if c in reg]
     for bays, (D, Lf, Lr, S), is_roof in parts:
         pg = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+        if is_roof:                                  # first wave item 5: collateral + PV (not in D_roof)
+            _Dn = eng.roof_nonpermanent_kNm2(cfg)
+            pg += eng.nonpermanent_factor(fD) * _Dn + fEv * _Dn
         pres = _bay_corners(bays)
         nb_g = _bays_adjacent(pres, b["i"], b["j"], b["dir"])
         tw = one_way_trib_mm(cfg, pres, b["i"], b["j"], b["dir"]) if ds is not None else None
@@ -993,6 +999,8 @@ def _plane_member_gravity(cfg, b, fD, fLr, fS, fEv, fdead, self_weight, snow_spl
     pl, role = b["rp"]
     D, _L0, Lr, S = RG.plane_pressures(cfg, pl)
     p = fD * D + fLr * Lr + fS * S + fEv * D
+    _Dn = eng.roof_nonpermanent_kNm2(cfg)            # first wave item 5: collateral + PV (not in D_roof)
+    p += eng.nonpermanent_factor(fD) * _Dn + fEv * _Dn
     p_ns = p - fS * S
     ca, cb = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
     ax, oax = pl["ax"], pl["oax"]
@@ -1057,7 +1065,8 @@ def pitched_roof_findings(cfg, info=None) -> list:
     sloped, zero = [], []
     _planes = RG.has_planes(cfg)
     rafters = {}
-    area = float(cfg.get("D_roof") or 0.0) + float(cfg.get("Lr") or 0.0) + float(cfg.get("snow") or 0.0)
+    area = (float(cfg.get("D_roof") or 0.0) + eng.roof_nonpermanent_kNm2(cfg) + float(cfg.get("Lr") or 0.0)
+            + float(cfg.get("snow") or 0.0))
     roofs = roof_level_set(cfg, NF)
     for (t, kind, sec, n1, n2) in info.get("ele") or []:
         if kind != "beam":
@@ -1380,6 +1389,10 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
         return w * L * L / 8.0, w * L / 2.0
     D, Lf, Lr, S = floor_pressures(cfg, k)
     p = fD * D + fL * Lf + fLr * Lr + fS * S + fEv * (D + _table10_fraction(Lf) * Lf)
+    _NF = len(cfg["heights"])
+    if k >= _NF or k in roof_level_set(cfg, _NF):     # first wave item 5: collateral + PV (not in D_roof)
+        _Dn = eng.roof_nonpermanent_kNm2(cfg)
+        p += eng.nonpermanent_factor(fD) * _Dn + fEv * _Dn
     ds = _deck_span(cfg)
     pk = b.get("present_k")
     if pk is None and present is not None:
@@ -1579,7 +1592,7 @@ def erection_pre_brace_cfg(cfg):
                      "nodal dead loads) before the braces (cfg['braces_after_superimposed_dead'])")
     NF = len(cfg["heights"])
     roofs = roof_level_set(cfg, NF)
-    c2 = dict(cfg, clad=0.0, nodal_dead_loads=[], extra_mass_floors={})
+    c2 = dict(cfg, clad=0.0, nodal_dead_loads=[], extra_mass_floors={}, D_roof_collateral=0.0, D_roof_pv=0.0)
     for key, s in (("D_floor", s_f), ("D_roof", s_r)):
         if cfg.get(key) is not None:
             if s > float(cfg[key]) + 1e-9:

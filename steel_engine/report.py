@@ -914,11 +914,22 @@ def _activity_section(name):
         return "".join(h)
     counts = {}
     for r in recs: counts[r.get("tool", "?")] = counts.get(r.get("tool", "?"), 0) + 1
-    _sd = os.path.relpath(src, HERE) if src else "scratch log"
-    h.append(f"<p>Source: <code>{_sd}</code> — {len(recs)} tool calls.</p>")
+    # first wave item 7: the job folder's own name, not a path on the build machine
+    _sd = os.path.basename(src) if src else "scratch log"
+    h.append(f"<p>Source: <code>{_sd}</code> in the job folder &mdash; {len(recs)} tool calls.</p>")
     h.append(_table(["Tool", "Calls"], [[k, counts[k]] for k in sorted(counts)]))
+    # standards look-ups that failed inside the look-up service (a server fault in the original run, not a design
+    # result) are counted once instead of printed row by row
+    def _failed(r):
+        return "server error" in str(r.get("result", "")).lower()
+    n_fail = sum(1 for r in recs if _failed(r))
+    if n_fail:
+        h.append("<p class='note'>%d standards look-ups in this run returned no text because of a fault in the "
+                 "look-up service (fixed since). They are left out of the table below. No design value depends on "
+                 "them: loads, factors and capacities come from the engine's own code tables, cited clause by "
+                 "clause in this report.</p>" % n_fail)
     rows = [[i + 1, (r.get("ts", "").split("T")[-1]), r.get("tool", ""),
-             r.get("detail", ""), r.get("result", "")] for i, r in enumerate(recs)]
+             r.get("detail", ""), r.get("result", "")] for i, r in enumerate(recs) if not _failed(r)]
     h.append("<h3>Chronological tool calls</h3>" + _table(["#", "time", "tool", "detail", "result"], rows))
     return "".join(h)
 

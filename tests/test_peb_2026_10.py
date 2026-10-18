@@ -205,8 +205,10 @@ def test_reactions_bom_anchor_plan(peb_job):
 
 
 def _parse_staad(path):
+    """joints, members, loads {case: [(kind, member | joint, comp, value, d1, d2)]}, titles {case: title}, slave
+    lines, combination lines (first wave item 8 format: global UNI GX/GY/GZ member loads, partial over d1-d2)."""
     txt = open(path).read().splitlines()
-    sec, joints, members, loads, cur, slave, combos = None, {}, {}, {}, None, [], []
+    sec, joints, members, loads, cur, slave, combos, titles = None, {}, {}, {}, None, [], [], {}
     for ln in txt:
         s = ln.strip()
         if not s or s.startswith("*"):
@@ -215,12 +217,14 @@ def _parse_staad(path):
                  "MEMBER TRUSS", "CONSTANTS", "DEFINE MATERIAL START"):
             sec = s
             continue
-        if s in ("JOINT LOAD", "MEMBER LOAD", "SELFWEIGHT Y -1"):
+        if s in ("JOINT LOAD", "MEMBER LOAD"):
+            sec = "LOAD_" + s.split()[0]
             continue
         if s.startswith("LOAD COMBINATION"):
             combos.append(s); sec = "COMB"; continue
         if s.startswith("LOAD "):
-            cur = int(s.split()[1]); loads[cur] = []; sec = "LOAD"; continue
+            cur = int(s.split()[1]); loads[cur] = []; titles[cur] = s.split("TITLE", 1)[-1].strip(); sec = "LOAD"
+            continue
         if s.startswith("SLAVE"):
             slave.append(s); continue
         if sec == "JOINT COORDINATES":
@@ -229,30 +233,60 @@ def _parse_staad(path):
         elif sec == "MEMBER INCIDENCES":
             a = s.rstrip(";").split()
             members[int(a[0])] = (int(a[1]), int(a[2]))
-        elif sec == "LOAD" and re.match(r"^\d+ UNI PY ", s):
+        elif sec == "LOAD_MEMBER":
             a = s.split()
-            loads[cur].append((int(a[0]), float(a[3])))
-    return joints, members, loads, slave, combos
+            if a[1] == "UNI":
+                d1, d2 = (float(a[4]), float(a[5])) if len(a) >= 6 else (None, None)
+                loads[cur].append(("UNI", int(a[0]), a[2], float(a[3]), d1, d2))
+            elif a[1] == "CON":
+                loads[cur].append(("CON", int(a[0]), a[2], float(a[3]), float(a[4]), None))
+        elif sec == "LOAD_JOINT":
+            a = s.split()
+            for k in range(1, len(a) - 1, 2):
+                loads[cur].append(("J", int(a[0]), a[k], float(a[k + 1]), None, None))
+    return joints, members, loads, titles, slave, combos
+
+
+def _resultant(loads, joints, members, comp):
+    """Sum of one global force component (kN) of a parsed case: UNI w x loaded length, CON and joint forces."""
+    tot = 0.0
+    for kind, ref, c, v, d1, d2 in loads:
+        if kind == "UNI" and c == "G" + comp:
+            if d1 is None:
+                a, b = members[ref]
+                d1, d2 = 0.0, math.dist(joints[a], joints[b])
+            tot += v * (d2 - d1)
+        elif kind in ("CON",) and c == "G" + comp:
+            tot += v
+        elif kind == "J" and c == "F" + comp:
+            tot += v
+    return tot
 
 
 def test_staad_parse_back(peb_job):
-    """5.7 (4): parse model.std back -- joint and member counts equal the model, and the roof dead / imposed member
-    loads sum to the load on the roof plan within 0.1 %."""
+    """5.7 (4) + first wave item 8: parse model.std back -- joint and member counts equal the model; the roof imposed
+    case sums to Lr on the roof plan within 0.1 %; every case's parsed resultant equals the engine's recorded total;
+    member wind, notional and storey-force cases and their combinations are exported."""
     out, root, pkg, cfg = peb_job
     st = pkg["peb"]["outputs"]["staad"]
-    joints, members, loads, slave, combos = _parse_staad(os.path.join(root, "model.std"))
+    joints, members, loads, titles, slave, combos = _parse_staad(os.path.join(root, "model.std"))
     assert len(joints) == st["n_joints"] and len(members) == st["n_members"]
     assert st["n_masters"] == 1 and any(s.startswith("SLAVE") for s in slave)
+    assert st["unmapped_loads"] == 0 and st["unmapped_calls"] == 0 and st["missing_terms"] == 0
     area_mm2 = NX * SX * SPAN
-    for lc, q in ((1, cfg["D_roof"]), (2, cfg["Lr"])):
-        tot = 0.0
-        for m, w in loads[lc]:
-            a, b = members[m]
-            dx = joints[b][0] - joints[a][0]
-            dz = joints[b][2] - joints[a][2]
-            tot += -w * math.hypot(dx, dz)                    # PY per projected (plan) length, kN/mm
-        assert tot == pytest.approx(q * area_mm2 / 1e6, rel=1e-3), lc
-    assert combos and not any("WM" in c or "W_" in c for c in combos)
+    lr = [n for n, t in titles.items() if t.startswith("ROOF IMPOSED")]
+    assert len(lr) == 1
+    # STAAD Y is up: the roof imposed load is -Lr x plan area
+    assert -_resultant(loads[lr[0]], joints, members, "Y") == pytest.approx(cfg["Lr"] * area_mm2 / 1e6, rel=1e-3)
+    totals = st["case_totals_kN"]
+    for n, key in zip(sorted(titles), totals):
+        fx, fy, fz = totals[key]                                  # engine axes; STAAD (X, Y, Z) = (x, z, -y)
+        assert _resultant(loads[n], joints, members, "X") == pytest.approx(fx, abs=0.05 + 1e-3 * abs(fx)), key
+        assert _resultant(loads[n], joints, members, "Y") == pytest.approx(fz, abs=0.05 + 1e-3 * abs(fz)), key
+        assert -_resultant(loads[n], joints, members, "Z") == pytest.approx(fy, abs=0.05 + 1e-3 * abs(fy)), key
+    assert any(t.startswith("MEMBER WIND") for t in titles.values())
+    assert any(t.startswith("NOTIONAL") for t in titles.values())
+    assert len(combos) == len(pkg["load_combinations"])
 
 
 # ------------------------------------------------------------------------------ end plates: patterns, reversal, column flange

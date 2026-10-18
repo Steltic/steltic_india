@@ -48,7 +48,16 @@ def schedule_extra(t, sec, L_mm):
 def basic_cases(cfg):
     """[(label, kind, data)] -- DL, LL (roof imposed), every member-wind pattern both ways, EQ_X / EQ_Y."""
     plan = cfg.get("load_plan") or {}
-    out = [("DL", "D", None), ("LL (roof imposed)", "Lr", None)]
+    out = [("DL", "D", None)]
+    import engine3d as E
+    if E.roof_nonpermanent_kNm2(cfg) > 0.0:
+        # first wave item 8: vendors list collateral (and PV) apart from the dead load
+        out.append(("DL collateral + PV", "DNP", None))
+    out.append(("LL (roof imposed)", "Lr", None))
+    if cfg.get("crane") or cfg.get("cranes"):
+        for cp in (("L", None), ("R", None), ("L", "S+"), ("L", "S-"), ("R", "S+"), ("R", "S-"), ("L", "T+"),
+                   ("L", "T-")):
+            out.append(("CL %s%s" % (cp[0], (" " + cp[1]) if cp[1] else " vertical"), "C", cp))
     for p in plan.get("member_wind") or []:
         signs = [p["sign"]] if p.get("sign") is not None else [1, -1]
         for sg in signs:
@@ -71,7 +80,12 @@ def base_reactions(cfg, nseg=6):
         ops.timeSeries("Linear", 1)
         ops.pattern("Plain", 1, 1)
         if kind == "D":
+            SM.apply_gravity_state(dict(cfg, D_roof_collateral=0.0, D_roof_pv=0.0), model, 1.0, 0.0, 0.0, 0.0, 0.0,
+                                   0.0, self_weight=cfg.get("self_weight", True))
+        elif kind == "DNP":                             # full dead minus the permanent case (linear analysis)
             SM.apply_gravity_state(cfg, model, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, self_weight=cfg.get("self_weight", True))
+        elif kind == "C":
+            SM.apply_gravity_state(cfg, model, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, self_weight=False, crane_pattern=data)
         elif kind == "Lr":
             SM.apply_gravity_state(cfg, model, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, self_weight=False)
         elif kind == "W":
@@ -98,6 +112,8 @@ def base_reactions(cfg, nseg=6):
             if not fx:
                 continue
             rr[n] = tuple(ops.nodeReaction(n))
+        if kind == "DNP" and isinstance(res.get("DL"), dict) and "_error" not in res["DL"]:
+            rr = {n: tuple(a - b for a, b in zip(v, res["DL"].get(n, (0.0,) * 6))) for n, v in rr.items()}
         res[lab] = rr
     return res
 
@@ -133,8 +149,9 @@ def write_reactions(cfg, outdir):
                 s["H_max_kN"] = max(s["H_max_kN"], math.hypot(Fx, Fy) / 1e3)
     return {"file": "design/reactions.csv", "cases": list(R), "summary": {str(k): v for k, v in summ.items()},
             "basis": "linear static analysis of the stepped model for each basic load case at gamma_f = 1.0 "
-                     "(self-weight + roof / cladding dead; roof imposed; every IS 875-3 member-wind pattern both ways; "
-                     "IS 1893 ESM storey forces)"}
+                     "(self-weight + permanent roof / cladding dead; collateral + PV apart; roof imposed; crane "
+                     "patterns with impact, surge and traction where a crane is declared; every IS 875-3 member-wind "
+                     "pattern both ways; IS 1893 ESM storey forces)"}
 
 
 # ------------------------------------------------------------------------------------------- BOM
@@ -391,10 +408,10 @@ def write_staad(cfg, info, path, pkg=None):
     as TAPERED with equal depths, tubes as PIPE, rolled sections by their IS 808 name (TABLE ST, may need the STAAD
     Indian table).  The roof diaphragm of the Steltic model (eave nodes tied across the span, ridge nodes along it,
     roof_geometry.tie_diaphragm) is written as SLAVE commands to the master joint of each level (the Steltic master,
-    supported vertically and against tilting like the OpenSees one); basic load cases: self-weight + roof dead (member
-    loads on the rafters, projected), roof imposed, EQ storey forces (joint loads at the master); LOAD COMBINATION for
-    every engine combination made only of these cases (pkg['load_combinations'], accidental-torsion variants merged).
-    Member wind, crane and the 4.3.6 notional loads are not exported (re-apply them in STAAD) -- stated in the file."""
+    supported vertically and against tilting like the OpenSees one); load cases: every engine basic case recorded
+    from the engine's own load application (staad_loads: dead, collateral + PV, imposed, snow, crane, member wind,
+    storey forces and accidental torsion at the master, vertical earthquake, IS 800 4.3.6 notional loads) and a LOAD
+    COMBINATION for every engine combination (pkg['load_combinations']).  The ops domain is rebuilt by the caller."""
     import openseespy.opensees as ops
     import peb_build as PB
     import roof_geometry as RG
@@ -406,9 +423,12 @@ def write_staad(cfg, info, path, pkg=None):
     L = ["STAAD SPACE", "* %s -- stepped analysis model exported by Steltic (peb_outputs.write_staad)" % cfg.get("name"),
          "* Coordinates: STAAD X = x, Y = z (up), Z = -y. Units mm, kN.",
          "* Tapered members are stepped (one STAAD member per segment, TAPERED with the exact end depths).",
-         "* Member wind (IS 875-3 7.3.1 patterns), crane loads and the IS 800 4.3.6 notional loads are NOT exported:",
-         "*   apply them from design/calc_package.json (load_plan.member_wind, crane) in STAAD.  The Steltic roof",
-         "*   diaphragm is written as SLAVE commands to the master joint of each level.",
+         "* Every engine load case is exported (staad_loads): dead (permanent), collateral + PV, imposed, snow,",
+         "*   crane patterns, member wind patterns, storey forces + accidental torsion at the diaphragm master,",
+         "*   vertical earthquake and the IS 800 4.3.6 notional loads; one LOAD COMBINATION per engine combination.",
+         "*   Combinations marked (RSA->ESM) used response spectrum forces in Steltic; here they carry the",
+         "*   equivalent static storey forces of the same direction (replace with a STAAD IS 1893 spectrum).",
+         "*   The Steltic roof diaphragm is written as SLAVE commands to the master joint of each level.",
          "START JOB INFORMATION", "ENGINEER DATE %s" % "2026-10", "END JOB INFORMATION",
          "INPUT WIDTH 79", "UNIT MMS KN", "JOINT COORDINATES"]
     for n in nodes:
@@ -508,75 +528,26 @@ def write_staad(cfg, info, path, pkg=None):
         L.append("* roof diaphragm (Steltic tie_diaphragm): eave joints follow the master across the span only, ridge")
         L.append("* joints along it only, so the eaves spread freely under gravity")
         L += sl
-    # load cases
-    L.append("LOAD 1 LOADTYPE Dead TITLE DL (SELF WEIGHT + ROOF DEAD %.3f kN/m2 PLAN)" % float(cfg.get("D_roof") or 0))
-    L.append("SELFWEIGHT Y -1")
-    raf = [(t, n1, n2) for (t, kind, sec, n1, n2) in eles if kind == "beam" and pls and
-           (RG.classify(cfg, ops.nodeCoord(n1), ops.nodeCoord(n2)) or (None, None))[1] == "rafter"]
-    if raf:
-        L.append("MEMBER LOAD")
-        for (t, n1, n2) in raf:
-            pl = RG.classify(cfg, ops.nodeCoord(n1), ops.nodeCoord(n2))[0]
-            trib = RG.rafter_trib_mm(pl, ops.nodeCoord(n1)[pl["oax"]])
-            wD = float(cfg.get("D_roof") or 0.0) * trib / 1000.0 / 1000.0          # kN/mm on plan
-            L.append("%d UNI PY %.6f" % (mid[t], -wD))
-    L.append("LOAD 2 LOADTYPE Roof Live TITLE ROOF IMPOSED %.2f kN/m2 PLAN" % float(cfg.get("Lr") or 0))
-    if raf:
-        L.append("MEMBER LOAD")
-        for (t, n1, n2) in raf:
-            pl = RG.classify(cfg, ops.nodeCoord(n1), ops.nodeCoord(n2))[0]
-            trib = RG.rafter_trib_mm(pl, ops.nodeCoord(n1)[pl["oax"]])
-            wL = float(cfg.get("Lr") or 0.0) * trib / 1000.0 / 1000.0
-            L.append("%d UNI PY %.6f" % (mid[t], -wL))
-    sf = (cfg.get("load_plan") or {}).get("story_forces") or {}
-    lc, case_of = 3, {"DL": 1, "LL": 2}
+    # load cases (first wave item 8): every engine basic case, recorded from the engine's own load application
+    import staad_loads as SL
     mk = {k: nid[int(v["master"])] for k, v in ties.items()}
-    for ref in ("EQ_X", "EQ_Y"):
-        if sf.get(ref):
-            L.append("LOAD %d LOADTYPE Seismic TITLE %s (IS 1893 storey force at the diaphragm master)" % (lc, ref))
-            jl = []
-            for k, v in sf[ref].items():
-                fx, fy = float(v[0]) / 1e3, float(v[1]) / 1e3
-                if int(k) in mk:
-                    jl.append("%d FX %.3f FZ %.3f" % (mk[int(k)], fx, -fy))
-                else:
-                    L.append("* level %s: Fx %.2f kN, Fy %.2f kN (no master joint exported)" % (k, fx, fy))
-            if jl:
-                L.append("JOINT LOAD")
-                L += jl
-            case_of[ref] = lc
-            lc += 1
-    # load combinations: the engine's combinations that use only the exported cases
-    combos, skipped, seen = [], 0, set()
-    for c in (pkg or {}).get("load_combinations") or []:
-        if c.get("notional") or c.get("fC") or c.get("fS") or c.get("fW") or c.get("fWM") or c.get("member_wind") or \
-                c.get("crane") or (c.get("lateral_kind") not in (None, "EQ")) or c.get("service") or \
-                any(t in ("member_wind", "crane", "service") for t in (c.get("tags") or [])):
-            skipped += 1
-            continue
-        terms = [(case_of["DL"], float(c.get("fD") or 0.0)),
-                 (case_of["LL"], float(c.get("fLr") if c.get("fLr") is not None else (c.get("fL") or 0.0)))]
-        if c.get("lateral_kind") == "EQ":
-            ref = c.get("lateral_ref")
-            if ref not in case_of:
-                skipped += 1
-                continue
-            terms.append((case_of[ref], float(c.get("fE") or 0.0)))
-        terms = tuple((n, f) for n, f in terms if abs(f) > 1e-12)
-        if terms in seen:
-            continue                                   # accidental-torsion variants [ea] / [eb] merge
-        seen.add(terms)
-        combos.append((c.get("label", "").split("[")[0], terms))
-    for q, (lab, terms) in enumerate(combos):
-        L.append("LOAD COMBINATION %d %s" % (101 + q, lab[:60]))
-        L.append(" ".join("%d %.3f" % (n, f) for n, f in terms))
-    if skipped:
-        L.append("* %d engine combinations with wind, crane, notional or serviceability terms are not exported" % skipped)
+    try:
+        lines_, summ = SL.staad_lines(cfg, list((pkg or {}).get("load_combinations") or []), nid, mid, mk)
+    except Exception as ex:                                  # never lose the geometry for a load-export failure
+        lines_, summ = ["* load export failed: %s: %s" % (type(ex).__name__, ex)], {"error": str(ex)}
+    L += lines_
     L.append("PERFORM ANALYSIS")
     L.append("FINISH")
     open(path, "w").write("\n".join(L) + "\n")
-    return {"file": os.path.basename(path), "n_joints": len(nodes), "n_members": len(eles),
-            "n_masters": len(masters), "n_combinations": len(combos), "n_combinations_not_exported": skipped,
-            "note": "geometry, stepped TAPERED properties, releases, supports, roof diaphragm (SLAVE), DL / LL member "
-                    "loads, EQ joint loads and the DL / LL / EQ combinations exported; member wind, crane and the "
-                    "notional loads are left to the user (stated in the file)"}
+    out = {"file": os.path.basename(path), "n_joints": len(nodes), "n_members": len(eles),
+           "n_masters": len(masters), "n_primary_cases": summ.get("n_primary"),
+           "n_combinations": summ.get("n_combinations"), "n_combinations_not_exported": 0,
+           "rsa_combinations_as_static": summ.get("rsa_as_static"), "unmapped_loads": summ.get("unmapped_loads"),
+           "missing_terms": summ.get("missing_terms", 0),
+           "unmapped_calls": summ.get("unmapped_calls"), "case_totals_kN": summ.get("case_totals_kN"),
+           "note": "geometry, stepped TAPERED properties, releases, supports, roof diaphragm (SLAVE) and every engine "
+                   "load case (dead, collateral + PV, imposed, snow, crane, member wind, storey forces, torsion, "
+                   "vertical EQ, notional) with all combinations"}
+    if summ.get("error"):
+        out["error"] = summ["error"]
+    return out

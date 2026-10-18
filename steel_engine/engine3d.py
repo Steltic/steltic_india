@@ -643,6 +643,26 @@ def _Dlev(cfg, k, roof):
     if by and k in by: return by[k]
     return cfg["D_roof"] if roof else cfg["D_floor"]
 
+
+ROOF_NONPERMANENT_CITE = ("IS 800:2007 Table 4: the 0.9 dead-load factor applies where the dead load resists the "
+                          "effect (uplift, overturning). Collateral (services hung from the roof) and rooftop PV are "
+                          "dead loads that may be absent, so they are carried with the dead-load factor where they add "
+                          "to the effect (1.0 / 1.2 / 1.5 rows) and left off the 0.9 DL rows; both count in the "
+                          "seismic weight (IS 1893 7.4).")
+
+
+def roof_nonpermanent_kNm2(cfg):
+    """First wave item 5: collateral and rooftop PV on plan (kN/m2), cfg['D_roof_collateral'] + cfg['D_roof_pv'].
+    They are NOT part of cfg['D_roof']; see ROOF_NONPERMANENT_CITE."""
+    return float(cfg.get("D_roof_collateral") or 0.0) + float(cfg.get("D_roof_pv") or 0.0)
+
+
+def nonpermanent_factor(fD):
+    """Factor on collateral / PV for a combination with dead-load factor fD: fD where the dead load adds to the
+    effect (fD >= 1.0), 0 on the IS 800 Table 4 0.9 DL rows (dead load resisting uplift / overturning)."""
+    fD = float(fD or 0.0)
+    return fD if fD >= 1.0 - 1e-9 else 0.0
+
 def _Llev(cfg, k):
     """Live load (psf) at level k: cfg['L_by_level'][k] override, else L_floor. (P12)"""
     by = cfg.get("L_by_level")
@@ -929,6 +949,8 @@ def seismic_weight_components(cfg, k):
     NF = len(cfg["heights"]); roof = (k in roof_levels(cfg))
     area = floor_area_mm2(cfg, k)
     d = _Dlev(cfg, k, roof)
+    if roof:
+        d = d + roof_nonpermanent_kNm2(cfg)          # first wave item 5: collateral + PV are in W (IS 1893 7.4)
     th = cfg["heights"][k-1]; th = th if k != NF else th / 2.0
     comp = {"dead": d * area / 1000.0,
             "cladding": float(cfg.get("clad") or 0.0) * envelope_perim_mm(cfg, k) * th / 1000.0}
