@@ -1,14 +1,14 @@
 # steltic-india — 2026-10: PEB variations study (PEB-LEVERS)
 
-Branch `feat/2026-10-peb-variations` (from main, with `fix/2026-10-first-wave` merged in). It adds the switches a
+Branch `feat/2026-10-peb-variations` (from main, with `fix/2026-10-first-wave` merged in up to 54e7463). It adds the switches a
 design engineer needs to see how each current Indian PEB practice or code reading changes the steel of a shed, a
 deterministic auto-sizer that re-sizes a PEB job under any set of switches, and the study runner that tabulates the
 result for the four PEB golds (IN_Ex1 … IN_Ex4).
 
 **Existing jobs are unchanged.** Every switch defaults to the owner ruling of the PEB release. The four PEB golds
 re-run with the defaults give a `calc_package.json` identical to the reference engine (`fix/2026-10-first-wave`,
-6bb60cc) and an identical `bom.csv` (no report, `PYTHONHASHSEED=0` on both sides so that ties between equal
-combinations break the same way).
+6bb60cc and again at 54e7463) and an identical `bom.csv` (no report, `PYTHONHASHSEED=0` on both sides so that ties
+between equal combinations break the same way).
 
 ## Switches: `cfg['peb_rules']` (`steel_engine/peb_levers.py`)
 | Switch | Default (gold ruling) | Alternative | Status of the alternative |
@@ -49,16 +49,27 @@ bundle `peb_levers.MARKET_PRACTICE` (NOT COMPLIANT).
   descent over the tied plate dimensions (standard plates, the briefs' fabrication limits). A full run verifies every
   proposal; a failure tightens the margin of what failed.
 - Purlins and girts: the job's CFS script re-run (child process, CFS engine first on the path) for the lightest passing
-  zed of the family.
+  zed of the family (IS 811 LZ at Fy 240, or the generic thin zeds `thin_Z_G350` of `cfs_generic_sections`).
+- Strengthen-only mode (`autosize(..., floor=True)`): start from the gold, no plate dimension below the gold's, a gold
+  joint (knee, splice, shear key) or purlin / girt kept while it passes, else the lightest that passes and is not
+  thinner. The study's solar-ready variant (IN_Ex1 with cfg `D_roof_pv` 0.15 kN/m²) uses it, so its change from the
+  gold is a strengthening of the published design, with the changed members listed.
+- Study variants: the strict design (auto-sized from the gold under the owner rulings), each lever alone (from the
+  strict design), the cumulative ladder (one lever added per step, each step from the previous one, in the order
+  compliant levers / readings / not compliant / market loads; the last compliant step is "all compliant levers", the
+  last step the market-practice bundle), and the solar-ready variant. A lever that does not apply is 'n/a'.
 - Outputs per job: `study.json`, `study.csv`, `study.html` (self-contained, dark theme of the site, a stacked bar per
-  variant); `index.html` over the jobs.
+  variant and a waterfall of the cumulative ladder); `index.html`, `study_all.json` and `study_tables.md` over the
+  jobs. The secondary-design results are cached per job (`secondary_cache.json`) so a resumed study does not redo them.
 
 ## Tests
 - `tests/test_peb_levers_2026_10.py`: switch registry and validation; defaults change nothing (the mini portal with
   and without the default switches); each frame switch changes what it should (knee / apex / 12.10.2.1 demand, member
   D/C only, Table 6 row and dado check, base shear, rod check and take-off); the cfg rewrite; the auto-sizer's end
   plate equals the golds' helper; the local member and knee checks equal the engine's; on a small job the sizer
-  returns a passing design no heavier than the start, the same on a second run.
+  returns a passing design no heavier than the start, the same on a second run; the strengthen-only floor (no step
+  below the floor; under an added roof load a passing design with nothing lighter than the gold); the study's variant
+  list and cumulative ladder.
 - `tests/fixtures/peb_levers_mini/cfg.py`: the mini portal as a job script.
 
 ## Not in this release

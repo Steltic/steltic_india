@@ -854,9 +854,10 @@ def secondary_candidates(family, cfs_root, gold_section, span_mm):
 
 
 def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_braced=False, log_fn=log,
-                     start=None, extra_pv=0.0):
+                     start=None, extra_pv=0.0, floor=False):
     """Lightest passing purlin and girt of the switch's family for this job (the job's secondary script with the
-    CFS engine); writes the final secondary/*.json into run_dir.  Returns {'purlin', 'girt', 'evaluated', ...}."""
+    CFS engine); writes the final secondary/*.json into run_dir.  Returns {'purlin', 'girt', 'evaluated', ...}.
+    floor=True: the script's own purlin / girt while it passes, else the lightest heavier one that passes."""
     sec = spec["secondary"]
     script = os.path.join(run_dir, sec["script"])
     fam = rules.get("purlins", "IS811_Fy240")
@@ -890,8 +891,14 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
     for role, other in (("purlin", gg), ("girt", gp)):
         # lightest first, in batches of 8 (one child process per batch)
         found = None
-        for i in range(0, len(cands), 8):
-            batch = cands[i:i + 8]
+        cr = cands
+        if floor:
+            g0 = gp if role == "purlin" else gg
+            m0 = next((float(c[3]) for c in cands if c[0] == g0), None)
+            if m0 is not None:
+                cr = [c for c in cands if c[0] == g0] + [c for c in cands if c[0] != g0 and float(c[3]) > m0]
+        for i in range(0, len(cr), 8):
+            batch = cr[i:i + 8]
             pairs = [(c[0], other) if role == "purlin" else (other, c[0]) for c in batch]
             res = evaluate(pairs)
             evaluated += len(res)
@@ -916,7 +923,7 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
     if rc:
         raise RuntimeError("secondary final write failed: see secondary_worker.log")
     return {"purlin": chosen["purlin"], "girt": chosen["girt"], "evaluated": evaluated, "family": fam, "Fy_MPa": fy,
-            "mass_kg": json.load(open(job["out"])).get("final")}
+            "mass_kg": json.load(open(job["out"])).get("final"), "gold": {"purlin": gp, "girt": gg}}
 
 
 # =================================================================================================== local model
@@ -1536,6 +1543,36 @@ def size_knee(lm, x, par0, kp0, margin=1.0, t_min=None):
     return best[1], best[2], best[3], best[4]
 
 
+def knee_fixed(lm, x, par, kp_par, margin=1.0):
+    """(par, kp_par, kg per knee, rows) of one given knee design (end plate, knee-zone column flange plate, stiffener
+    thicknesses) on the faces of the members x, or None when it does not pass.  A column flange thicker than the
+    given knee-zone plate is taken as it is."""
+    import sections as S
+    dem = knee_demand(lm, x)
+    if not dem or not par:
+        return None
+    csec, bsec = dem["csec"], dem["bsec"]
+    cfg_c = lm.cfg
+    old_face = next((k for k, v in (cfg_c.get("connections") or {}).get("beam_column", {}).items()
+                     if k != "default" and (v or {}).get("end_plate", {}).get("rows")), None)
+    kspec0 = copy.deepcopy(cfg_c["connections"]["beam_column"][old_face])
+    kp = copy.deepcopy((cfg_c.get("connections") or {}).get("knee_panel") or {})
+    pc = S.props(csec)
+    par = dict(par)
+    par["t_cf"] = max(float(par.get("t_cf") or 0.0), float(pc["tf"]))
+    kp_par = dict(kp_par or {})
+    kp_t = copy.deepcopy(kp)
+    for k_, t_ in (("flange_stiffener", kp_par.get("flange_t")), ("diagonal_stiffener", kp_par.get("diag_t"))):
+        if kp_t.get(k_) and t_:
+            kp_t[k_]["t_mm"] = float(t_)
+            kp_t[k_]["fy_MPa"] = plate_fy(float(t_), "E250")
+    ks = dict(kspec0, end_plate=make_ep(par, bsec), column_flange_t_mm=par["t_cf"])
+    r = knee_rows(lm, cfg_c, dem, ks, kp_t)
+    if not (_ok(r, margin) and _knee_shear_ok(lm, cfg_c, ks, bsec, r, margin)):
+        return None
+    return par, kp_par, _knee_mass(par, kp_par, ks, kp, bsec, csec), r
+
+
 def _knee_shear_ok(lm, cfg_c, kspec, bsec, rows, margin):
     """IS 800 12.10.2.4 / 12.11.2.2 connection shear of the knee: the run's demand scaled with the connection moment
     (never down: V = Vg + 2 Mdem / L', Vg unknown here), against the declared shear plate / bolts (t, h follow the end
@@ -1621,9 +1658,6 @@ def splice_demands(lm, x):
 
 def size_splice(lm, key, dem, face, par0, margin=1.0, t_min=None):
     """Lightest end plate (t, bolt d, rows beyond the flange) of a rafter_splice spec for its demand."""
-    import peb_checks as PC
-    sp = dem["spec"]
-    sym = bool(sp.get("symmetric"))
     best = None
     t_lo = max(10.0, float(t_min or 0.0))
     for d in BOLT_D_MM:
@@ -1631,31 +1665,42 @@ def size_splice(lm, key, dem, face, par0, margin=1.0, t_min=None):
             par = dict(par0, d=d, n_out=n_out)
             for t in [t for t in PLATES_MM if t >= t_lo]:
                 par["t"] = t
-                ep = make_ep(par, face)
-                cap = (PC.end_plate_capacity(ep, lm.cfg) or {}).get("capacity_Nmm") or 0.0
-                lay = PC.end_plate_layout(ep, dem["sec_min"], symmetric=sym)
-                if sym:
-                    cap_r = cap
-                else:
-                    cap_r = (PC.end_plate_capacity(ep, lm.cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm") \
-                        if lay["reverse_rows"] else 0.0
-                if dem["Md"] <= margin * cap + 1e-6 and (dem["Mr"] <= 1.0 or dem["Mr"] <= margin * (cap_r or 0.0) + 1e-6):
-                    h = ep_height(face, n_out, pitch_of(par, face))
-                    npl = 1 if key == "canopy_root" else 2
-                    kg = npl * par["b_plate"] * t * h * STEEL
-                    rib = _bom_item(sp.get("bom_plates"), "extension rib stiffeners")
-                    if rib:
-                        import sections as S
-                        tr = (_parse_txhxl(rib.get("size")) or (10.0,))[0]
-                        ext = h / 2.0 - S.props(face)["d"] / 2.0
-                        kg += int(rib.get("qty_per_joint") or 1) * 0.5 * ext * 1.7 * ext * tr * STEEL
-                    k_ = (round(kg, 3), d, n_out, t)
+                r = splice_fixed(lm, key, dem, face, par, margin)
+                if r:
+                    k_ = (round(r[1], 3), d, n_out, t)
                     if best is None or k_ < best[0]:
-                        best = (k_, dict(par), kg, (dem["Md"], cap, dem["Mr"], cap_r))
+                        best = (k_, dict(par), r[1], r[2])
                     break
     if not best:
         return None
     return best[1], best[2], best[3]
+
+
+def splice_fixed(lm, key, dem, face, par, margin=1.0):
+    """(par, kg, (Md, cap, Mr, cap_r)) of one given end-plate splice for its demand, or None when it does not pass."""
+    import peb_checks as PC
+    sp = dem["spec"]
+    sym = bool(sp.get("symmetric"))
+    ep = make_ep(par, face)
+    cap = (PC.end_plate_capacity(ep, lm.cfg) or {}).get("capacity_Nmm") or 0.0
+    lay = PC.end_plate_layout(ep, dem["sec_min"], symmetric=sym)
+    if sym:
+        cap_r = cap
+    else:
+        cap_r = (PC.end_plate_capacity(ep, lm.cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm") \
+            if lay["reverse_rows"] else 0.0
+    if not (dem["Md"] <= margin * cap + 1e-6 and (dem["Mr"] <= 1.0 or dem["Mr"] <= margin * (cap_r or 0.0) + 1e-6)):
+        return None
+    h = ep_height(face, par["n_out"], pitch_of(par, face))
+    npl = 1 if key == "canopy_root" else 2
+    kg = npl * par["b_plate"] * par["t"] * h * STEEL
+    rib = _bom_item(sp.get("bom_plates"), "extension rib stiffeners")
+    if rib:
+        import sections as S
+        tr = (_parse_txhxl(rib.get("size")) or (10.0,))[0]
+        ext = h / 2.0 - S.props(face)["d"] / 2.0
+        kg += int(rib.get("qty_per_joint") or 1) * 0.5 * ext * 1.7 * ext * tr * STEEL
+    return dict(par), kg, (dem["Md"], cap, dem["Mr"], cap_r)
 
 
 def base_demands(lm, x, base_counts):
@@ -1791,10 +1836,15 @@ def dim_values(dn, current, spec):
 
 
 def step_group(x, g, n, spec):
-    """x with the dims of group g moved n notches (negative: lighter); None when out of range or unchanged."""
+    """x with the dims of group g moved n notches (negative: lighter); None when out of range or unchanged.  With
+    spec['_floor'] (strengthen-only: {const: label}) no dimension goes below the floor's."""
     c0, d0 = g[0]
     cur = dim(x[c0], d0)
     vals = dim_values(d0, cur, spec)
+    fl = spec.get("_floor") or {}
+    lo = max([dim(fl[c], dn) for c, dn in g if c in fl] or [None], key=lambda v: -1e9 if v is None else v)
+    if lo is not None:
+        vals = [v for v in vals if v >= lo - 1e-9 or v == cur]
     i = vals.index(cur) + n
     if i < 0 or i >= len(vals):
         return None
@@ -1841,9 +1891,12 @@ class Evaluator:
             return self.conn_cache[key]
         design, kg, info = {}, 0.0, {}
         cp = self.conn_prev
+        fl = self.spec.get("_conn_floor") or {}           # strengthen-only: keep a floor joint that still passes
         if cp.get("knee") and lm.knees:
-            r = size_knee(lm, x, cp["knee"], cp.get("knee_panel") or {}, margin=self.margin("conn:knee"),
-                          t_min=self.m.get("tmin:knee"))
+            r = knee_fixed(lm, x, fl["knee"], fl.get("knee_panel"), margin=self.margin("conn:knee")) \
+                if fl.get("knee") else None
+            r = r or size_knee(lm, x, cp["knee"], cp.get("knee_panel") or {}, margin=self.margin("conn:knee"),
+                               t_min=max(float(self.m.get("tmin:knee") or 0.0), float((fl.get("knee") or {}).get("t") or 0.0)))
             if r is None:
                 self.conn_cache[key] = (None, None, {"fail": "knee"})
                 return self.conn_cache[key]
@@ -1860,8 +1913,9 @@ class Evaluator:
                 continue
             v = faces[skey]
             face = PB.section_at(x[v[0]], v[1]) if isinstance(v, (list, tuple)) else x[v]
-            r = size_splice(lm, skey, dem, face, cp[slot], margin=self.margin("conn:" + slot),
-                            t_min=self.m.get("tmin:" + slot))
+            r = splice_fixed(lm, skey, dem, face, fl[slot], margin=self.margin("conn:" + slot)) if fl.get(slot) else None
+            r = r or size_splice(lm, skey, dem, face, cp[slot], margin=self.margin("conn:" + slot),
+                                 t_min=max(float(self.m.get("tmin:" + slot) or 0.0), float((fl.get(slot) or {}).get("t") or 0.0)))
             if r is None:
                 self.conn_cache[key] = (None, None, {"fail": slot})
                 return self.conn_cache[key]
@@ -1874,6 +1928,10 @@ class Evaluator:
                 continue
             dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
                                  b_max=cp[slot].get("b_max"))
+            fk = (fl.get(slot) or {}).get("key")
+            if fk and shear_key(fk[0], fk[1], fk[2], plate_fy(fk[1], "E250"),
+                                cp[slot].get("fck", 30.0))["capacity_N"] * self.margin("conn:base") >= need:
+                dims, kgk = list(fk), 2 * fk[0] * fk[1] * (fk[2] + 50.0) * STEEL
             if dims == "none_fits":
                 self.conn_cache[key] = (None, None, {"fail": slot})
                 return self.conn_cache[key]
@@ -2214,9 +2272,11 @@ def save_best(run_dir, dst):
 
 def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=None, cfg_patch=None, rods=None,
              Lr=None, free_flange=False, waivers=(), start=None, start_conn=None, calib=None, max_full_runs=8,
-             resize_secondary=True, extra_pv=0.0, secondary_cache=None, log_fn=log):
+             resize_secondary=True, extra_pv=0.0, secondary_cache=None, floor=False, log_fn=log):
     """Auto-size one variant of a PEB job.  Returns a record with the passing design of least mass ('best'), the
-    history of full runs and the calibration of the connection take-off ('calib', reused by later variants)."""
+    history of full runs and the calibration of the connection take-off ('calib', reused by later variants).
+    floor=True: strengthen only -- start from the gold, no plate dimension below the gold's, a gold joint kept while
+    it passes, the gold purlin / girt kept while they pass (a strengthening option of the published design)."""
     t0 = time.time()
     waivers = tuple(waivers or ()) + REPORT_ONLY_WAIVERS
     vdir = os.path.join(work_dir, name)
@@ -2226,12 +2286,15 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
     prepare_run_dir(job_dir, run_dir)
     consts = sorted(spec["members"])
     x_gold = read_constants(os.path.join(job_dir, "cfg.py"), consts)
+    if floor:
+        spec = dict(spec, _floor=dict(x_gold))
+        start, start_conn = None, None
     out = {"variant": name, "rules": rules, "extra_overrides": extra_overrides, "cfg_patch": cfg_patch, "history": [],
            "x_gold": x_gold}
     log_fn("== %s / %s" % (spec["job"], name))
     if resize_secondary:
         skey = json.dumps([rules.get("purlins", "IS811_Fy240"), bool(rules.get("collateral_in_uplift")), Lr,
-                           bool(free_flange), float(extra_pv or 0.0)])
+                           bool(free_flange), float(extra_pv or 0.0), bool(floor)])
         hit = (secondary_cache or {}).get(skey)
         if hit:
             for f, txt in hit["files"].items():
@@ -2240,7 +2303,8 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
             log_fn("    secondary: reused (%s / %s)" % (hit["record"]["purlin"]["section"], hit["record"]["girt"]["section"]))
         else:
             out["secondary"] = design_secondary(run_dir, spec, rules, cfs_root=cfs_root, Lr=Lr,
-                                                free_flange_braced=free_flange, extra_pv=extra_pv, log_fn=log_fn)
+                                                free_flange_braced=free_flange, extra_pv=extra_pv, log_fn=log_fn,
+                                                floor=floor)
             if secondary_cache is not None:
                 secondary_cache[skey] = {"record": out["secondary"], "files": {
                     f: open(os.path.join(run_dir, "secondary", f)).read()
@@ -2278,6 +2342,9 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
             out["history"].append({"it": it, "x": x_run, "passed": False, "exception": R.get("exception")})
             log_fn("    run failed: %s" % str(R.get("exception"))[-1500:])
             break
+        if it == 0 and floor:
+            spec["_conn_floor"] = copy.deepcopy(R.get("design_connections") or {})
+            out["conn_gold"] = spec["_conn_floor"]
         if it == 0 and calib is None:
             calib = {"gold_kg": float((R.get("cfg_values") or {}).get("peb_connection_mass_kg") or 0.0),
                      "items_kg": round(sum((R.get("connection_items") or {}).values()), 2),

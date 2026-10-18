@@ -23,7 +23,7 @@ the strict baseline), and <work>/index.html over the jobs.
 usage:
   python scripts/peb_lever_study.py --job IN_Ex1_PEB_factory_shed_tapered_Bengaluru [--job ...] \\
       --jobs-root /home/claude/gold_var/jobs_hr --work /home/claude/gold_var/study \\
-      --cfs-root /home/claude/gold_var/cfs_head [--published-root /home/claude/gold_ref/jobs_hr] \\
+      --cfs-root /home/claude/gold_var/cfs_fw [--published-root /home/claude/gold_var/jobs_hr] \\
       [--variants strict,joint_deliverable,...] [--max-runs 8] [--resume] [--solar]
   python scripts/peb_lever_study.py --render --work <dir>       # re-write the CSV / HTML from study.json files
 One heavy analysis at a time: every full run is one child process, run sequentially.
@@ -52,8 +52,13 @@ COLORS = {"primary": "#ff8a3d", "bracing": "#e6b65c", "crane": "#8fb996", "canop
 # design_status reasons that do not depend on the design (the report is not built during the study)
 BASE_WAIVERS = (r"grounding record not available \(report not built\)",)
 
-VARIANT_ORDER = ("gold", "rerun", "strict", "joint_deliverable", "ltb_gradient", "sway_H150_dado", "base_key_analysis",
-                 "rods", "thin_purlins", "collateral_in_uplift", "omrf_r3", "compliant", "market", "solar_ready")
+# the levers alone (run order) and the cumulative ladder (waterfall order: the compliant levers first, then the
+# readings, then the not-compliant ones, the market-practice loads last)
+LEVER_ORDER = ("ltb_gradient", "joint_deliverable", "sway_H150_dado", "thin_purlins", "base_key_analysis",
+               "collateral_in_uplift", "omrf_r3", "rods")
+CUM_ORDER = LEVER_ORDER + ("market",)
+VARIANT_ORDER = (("gold", "rerun", "strict") + LEVER_ORDER + tuple("cum:" + n for n in LEVER_ORDER) +
+                 ("compliant", "market", "solar_ready"))
 LABELS = {
     "gold": "Gold as published",
     "rerun": "Gold sizes, this engine (strict rules)",
@@ -67,9 +72,15 @@ LABELS = {
     "collateral_in_uplift": "Collateral / PV counted in 0.9DL rows",
     "omrf_r3": "Seismic route: OMRF R 3, no IS 18168",
     "compliant": "All compliant levers together",
-    "market": "Market practice bundle",
-    "solar_ready": "Solar-ready: auto-sized for 0.15 kN/m2 PV",
+    "market": "Market practice bundle (every lever + market loads)",
+    "solar_ready": "Solar-ready: gold strengthened for 0.15 kN/m2 PV",
 }
+
+
+def label(name):
+    if name.startswith("cum:"):
+        return "+ " + LABELS[name[4:]]
+    return LABELS[name]
 
 
 def log(*a):
@@ -88,67 +99,102 @@ def omrf_patch(spec):
     return ov, patch
 
 
+def _worst_status(sts):
+    """The least compliant of a set of statuses (the status of a cumulative step)."""
+    for key in ("NOT", "not compliant", "conflict", "unconservative", "reading"):
+        for st in sts:
+            if key in str(st):
+                return st
+    return "compliant"
+
+
 def variants_for(spec, solar=False):
-    """[(name, kwargs for autosize, status, note)] of a job; status: compliant / reading / not compliant / n/a."""
+    """[(name, kwargs for autosize, status, note)] of a job; status: compliant / reading / not compliant / n/a.
+    The levers alone start from the strict design; the cumulative steps ('cum:<lever>', the waterfall) add one lever
+    at a time to the previous step, in CUM_ORDER (the compliant levers first, then the readings, then the not-compliant
+    ones, the market-practice loads last), each starting from the previous step's design.  The last compliant step is
+    'all compliant levers'; the last step is the market-practice bundle."""
     sz = spec["seismic"]
     zone, I = sz["zone"], float(sz.get("I") or 1.0)
     omrf = sz.get("route") == "OMRF"
     dado = spec.get("dado_height_mm")
     out = []
+    levers = {}          # name -> (rules, status, note, flags) of the levers that apply
 
     def add(name, rules=None, status="compliant", note="", **kw):
         out.append((name, dict(rules=dict(rules or {}), **kw), status, note))
 
     add("strict", {}, "compliant", "owner rulings D-T1, D-T4, D-T7, O1; H/240 with the dado; IS 811 purlins Fy 240")
     if omrf:
-        add("joint_deliverable", {"joint_demand": "deliverable"}, "compliant", PL.STATUS[("joint_demand", "deliverable")][1])
+        levers["joint_deliverable"] = ({"joint_demand": "deliverable"}, "compliant",
+                                       PL.STATUS[("joint_demand", "deliverable")][1], {})
     else:
         out.append(("joint_deliverable", None, "n/a", "SMRF joints (IS 800 12.11.2.1 1.2 Mp, IS 18168 8.4 1.1 Ry Mp): no "
                                                         "deliverable-moment option; unchanged"))
-    add("ltb_gradient", {"ltb_c1": "gradient"}, "compliant", PL.STATUS[("ltb_c1", "gradient")][1])
+    levers["ltb_gradient"] = ({"ltb_c1": "gradient"}, "compliant", PL.STATUS[("ltb_c1", "gradient")][1], {})
     if dado:
-        add("sway_H150_dado", {"sway_limit": "H150_with_dado_check", "dado_height_mm": dado}, "compliant",
-            PL.STATUS[("sway_limit", "H150_with_dado_check")][1])
+        levers["sway_H150_dado"] = ({"sway_limit": "H150_with_dado_check", "dado_height_mm": dado}, "compliant",
+                                    PL.STATUS[("sway_limit", "H150_with_dado_check")][1], {})
     else:
         out.append(("sway_H150_dado", None, "n/a", "no brick dado: the column sway row is not the masonry row "
                                                    "(crane frame H/200 governs)"))
-    add("base_key_analysis", {"base_shear_key": "analysis"}, "reading rejected by ruling O1",
-        PL.STATUS[("base_shear_key", "analysis")][1])
+    levers["base_key_analysis"] = ({"base_shear_key": "analysis"}, "reading rejected by ruling O1",
+                                   PL.STATUS[("base_shear_key", "analysis")][1], {})
     if zone == "II" and omrf:
-        add("rods", {"bracing": "tension_rods"}, "not compliant", PL.STATUS[("bracing", "tension_rods")][1],
-            rods=True)
+        levers["rods"] = ({"bracing": "tension_rods"}, "not compliant", PL.STATUS[("bracing", "tension_rods")][1],
+                          {"rods": True})
     else:
         out.append(("rods", None, "n/a", "refused: tension rods are offered on a Zone II OCBF only (zone %s)" % zone))
-    add("thin_purlins", {"purlins": "thin_G350"}, "compliant", PL.STATUS[("purlins", "thin_G350")][1])
-    add("collateral_in_uplift", {"collateral_in_uplift": True}, "old treatment (unconservative)",
-        "collateral / PV also resist uplift in the 0.9DL rows (the treatment before the 2026-10 first wave; the "
-        "engine now leaves them out)")
+    levers["thin_purlins"] = ({"purlins": "thin_G350"}, "compliant", PL.STATUS[("purlins", "thin_G350")][1], {})
+    levers["collateral_in_uplift"] = ({"collateral_in_uplift": True}, "old treatment (unconservative)",
+                                      "collateral / PV also resist uplift in the 0.9DL rows (the treatment before the "
+                                      "2026-10 first wave; the engine now leaves them out)", {})
     if omrf:
         out.append(("omrf_r3", None, "n/a", "the job is already an ordinary moment frame (route as briefed)"))
     else:
         ok_, lab_, note_ = PL.seismic_route_status(zone, I)
-        add("omrf_r3", {}, lab_, note_, seismic_route="OMRF_R3")
-    comp_rules = {"ltb_c1": "gradient", "purlins": "thin_G350"}
-    if omrf:
-        comp_rules["joint_demand"] = "deliverable"
-    if dado:
-        comp_rules.update(sway_limit="H150_with_dado_check", dado_height_mm=dado)
-    add("compliant", comp_rules, "compliant", "every lever marked compliant: %s" % ", ".join(sorted(comp_rules)))
-    mk = dict(comp_rules, joint_demand="deliverable", base_shear_key="analysis", sway_limit="H150_no_dado_check",
-              purlin_free_flange="sheeting_braced")
-    mk.pop("dado_height_mm", None)
-    if not dado:
-        mk.pop("sway_limit")
-    kw = {"market": True, "rods": bool(zone == "II" and omrf)}
-    if kw["rods"]:
-        mk["bracing"] = "tension_rods"
-    add("market", mk, "NOT COMPLIANT (market practice)",
-        "MBMA roof live 0.57 kN/m2 (IS 875-2: 0.75); ordinary frames R 3 / R 4 in any zone; sheeting taken as bracing "
-        "the purlin free flange; H/150 without the dado check; deliverable joints, gradient C1, thin purlins, "
-        "analysis base shear%s" % (", rods" if kw["rods"] else ""), **kw)
+        levers["omrf_r3"] = ({}, lab_, note_, {"seismic_route": "OMRF_R3"})
+    for name in LEVER_ORDER:
+        if name in levers:
+            r, st, nt, fl = levers[name]
+            add(name, r, st, nt, **fl)
+    # the cumulative ladder
+    rules, flags, sts, prev, last_comp = {}, {}, [], "strict", None
+    for name in CUM_ORDER:
+        if name == "market":
+            mk = dict(sway_limit="H150_no_dado_check", purlin_free_flange="sheeting_braced")
+            if not dado:
+                mk.pop("sway_limit")
+            rules = dict(rules, **mk)
+            rules.pop("dado_height_mm", None)
+            flags = dict(flags, market=True, seismic_route="OMRF_R3" if not omrf else flags.get("seismic_route"))
+            flags = {k: v for k, v in flags.items() if v}
+            sts = sts + ["NOT COMPLIANT (market practice)"]
+            note = ("all the levers above plus the market-practice loads: MBMA roof live 0.57 kN/m2 (IS 875-2: 0.75), "
+                    "ordinary frames R 3 / R 4 in any zone, the sheeting taken as bracing the purlin free flange, "
+                    "H/150 without the dado check")
+            add("market", rules, sts[-1], note, start_from=prev, **flags)
+            break
+        if name not in levers:
+            continue
+        r, st, nt, fl = levers[name]
+        rules = dict(rules, **r)
+        flags = dict(flags, **fl)
+        sts = sts + [st]
+        cname = "cum:" + name
+        add(cname, rules, _worst_status(sts), "cumulative: " + " + ".join(
+            n for n in CUM_ORDER if n in levers and CUM_ORDER.index(n) <= CUM_ORDER.index(name)),
+            start_from=prev, alias=name if prev == "strict" else None, **flags)
+        prev = cname
+        if _worst_status(sts) == "compliant":
+            last_comp = cname
+    if last_comp:
+        out.append(("compliant", {"alias": last_comp}, "compliant", "every lever marked compliant, together (= %s)"
+                    % last_comp))
     if solar:
-        add("solar_ready", {}, "compliant", "the Ex1 shed with 0.15 kN/m2 rooftop PV (cfg D_roof_pv), strict rules",
-            solar_pv=0.15)
+        add("solar_ready", {}, "compliant", "the Ex1 gold strengthened for 0.15 kN/m2 rooftop PV (cfg D_roof_pv), strict "
+                                            "rules: nothing lighter than the gold, a gold joint or purlin kept while it "
+                                            "passes", solar_pv=0.15)
     return out
 
 
@@ -210,10 +256,51 @@ def size_ocbf_braces(strict_run_dir, gold_brace, R_old_x, R_new_x=4.0, K=0.5):
 
 
 # ------------------------------------------------------------------------------------------- one job
+def design_changes(res):
+    """What a strengthen-only variant changed from the gold: member constants, joints, purlins / girts."""
+    best = res.get("best") or {}
+    out = []
+    for c, lab in sorted((best.get("x") or {}).items()):
+        g = (res.get("x_gold") or {}).get(c)
+        if g and g != lab:
+            out.append("%s %s -> %s" % (c, g, lab))
+    cg, cb = res.get("conn_gold") or {}, best.get("conn") or {}
+    for slot in sorted(set(cg) | set(cb)):
+        a, b = cg.get(slot), cb.get(slot)
+        if a == b or not isinstance(a, dict) or not isinstance(b, dict):
+            continue
+        keys = [k for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k) and not str(k).startswith("_")]
+        if keys:
+            out.append("joint %s: %s" % (slot, ", ".join("%s %s -> %s" % (k, a.get(k), b.get(k)) for k in keys)))
+    sec = res.get("secondary") or {}
+    for role in ("purlin", "girt"):
+        r = sec.get(role) or {}
+        g0 = (sec.get("gold") or {}).get(role)
+        if r.get("section") and g0 and r["section"] != g0:
+            out.append("%s %s -> %s (DC %.3f)" % (role, g0, r["section"], r.get("DC") or 0.0))
+    return out
+
+
 def kgm2(ton, area):
     out = {g: round(float((ton or {}).get(g) or 0.0) / area, 2) for g in GROUPS}
     out["total"] = round(sum(float((ton or {}).get(g) or 0.0) for g in GROUPS) / area, 2)
     return out
+
+
+class _PersistentDict(dict):
+    """The secondary-design cache of a job, kept on disk so that a resumed study does not redo the CFS runs."""
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+        try:
+            self.update(json.load(open(path)))
+        except (OSError, ValueError):
+            pass
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        json.dump(dict(self), open(self.path, "w"), default=str)
 
 
 def run_job(job, a, solar=False):
@@ -233,7 +320,8 @@ def run_job(job, a, solar=False):
         rows["gold"] = {"name": "gold", "label": LABELS["gold"], "status": "published (owner rulings)",
                         "kg": ton["kg"], "area_m2": ton["plan_area_m2"], "kg_m2": kgm2(ton["kg"], ton["plan_area_m2"]),
                         "note": "the published gold package (%s)" % os.path.dirname(os.path.dirname(pub))}
-    sec_cache = {}
+    sec_p = os.path.join(work, "secondary_cache.json")
+    sec_cache = _PersistentDict(sec_p)
     vlist = variants_for(spec, solar=solar)
     want = set(a.variants.split(",")) if a.variants else None
     strict = rows.get("strict")
@@ -244,7 +332,16 @@ def run_job(job, a, solar=False):
             log("== %s / %s: done (resume)" % (job, name))
             continue
         if kw is None:
-            rows[name] = {"name": name, "label": LABELS[name], "status": "n/a", "note": note, "done": True}
+            rows[name] = {"name": name, "label": label(name), "status": "n/a", "note": note, "done": True}
+            continue
+        if kw.get("alias"):
+            # the first cumulative step is its lever alone; 'compliant' is the last compliant cumulative step
+            src = rows.get(kw["alias"])
+            if src and src.get("done"):
+                rows[name] = dict(copy.deepcopy(src), name=name, label=label(name), status=status, note=note,
+                                  alias_of=kw["alias"])
+                study["rows"] = rows
+                json.dump(study, open(study_p, "w"), indent=1, default=str)
             continue
         t0 = time.time()
         rules = dict(kw["rules"])
@@ -262,12 +359,16 @@ def run_job(job, a, solar=False):
         if kw.get("solar_pv"):
             extra_ov["SOLAR_PV"] = float(kw["solar_pv"])
             args["extra_pv"] = float(kw["solar_pv"])
+            args["floor"] = True                       # strengthening of the published gold: nothing lighter
         if name != "strict":
             if not strict or not strict.get("best_x"):
-                rows[name] = {"name": name, "label": LABELS[name], "status": status, "note": note,
+                rows[name] = {"name": name, "label": label(name), "status": status, "note": note,
                               "error": "no strict baseline to start from", "done": False}
                 continue
-            args.update(start=strict["best_x"], start_conn=strict.get("best_conn"), calib=strict.get("calib"))
+            src = rows.get(kw.get("start_from") or "strict") or {}
+            if not src.get("best_x"):
+                src = strict                           # the previous step found no passing design
+            args.update(start=src["best_x"], start_conn=src.get("best_conn"), calib=strict.get("calib"))
         if kw.get("rods"):
             rod, T = size_rods(os.path.join(a.work, job, "strict", "best"))
             PL.register_rod(rod)
@@ -294,7 +395,8 @@ def run_job(job, a, solar=False):
         res = A.autosize(job_dir, spec, rules, work, name=name, extra_overrides=extra_ov or None,
                          cfg_patch=patch or None, rods=rods, Lr=Lr, free_flange=free, **args)
         best = res.get("best")
-        row = {"name": name, "label": LABELS[name], "status": status, "note": note, "rules": rules,
+        row = {"name": name, "label": label(name), "status": status, "note": note, "rules": rules,
+               "start_from": kw.get("start_from") or ("gold" if name in ("strict", "solar_ready") else "strict"),
                "extra_overrides": extra_ov, "cfg_patch": patch, "n_full_runs": res.get("n_full_runs"),
                "elapsed_s": round(time.time() - t0, 1), "secondary": res.get("secondary"), "done": True,
                "history": [{k: h.get(k) for k in ("it", "passed", "total_kg", "governing", "blocking", "elapsed_s")}
@@ -309,6 +411,11 @@ def run_job(job, a, solar=False):
             row["error"] = "no passing design within %d full runs" % a.max_runs
             last = (res.get("history") or [{}])[-1]
             row["last_blocking"] = last.get("blocking")
+        if kw.get("solar_pv"):
+            row["changed"] = design_changes(res)
+            g = rows.get("gold") or {}
+            if best and g.get("kg_m2"):
+                row["extra_over_gold_kg_m2"] = round(row["kg_m2"]["total"] - g["kg_m2"]["total"], 2)
         if name == "strict":
             row["calib"] = res.get("calib")
             h0 = (res.get("history") or [None])[0]
@@ -446,6 +553,54 @@ def _bars(rows):
     return "".join(out)
 
 
+def _waterfall(study):
+    """The cumulative ladder as a waterfall: the strict total, then the change of each added lever."""
+    R = study["rows"]
+    steps = [("strict", R.get("strict"))] + [(n, R.get("cum:" + n) if n != "market" else R.get("market"))
+                                             for n in CUM_ORDER]
+    steps = [(n, r) for n, r in steps if r and r.get("kg_m2")]
+    if len(steps) < 2:
+        return ""
+    W, H, top, bot, lw = 1100, 300, 16, 92, 46
+    vmax = max(r["kg_m2"]["total"] for n, r in steps) * 1.1
+    bw = (W - lw - 10) / len(steps)
+    y = lambda v: top + (H - top - bot) * (1.0 - v / vmax)
+    out = ['<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-label="cumulative change of kg per m2">' % (W, H)]
+    step = 10 if vmax > 40 else 5
+    for v in range(0, int(vmax) + 1, step):
+        out.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="#2e2820"/>' % (lw, y(v), W - 10, y(v)))
+        out.append('<text x="%d" y="%.1f" fill="#665e50" font-size="10" text-anchor="end">%d</text>' % (lw - 6, y(v) + 3, v))
+    prev = None
+    for i, (n, r) in enumerate(steps):
+        v = r["kg_m2"]["total"]
+        x = lw + i * bw + bw * 0.18
+        w = bw * 0.64
+        nc = "NOT" in str(r.get("status")) or "not compliant" in str(r.get("status"))
+        if prev is None:
+            y0, y1, col = y(v), y(0), "#ff8a3d"
+            txt = "%.1f" % v
+        else:
+            y0, y1 = y(max(prev, v)), y(min(prev, v))
+            col = "#46c993" if v <= prev else "#ff6b6b"
+            txt = "%+.2f" % (v - prev)
+        out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"%s><title>%s: %.2f kg/m2</title></rect>'
+                   % (x, y0, w, max(y1 - y0, 1.0), col, ' fill-opacity="0.55"' if nc else "",
+                      html.escape(r.get("label") or n), v))
+        out.append('<text x="%.1f" y="%.1f" fill="#f0ebe4" font-size="11" text-anchor="middle">%s</text>'
+                   % (x + w / 2, y0 - 5, txt))
+        lab = "strict" if n == "strict" else ("market" if n == "market" else n.replace("_", " "))
+        out.append('<text x="%.1f" y="%d" fill="%s" font-size="10.5" text-anchor="end" transform="rotate(-35 %.1f %d)">%s'
+                   '</text>' % (x + w / 2, H - bot + 14, "#ff6b6b" if nc else "#c6beb2", x + w / 2, H - bot + 14,
+                                html.escape(lab)))
+        if prev is not None:
+            px = lw + (i - 1) * bw + bw * 0.82
+            out.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#665e50" stroke-dasharray="3 3"/>'
+                       % (px, y(prev), x, y(prev)))
+        prev = v
+    out.append("</svg>")
+    return "".join(out)
+
+
 def _table(rows):
     h = ['<div class="wrap"><table><tr><th class="l">variant</th><th class="l">status</th>'] + \
         ["<th>%s</th>" % g for g in GROUPS] + ["<th>total kg/m²</th><th>vs strict</th><th class='l'>governing check</th></tr>"]
@@ -482,6 +637,12 @@ def _members(study):
             html.escape(r["label"]), "".join("<td class='l' style='font-family:var(--mono);font-size:.8rem'>%s</td>"
                                              % html.escape(r["members"].get(c, "")) for c in consts), html.escape(pg)))
     h.append("</table></div>")
+    for r in rows:
+        if r.get("changed") is not None:
+            h.append("<p class='muted'>%s: changed from the gold%s</p><ul>%s</ul>" % (
+                html.escape(r["label"]), "" if r.get("extra_over_gold_kg_m2") is None else
+                " (%+.2f kg/m²)" % r["extra_over_gold_kg_m2"],
+                "".join("<li class='muted'>%s</li>" % html.escape(c) for c in r["changed"]) or "<li>nothing</li>"))
     return "".join(h)
 
 
@@ -502,6 +663,10 @@ def html_page(studies):
         rows = _rows_sorted(st)
         parts.append("<h2>%s</h2>" % html.escape(st["job"]))
         parts.append("<div class='card'>%s</div>" % _bars(rows))
+        wf = _waterfall(st)
+        if wf:
+            parts.append("<div class='card'><div class='muted'>Cumulative: each lever added to the previous step "
+                         "(compliant levers first; faded bars are not compliant), kg/m²</div>%s</div>" % wf)
         parts.append("<div class='card'>%s</div>" % _table(rows))
         parts.append("<details class='card'><summary class='muted'>member sizes and purlins of each variant</summary>%s"
                      "</details>" % _members(st))
@@ -513,13 +678,46 @@ def html_page(studies):
     return "".join(parts)
 
 
+def markdown_tables(studies):
+    """Markdown summary: per job kg/m2 (total) of the strict design, each lever alone and each cumulative step, with
+    the change from the strict design / the previous step, the governing check, the full runs and the run time."""
+    out = []
+    for st in studies:
+        R = st["rows"]
+        s0 = (R.get("strict") or {}).get("kg_m2", {}).get("total")
+        out.append("### %s\n" % st["job"])
+        out.append("| variant | status | kg/m² | vs strict | governing check | runs | time |")
+        out.append("|---|---|---|---|---|---|---|")
+        prev = s0
+        for r in _rows_sorted(st):
+            k = (r.get("kg_m2") or {}).get("total")
+            g = r.get("governing")
+            gov = ("%.3f %s" % (g[0], str(g[2])[:48])) if g else (r.get("error") or ("" if r.get("status") != "n/a"
+                                                                                       else str(r.get("note"))[:60]))
+            dv = "" if (k is None or s0 is None or r["name"] in ("strict",)) else "%+.2f" % (k - s0)
+            if r["name"].startswith("cum:") or r["name"] == "market":
+                dv += "" if (k is None or prev is None) else " (step %+.2f)" % (k - prev)
+                prev = k if k is not None else prev
+            tm = ("%.0f min" % (r["elapsed_s"] / 60.0)) if r.get("elapsed_s") and not r.get("alias_of") else \
+                ("= %s" % r["alias_of"] if r.get("alias_of") else "")
+            out.append("| %s | %s | %s | %s | %s | %s | %s |" % (
+                r.get("label") or r["name"], r.get("status") or "", "%.2f" % k if k is not None else "-", dv, gov,
+                r.get("n_full_runs") or "", tm))
+            if r.get("changed") is not None:
+                out.append("| ↳ changed from the gold (%s kg/m²) | | | | %s | | |" % (
+                    "%+.2f" % r["extra_over_gold_kg_m2"] if r.get("extra_over_gold_kg_m2") is not None else "?",
+                    "; ".join(r["changed"]) or "nothing"))
+        out.append("")
+    return "\n".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", action="append", default=[])
     ap.add_argument("--jobs-root", default="/home/claude/gold_var/jobs_hr")
     ap.add_argument("--work", default="/home/claude/gold_var/study")
-    ap.add_argument("--cfs-root", default="/home/claude/gold_var/cfs_head")
-    ap.add_argument("--published-root", default="/home/claude/gold_ref/jobs_hr")
+    ap.add_argument("--cfs-root", default="/home/claude/gold_var/cfs_fw")
+    ap.add_argument("--published-root", default="/home/claude/gold_var/jobs_hr")
     ap.add_argument("--variants", default="")
     ap.add_argument("--max-runs", type=int, default=8)
     ap.add_argument("--resume", action="store_true")
@@ -539,9 +737,11 @@ def main():
             studies.append(st)
     open(os.path.join(a.work, "index.html"), "w").write(html_page(studies))
     json.dump({s["job"]: {k: {kk: r.get(kk) for kk in ("label", "status", "kg_m2", "governing", "delta_vs_strict_kg_m2",
-                                                        "note", "n_full_runs", "elapsed_s", "error")}
+                                                        "note", "n_full_runs", "elapsed_s", "error", "start_from", "alias_of",
+                                                        "extra_over_gold_kg_m2", "changed", "members")}
                           for k, r in s["rows"].items()} for s in studies},
               open(os.path.join(a.work, "study_all.json"), "w"), indent=1, default=str)
+    open(os.path.join(a.work, "study_tables.md"), "w").write(markdown_tables(studies))
     log("wrote %s" % os.path.join(a.work, "index.html"))
 
 

@@ -16,8 +16,8 @@ A job spec tells steel_engine/peb_autosize.py which module-level constants of th
   dado_height_mm brick dado height (the 'H150_with_dado_check' switch)
   seismic        zone, I, the R constants {CONST: 'x' | 'y'} and the frame route ('OMRF' / 'SMRF_IS18168')
   Lr_const       the roof imposed-load constant (market-practice bundle)
-  secondary      the CFS secondary script, its constants, the gold purlin / girt dicts, the non-permanent dead loads
-                 (collateral, PV, kN/m2) and the purlin span
+  secondary      the CFS secondary script and its constants (the purlin / girt dicts are read from the script),
+                 the non-permanent dead loads (collateral, PV, kN/m2) and the purlin span
   brace          the brace constant (resized by the rod switch only)
 """
 
@@ -37,8 +37,6 @@ JOB_SPECS = {
         "Lr_const": "LR",
         "secondary": {"script": "secondary/secondary_is801.py",
                       "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
-                      "gold": {"purlin": {"section": "LZ230X75X20X2", "spacing_mm": 1500.0, "sag_rods": 1},
-                               "girt": {"section": "LZ230X75X20X2", "spacing_mm": 1800.0, "sag_rods": 2}},
                       "nonpermanent": {"collateral": 0.15}, "span_mm": 7500.0},
         "brace": {"const": "BRACE"},
     },
@@ -58,8 +56,6 @@ JOB_SPECS = {
         "Lr_const": "LR",
         "secondary": {"script": "secondary/secondary_is801.py",
                       "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
-                      "gold": {"purlin": {"section": "LZ250X75X20X3.15", "spacing_mm": 1250.0, "sag_rods": 3},
-                               "girt": {"section": "LZ250X75X20X3.15", "spacing_mm": 1500.0, "sag_rods": 3}},
                       "nonpermanent": {"collateral": 0.25, "pv": 0.15}, "span_mm": 9000.0},
         "brace": {"const": "BRACE"},
     },
@@ -78,8 +74,6 @@ JOB_SPECS = {
         "Lr_const": "LR",
         "secondary": {"script": "secondary/secondary_is801.py",
                       "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
-                      "gold": {"purlin": {"section": "LZ250X75X20X2.3", "spacing_mm": 1500.0, "sag_rods": 2},
-                               "girt": {"section": "LZ250X75X20X2.3", "spacing_mm": 1800.0, "sag_rods": 2}},
                       "nonpermanent": {"collateral": 0.10}, "span_mm": 7500.0},
         "brace": {"const": "BRACE"},
     },
@@ -98,8 +92,6 @@ JOB_SPECS = {
         "Lr_const": "LR",
         "secondary": {"script": "secondary/secondary_is801.py",
                       "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
-                      "gold": {"purlin": {"section": "LZ250X75X20X2.55", "spacing_mm": 1500.0, "sag_rods": 3},
-                               "girt": {"section": "LZ250X75X20X2.55", "spacing_mm": 1500.0, "sag_rods": 2}},
                       "nonpermanent": {"collateral": 0.20}, "span_mm": 7500.0},
         "brace": {"const": "BRACE"},
     },
@@ -118,8 +110,6 @@ TEMPLATE = {
     "seismic": {"zone": "II", "I": 1.0, "R_consts": {"R_Y": "y", "R_X": "x"}, "route": "OMRF"},
     "Lr_const": "LR",
     "secondary": {"script": "secondary/secondary_is801.py", "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
-                  "gold": {"purlin": {"section": "LZ230X75X20X2", "spacing_mm": 1500.0, "sag_rods": 1},
-                           "girt": {"section": "LZ230X75X20X2", "spacing_mm": 1800.0, "sag_rods": 2}},
                   "nonpermanent": {"collateral": 0.15}, "span_mm": 7500.0},
     "brace": {"const": "BRACE"},
 }

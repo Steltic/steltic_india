@@ -403,6 +403,8 @@ Before `pipeline.design_and_report`:
     'IS811_Fy240' | 'thin_G350' (secondary design), collateral_in_uplift False | True (True: D_roof_collateral /
     D_roof_pv also in the 0.9 DL rows -- the old treatment)}.  Every default is the gold ruling; leave `peb_rules`
     out for a strict design.  Only for a variations study the brief asks for; state the switch and its status.
+    The auto-sizer (`steel_engine/peb_autosize.py`, used by `scripts/peb_lever_study.py`) re-sets
+    `peb_connection_mass_kg` for its resized plates and records how in `peb_connection_mass_basis` (text only).
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels
   {unit: k}, base_mm {unit: mm above a common datum}, level_tol_mm (50), id}])` runs each unit as its own job

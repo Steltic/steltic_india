@@ -348,3 +348,65 @@ def test_autosize_passes_and_is_deterministic(sized):
     assert a["best"]["total_kg"] == b["best"]["total_kg"]
     # the joints were re-designed for the new members (1.2 Mp of the new knee face, the apex, the shear keys)
     assert a["best"]["conn"] != a["history"][0]["conn"]
+
+
+def test_floor_steps_never_go_below_the_floor():
+    import peb_autosize as A
+    x = {"COL_T": COL_T, "RAF_T": RAF_T, "RAF_P": RAF_P}
+    sp = dict(SPEC, _floor=dict(x))
+    g = [("RAF_P", "tf")]
+    tf0 = A.dim(RAF_P, "tf")
+    assert A.step_group(x, g, -1, sp) is None                   # at the floor: no lighter notch
+    up = A.step_group(x, g, 1, sp)
+    assert A.dim(up["RAF_P"], "tf") > tf0
+    assert A.dim(A.step_group(up, g, -1, sp)["RAF_P"], "tf") == tf0
+    assert A.dim(A.step_group(x, g, -1, SPEC)["RAF_P"], "tf") < tf0      # without a floor it may go lighter
+
+
+def test_strengthen_only_keeps_the_gold_as_a_floor(mini_job, tmp_path_factory):
+    """floor=True (the solar-ready strengthening of a published design): under an added roof load the sizer returns
+    a passing design with no plate dimension, end-plate thickness or shear key below the gold's.  (The mini job
+    declares its seismic weight, so the added load is roof imposed load, which IS 1893 7.3.2 leaves out of W.)"""
+    import peb_autosize as A
+    work = str(tmp_path_factory.mktemp("lev_floor"))
+    r = A.autosize(mini_job, SPEC, {}, work, name="floor", cfs_root=None, resize_secondary=False, max_full_runs=4,
+                   waivers=(r"not evaluated",), extra_overrides={"LR": 1.5}, floor=True)
+    best = r["best"]
+    assert best and best["run"]["passed"]
+    for c, lab in best["x"].items():
+        k, d = A.parse(lab)
+        for dn in A.DIMS[k]:
+            assert A.dim(lab, dn) >= A.dim(r["x_gold"][c], dn) - 1e-9, (c, dn)
+    g, b = r["conn_gold"], best["conn"]
+    for slot in g:
+        if isinstance(g[slot], dict) and "t" in g[slot]:
+            assert b[slot]["t"] >= g[slot]["t"], slot
+        if isinstance(g[slot], dict) and g[slot].get("key"):
+            ka, kb = g[slot]["key"], b[slot]["key"]
+            assert kb == ka or 2 * kb[0] * kb[1] * (kb[2] + 50) >= 2 * ka[0] * ka[1] * (ka[2] + 50), slot
+
+
+def test_study_variants_and_cumulative_ladder():
+    """The study's variants: each lever alone from the strict design, the cumulative ladder in the waterfall order
+    (compliant levers first, each step from the previous one), 'compliant' = the last compliant step, the market
+    bundle last; levers that do not apply are n/a (rods outside a Zone II OCBF, deliverable joints on SMRF)."""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+    import peb_lever_jobs as J
+    import peb_lever_study as L
+    ex1 = {n: (kw, st) for n, kw, st, _ in L.variants_for(J.JOB_SPECS["IN_Ex1_PEB_factory_shed_tapered_Bengaluru"],
+                                                         solar=True)}
+    assert ex1["omrf_r3"][0] is None and ex1["rods"][0]["rods"]
+    cum = [n for n in ex1 if n.startswith("cum:")]
+    assert cum[0] == "cum:ltb_gradient" and ex1[cum[0]][0]["alias"] == "ltb_gradient"
+    for a, b in zip(cum, cum[1:]):
+        assert ex1[b][0]["start_from"] == a and set(ex1[a][0]["rules"]) <= set(ex1[b][0]["rules"])
+    assert ex1["compliant"][0]["alias"] == "cum:thin_purlins"
+    assert ex1["market"][0]["start_from"] == cum[-1] and ex1["market"][0]["market"] and ex1["market"][0]["rods"]
+    assert ex1["market"][1].startswith("NOT") and ex1["cum:rods"][1] == "not compliant"
+    assert ex1["solar_ready"][0]["solar_pv"] == 0.15
+    ex4 = {n: (kw, st) for n, kw, st, _ in L.variants_for(J.JOB_SPECS["IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR"])}
+    assert ex4["joint_deliverable"][0] is None and ex4["rods"][0] is None and "solar_ready" not in ex4
+    assert ex4["omrf_r3"][1] == "market practice, not compliant" and ex4["cum:omrf_r3"][1] == ex4["omrf_r3"][1]
+    ex2 = {n: (kw, st) for n, kw, st, _ in L.variants_for(J.JOB_SPECS["IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi"])}
+    assert ex2["cum:omrf_r3"][1].startswith("conflict")
