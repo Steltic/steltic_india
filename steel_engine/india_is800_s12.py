@@ -763,6 +763,10 @@ def base_checks(system, model_data, cfg):
         else:
             cl = "IS 800:2007 12.12 / 7.4 / 10.3"
             ct = "all SFRS bases: shear max(case, 1.2 Vd) in every case (12.12.2; owner ruling O1: literal)"
+            if (cfg or {}).get("peb_rules"):                     # PEB-LEVERS: base_shear_key 'analysis'
+                import peb_levers as _PL0
+                if _PL0.base_shear_note(cfg):
+                    ct = "all SFRS bases: " + _PL0.base_shear_note(cfg)
             if fixed:
                 ct += "; fixed base: %.2f x Mpc (concurrent P, 9.3.1.2) paired with the seismic cases (12.12.1%s)" % (
                     mfac, "; IS 18168:2023 9.3 1.1 Ry Mpc, shear 2.2 Ry Mpc/Hc, %s" % ry_note if use18 else "")
@@ -798,6 +802,12 @@ def base_checks(system, model_data, cfg):
             subs = [(None, Mz0, My0, V0, [])]
             if sfrs and fy:
                 vmin12 = max([1.2 * Vd[ax] for ax in axes if Vd.get(ax)] or [0.0])
+                # PEB-LEVERS: base_shear_key 'analysis' -- the case's own (factored) base shear, no 1.2 Vd floor
+                import peb_levers as _PL
+                _bnote = _PL.base_shear_note(cfg)
+                if _bnote:
+                    vmin12 = 0.0
+                # PEB-LEVERS: end
                 if fixed and seismic:
                     subs = []
                     for ax in sorted(axes):
@@ -823,6 +833,7 @@ def base_checks(system, model_data, cfg):
                     subs = [(None, Mz0, My0, max(V0, vmin12), [])]
                 for sub in subs:
                     sub[4].append(("12.12.2_shear_demand", vmin12, "IS 800:2007 12.12.2",
+                                   _bnote or                     # PEB-LEVERS: base_shear_key 'analysis'
                                    "full shear under the case or 1.2 x column shear capacity, whichever is higher "
                                    "(owner ruling O1: literal, pinned braced-frame bases included)"))
             for ax, mz, my, v, info in subs:

@@ -1240,6 +1240,13 @@ def design_india(name, cfg, outdir):
                    "from india_is800.member_check_is800 per combination with concurrent forces.",
            "members": [], "connections": []}
     elem_results = {}
+    # PEB-LEVERS: the switches of cfg['peb_rules'] used by the member checks (peb_levers): the moment-gradient C1 map
+    # (ltb_c1 'gradient'), tension-rod braces (bracing 'tension_rods') and the element-input dump of peb_autosize
+    import peb_levers as _PL
+    _c1map = _PL.c1_gradient_map(cfg, _peb, envt) if (_PB is not None and _peb) else {}
+    _rods = _PL.rods_allowed(cfg)[0]
+    _dump = {} if _PL.rules(cfg).get("_dump_element_inputs") else None
+    # PEB-LEVERS: end
     for key, tags in sorted(by.items()):
         kind, sec, role = key
         worst = None
@@ -1251,9 +1258,19 @@ def design_india(name, cfg, outdir):
                         ("sfrs_brace" in tagof.get(l, []) and kind == "brace"))
                 recs = {l: r for l, r in recs.items() if l not in (envt[t].get("conn") or {}) or keep(l)}
             mem = _member_input_record(cfg, t, kind, sec, reg[t][2], reg[t][3], length[t], role)
-            res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
+            if t in _c1map:                                         # PEB-LEVERS: per-combination C1 (gradient)
+                mem["c1_by_combo"] = _c1map[t]
+            if _rods and kind == "brace" and _PL.is_rod(sec):       # PEB-LEVERS: tension-only rod brace
+                res = _PL.rod_member_result(mem, recs)
+            else:
+                res = member_checks_is800(cfg, {"member": mem, "kind": kind, "records": recs})
             if _PB is not None and _peb and _PB.stations(t):
                 res = peb_station_checks(cfg, mem, kind, recs, res, _PB.stations(t))
+            if _dump is not None:                                   # PEB-LEVERS: inputs for peb_autosize
+                _dump[t] = {"kind": kind, "role": role, "member": _jsonable(mem), "records": sorted(recs),
+                            "stations": list(_PB.stations(t)) if (_PB is not None and _peb and _PB.stations(t)) else None,
+                            "peb": _jsonable(_PB.element(t)) if (_PB is not None and _peb) else None,
+                            "dc": res.get("dc"), "governing_check": res.get("governing_check")}
             elem_results[t] = res
             if worst is None or (res.get("dc") or -1) > (worst[1].get("dc") or -1) or res.get("dc") is None:
                 worst = (t, res)
@@ -1277,6 +1294,8 @@ def design_india(name, cfg, outdir):
                                                                       for k, v in res["capacities"].items()},
                                "DC": dc, "governing_check": res.get("governing_check"),
                                "governing_element_result": _governing_result(res)})
+    if _dump is not None:                                           # PEB-LEVERS: peb_autosize element inputs
+        json.dump({str(k): v for k, v in _dump.items()}, open(os.path.join(outdir, "peb_element_inputs.json"), "w"))
 
     # ---- Section 12 (india_is800_s12) with the declared connections / bases / joints ----
     import india_connection_design as CD
@@ -1314,6 +1333,8 @@ def design_india(name, cfg, outdir):
                    apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
                    is18168_table2=cfg.get("is18168_table2"))
     s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis", "beam_lateral_bracing") if k in cfg})  # H52 / H46; first wave 6.2
+    if cfg.get("peb_rules"):                                        # PEB-LEVERS: base_shear_key switch (base_checks)
+        s12_cfg["peb_rules"] = cfg["peb_rules"]
     joint_conn = {}
     try:
         import india_is800_s12 as S12
@@ -1348,6 +1369,15 @@ def design_india(name, cfg, outdir):
                 pb = S.props(bm["section"])
                 fyb = CD._fy(bm, pb)[0]
                 cn = CD.beam_column_connection(cfg, bm, pb, fyb)
+                if cn and _PL.deliverable_applies(cfg, system=cfg.get("system"))[0]:
+                    # PEB-LEVERS: joint_demand 'deliverable' -- the 12.10.2.1 moment that the beam can deliver: the
+                    # largest factored moment at this joint over every strength combination (12.2.3 rows included)
+                    import peb_checks as _PC
+                    _nf = _PC._node_forces(reg, envt, j.get("node"))
+                    _Mj = max([abs(v[0]) for v in _nf.values()] or [0.0])
+                    cn = dict(cn, max_deliverable_moment_Nmm=float(_PL.rules(cfg)["deliverable_factor"]) * _Mj,
+                              max_deliverable_basis="PEB-LEVERS joint_demand 'deliverable': %.1f x %.0f kN-m"
+                                                    % (_PL.rules(cfg)["deliverable_factor"], _Mj / 1e6))
                 if cn:
                     j["connection"] = cn
                     joint_conn[bm["section"]] = cn

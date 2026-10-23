@@ -435,3 +435,20 @@ def test_no_change_cases_are_said_plainly():
     assert "higher Type III ordinates" in h
     h2 = RS.base_shear_html(_ss(), {"seismic_analysis": {"method": "ESM"}}, dims={"X": 30.0, "Y": 30.0})
     assert "V_B ratio" in h2 and "re-designed" in h2 and "higher Type III ordinates" not in h2
+
+
+def test_compliance_ratio_column_and_difference_basis(tmp_path):
+    """The comparison rows carry the largest ratio over every check (purlins, joints, Section 12 ...), not the member
+    strength headline, and the difference says what it is between when the study states it."""
+    import json
+    import report_second_wave as RS
+    cc = {"title": "Cost of compliance", "basis": "b",
+          "rows": [{"variant": "As designed", "R": 5.0, "steel_t": 1.0, "kg_m2": 50.0, "worst_strength_dc": 1.0,
+                    "governing": "secondary member purlin", "status": "COMPLETE", "code_status": "compliant"}],
+          "difference": {"kg_m2": -0.26, "percent": -0.5, "between": "the SMRF minus the ordinary frame"}}
+    (tmp_path / "compliance_comparison.json").write_text(json.dumps(cc))
+    h = RS.compliance_html(str(tmp_path))
+    assert "largest check ratio" in h and "worst strength ratio" not in h
+    assert "the SMRF minus the ordinary frame" in h
+    (tmp_path / "strengthening_option.json").write_text(json.dumps({"title": "S", "worst_strength_dc": 0.995}))
+    assert "largest check ratio after strengthening" in RS.strengthening_html(str(tmp_path))
