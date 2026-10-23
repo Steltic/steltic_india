@@ -330,6 +330,15 @@ def design_changes(res):
     return out
 
 
+def parse_margins(txt):
+    """--init-margins 'sway=0.9,conn:splice:rafter_splice=0.95' -> {name: value} (the sizer's starting margins)."""
+    out = {}
+    for part in [p.strip() for p in str(txt or "").split(",") if p.strip()]:
+        k, _, v = part.partition("=")
+        out[k.strip()] = float(v)
+    return out
+
+
 def drop_failed_rods(kw, name, rows):
     """Second wave: the market bundle keeps the job's compression bracing when the rods alone found no passing design
     (IN_Ex3: with rods the shed is torsionally irregular and its torsional mode is not below the first X mode, IS 1893
@@ -446,7 +455,8 @@ def run_job(job, a, solar=False):
         if kw.get("rods_dropped"):
             note = note + "; " + kw["rods_dropped"]
         rules = dict(kw["rules"])
-        args = dict(cfs_root=a.cfs_root, waivers=BASE_WAIVERS, max_full_runs=a.max_runs, secondary_cache=sec_cache)
+        args = dict(cfs_root=a.cfs_root, waivers=BASE_WAIVERS, max_full_runs=a.max_runs, secondary_cache=sec_cache,
+                    init_margins=parse_margins(getattr(a, "init_margins", "")))
         extra_ov, patch, rods, Lr, free = {}, {}, None, None, False
         if kw.get("seismic_route") == "OMRF_R3" or kw.get("market"):
             if spec["seismic"].get("route") != "OMRF":
@@ -846,6 +856,9 @@ def main():
     ap.add_argument("--max-runs", type=int, default=8)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--solar", action="store_true", help="IN_Ex1: add the solar-ready variant (0.15 kN/m2 PV)")
+    ap.add_argument("--init-margins", default="",
+                    help="starting margins of the sizer, e.g. 'sway=0.9,conn:splice:rafter_splice=0.95' (a job whose "
+                         "full runs keep overshooting the local predictions)")
     ap.add_argument("--control", action="store_true",
                     help="add the control variant: strict rules again from the strict design (the sizer's resolution)")
     ap.add_argument("--ladder", choices=("full", "short"), default="full",

@@ -2561,7 +2561,7 @@ def save_best(run_dir, dst):
 
 def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=None, cfg_patch=None, rods=None,
              Lr=None, free_flange=False, waivers=(), start=None, start_conn=None, calib=None, max_full_runs=8,
-             resize_secondary=True, extra_pv=0.0, secondary_cache=None, floor=False, log_fn=log):
+             resize_secondary=True, extra_pv=0.0, secondary_cache=None, floor=False, init_margins=None, log_fn=log):
     """Auto-size one variant of a PEB job.  Returns a record with the passing design of least mass ('best'), the
     history of full runs and the calibration of the connection take-off ('calib', reused by later variants).
     floor=True: strengthen only -- start from the gold, no plate dimension below the gold's, a gold joint kept while
@@ -2601,6 +2601,7 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
     x_last = dict(start or x_gold)
     conn_run = start_conn
     margins = {"member": 1.0, "sway": 0.98, "defl": 0.98, "lambda": 0.98}
+    margins.update({k: float(v) for k, v in (init_margins or {}).items()})   # second wave: e.g. a multi-span frame
     best, lm = None, None
     groups = dim_groups(spec, x_last)
     for it in range(max_full_runs):

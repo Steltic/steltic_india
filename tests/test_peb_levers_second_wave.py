@@ -527,3 +527,12 @@ def test_short_ladder_caption():
             "compliant": {"name": "compliant", "label": "c", "status": "compliant", "kg_m2": {"total": 27.5}}}
     page = L.html_page([{"job": "J", "rows": rows, "ladder": "short"}])
     assert "Short ladder" in page and "each lever added to the previous step" not in page
+
+
+def test_init_margins_option():
+    import inspect
+    import peb_lever_study as L
+    assert L.parse_margins("sway=0.9, conn:splice:rafter_splice=0.95") == {"sway": 0.9,
+                                                                         "conn:splice:rafter_splice": 0.95}
+    assert L.parse_margins("") == {}
+    assert "init_margins" in inspect.signature(A.autosize).parameters
