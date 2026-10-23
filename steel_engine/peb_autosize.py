@@ -1021,6 +1021,8 @@ class LocalModel:
         # IN_Ex4: the sizer lightened the columns against the rafters and every full run failed SCWB)
         self._scwb_cache = {}
         self.scwb = self._scwb_rows()
+        self._pz_cache = {}
+        self.pz = self._pz_rows()
         self.is18 = self._is18()
         self.knees = self._knee_joints()
         self.knee_shear0 = self._knee_shear0()
@@ -1131,6 +1133,77 @@ class LocalModel:
             if terms and any(k == "c" for k, _, _ in terms) and any(k == "b" for k, _, _ in terms):
                 out.append((c, int(m.group(1)), terms))
         return out
+
+    def _pz_rows(self):
+        """[(row, node, column tag, [beam tags], V_column_N)] of the run's SMRF 12.11.2.3 / 12.11.2.4 panel-zone rows
+        (strong-axis joints), the members taken from the SCWB row of the same joint."""
+        import india_is800_s12 as S12
+        import peb_build as PB
+        by_joint = {c.get("member"): (node, terms) for c, node, terms in self.scwb}
+        out = []
+        for c in ((self.pkg.get("capacity_design") or {}).get("section12") or {}).get("checks") or []:
+            det = c.get("detail") or {}
+            inp = det.get("inputs") or {}
+            if c.get("id") != "12.11.2.3_panel_zone" or not det.get("found") or c.get("column_axis") != "major" \
+                    or not inp.get("V_design_N") or c.get("member") not in by_joint:
+                continue
+            node, terms = by_joint[c["member"]]
+            cols = [t for k, t, _ in terms if k == "c"]
+            beams = [t for k, t, _ in terms if k == "b"]
+            mps, d0, tf0 = [], None, None
+            for t in beams:
+                sec = self.face_section(t, node, self.x0)          # the section at the joint face (D-T7)
+                PB.ensure(sec)
+                m = {k: v for k, v in self.dump[t]["member"].items() if k not in ("fy_MPa", "fu_MPa")}
+                m["section"] = sec
+                pb = S12._props(m)
+                mps.append(float(pb["Zx"]) * S12._fy(m, pb)[0])
+                d0, tf0 = (pb["d"], pb["tf"]) if d0 is None else (d0, tf0)
+            if not mps or abs(float(inp.get("d_beam_mm") or 0.0) - float(d0)) > 1.0:
+                continue                 # the row's beam is not the one recorded in the SCWB row: leave it to the run
+            vcol = max(S12.panel_zone_design_shear(mps, d0, tf0, 0.0) - float(inp["V_design_N"]), 0.0)
+            out.append((c, node, cols[0], beams, vcol))
+        return out
+
+    def pz_dc(self, x):
+        """Max panel-zone ratio (12.11.2.3 shear at the 12.11.2.2 moments, 12.11.2.4 individual web t >= (dp+bp)/90)
+        over the run's SMRF strong-axis joints with the face sections of x; the run's doubler and column shear."""
+        import india_is800 as I8
+        import india_is800_s12 as S12
+        import peb_build as PB
+        best = (0.0, None)
+        for c, node, tc, beams, vcol in self.pz:
+            csec = self.face_section(tc, node, x)
+            bsecs = tuple(self.face_section(t, node, x) for t in beams)
+            key = (c.get("member"), csec) + bsecs
+            if key not in self._pz_cache:
+                mps, d0, tf0 = [], None, None
+                for t, sec in zip(beams, bsecs):
+                    PB.ensure(sec)
+                    m = {k: v for k, v in self.dump[t]["member"].items() if k not in ("fy_MPa", "fu_MPa")}
+                    m["section"] = sec
+                    pb = S12._props(m)
+                    mps.append(float(pb["Zx"]) * S12._fy(m, pb)[0])
+                    d0, tf0 = (pb["d"], pb["tf"]) if d0 is None else (d0, tf0)
+                PB.ensure(csec)
+                mc = {k: v for k, v in self.dump[tc]["member"].items() if k not in ("fy_MPa", "fu_MPa")}
+                mc["section"] = csec
+                pc = S12._props(mc)
+                fyc = S12._fy(mc, pc)[0]
+                inp = (c.get("detail") or {}).get("inputs") or {}
+                pz = I8.panel_zone_check(d_beam_mm=d0, V_design_N=S12.panel_zone_design_shear(mps, d0, tf0, vcol),
+                                         fy_MPa=fyc, doubler_t_mm=float(inp.get("doubler_t_mm") or 0.0),
+                                         continuity_plates=True, n_webs=1, d_col_mm=pc["d"], tw_mm=pc["tw"],
+                                         bf_mm=pc["bf"], tf_mm=pc["tf"])
+                dc = float(pz.get("dc") or 0.0)
+                for pl in pz.get("plates") or []:
+                    if pl.get("t_mm") and pl.get("t_min_mm"):
+                        dc = max(dc, float(pl["t_min_mm"]) / float(pl["t_mm"]))
+                self._pz_cache[key] = dc
+            dc = self._pz_cache[key]
+            if dc > best[0]:
+                best = (dc, "IS 800 12.11.2.3 / 12.11.2.4 panel zone at %s" % c.get("member"))
+        return best
 
     def face_section(self, t, node, x):
         """The section of element t at the joint node with the labels of x (D-T7: a tapered member enters the joint
@@ -2118,6 +2191,13 @@ class Evaluator:
                 viol += dcw - mg
                 out["why"] = out["why"] or "%s D/C %.3f > %.3f" % (govw, dcw, mg)
             dcs[("SCWB",)] = (dcw, govw)
+        if getattr(lm, "pz", None):
+            dcp, govp = lm.pz_dc(x)
+            mg = self.margin("panel", 1.0)
+            if dcp > mg:
+                viol += dcp - mg
+                out["why"] = out["why"] or "%s D/C %.3f > %.3f" % (govp, dcp, mg)
+            dcs[("panel_zone",)] = (dcp, govp)
         if getattr(lm, "struts", None):
             dcs_, govs_ = lm.strut_dc(x)
             mg = self.margin("strut", self.margin("member", 0.99))
@@ -2343,7 +2423,9 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
                 hit = True
         elif kind == "section12":
             sid = ident.split("@")[0]
-            if sid in ("connection_moment", "connection_shear", "12.11.2.3_panel_zone"):
+            if sid == "12.11.2.3_panel_zone":
+                tighten("panel", 0.02, 1.0); hit = True         # second wave: the panel zone has its own local check
+            elif sid in ("connection_moment", "connection_shear"):
                 tighten("conn:knee"); hit = True
             elif sid.startswith("12.12") or sid.startswith("7.4"):
                 tighten("conn:base"); hit = True

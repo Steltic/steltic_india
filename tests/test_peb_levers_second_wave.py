@@ -14,6 +14,7 @@ for p in (os.path.join(ROOT, "steel_engine"), os.path.join(ROOT, "scripts")):
         sys.path.insert(0, p)
 
 import peb_autosize as A        # noqa: E402
+import sections as S           # noqa: E402
 
 
 def test_shared_label_reason():
@@ -401,3 +402,49 @@ def test_local_scwb_matches_the_engine_joint_check():
     A.feedback(m, {"fail_items": [(1.17, "section12", "12.11.3.2_SCWB@J100100-Y", "IS 800")]}, None,
                log_fn=lambda *a: None)
     assert abs(m["scwb"] - 0.98) < 1e-9 and "member" not in m
+
+
+def test_local_panel_zone_matches_the_engine():
+    """SMRF knees: the local 12.11.2.3 / 12.11.2.4 panel-zone ratio with candidate face sections equals the engine's
+    panel_zone_check at the 12.11.2.2 shear of those sections (column shear and doubler of the run)."""
+    import india_is800 as I8
+    import india_is800_s12 as S12
+    import peb_build as PB
+    col0, col1, raf = "WI700X280X22X14", "WI700X300X22X16", "WI625X310X22X17"
+    for s_ in (col0, col1, raf):
+        PB.ensure(s_)
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.dump = {16: {"member": {"section": col0, "node_i": 1000, "node_j": 100100, "grade": "E350 B0"},
+                    "peb": {"member": "m16", "f": [0.0, 1.0]}},
+               122: {"member": {"section": raf, "node_i": 100100, "node_j": 100101, "grade": "E350 B0"},
+                     "peb": {"member": "m122", "f": [0.0, 0.25]}}}
+    lm.members = {"m16": {"section": col0}, "m122": {"section": raf}}
+    lm.const_of_label = {col0: "COL", raf: "RAF_K"}
+    lm.x0 = {"COL": col0, "RAF_K": raf}
+    praf = S.props(raf)
+    fyb = S12._fy({"section": raf, "grade": "E350 B0"}, praf)[0]
+    vcol = 50000.0
+    V0 = S12.panel_zone_design_shear([praf["Zx"] * fyb], praf["d"], praf["tf"], vcol)
+    lm.pkg = {"capacity_design": {"section12": {"checks": [
+        {"id": "12.11.3.2_SCWB", "member": "J100100-Y", "value": 1.0, "dc": 1.2,
+         "columns": [{"member": "e16", "section": col0, "axis": "z", "P_N": 2.0e5}],
+         "beams": [{"member": "e122", "section": raf}]},
+        {"id": "12.11.2.3_panel_zone", "member": "J100100-Y", "dc": 1.05, "column_axis": "major",
+         "detail": {"found": True, "inputs": {"V_design_N": V0, "d_beam_mm": praf["d"], "doubler_t_mm": 16.0}}}]}}}
+    lm._scwb_cache, lm._pz_cache = {}, {}
+    lm.scwb = lm._scwb_rows()
+    lm.pz = lm._pz_rows()
+    assert len(lm.pz) == 1 and abs(lm.pz[0][4] - vcol) < 1e-6
+    for col in (col0, col1):
+        pc = S.props(col)
+        fyc = S12._fy({"section": col, "grade": "E350 B0"}, pc)[0]
+        ref = I8.panel_zone_check(d_beam_mm=praf["d"], V_design_N=V0, fy_MPa=fyc, doubler_t_mm=16.0,
+                                  continuity_plates=True, n_webs=1, d_col_mm=pc["d"], tw_mm=pc["tw"], bf_mm=pc["bf"],
+                                  tf_mm=pc["tf"])
+        want = max([ref["dc"]] + [p["t_min_mm"] / p["t_mm"] for p in ref["plates"]])
+        dc, gov = lm.pz_dc({"COL": col, "RAF_K": raf})
+        assert abs(dc - want) < 1e-9 and "panel zone" in gov, (col, dc, want)
+    m = {}
+    A.feedback(m, {"fail_items": [(1.07, "section12", "12.11.2.3_panel_zone@J100100-Y", "IS 800")]}, None,
+               log_fn=lambda *a: None)
+    assert abs(m["panel"] - 0.98) < 1e-9 and "conn:knee" not in m
