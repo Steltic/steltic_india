@@ -164,7 +164,8 @@ def section(cfg, pkg, root):
                                                       % (v.get("missing_terms"), v.get("unmapped_loads")))
                 li.append("<li><b>STAAD.Pro input</b>: %s &mdash; %s</li>" % (_ln(v.get("file")), txt))
             elif isinstance(v, dict):
-                li.append("<li><b>%s</b>: %s %s</li>" % (_e(k), _ln(v.get("file")), _e(v.get("basis") or v.get("note") or "")))
+                li.append("<li><b>%s</b>: %s %s</li>" % (_e(str(k).replace("_", " ")), _ln(v.get("file")),
+                                                          _e(v.get("basis") or v.get("note") or "")))
         out.append("<h3>Deliverables</h3><ul>%s</ul>" % "".join(li))
         svg = os.path.join(root, "design", "anchor_bolt_plan.svg")
         if os.path.exists(svg):

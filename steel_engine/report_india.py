@@ -264,8 +264,8 @@ def _irregularity(pkg):
 def _gravity_table(cfg):
     import report_first_wave as FW
     shed = len(cfg.get("heights") or []) == 1 and not float(cfg.get("L_floor") or 0.0)
-    rows = [] if shed else [["Floor dead load D_floor", _num(cfg.get("D_floor")), "kN/m2"]]
-    rows.append(["Roof dead load D_roof (permanent)", _num(cfg.get("D_roof")), "kN/m2"])
+    rows = [] if shed else [["Floor dead load D<sub>floor</sub>", _num(cfg.get("D_floor")), "kN/m2"]]
+    rows.append(["Roof dead load D<sub>roof</sub> (permanent)", _num(cfg.get("D_roof")), "kN/m2"])
     rows += FW.dead_load_rows(cfg)
     if not shed:
         rows += [["Floor imposed load (IS 875 Part 2)", _num(cfg.get("L_floor")), "kN/m2"],
@@ -396,7 +396,7 @@ def _seismic_table(cfg, pkg, run):
             env = fd.get("envelope") or {}
             if env:
                 out += "<p>%s</p>" % html.escape(str(env.get("method") or ""))
-                rows = [[g, f, _num(v.get("rigid"), 0), _num(v.get("flexible"), 0), _num(v.get("ratio"), 3)]
+                rows = [[g, PUB.symbol(f), _num(v.get("rigid"), 0), _num(v.get("flexible"), 0), _num(v.get("ratio"), 3)]
                         for g, fl in sorted((env.get("ratio_flexible_over_rigid_by_group") or {}).items())
                         for f, v in fl.items() if isinstance(v, dict) and (v.get("rigid") or v.get("flexible"))]
                 out += _t(["group", "field", "rigid max (N / N-mm)", "flexible max (N / N-mm)", "flexible / rigid"],
@@ -562,9 +562,11 @@ def _connections(pkg):
     rows = []
     for c in con:
         dem = c.get("demand") or {}
-        dtxt = "; ".join((f"{k[:-4]} = " + _kNm(v) + " kN-m") if k.endswith("_Nmm") else
-                         (f"{k[:-2]} = " + _kN(v) + " kN") if k.endswith("_N") else
-                         (f"{k[:-3]} = " + _num(v, 0) + " mm") if k.endswith("_mm") else f"{k} = {_num(v)}"
+        # check fixes (2026-10-23, finding 5): demand keys printed as symbols (M<sub>design</sub>, not M_design)
+        dtxt = "; ".join((f"{PUB.symbol(k[:-4])} = " + _kNm(v) + " kN-m") if k.endswith("_Nmm") else
+                         (f"{PUB.symbol(k[:-2])} = " + _kN(v) + " kN") if k.endswith("_N") else
+                         (f"{PUB.symbol(k[:-3])} = " + _num(v, 0) + " mm") if k.endswith("_mm") else
+                         f"{PUB.symbol(k)} = {_num(v)}"
                          for k, v in dem.items() if isinstance(v, (int, float)))
         _ck = c.get("checks") or []
         chks = [x for x in (_ck.values() if isinstance(_ck, dict) else _ck) if isinstance(x, dict)]

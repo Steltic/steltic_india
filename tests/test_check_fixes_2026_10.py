@@ -299,3 +299,39 @@ def test_no_part_level_note_where_the_level_is_a_full_storey():
     assert RS.part_levels(cfg) == []
     assert RS.part_level_note(cfg, _ex9_irregularity_pkg()) == ""
     assert RS.part_level_note(_two_level_cfg(), {"irregularity": {}}) == ""
+
+
+# ------------------------------------------------------------------------------------------------ finding 5 (symbols)
+def test_calc_symbols_and_tags_in_words():
+    import report_public as P
+    import report_second_wave as RS
+    assert P.symbol("M_design") == "M<sub>design</sub>" and P.symbol("P_12_2_3") == "P<sub>12.2.3</sub>"
+    assert P.symbol("axial_12_2_3") == "axial (12.2.3)" and P.symbol("V") == "V"
+    assert P.combo_tags_text(["col_only", "conn_only", "is800_12_2_3", "is18168_5_5", "sfrs_beam"]) == \
+        "columns, connections, beams of the seismic system (IS 800 12.2.3 and IS 18168 5.5 cases)"
+    assert RS.s12_value("11.4.1_end_stiffeners", {"both_sides": True, "width_mm": 285.5, "t_mm": 12.0}) == \
+        "both sides: yes, width 285.50 mm, t 12.00 mm"
+    assert RS.s12_value("is18168_table2_beam", {"b/tf": 4.67, "d/tw": 37.47}) == "b/tf 4.67, d/tw 37.47"
+    out = P.public_text("Md = Zp fy / gamma_m0; lambda_cr = 7.5; scaling to V-bar_B; the corpus answers not_tabulated")
+    assert "γm0" in out and "λcr = 7.5" in out and "not tabulated" in out and "bar_B" not in out
+    # a deliverable file named in brackets stays (it is published next to the report); a data file does not
+    assert P.public_text("Reactions unfactored (design/reactions.csv): Fz") == "Reactions unfactored (design/reactions.csv): Fz"
+    assert P.public_text("lowers it (design/pv_capacity.json). x") == "lowers it. x"
+
+
+def test_bare_module_names_and_record_fields():
+    import report_public as P
+    out = P.public_text("the rigid records carry the india_diaphragm collector / chord forces; Mmaj_sag_max keeps "
+                        "the larger signed value")
+    assert "india_" not in out and "Mmaj_sag_max" not in out and "diaphragm collector" in out
+
+
+def test_record_paths_and_calc_keys():
+    import report_public as P
+    for t, want in (("Fig. 4(a) design-engineer reading (wind_summary.Cf_fig4)", "Fig. 4(a) design-engineer reading"),
+                    ("(design-engineer reading, see wind_summary.Cf_fig4)", "(design-engineer reading)"),
+                    ("zero snow on one half (engine snow_partial X)", "zero snow on one half (X)"),
+                    ("beam-end shear connection: bolts_10_3", "beam-end shear connection: bolts (IS 800 10.3)"),
+                    ("IS 800 12.10.2.1 connection_moment (joint e159)", "IS 800 12.10.2.1 connection moment (joint e159)")):
+        assert P.public_text(t) == want, P.public_text(t)
+        assert P.leaks(P.public_text(t)) == []

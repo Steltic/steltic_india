@@ -1041,7 +1041,15 @@ def s12_value(cid, v):
     """A Section 12 value or limit in report units: forces in kN, moments in kN·m, lengths in mm, width-thickness
     records as 'b/tf 6.67, d/tw 18.89'."""
     if isinstance(v, dict):
-        return ", ".join("%s %s" % (_e(k), _f(x, 2) if _num(x) else _e(x)) for k, x in v.items())
+        # check fixes (2026-10-23, finding 5): 'width 285.50 mm, both sides: yes', not 'width_mm 285.50, both_sides True'
+        def _kv(k, x):
+            k = str(k)
+            unit = " mm" if k.endswith("_mm") else ""
+            name = PUB.humanise(k[:-3] if unit else k)
+            if isinstance(x, bool):
+                return "%s: %s" % (_e(name), "yes" if x else "no")
+            return "%s %s%s" % (_e(name), _f(x, 2) if _num(x) else _e(x), unit)
+        return ", ".join(_kv(k, x) for k, x in v.items())
     if isinstance(v, bool) or not _num(v):
         return "&mdash;" if v is None else ("yes" if v is True else "no" if v is False else _e(v))
     if cid in S12_UNITS["N"]:

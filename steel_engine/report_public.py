@@ -153,6 +153,41 @@ def check_label(cid):
     return s.replace("_", " ").strip()
 
 
+COMBO_TAGS = {
+    "col_only": "columns", "conn_only": "connections", "sfrs_beam": "beams of the seismic system",
+    "sfrs_brace": "braces of the seismic system", "member_wind": "member-wind pattern", "across_wind": "across-wind",
+    "service": "serviceability",
+}
+COMBO_CASES = {"is800_12_2_3": "IS 800 12.2.3", "is18168_5_5": "IS 18168 5.5"}
+
+
+def combo_tags_text(tags):
+    """The 'applies to' tags of a combination in words (india_combos tags): 'columns, connections, beams of the
+    seismic system (IS 800 12.2.3 and IS 18168 5.5 cases)'."""
+    tags = [str(t) for t in (tags or [])]
+    words = [COMBO_TAGS.get(t, humanise(t)) for t in tags if t not in COMBO_CASES]
+    cases = [COMBO_CASES[t] for t in tags if t in COMBO_CASES]
+    txt = ", ".join(words)
+    if cases:
+        txt += " (%s case%s)" % (" and ".join(cases), "s" if len(cases) > 1 else "")
+    return txt.strip()
+
+
+def symbol(key, html_out=True):
+    """A demand / quantity key as a symbol: 'M_design' -> M<sub>design</sub>, 'P_12_2_3' -> P<sub>12.2.3</sub>,
+    'axial_12_2_3' -> 'axial (12.2.3)', 'Pu_capacity_design' -> Pu<sub>capacity design</sub>."""
+    k = str(key)
+    k = re.sub(r"_(\d+)_(\d+)_(\d+)$", lambda m: "_%s.%s.%s" % m.groups(), k)
+    m = re.match(r"^([A-Za-z]{1,3})_(.+)$", k)
+    if m:
+        sub_ = m.group(2).replace("_", " ")
+        return ("%s<sub>%s</sub>" % (m.group(1), sub_)) if html_out else "%s %s" % (m.group(1), sub_)
+    m = re.match(r"^(.+)_([\d.]+)$", k)
+    if m:
+        return "%s (%s)" % (humanise(m.group(1)), m.group(2))
+    return humanise(k)
+
+
 def humanise(token):
     """A snake_case key or value spelt out ('frame_tributary' -> 'frame tributary', 'KL_r' -> 'KL/r')."""
     t = str(token).replace("KL_r", "KL/r")
@@ -204,7 +239,7 @@ def _subs():
     s.append((re.compile(r"[;,]?\s*(?<![\w])(?:[\w.-]+/)*[A-Za-z_]\w*\.py\b(?:\s+--[\w-]+(?:\s+(?!and\b|or\b)[a-z_]+\b)?)*"), ""))
     # a bracketed reference to a job data file inside a sentence ('(design/pv_capacity.json)'); a deliverable link
     # text such as 'design/reactions.csv' is not bracketed and is kept
-    s.append((re.compile(r"\s*\(\s*design/[\w.-]+\.(?:json|csv)\s*\)"), ""))
+    s.append((re.compile(r"\s*\(\s*design/[\w.-]+\.json\s*\)"), ""))
     # repository / branch / commit references
     s.append((re.compile(r"\bsteltic_(?:india|CFS_india|cfs_india|nonlinear_india|hub_india)\s+(?:feat|fix)/[\w.-]+(?:\s+[0-9a-f]{7,40}\b)?"), "Steltic"))
     s.append((re.compile(r"\b(?:feat|fix)/2026-[\w.-]+(?:\s+[0-9a-f]{7,40}\b)?"), ""))
@@ -227,7 +262,25 @@ def _subs():
     s.append((re.compile(_q + r"solar_pv" + _q), "PV load"))
     # IS 800 Table 6 row keys and gamma_f
     s.append((re.compile(r"\b(%s)\b" % "|".join(sorted(TABLE6_ROWS, key=len, reverse=True))), lambda m: TABLE6_ROWS[m.group(1)]))
-    s.append((re.compile(r"\bgamma_f\b"), "γf"))
+    s.append((re.compile(r"\bgamma_([A-Za-z]\w*)\b"), "γ\\1"))
+    s.append((re.compile(r"\blambda_cr\b"), "λcr"))
+    s.append((re.compile(r"\bV-bar_B\b"), "V\u0304B"))
+    s.append((re.compile(r"\bnot_tabulated\b"), "not tabulated"))
+    s.append((re.compile(r"\bMmaj_sag_max\b"), "the sagging major-axis moment"))
+    # record paths of the job input / load plan named in printed text ('(see wind_summary.Cf_fig4)')
+    s.append((re.compile(r"\s*\((?:see\s+)?[a-z]+_[a-z_]+(?:\.[A-Za-z_]\w*)+\)"), ""))
+    s.append((re.compile(r",?\s*see\s+[a-z]+_[a-z_]+(?:\.[A-Za-z_]\w*)+"), ""))
+    s.append((re.compile(r"\bcolumn_base\.anchors\.embedment\s*\{method:\s*(?:'|&#x27;|&#39;)(\w+)(?:'|&#x27;|&#39;)\}"),
+              r"anchor embedment by \1"))
+    s.append((re.compile(r"\s*\(engine snow_partial ([XY])\)"), r" (\1)"))
+    s.append((re.compile(r"\bbolts_10_3\b"), "bolts (IS 800 10.3)"))
+    s.append((re.compile(r"\bconnection_(moment|shear)\b"), r"connection \1"))
+    s.append((re.compile(r"\bsingle_frame model\b"), "single-frame model"))
+    s.append((re.compile(r"\btau_(bd|c)\b"), "τ\\1"))
+    s.append((re.compile(r"\bpd_bar\b"), "p\u0304d"))
+    # a bare engine module name used as a noun ('the india_diaphragm collector forces')
+    s.append((re.compile(r"\b(?:%s)\b" % "|".join(re.escape(m) for m in _MODULES if m.startswith("india_"))),
+              lambda m: humanise(m.group(0)[len("india_"):])))
     # analysis gate keys after the word 'gate'
     s.append((re.compile(r"\b(gate:?\s+)(%s)\b" % "|".join(sorted(GATE_LABELS, key=len, reverse=True))),
               lambda m: m.group(1) + "'" + _GATE_PLAIN[m.group(2)] + "'"))
@@ -332,7 +385,7 @@ LEAK_PATTERNS = {
     "module": r"\b(?:%s)\.[A-Za-z_]\w*" % _MOD_ALT,
     "repository": r"\bsteltic_(?:india|CFS_india|cfs_india|nonlinear_india|hub_india)\b|\b(?:feat|fix)/20\d\d-",
     "json key": r"\b(?:difference_vs_gold|checks_that_fall_away|code_status_R3|kg_m2_by_group|worst_strength_dc|"
-                r"solar_pv|D_roof_pv|wind_defl_[XY])\b|\bcfg\[|\bcfg\s+\w",
+                r"solar_pv|D_roof_pv|wind_defl_[XY])\b|\bcfg\[|\bcfg\s+\w|\b(?:wind_summary|column_base|load_plan)\.\w+",
     "internal word": r"\bgold\b|\bowner rulings?\b|\bowner decision\b|\bbrief ruling\b|\bspec\s+WP\d|\(was None\)",
     "bare ruling": r"(?<![\w-])(?:D-T\d+|D8)(?![\w-])",
 }

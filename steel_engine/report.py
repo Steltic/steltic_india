@@ -1414,7 +1414,9 @@ def _combo_table(cases):
             extras.append("EL<sub>Z</sub> %+.3g" % m.get("fEv"))
         if m.get("fC"):
             extras.append("CL %.2f" % m.get("fC"))
-        tags = ", ".join(m.get("tags") or []) or ("col_only" if co else "all members")
+        # check fixes (2026-10-23, finding 5): the tags in words (columns, connections, the IS 800 12.2.3 case ...)
+        import report_public as _PUB
+        tags = _PUB.combo_tags_text(m.get("tags") or []) or ("columns" if co else "all members")
         rows.append([L, "%.2f" % fD, "%.2f" % fL, "%.2f" % fLr,
                      ("%+.2f" % f) if f is not None else "&mdash;", lat_txt,
                      "; ".join(extras) or "&mdash;", tags])
