@@ -772,6 +772,16 @@ def load(job, purlin, girt):
                                "flange)", note="PEB-LEVERS market practice: free flange taken as braced by the sheeting")
                 return rec
             CM.bracing_basis = bb
+            orig_rows = CM.bracing_rows
+
+            def br_rows(cfg, pu, sec, role, span, s, br, *a, **k):
+                # second wave: with the sheeting taken as the brace there is no brace interval, so the IS 801 8.2.1 /
+                # 8.2.2 brace rows (spacing, brace force over the interval) do not apply (the first-wave CFS engine
+                # divides by the interval)
+                if role == "purlin" and not float((br or {}).get("spacing_mm") or 0.0):
+                    return []
+                return orig_rows(cfg, pu, sec, role, span, s, br, *a, **k)
+            CM.bracing_rows = br_rows
             CM._peb_levers_patched = True
     return mod
 
@@ -888,6 +898,7 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
 
     gp, gg = gold["purlin"]["section"], gold["girt"]["section"]
     chosen, evaluated = {}, 0
+    first_err = []
     for role, other in (("purlin", gg), ("girt", gp)):
         # lightest first, in batches of 8 (one child process per batch)
         found = None
@@ -903,14 +914,17 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
             res = evaluate(pairs)
             evaluated += len(res)
             for c, r in zip(batch, res):
-                rr = r.get(role) or {}
+                rr = r.get(role) if isinstance(r.get(role), dict) else {}      # an 'error' row carries the label only
+                if r.get("error") and not first_err:
+                    first_err.append("%s: %s" % (c[0], str(r["error"]).strip().splitlines()[-1]))
                 if rr.get("ok") is True:
                     found = {"section": c[0], "mass_kg_m": c[3], "DC": rr.get("DC"), "governing": rr.get("governing")}
                     break
             if found:
                 break
         if not found:
-            raise RuntimeError("design_secondary: no %s of family %s passes for %s" % (role, fam, spec["job"]))
+            raise RuntimeError("design_secondary: no %s of family %s passes for %s%s" % (
+                role, fam, spec["job"], "" if not first_err else " (first CFS error: %s)" % first_err[0]))
         chosen[role] = found
         log_fn("    secondary %s: %s (%.2f kg/m, DC %.3f, %s)" % (role, found["section"], found["mass_kg_m"],
                                                                   found["DC"] or -1, found["governing"]))

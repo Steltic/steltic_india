@@ -206,3 +206,58 @@ def test_omrf_patch_declares_the_study_run_outside_zone_II():
     assert "Zone III" in p2["study_allow_banned_system"]
     _, p1 = L.omrf_patch(J.JOB_SPECS["IN_Ex1_PEB_factory_shed_tapered_Bengaluru"])
     assert "study_allow_banned_system" not in p1
+
+
+FAKE_SECONDARY = '''
+import types
+calls = []
+
+
+def bracing_basis(spec, span, role="purlin"):
+    return {"declared": True, "type": "sag_rods", "lines": 2, "spacing_mm": span / 3.0}
+
+
+def bracing_rows(cfg, pu, sec, role, span, s, br, *a, **k):
+    calls.append((role, br["spacing_mm"]))
+    return [{"check": "8.2.1 brace spacing", "dc": br["spacing_mm"] / (span / 4.0)}]
+
+
+CM = types.SimpleNamespace(bracing_basis=bracing_basis, bracing_rows=bracing_rows)
+PURLIN = {"section": "LZ230X75X20X2", "sag_rods": 2}
+GIRT = {"section": "LZ210X60X20X2"}
+FY = 240.0
+
+
+def cfs_cfg():
+    return {"loads": {"D_roof": 0.2, "Lr": 0.75}}
+'''
+
+
+def test_market_free_flange_patch_drops_the_brace_rows(tmp_path):
+    """Market bundle (sheeting taken as the purlin brace): the patched bracing basis has no brace interval, so the
+    IS 801 8.2 brace rows are not produced for the purlin (the first-wave CFS engine divided by the interval: the
+    IN_Ex1 market variant stopped on a ZeroDivisionError); girts keep their rows."""
+    src = A.SECONDARY_WORKER.replace("\nmain()\n", "\n")
+    ns = {}
+    exec(compile(src, "secondary_worker", "exec"), ns)
+    script = tmp_path / "secondary_is801.py"
+    script.write_text(FAKE_SECONDARY)
+    job = {"script": str(script), "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
+           "purlin0": {"section": "LZ230X75X20X2", "sag_rods": 2}, "girt0": {"section": "LZ210X60X20X2"}, "fy": 240.0,
+           "free_flange_braced": True}
+    mod = ns["load"](job, "LZ200X60X20X2", "LZ210X60X20X2")
+    br = mod.CM.bracing_basis({}, 7500.0, "purlin")
+    assert br["spacing_mm"] == 0.0 and br["type"] == "sheeting" and "MARKET PRACTICE" in br["type_text"]
+    assert mod.CM.bracing_rows({}, {}, {}, "purlin", 7500.0, 1500.0, br) == []
+    gb = mod.CM.bracing_basis({}, 7500.0, "girt")
+    rows = mod.CM.bracing_rows({}, {}, {}, "girt", 7500.0, 1800.0, gb)
+    assert rows and abs(rows[0]["dc"] - (2500.0 / 1875.0)) < 1e-9
+
+
+def test_secondary_error_rows_are_not_read_as_results():
+    """A CFS error row carries the section label under the role key: it must read as 'no result', not crash."""
+    r = {"purlin": "Z200X65X20X1.0-G350", "girt": "LZ230X75X20X2", "error": "Traceback ...\nZeroDivisionError: x"}
+    rr = r.get("purlin") if isinstance(r.get("purlin"), dict) else {}
+    assert rr == {}
+    import inspect
+    assert 'isinstance(r.get(role), dict)' in inspect.getsource(A.design_secondary)
