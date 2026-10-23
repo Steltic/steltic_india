@@ -184,6 +184,15 @@ connection worksheet inputs `base_plate_geometry` / `column_base_geometry` / `ba
 `connection_rag_capacities` (India jobs declare `cfg['connections']`). Keys with a leading underscore are
 engine-private caches.
 
+## Roadmap: the next IS 800
+
+BIS lists a fourth revision of IS 800 (General construction in steel — code of practice) as a finalised draft in
+the programme of work of its Structural Engineering and Structural Sections Sectional Committee, CED 7
+([BIS programme of work, CED 7](https://www.services.bis.gov.in/php/BIS_2.0/bisconnect/pow_new/Pow/download_pow_pdf_dept_commtt/63/195)).
+Steltic designs to IS 800:2007 until the revision is published. When it is, the IS corpus and the engine's IS 800
+transcriptions (member and connection capacities, Section 12) will be rebuilt for it, and the worked examples
+re-run. Until then every report cites IS 800:2007.
+
 ## Product shape (unchanged)
 
 brief → OpenSees → `report.html` + `viewer_3d.html` + agent contract (`contract/AGENT_START.md`).

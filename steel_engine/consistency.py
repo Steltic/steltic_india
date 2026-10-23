@@ -928,6 +928,15 @@ def package_warnings(cfg, pkg):
         out += [m for s_, m in _CDw.anchorage_findings(cfg if isinstance(cfg, dict) else {}) if s_ == "WARN"]
     except Exception as ex:
         out.append("anchorage findings unavailable: %s" % ex)
+    # second wave item 9: a composite deck spanning a full bay with no secondary beams is a point for the design
+    # engineer (the deck profile is not designed here)
+    try:
+        import report_second_wave as _RSw
+        _dw = _RSw.deck_span_warning(cfg if isinstance(cfg, dict) else {})
+        if _dw:
+            out.append(_dw)
+    except Exception as ex:
+        out.append("deck span finding unavailable: %s" % ex)
     return out
 
 
