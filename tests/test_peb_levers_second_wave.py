@@ -310,3 +310,18 @@ def test_waived_checks_do_not_govern(tmp_path):
     assert r["waived_checks"][0][2] == "brace_compression@e355"
     r0 = A.evaluate_run(str(rd))
     assert r0["governing"][1] == "section12" and r0["fail_items"]
+
+
+def test_control_variant_is_optional():
+    """--control: the strict rules again from the strict design (the sizer's resolution), right after 'strict'."""
+    import peb_lever_jobs as J
+    import peb_lever_study as L
+    spec = J.JOB_SPECS["IN_Ex3_PEB_crane_shed_10t_Nagpur"]
+    names = [n for n, kw, st, _ in L.variants_for(spec, ladder="short")]
+    assert "control" not in names
+    v = L.variants_for(spec, ladder="short", control=True)
+    names = [n for n, kw, st, _ in v]
+    assert names[:2] == ["strict", "control"]
+    kw = v[1][1]
+    assert kw["rules"] == {} and kw["start_from"] == "strict" and v[1][2] == "compliant"
+    assert L.VARIANT_ORDER.index("control") == L.VARIANT_ORDER.index("strict") + 1

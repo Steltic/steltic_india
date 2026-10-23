@@ -57,12 +57,13 @@ BASE_WAIVERS = (r"grounding record not available \(report not built\)",)
 LEVER_ORDER = ("ltb_gradient", "joint_deliverable", "sway_H150_dado", "thin_purlins", "base_key_analysis",
                "collateral_in_uplift", "omrf_r3", "rods")
 CUM_ORDER = LEVER_ORDER + ("market",)
-VARIANT_ORDER = (("gold", "rerun", "strict") + LEVER_ORDER + tuple("cum:" + n for n in LEVER_ORDER) +
+VARIANT_ORDER = (("gold", "rerun", "strict", "control") + LEVER_ORDER + tuple("cum:" + n for n in LEVER_ORDER) +
                  ("compliant", "market", "solar_ready"))
 LABELS = {
     "gold": "Gold as published",
     "rerun": "Gold sizes, this engine (strict rules)",
     "strict": "Auto-sized strict baseline",
+    "control": "Control: strict rules again, from the strict design (sizer resolution)",
     "joint_deliverable": "Joints for the deliverable moment (12.10.2.1)",
     "ltb_gradient": "LTB with the moment-gradient C1",
     "sway_H150_dado": "Sway H/150 + dado-top H/240",
@@ -113,7 +114,7 @@ def _worst_status(sts):
     return "compliant"
 
 
-def variants_for(spec, solar=False, ladder="full"):
+def variants_for(spec, solar=False, ladder="full", control=False):
     """[(name, kwargs for autosize, status, note)] of a job; status: compliant / reading / not compliant / n/a.
     The levers alone start from the strict design; the cumulative steps ('cum:<lever>', the waterfall) add one lever
     at a time to the previous step, in CUM_ORDER (the compliant levers first, then the readings, then the not-compliant
@@ -130,6 +131,11 @@ def variants_for(spec, solar=False, ladder="full"):
         out.append((name, dict(rules=dict(rules or {}), **kw), status, note))
 
     add("strict", {}, "compliant", "owner rulings D-T1, D-T4, D-T7, O1; H/240 with the dado; IS 811 purlins Fy 240")
+    if control:
+        # second wave: the same rules again from the strict design -- what the sizer still finds with no lever is its
+        # resolution (a lever's change smaller than this is within the sizer's noise)
+        add("control", {}, "compliant", "strict rules again, from the strict design: the change is the sizer's "
+                                        "resolution, not a lever", start_from="strict")
     if omrf:
         levers["joint_deliverable"] = ({"joint_demand": "deliverable"}, "compliant",
                                        PL.STATUS[("joint_demand", "deliverable")][1], {})
@@ -366,7 +372,7 @@ def run_job(job, a, solar=False):
     if study.get("ladder") and study["ladder"] != ladder:
         raise SystemExit("%s: the study in %s was run with --ladder %s" % (job, work, study["ladder"]))
     study["ladder"] = ladder
-    vlist = variants_for(spec, solar=solar, ladder=ladder)
+    vlist = variants_for(spec, solar=solar, ladder=ladder, control=bool(getattr(a, "control", False)))
     want = set(a.variants.split(",")) if a.variants else None
     strict = rows.get("strict")
     stopped = None
@@ -791,6 +797,8 @@ def main():
     ap.add_argument("--max-runs", type=int, default=8)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--solar", action="store_true", help="IN_Ex1: add the solar-ready variant (0.15 kN/m2 PV)")
+    ap.add_argument("--control", action="store_true",
+                    help="add the control variant: strict rules again from the strict design (the sizer's resolution)")
     ap.add_argument("--ladder", choices=("full", "short"), default="full",
                     help="full: the cumulative ladder one lever at a time; short: strict -> all compliant levers -> "
                          "market bundle (for a study that would otherwise take too long)")
