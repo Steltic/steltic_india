@@ -165,7 +165,7 @@ def _drift_fig(cfg, run):
 
 
 def _codes_table(cfg, pkg):
-    # second wave item 16: one citation per standard (IS 875 (Part 1):1987, IS 2062 (Part 1):2025, ...); IS 18168 is
+    # second wave item 16: one citation per standard (IS 875 (Part 1):2026, IS 2062 (Part 1):2025, ...); IS 18168 is
     # listed wherever its checks were evaluated, not only where cfg['apply_is18168'] is set
     rows = [list(r) for r in RS.CODE_ROWS]
     if RS.uses_is18168(cfg, pkg):

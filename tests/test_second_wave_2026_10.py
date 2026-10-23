@@ -292,17 +292,17 @@ def test_strengthening_option_in_the_pv_section(tmp_path):
 def test_codes_table_citations():
     import report_india as RI
     h = RI._codes_table({}, {})
-    assert "IS 875 (Part 1):1987" in h and "IS 2062 (Part 1):2025" in h and "(Part 4):2021" in h
-    assert "(Part 1):2026" not in h and "IS 18168" not in h
+    assert "IS 875 (Part 1):2026" in h and "IS 2062 (Part 1):2025" in h and "(Part 4):2021" in h
+    assert "(Part 1):1987" not in h and "IS 18168" not in h
     pkg = {"capacity_design": {"section12": {"checks": [{"id": "is18168_table2_beam", "ok": True}]}}}
     assert "IS 18168:2023" in RI._codes_table({}, pkg)
 
 
 def test_citation_normalisation():
     import report_second_wave as RS
-    t = RS.normalise_citations("IS 875 (Part 1):2026 / Part 2:1987; Snow (IS 875 Part 4:2021); IS 875-3 6.3.4; "
+    t = RS.normalise_citations("IS 875 (Part 1):1987 / Part 2:1987; Snow (IS 875 Part 4:2021); IS 875-3 6.3.4; "
                                "IS 2062:2025; IS 875 Parts 2 and 4; IS 875 Parts 1-5; IS 1893 Part 1")
-    assert t == ("IS 875 (Part 1):1987 / (Part 2):1987; Snow (IS 875 (Part 4):2021); IS 875 (Part 3) 6.3.4; "
+    assert t == ("IS 875 (Part 1):2026 / (Part 2):1987; Snow (IS 875 (Part 4):2021); IS 875 (Part 3) 6.3.4; "
                  "IS 2062 (Part 1):2025; IS 875 (Parts 2 and 4); IS 875 (Parts 1 to 5); IS 1893 (Part 1)")
     assert RS.normalise_citations("IS 875 (Part 3):2015") == "IS 875 (Part 3):2015"
     h = RS.tidy_html("<a href='IS 875-3.html'>IS 875-3 Table 5 by the EOR</a>")

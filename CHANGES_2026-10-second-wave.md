@@ -74,9 +74,9 @@ are untouched.
 
 ## Citations (H6, item 16)
 
-- One style for the standards in every printed line outside the activity log: IS 875 (Part 1):1987,
-  (Part 2):1987, (Part 3):2015, (Part 4):2021, (Part 5):1987; IS 2062 (Part 1):2025; IS 1893 (Part 1):2016 with
-  Amendments 1 and 2; IS 875-N shorthand written as IS 875 (Part N). IS 875 (Part 1):2026 (a draft) is gone.
+- One style for the standards in every printed line outside the activity log: IS 875 (Part 1):2026
+  (Third Revision, the edition in the corpus), (Part 2):1987, (Part 3):2015, (Part 4):2021, (Part 5):1987; IS 2062 (Part 1):2025; IS 1893 (Part 1):2016 with
+  Amendments 1 and 2; IS 875-N shorthand written as IS 875 (Part N). A stray "(Part 1):1987" is written as the 2026 edition.
 - IS 18168:2023 is listed in the codes table wherever its checks were evaluated. It was missing on Ex9, Ex10,
   Ex12 (+ units), Ex13, Ex14, Ex16, Ex17 and Ex18, which do not set `apply_is18168` but whose Chapter 9 carries
   IS 18168 checks.

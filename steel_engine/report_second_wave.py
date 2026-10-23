@@ -750,7 +750,7 @@ def strengthening_html(root):
 
 # ============================================================================================ H6 citations
 CODE_ROWS = [["IS 800:2007", "General construction in steel &mdash; limit state design"],
-             ["IS 875 (Part 1):1987 / (Part 2):1987", "Dead loads / imposed loads"],
+             ["IS 875 (Part 1):2026 / (Part 2):1987", "Dead loads / imposed loads"],
              ["IS 875 (Part 3):2015", "Wind loads"],
              ["IS 875 (Part 4):2021 / (Part 5):1987", "Snow loads / special loads and combinations"],
              ["IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020)", "Earthquake resistant design (in force: BIS withdrew "
@@ -759,7 +759,7 @@ CODE_ROWS = [["IS 800:2007", "General construction in steel &mdash; limit state 
              ["IS 816 / IS 4000", "Welding / high-strength friction grip bolts (where used)"]]
 
 _CITE_SUBS = [
-    (re.compile(r"IS\s*875\s*\(Part\s*1\)\s*:\s*2026"), "IS 875 (Part 1):1987"),
+    (re.compile(r"IS\s*875\s*\(Part\s*1\)\s*:\s*1987"), "IS 875 (Part 1):2026"),
     (re.compile(r"IS\s*875\s*\(Part\s*4\)\s*:\s*1987"), "IS 875 (Part 4):2021"),
     (re.compile(r"IS\s*2062\s*:\s*(\d{4})"), r"IS 2062 (Part 1):\1"),
     (re.compile(r"IS\s*875\s+Parts\s+1\s*-\s*5"), "IS 875 (Parts 1 to 5)"),
