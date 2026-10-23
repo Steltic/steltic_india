@@ -717,10 +717,12 @@ def compliance_html(root):
     df = cc.get("difference") or {}
     out = ["<h3>%s</h3>" % _e(cc.get("title") or "Cost of compliance"),
            "<p>%s</p>" % _e(cc.get("basis") or ""),
-           _tab(["design", "R", "steel (t)", "kg/m²", "worst strength ratio", "governing", "status", "code status"], rows)]
+           _tab(["design", "R", "steel (t)", "kg/m²", "largest check ratio", "governing check", "status", "code status"], rows),
+           "<p class='note'>Largest check ratio: the highest ratio over every check of the design (members, Section 12, joints, purlins and girts, sway), so it can differ from the member strength headline above.</p>"]
     if df:
-        out.append("<p><b>Difference:</b> %s kg/m² (%s %%) for the code-compliant design.</p>"
-                   % (_f(df.get("kg_m2"), 1), _f(df.get("percent"), 1)))
+        out.append("<p><b>Difference:</b> %s kg/m² (%s %%)%s.</p>"
+                   % (_f(df.get("kg_m2"), 1), _f(df.get("percent"), 1),
+                      (": " + _e(df["between"])) if df.get("between") else " for the code-compliant design"))
     if cc.get("source"):
         out.append("<p class='note'>Source: %s</p>" % _e(cc["source"]))
     return "".join(out)
@@ -737,7 +739,7 @@ def strengthening_html(root):
            _tab(["result", "value"], [
                ["PV load carried", "%s kN/m²" % _f(so.get("pv_kNm2"), 2)],
                ["status", _e(so.get("status") or "")],
-               ["worst strength ratio after strengthening", _f(so.get("worst_strength_dc"), 3)],
+               ["largest check ratio after strengthening", _f(so.get("worst_strength_dc"), 3)],
                ["steel added", "%s t (%s kg/m²)" % (_f(so.get("added_steel_t"), 2), _f(so.get("added_kg_m2"), 2))]])]
     ch = [[_e(c.get("item")), _e(c.get("from")), _e(c.get("to")), _f(c.get("added_kg"), 0)]
           for c in so.get("changes") or [] if isinstance(c, dict)]
