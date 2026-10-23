@@ -96,6 +96,11 @@ def omrf_patch(spec):
         ov[c] = 3.0 if d == "y" else 4.0
     patch = {"system": "OMRF+OCBF", "system_y": "OMRF", "system_x": "OCBF", "apply_is18168": False,
              "load_plan/seismic_summary/system": "OMRF+OCBF"}
+    if str(spec["seismic"].get("zone")).upper() != "II":
+        # second wave: let the comparison run past the preflight zone ban (pipeline.study_zone_ban_as_warning); the
+        # design status keeps the ban, which the study waives (ZONE_WAIVERS) and reports as the code status
+        patch["study_allow_banned_system"] = ("PEB lever study, seismic route OMRF_R3 in Zone %s: cost of compliance"
+                                              % spec["seismic"]["zone"])
     return ov, patch
 
 

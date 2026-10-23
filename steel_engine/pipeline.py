@@ -25,7 +25,7 @@ releases, etc.), set cfg["custom_build"] = a function custom_build(cfg, transf) 
 OpenSees model and returns the standard info dict {cm, present, z, NF, ele:[(tag,kind,sec,n1,n2)]}
 using engine3d.ntag(i,j,k)/mtag(k); the whole pipeline then runs on your model unchanged.
 """
-import os, json, sys, subprocess, copy
+import os, json, re, sys, subprocess, copy
 
 _HERE = os.path.dirname(os.path.abspath(__file__))     # .../engine
 _REPO = os.path.dirname(_HERE)                          # repo root (steel_builder)
@@ -100,6 +100,22 @@ def build_and_preview(name, cfg=None):
                      "call design_and_report." % base)}
 
 
+_ZONE_BAN_RE = re.compile(r"is not allowed in Seismic Zone|with I = [0-9.]+ in Zone III --")
+
+
+def study_zone_ban_as_warning(cfg, findings):
+    """PEB-LEVERS (second wave, cost of compliance): cfg['study_allow_banned_system'] = '<why>' lets a COMPARISON run
+    of an ordinary frame in a zone where IS 1893 (Part 1) Table 9 Note 1 / IS 800 12.7.1.1 / 12.10.1.1 do not permit
+    it go through the analysis: the preflight zone-ban ERROR becomes a WARN marked 'STUDY ONLY'.  Nothing else is
+    relaxed: the design status keeps the zone-ban reason and the Section 12 zone gate fails, so such a run is never
+    COMPLETE.  Without the key (every job) the findings are returned unchanged."""
+    why = (cfg or {}).get("study_allow_banned_system")
+    if not why:
+        return findings
+    return [("WARN", "STUDY ONLY (%s), not a compliant design: %s" % (why, m))
+            if (sv == "ERROR" and _ZONE_BAN_RE.search(str(m))) else (sv, m) for sv, m in (findings or [])]
+
+
 def design_and_report(name, cfg=None, do_report=True):
     """Run the full design (no user-review pause): register cfg, run preflight -> analysis -> combinations ->
     IS 800 member + Section 12 checks -> figures -> HTML report, all in process, writing to the job folder
@@ -122,6 +138,7 @@ def design_and_report(name, cfg=None, do_report=True):
     try:
         import preflight as _PF
         _pf = _PF.check(E.CFG.get(name))
+        _pf = study_zone_ban_as_warning(E.CFG.get(name), _pf)
         out["preflight"] = _pf
         print(_PF.render(_pf))
         _pf_err = [m for s, m in (_pf or []) if s == "ERROR"]

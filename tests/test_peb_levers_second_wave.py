@@ -172,3 +172,37 @@ def test_feedback_tightens_the_strut_margin():
     A.feedback(m, {"fail_items": [(1.22, "secondary", "gable-rafter-as-girder-chord-WI250X125X8X4", "strut")]}, None,
                log_fn=lambda *a: None)
     assert abs(m["strut"] - 0.96) < 1e-9 and m["member"] == 0.99
+
+
+def test_study_zone_ban_is_a_warning_only_for_a_declared_study_run():
+    """cfg['study_allow_banned_system'] (cost-of-compliance runs) turns only the preflight zone-ban ERRORs into
+    'STUDY ONLY' warnings; other ERRORs stay, and a job without the key is unchanged."""
+    import india_seismic_gates as G
+    import pipeline as P
+    cfg = {"system": "OMF", "seis": {"zone": "IV", "Z": 0.24, "I": 1.0, "R": 3.0},
+           "load_plan": {"seismic_summary": {"zone": "IV", "Z": 0.24, "I": 1.0, "R": 3.0, "system": "OMF"}}}
+    f = G.system_zone_findings(cfg)
+    ban = [m for s, m in f if s == "ERROR" and "is not allowed in Seismic Zone" in m]
+    assert ban, f
+    other = ("ERROR", "load_plan.seismic_summary.Ah missing")
+    assert P.study_zone_ban_as_warning(cfg, f + [other]) == f + [other]
+    cfg["study_allow_banned_system"] = "cost of compliance"
+    g = P.study_zone_ban_as_warning(cfg, f + [other])
+    assert other in g and not [m for s, m in g if s == "ERROR" and "is not allowed in Seismic Zone" in m]
+    assert [m for s, m in g if s == "WARN" and m.startswith("STUDY ONLY (cost of compliance)")]
+    # Zone III with I > 1 (IS 800 12.10.1.1 alone)
+    msg = ("ERROR", "Steel OMRF with I = 1.5 in Zone III -- IS 800 12.10.1.1")
+    assert P.study_zone_ban_as_warning(cfg, [msg])[0][0] == "WARN"
+    # the design status still carries the ban (never COMPLETE)
+    assert ban[0] in [m for s, m in G.system_zone_findings(cfg) if s == "ERROR"]
+
+
+def test_omrf_patch_declares_the_study_run_outside_zone_II():
+    import peb_lever_jobs as J
+    import peb_lever_study as L
+    _, p4 = L.omrf_patch(J.JOB_SPECS["IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR"])
+    assert "Zone IV" in p4["study_allow_banned_system"] and p4["apply_is18168"] is False
+    _, p2 = L.omrf_patch(J.JOB_SPECS["IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi"])
+    assert "Zone III" in p2["study_allow_banned_system"]
+    _, p1 = L.omrf_patch(J.JOB_SPECS["IN_Ex1_PEB_factory_shed_tapered_Bengaluru"])
+    assert "study_allow_banned_system" not in p1
