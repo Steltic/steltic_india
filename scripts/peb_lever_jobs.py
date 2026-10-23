@@ -21,6 +21,56 @@ A job spec tells steel_engine/peb_autosize.py which module-level constants of th
   brace          the brace constant (resized by the rod switch only)
 """
 
+# second wave: the solar-ready variant of IN_Ex1 uses the wind basis of the IN_Ex5 PV check -- with the PV mass the
+# first transverse mode drops below 1.0 Hz and IS 875 (Part 3):2015 9.1 (b) asks for the 10.2 gust-factor along-wind
+# load; IN_Ex5's cfg.py applies it (walls of the across-ridge cases and the Y storey force scaled to the 10.2 force).
+# The same block is appended to a copy of the IN_Ex1 job for the variant (evidence: IN_Ex5's retrieval_evidence.json,
+# a superset of IN_Ex1's).  Names are IN_Ex1's module-level constants.
+SOLAR_GUST_APPEND = r"""
+
+# ==================================================================================================================
+# PEB-LEVERS solar-ready variant (second wave): IS 875-3 9.1 (b) with the PV mass, as in IN_Ex5's cfg.py.  When the
+# first transverse mode is below 1.0 Hz the along-wind frame load is the larger of the 10.2 gust-factor force and the
+# static 7.2 force (walls of the across-ridge member cases and the Y storey force); otherwise the static wind stands.
+# ==================================================================================================================
+if SOLAR_PV > 0.0:
+    _lp = cfg["load_plan"]
+    _lp["retrieval"] = list(_lp["retrieval"]) + [_ev(k) for k in ("dyn_9_1", "dyn_10_1", "gust_10_2", "beta_T36",
+                                                                  "hourly_6_4", "turb_6_5", "across_10_3_scope")]
+    _T, _w2, _eX, _eY, _Mt = E.modal(cfg, 3)
+    _iy = max(range(len(_T)), key=lambda n: _eY[n]); _ix = max(range(len(_T)), key=lambda n: _eX[n])
+    FA_Y, FA_X = 1.0 / _T[_iy], 1.0 / _T[_ix]
+    CF_Y = CPE_W0["A"] - CPE_W0["B"]
+    BETA = 0.020
+    if FA_Y < 1.0:
+        AW_Y = WT.along_wind_story_forces([H_EAVE / 1000.0], L_M, CF_Y, FA_Y, TERRAIN, VB, K1, K3, K4, BETA)
+        GUST_RATIO = max(1.0, AW_Y["VB_N"] / (F_Y * 1000.0))
+        for p_ in _lp["member_wind"]:
+            if p_["direction"] == "across_ridge" and GUST_RATIO > 1.0:
+                p_["wall_windward_kNm2"] += (GUST_RATIO - 1.0) * CPE_W0["A"] * PD
+                p_["wall_leeward_kNm2"] += (GUST_RATIO - 1.0) * CPE_W0["B"] * PD
+                p_["gust_factor_basis"] = "walls x %.3f to the IS 875-3 10.2 force (G %.3f, f %.3f Hz)" % (
+                    GUST_RATIO, AW_Y["gust"]["G"], FA_Y)
+        _lp["story_forces"]["W_Y"] = {"1": [0.0, F_Y * GUST_RATIO * 1000.0, 0.0]}
+        _lp["wind_summary"]["gust_factor"] = {
+            "G": round(AW_Y["gust"]["G"], 4), "G_y": round(AW_Y["gust"]["G"], 4), "fa_hz": round(FA_Y, 4),
+            "fa_y_hz": round(FA_Y, 4), "fa_x_hz": round(FA_X, 4), "beta": BETA,
+            "beta_basis": "IS 875-3 Table 36 ii) bolted steel structures 0.020 (as IN_Ex5)",
+            "Cf": {"Y": CF_Y}, "Cf_basis": "Table 5 net wall coefficient A - B (as the static 7.2 force)",
+            "terrain": TERRAIN, "h_m": H_EAVE / 1000.0, "b_m": L_M,
+            "VB_y_kN": round(AW_Y["VB_N"] / 1000.0, 1), "VB_y_static_kN": round(F_Y, 1),
+            "applied_W_Y_kN": round(F_Y * GUST_RATIO, 1), "gust_ratio": round(GUST_RATIO, 4),
+            "components_y": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in AW_Y["gust"].items()},
+            "x_direction": "first X mode %.2f Hz (static 7.2 only when >= 1.0 Hz)" % FA_X,
+            "trigger": "PV mass: f1 = %.2f Hz < 1.0 Hz (9.1 (b))" % FA_Y,
+            "cite": "IS 875 (Part 3):2015 9.1 (b); 10.1; 10.2; 6.4; 6.5; Table 36 ii)"}
+        _lp["wind_summary"]["across_wind"] = {"eor": {
+            "value": 0.0,
+            "source": "EOR (as IN_Ex5): no across-wind response -- IS 875-3 10.3 covers tall enclosed buildings and "
+                      "towers; this is a 10 m low-rise shed",
+            "cite": "IS 875 (Part 3):2015 10.3 (scope), 10.4; VERIFY (EOR)"}}
+"""
+
 JOB_SPECS = {
     "IN_Ex1_PEB_factory_shed_tapered_Bengaluru": {
         "job": "IN_Ex1_PEB_factory_shed_tapered_Bengaluru",
@@ -39,6 +89,8 @@ JOB_SPECS = {
                       "consts": {"purlin": "PURLIN", "girt": "GIRT", "fy": "FY"},
                       "nonpermanent": {"collateral": 0.15}, "span_mm": 7500.0},
         "brace": {"const": "BRACE"},
+        "solar": {"pv_kNm2": 0.15, "evidence_job": "IN_Ex5_PEB_rooftop_solar_check_Bengaluru",
+                  "cfg_append": SOLAR_GUST_APPEND},
     },
     "IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi": {
         "job": "IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi",

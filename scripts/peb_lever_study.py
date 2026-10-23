@@ -327,6 +327,30 @@ def design_changes(res):
     return out
 
 
+def solar_job(job_dir, spec, jobs_root, work):
+    """The job the solar-ready variant is sized on (second wave): a copy of the job with spec['solar']['cfg_append']
+    appended to its cfg.py (IN_Ex1: the IN_Ex5 gust-factor wind once the PV mass takes f1 below 1.0 Hz) and the
+    evidence (retrieval_evidence.json, rag/) of spec['solar']['evidence_job'] laid over the job's own.  Without a
+    'solar' entry the job itself is used."""
+    import shutil
+    so = spec.get("solar") or {}
+    if not so.get("cfg_append"):
+        return job_dir
+    d = os.path.join(work, "_solar_job", os.path.basename(job_dir))
+    if os.path.isdir(d):
+        shutil.rmtree(d)
+    shutil.copytree(job_dir, d, ignore=shutil.ignore_patterns("design", "figs", "report.html", "viewer_3d.html",
+                                                              "model.std", "model_*.py", "__pycache__"))
+    ev = os.path.join(jobs_root, so.get("evidence_job") or "", "")
+    if so.get("evidence_job") and os.path.isdir(ev):
+        shutil.copy2(os.path.join(ev, "retrieval_evidence.json"), os.path.join(d, "retrieval_evidence.json"))
+        if os.path.isdir(os.path.join(ev, "rag")):
+            shutil.copytree(os.path.join(ev, "rag"), os.path.join(d, "rag"), dirs_exist_ok=True)
+    with open(os.path.join(d, "cfg.py"), "a", encoding="utf-8") as f:
+        f.write(so["cfg_append"])
+    return d
+
+
 def kgm2(ton, area):
     out = {g: round(float((ton or {}).get(g) or 0.0) / area, 2) for g in GROUPS}
     out["total"] = round(sum(float((ton or {}).get(g) or 0.0) for g in GROUPS) / area, 2)
@@ -413,10 +437,12 @@ def run_job(job, a, solar=False):
             extra_ov[spec["Lr_const"]] = PL.MARKET_PRACTICE["Lr_kNm2"]
             Lr = PL.MARKET_PRACTICE["Lr_kNm2"]
             free = True
+        vjob_dir = job_dir
         if kw.get("solar_pv"):
             extra_ov["SOLAR_PV"] = float(kw["solar_pv"])
             args["extra_pv"] = float(kw["solar_pv"])
             args["floor"] = True                       # strengthening of the published gold: nothing lighter
+            vjob_dir = solar_job(job_dir, spec, a.jobs_root, work)
         if name != "strict":
             if not strict or not strict.get("best_x"):
                 rows[name] = {"name": name, "label": label(name), "status": status, "note": note,
@@ -449,7 +475,7 @@ def run_job(job, a, solar=False):
             args["waivers"] = tuple(list(BASE_WAIVERS) + ZONE_WAIVERS)
         if kw.get("rods"):
             args["waivers"] = tuple(list(args["waivers"]) + ROD_WAIVERS)
-        res = A.autosize(job_dir, spec, rules, work, name=name, extra_overrides=extra_ov or None,
+        res = A.autosize(vjob_dir, spec, rules, work, name=name, extra_overrides=extra_ov or None,
                          cfg_patch=patch or None, rods=rods, Lr=Lr, free_flange=free, **args)
         best = res.get("best")
         row = {"name": name, "label": label(name), "status": status, "note": note, "rules": rules,

@@ -335,3 +335,32 @@ def test_strengthen_only_floors_the_knee_diagonal_stiffener():
     assert "diag_min" in sig.parameters and sig.parameters["diag_min"].default is None
     src = inspect.getsource(A.Evaluator.connections)
     assert 'diag_min=float((fl.get("knee_panel") or {}).get("diag_t") or 0.0)' in src
+
+
+def test_solar_job_uses_the_IN_Ex5_wind_basis(tmp_path):
+    """The solar-ready variant is sized on a copy of the job with spec['solar']['cfg_append'] appended (IN_Ex1: the
+    IN_Ex5 gust-factor wind once the PV mass takes f1 below 1.0 Hz) and the evidence of the PV job laid over."""
+    import peb_lever_jobs as J
+    import peb_lever_study as L
+    jobs = tmp_path / "jobs"
+    j1, j5 = jobs / "JOB1", jobs / "JOB5"
+    for d in (j1 / "rag", j1 / "design", j1 / "secondary", j5 / "rag"):
+        d.mkdir(parents=True)
+    (j1 / "cfg.py").write_text("SOLAR_PV = 0.0\ncfg = {}\n")
+    (j1 / "retrieval_evidence.json").write_text('[{"item": "a"}]')
+    (j1 / "rag" / "a.txt").write_text("a")
+    (j1 / "design" / "calc_package.json").write_text("{}")
+    (j5 / "retrieval_evidence.json").write_text('[{"item": "a"}, {"item": "dyn_9_1"}]')
+    (j5 / "rag" / "dyn.txt").write_text("9.1")
+    spec = {"solar": {"pv_kNm2": 0.15, "evidence_job": "JOB5", "cfg_append": "\n# APPENDED\n"}}
+    d = L.solar_job(str(j1), spec, str(jobs), str(tmp_path / "work"))
+    assert d != str(j1) and open(os.path.join(d, "cfg.py")).read().endswith("# APPENDED\n")
+    assert "dyn_9_1" in open(os.path.join(d, "retrieval_evidence.json")).read()
+    assert sorted(os.listdir(os.path.join(d, "rag"))) == ["a.txt", "dyn.txt"]
+    assert not os.path.exists(os.path.join(d, "design"))            # no stale outputs in the variant job
+    assert open(j1 / "cfg.py").read() == "SOLAR_PV = 0.0\ncfg = {}\n"  # the job itself is not touched
+    assert L.solar_job(str(j1), {}, str(jobs), str(tmp_path / "work")) == str(j1)
+    ap = J.JOB_SPECS["IN_Ex1_PEB_factory_shed_tapered_Bengaluru"]["solar"]["cfg_append"]
+    compile(ap, "append", "exec")
+    for name in ("SOLAR_PV", "E.modal", "WT.along_wind_story_forces", "CPE_W0", "F_Y", "gust_factor", "9.1 (b)"):
+        assert name in ap, name
