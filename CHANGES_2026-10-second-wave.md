@@ -118,6 +118,18 @@ are untouched.
 Not done here (need a design or engine change, or a source outside the corpus): see the HR result file
 (`/home/claude/briefs/HR_RESULT2.md`).
 
+## Contract
+
+- `contract/AGENT_START.md` documents the optional report-only keys `soil_basis`, `facade_basis`, `deck` and
+  `report_framing` (the contract lint requires every cfg key the engine reads to be named).
+
+## Gold harness (outside the repo)
+
+- `/home/claude/gold/harness/run_job.py` adds to run_summary.json: `headline` (the record above), `worst_strength`,
+  `worst_slenderness`, `worst_members_strength` [(strength, id, slenderness ratio, KL/r, limit)] and
+  `worst_members_note`. `worst_members` is kept as it was (member D/C = the larger of the two ratios) for older
+  scripts. The previous harness is saved as `/home/claude/gold/baseline_2026-10-23/run_job.py.before_second_wave`.
+
 ## Tests
 
 - `tests/test_second_wave_2026_10.py` (new): headline ratios and their printing, headline.json, soil and Ta notes
@@ -126,7 +138,54 @@ Not done here (need a design or engine change, or a source outside the corpus): 
   strengthening sections from fixtures, citations and the codes table, README roadmap, ridge line, assumptions,
   snow, Section 12 units, 7.11.2 reason, Table 7 row, system names, flexible-run reason, effective lengths and
   ridge height, and no US residue in any new text.
+- Whole suite: 1,037 passed, 4 skipped (main before this branch: 1,005 passed, 4 skipped).
 
 ## Gold re-runs
 
-(table below)
+Before any change the outputs of the 24 golds (run_summary.json, design/, report.html, STATUS.md, the IS 801 secondary
+results) were snapshotted in `/home/claude/gold/baseline_2026-10-23/` with the md5 of every gold `cfg.py`. All 24 were
+then re-run with reports and no LLM on this branch, each wrapped in `/home/claude/bin/heavy`, the five PEB jobs with
+their IS 801 secondary step first (steltic_CFS_india fix/2026-10-first-wave 81e8bbe). Every run returned rc 0.
+
+**The designs are unchanged.** For every job the member groups and sections, every member check ratio, value and
+limit, the connections, the Section 12 checks, the storey drifts, the PEB members, the secondary members, the IS 801
+purlin and girt results, the seismic weight, the RSA scale factors, the gates, the status and its open reasons and
+the kg/m² are identical to the snapshot (compared at six decimals; one Ex13 column ratio differs by 2.5 × 10⁻¹⁰,
+solver round-off). The only other differences are combination labels on checks where two combinations give exactly
+the same ratio (for example 1.5DL+1.5LL and 1.5DL+1.5LL+N_X on a floor girder): the label of a tie depends on the
+order the combinations are visited, not on this branch. No gold `cfg.py` was changed.
+
+What the table shows: the headline is now the worst strength ratio. It differs from the old single member D/C only
+on IN_Ex9 (0.865 was the brace KL/r 155.8 against 180; the worst strength ratio is 0.810). The new non-blocking
+point (full-bay composite deck) is on Ex13, Ex14 and Ex16; it does not change their status.
+
+| Job | Status before → after | Member D/C before (mixed) | Worst strength ratio after (member) | Slenderness KL/r / limit (ratio) | Drift D/C before → after | kg/m² before → after | New non-blocking point |
+|---|---|---|---|---|---|---|---|
+| IN_Ex1_PEB_factory_shed_tapered_Bengaluru | complete → complete | 0.961 | 0.961 (lateral_col-WI956X250X14X6) | 129.5 / 180 (0.719) | 0.266 → 0.266 | 34.5 → 34.5 | — |
+| IN_Ex2_PEB_GradeA_warehouse_multispan_Bhiwandi | complete → complete | 0.930 | 0.930 (roof-WI500X300X25X14) | 148.8 / 180 (0.827) | 0.390 → 0.390 | 56.2 → 56.2 | — |
+| IN_Ex3_PEB_crane_shed_10t_Nagpur | complete → complete | 0.849 | 0.849 (roof-WI778X220X12X6) | 129.5 / 180 (0.719) | 0.086 → 0.086 | 57.0 → 57.0 | — |
+| IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR | complete → complete | 0.890 | 0.890 (lateral_col-WI422X250X20X16) | 141.2 / 180 (0.784) | 0.168 → 0.168 | 63.8 → 63.8 | — |
+| IN_Ex5_PEB_rooftop_solar_check_Bengaluru | partial → partial | 1.102 | 1.102 (lateral_col-WI956X250X14X6) | 129.5 / 180 (0.719) | 0.363 → 0.363 | 34.5 → 34.5 | — |
+| IN_Ex6_OMRF_warehouse_mezzanine_Hyderabad | complete → complete | 0.887 | 0.887 (floor-NPB600X220X122.45) | 156.2 / 180 (0.868) | 0.301 → 0.301 | 47.6 → 47.6 | — |
+| IN_Ex7_Crane_bay_OMRF_OCBF_Vizag | complete → complete | 0.953 | 0.953 (lateral_col-WPB600X300X211.92) | 146.0 / 180 (0.811) | 0.073 → 0.073 | 73.8 → 73.8 | — |
+| IN_Ex8_SMF_portal_Chennai_wind | complete → complete | 0.804 | 0.804 (roof-WPB500X300X155.08) | 104.5 / 300 (0.348) | 0.046 → 0.046 | 72.1 → 72.1 | — |
+| IN_Ex9_Gable_warehouse_SMF_SCBF_snow_Shimla | complete → complete | 0.865 | 0.810 (roof-NPB600X220X154.47) | 155.8 / 180 (0.865) | 0.135 → 0.135 | 52.8 → 52.8 | — |
+| IN_Ex10_SCBF_bigbox_flexdiaphragm_Indore | complete → complete | 0.920 | 0.920 (roof-WPB450X300X139.76) | 159.1 / 180 (0.884) | 0.018 → 0.018 | 29.6 → 29.6 | — |
+| IN_Ex11_OCBF_4levels_splitlevel_Jaipur | complete → complete | 0.947 | 0.947 (roof-NPB450X190X67.16) | 189.9 / 250 (0.759) | 0.093 → 0.093 | 42.4 → 42.4 | — |
+| IN_Ex11_OCBF_4levels_splitlevel_Jaipur/units/workshop | complete → complete | 0.947 | 0.947 (roof-NPB450X190X67.16) | 187.5 / 250 (0.750) | 0.018 → 0.018 | 50.0 → 50.0 | — |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh | complete → complete | 0.984 | 0.984 (floor-NPB700X250X143.42) | 220.8 / 250 (0.883) | 0.808 → 0.808 | 63.8 → 63.8 | — |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitB_link | complete → complete | 0.984 | 0.984 (floor-NPB700X250X143.42) | 220.8 / 250 (0.883) | 0.339 → 0.339 | 64.5 → 64.5 | — |
+| IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitC_gym | complete → complete | 0.960 | 0.960 (roof-NPB700X250X143.42) | 201.9 / 250 (0.808) | 0.090 → 0.090 | 116.4 → 116.4 | — |
+| IN_Ex13_SCBF_5levels_Delhi | complete → complete | 0.970 | 0.970 (floor-NPB450X190X67.16) | 138.8 / 180 (0.771) | 0.067 → 0.067 | 58.1 → 58.1 | deck span |
+| IN_Ex14_SCBF_hospital_Kolkata | complete → complete | 0.864 | 0.864 (floor-NPB450X190X92.37) | 126.4 / 180 (0.702) | 0.153 → 0.153 | 69.4 → 69.4 | deck span |
+| IN_Ex15_EBF_8levels_Lplan_Pune | complete → complete | 0.999 | 0.999 (floor-WPB260X260X114.4) | 225.0 / 300 (0.750) | 0.326 → 0.326 | 66.2 → 66.2 | — |
+| IN_Ex16_SMF_office_Mumbai | complete → complete | 0.774 | 0.774 (roof-NPB500X200X90.69) | 187.5 / 250 (0.750) | 0.836 → 0.836 | 74.5 → 74.5 | deck span |
+| IN_Ex17_SCBF_10levels_Ahmedabad | complete → complete | 0.932 | 0.932 (floor-NPB750X270X145.29) | 220.8 / 250 (0.883) | 0.474 → 0.474 | 62.4 → 62.4 | — |
+| IN_Ex18_SMF_podium_11levels_Kochi | complete → complete | 0.889 | 0.889 (floor-NPB750X270X174.54) | 214.8 / 250 (0.859) | 0.635 → 0.635 | 79.9 → 79.9 | — |
+| IN_Ex19_EBF_12levels_Tplan_Guwahati | complete → complete | 0.972 | 0.972 (floor-WPB400X300X155.26) | 206.8 / 250 (0.827) | 0.362 → 0.362 | 88.0 → 88.0 | — |
+| IN_Ex19_EBF_12levels_Tplan_Guwahati/units/stem | complete → complete | 0.947 | 0.947 (floor-WPB340X300X134.16) | 206.8 / 250 (0.827) | 0.276 → 0.276 | 105.3 → 105.3 | — |
+| IN_Ex20_SCBF_18levels_slender_Noida | complete → complete | 0.967 | 0.967 (floor-WPB550X300X199.44) | 213.8 / 250 (0.855) | 0.341 → 0.341 | 88.3 → 88.3 | — |
+
+Comparison script: `compare2.py` in the HR agent scratchpad; report scan: `scan2.py` (headline, wind base shear row, gust
+factor, composite scope, deck point, framing, ridge, assumptions, Table 7, base-shear statements, IS 18168 row,
+US residue 0 and no old citation forms on all 24 reports).
