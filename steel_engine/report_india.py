@@ -8,6 +8,7 @@ code: a missing input is shown as "not evaluated" with the reason.
 from __future__ import annotations
 
 import report_first_wave as FW
+import report_second_wave as RS
 import datetime
 import json
 import os
@@ -17,8 +18,8 @@ import engine3d as E
 
 CHAPTERS_IN = {
     1: ("Design basis & codes", [
-        "Governing Indian Standards and editions stated: IS 800:2007, IS 875 Parts 1-5, IS 1893 (Part 1):2016 "
-        "with Amendments 1 and 2, IS 808, IS 2062, IS 1161, IS 816 / IS 4000 where used.",
+        "Governing Indian Standards and editions stated: IS 800:2007, IS 875 (Parts 1 to 5), IS 1893 (Part 1):2016 "
+        "with Amendments 1 and 2, IS 808, IS 2062 (Part 1), IS 1161, IS 816 / IS 4000 where used.",
         "Importance factor (IS 1893 Table 8), zone and soil type, occupancy and imposed loads match the brief.",
         "Units (N, mm, MPa; kN/m2 for area loads) stated and consistent.",
         "Design status from india_seismic_gates.design_status stated with every open reason."]),
@@ -164,15 +165,10 @@ def _drift_fig(cfg, run):
 
 
 def _codes_table(cfg, pkg):
-    rows = [["IS 800:2007", "General construction in steel &mdash; limit state design"],
-            ["IS 875 (Part 1):2026 / Part 2:1987", "Dead loads / imposed loads"],
-            ["IS 875 (Part 3):2015", "Wind loads"],
-            ["IS 875 (Part 4):2021 / Part 5:1987", "Snow loads / special loads and combinations"],
-            ["IS 1893 (Part 1):2016 + Amd 1 (2017) + Amd 2 (2020)", "Earthquake resistant design (in force: BIS withdrew "
-             "the 2025 revision in March 2026)"],
-            ["IS 808:2021 / IS 2062 (Part 1):2025 / IS 1161:2014", "Rolled sections / structural steel / steel tubes"],
-            ["IS 816 / IS 4000", "Welding / high-strength friction grip bolts (where used)"]]
-    if cfg.get("apply_is18168") or str(cfg.get("system") or "").upper() in ("EBF",):
+    # second wave item 16: one citation per standard (IS 875 (Part 1):2026, IS 2062 (Part 1):2025, ...); IS 18168 is
+    # listed wherever its checks were evaluated, not only where cfg['apply_is18168'] is set
+    rows = [list(r) for r in RS.CODE_ROWS]
+    if RS.uses_is18168(cfg, pkg):
         rows.append(["IS 18168:2023", "Ductile design and detailing of steel structures (seismic)"])
     if (pkg or {}).get("peb") or cfg.get("peb_secondary"):
         rows.append(["IS 801:1975 (reaffirmed 2021) / IS 811:1987", "Cold-formed purlins and girts (working stress)"])
@@ -190,6 +186,11 @@ def _status_block(pkg):
             f"(authority: <code>{st.get('authority', 'india_seismic_gates.design_status')}</code>; "
             f"{st.get('n_reasons', len(reasons))} open reason(s)"
             + (f", {len(warns)} point(s) for the checking engineer" if warns else "") + ").</p>")
+    # second wave H1: the headline is the worst STRENGTH ratio; the slenderness ratio is printed beside it with its
+    # limit, and the Section 12 / connection / drift ratios in their own rows (never one mixed 'governing D/C')
+    hl = RS.headline(pkg)
+    hs = RS.headline_sentence(hl)
+    head += (f"<p><b>Headline:</b> {RS._e(hs)}.</p>" if hs else "") + RS.headline_html(pkg, hl)
     # first wave item 6: the non-blocking points are printed too, so COMPLETE never hides an open reading
     wtab = (("<p>Points the checking engineer should note (they do not block the status):</p>"
              + _t(["#", "note"], [[i + 1, w] for i, w in enumerate(warns)])) if warns else "")
@@ -205,14 +206,19 @@ def _systems(cfg, pkg):
     ss = ((cfg.get("load_plan") or {}).get("seismic_summary") or {})
     sx, sy = cfg.get("system_x"), cfg.get("system_y")
     rx, ry_ = cfg.get("R_x"), cfg.get("R_y")
+    _bs = RS.base_shear_notes(cfg, pkg, dims={})          # soil basis only here (no geometry needed)
+    _soil = _bs.get("soil")
     rows = [["Seismic force-resisting system", str(cfg.get("system") or "&mdash;") +
              ((" (X: %s, Y: %s)" % (sx or "&mdash;", sy or "&mdash;")) if (sx or sy) else "")],
+            ["System names (IS 1893 Table 9 / IS 800 Section 12)",
+             RS._e(RS.system_names("+".join(x for x in (cfg.get("system"), sx, sy) if x)) or "&mdash;")],
             ["Response reduction factor R (IS 1893 Table 9)",
              ("X %s / Y %s" % (_num(rx), _num(ry_))) if (rx is not None and ry_ is not None and rx != ry_)
              else _num(G.declared_R(cfg))],
             ["Importance factor I (IS 1893 Table 8)", _num(G.importance_of(cfg))],
             ["Zone / Z", "%s / %s" % (G.zone_of(cfg), _num(ss.get("Z")))],
-            ["Soil type", str(ss.get("soil") or (cfg.get("seis") or {}).get("soil") or "&mdash;")],
+            ["Soil type", RS._e(_soil["basis"]) if _soil else
+             str(ss.get("soil") or (cfg.get("seis") or {}).get("soil") or "&mdash;")],
             ["Brace configuration", str(cfg.get("brace_config") or "&mdash;")],
             ["Column bases / joints", "%s / %s" % ((cfg.get("model") or {}).get("bases", cfg.get("base")),
                                                    (cfg.get("model") or {}).get("joints", "&mdash;"))],
@@ -264,12 +270,15 @@ def _gravity_table(cfg):
         rows += [["Floor imposed load (IS 875 Part 2)", _num(cfg.get("L_floor")), "kN/m2"],
                  ["Partition allowance (IS 875-2 3.1.2)", _num(cfg.get("partition_load_kNm2")), "kN/m2"]]
     rows += [["Roof imposed load Lr (IS 875-2 Table 2)", _num(cfg.get("Lr")), "kN/m2"],
-             ["Snow (IS 875 Part 4:2021)", _num(cfg.get("snow")), "kN/m2"],
+             ["Snow (IS 875 (Part 4):2021)", _num(cfg.get("snow")), "kN/m2"],
              ["Cladding", _num(cfg.get("clad")), "kN/m2 of wall"],
              ["Member self-weight", "from the sections (78.5 kN/m3)", ""]]
     if not shed:
-        rows.append(["Floor system", "%s%s" % (cfg.get("floor_system") or "one-way",
-                                               (", deck spans " + str(cfg.get("deck_span"))) if cfg.get("deck_span") else ""), ""])
+        _dk = RS.deck_layout(cfg)            # second wave item 9: the deck span in metres and its basis
+        _span = (" (deck span %s m: %s)" % (_num(round(_dk["span_m"], 2)), _dk["basis"])) if _dk.get("span_m") else ""
+        rows.append(["Floor system", "%s%s%s" % (cfg.get("floor_system") or "one-way",
+                                                 (", deck spans " + str(cfg.get("deck_span"))) if cfg.get("deck_span") else "",
+                                                 _span if _dk.get("composite") else ""), ""])
     else:
         rows.append(["Roof system", "purlins and profiled metal sheeting", ""])
     return _t(["Load", "Value", "Unit"], rows)
@@ -294,11 +303,32 @@ def _seismic_table(cfg, pkg, run):
     ss = plan.get("seismic_summary") or {}
     sc = (pkg or {}).get("seismic_calc") or {}
     keys = [("Z", "zone factor Z (Table 3 / Annex E)"), ("I", "importance factor I (Table 8)"),
-            ("R", "response reduction factor R (Table 9)"), ("soil", "soil type"),
+            ("R", "response reduction factor R (Table 9)"), ("R_x", "R, X (Table 9)"), ("R_y", "R, Y (Table 9)"),
+            ("soil", "soil type"), ("Ta_formula", "Ta formula (7.6.2)"),
             ("Ta_x_s", "Ta X (s) (7.6.2)"), ("Ta_y_s", "Ta Y (s) (7.6.2)"), ("Ta_s", "Ta (s)"),
-            ("Sa_g", "Sa/g"), ("Ah", "Ah = (Z/2)(I/R)(Sa/g) (6.4.2)"), ("W_kN", "seismic weight W (kN) (7.4)"),
+            ("Sa_g_x", "Sa/g X"), ("Sa_g_y", "Sa/g Y"), ("Sa_g", "Sa/g"), ("Ah_x", "Ah X"), ("Ah_y", "Ah Y"),
+            ("Ah", "Ah = (Z/2)(I/R)(Sa/g) (6.4.2)"), ("W_kN", "seismic weight W (kN) (7.4)"),
             ("VB_x_kN", "V_B X (kN)"), ("VB_y_kN", "V_B Y (kN)"), ("VB_kN", "V_B (kN)")]
-    rows = [[lab, _num(ss.get(k))] for k, lab in keys if ss.get(k) is not None]
+    rows = [[lab, RS._e(ss.get(k)) if isinstance(ss.get(k), str) else _num(ss.get(k))]
+            for k, lab in keys if ss.get(k) is not None]
+    # second wave H8: the IS 1893 7.2.2 / Table 7 minimum design base shear, shown even where it does not govern
+    try:
+        import india_seismic as _IS
+        _zone = str(ss.get("zone") or "").upper().replace("ZONE", "").strip()
+        _rho = ss.get("rho_min") if isinstance(ss.get("rho_min"), (int, float)) else _IS.TABLE7_RHO.get(_zone)
+        if _rho and all(isinstance(ss.get(k), (int, float)) for k in ("Z", "I")):
+            _raw = []
+            for d in ("x", "y"):
+                _R, _sa = ss.get("R_" + d, ss.get("R")), ss.get("Sa_g_" + d, ss.get("Sa_g"))
+                if isinstance(_R, (int, float)) and isinstance(_sa, (int, float)):
+                    _raw.append((float(ss["Z"]) / 2.0) * (float(ss["I"]) / float(_R)) * float(_sa))
+            if _raw:
+                rows.append(["minimum design base shear (7.2.2, Table 7): &rho;",
+                             "%s (Zone %s); (Z/2)(I/R)(Sa/g) = %s: %s" % (
+                                 _num(_rho), _zone, " / ".join(_num(a) for a in _raw),
+                                 "the minimum does not govern" if min(_raw) >= _rho else "the minimum governs (V_B = &rho; W)")])
+    except Exception:
+        pass
     rows.append(["engine seismic weight (kN)", _num(sc.get("W_engine_kN"), 1)])
     sa = (pkg or {}).get("seismic_analysis") or {}
     rows.append(["analysis method (7.7.1)", str(sa.get("method") or run.get("method"))])
@@ -331,6 +361,16 @@ def _seismic_table(cfg, pkg, run):
         import html
         out += "<h4>Flexible-diaphragm 3-D dynamic analysis (Table 5(ii), Amd 2)</h4><p>%s</p>" % html.escape(
             str(fd.get("cite") or ""))
+        # second wave H8 (review Ex8): say why the run was made, and that a regular plan does not need it
+        _trig = fd.get("trigger")
+        _ree = ((pkg or {}).get("irregularity") or {}).get("reentrant") or {}
+        if _trig:
+            out += "<p><b>Why this run was made:</b> %s%s.</p>" % (
+                html.escape(RS.plain(str(_trig)).replace("cfg['flexible_diaphragm_analysis'] = True",
+                                                         "declared in the job (cfg['flexible_diaphragm_analysis'] = True)")),
+                "; the plan has no re-entrant corner, so Table 5(ii) does not require it here: it was run as declared "
+                "and the members are designed for the envelope of the rigid and flexible runs"
+                if _ree.get("irregular") is False else "")
         if fd.get("status") != "run":
             out += "<p><b>Not run:</b> %s</p>" % html.escape(str(fd.get("error")))
         else:
@@ -366,9 +406,10 @@ def _wind_table(cfg):
     ws = (cfg.get("load_plan") or {}).get("wind_summary") or {}
     if not ws:
         return "<p class='cnote'>No wind summary in the load plan.</p>"
-    keys = ["Vb_mps", "Vb_source", "terrain_category", "k1", "k2", "k3", "k4", "Kd", "Ka", "Ka_basis", "Kc",
-            "Vz_mps", "pz_kNm2", "pd_kNm2", "Cpe_windward", "Cpe_leeward", "Cpi", "cyclone_belt", "VB_x_kN", "VB_y_kN"]
-    rows = [[k, _num(ws.get(k))] for k in keys if ws.get(k) is not None]
+    keys = ["Vb_mps", "Vb_source", "Vb_note", "terrain_category", "terrain_basis", "k1", "k2", "k3", "k3_basis", "k4",
+            "Kd", "Ka", "Ka_basis", "Kc", "Vz_mps", "pz_kNm2", "pd_kNm2", "Cpe_windward", "Cpe_leeward", "Cpi",
+            "cyclone_belt", "VB_x_kN", "VB_y_kN"]
+    rows = [[k, RS._e(ws.get(k)) if isinstance(ws.get(k), str) else _num(ws.get(k))] for k in keys if ws.get(k) is not None]
     if ws.get("across_wind"):                  # X05: 10.3 across-wind case and 10.4 combination
         try:
             import india_combos as _IC
@@ -380,14 +421,14 @@ def _wind_table(cfg):
                                  "applied with the along-wind case, both signs (10.4)"
                                  % (_num(sm["Mc_kNm"], 1), sm.get("basis"), _num(sm["V_kN"], 1),
                                     _num(sm["F_ground_kN"], 1), _num(sm["M_base_kNm"], 1))])
-            else:
-                rows.append(["across-wind (10.3)", "NOT EVALUATED: %s" % awp.get("reason")])
+            else:     # second wave H8: 'not required' with the 9.1 basis where the load plan records it
+                rows.append(["across-wind (10.3)", RS._e(RS.across_wind_text(ws, awp.get("reason")))])
         except Exception as ex:
             rows.append(["across-wind (10.3)", "error: %s" % ex])
     return ("<p>IS 875 (Part 3):2015: V<sub>z</sub> = V<sub>b</sub> k<sub>1</sub> k<sub>2</sub> k<sub>3</sub> "
             "k<sub>4</sub> (6.3); p<sub>z</sub> = 0.6 V<sub>z</sub><sup>2</sup> (7.2); p<sub>d</sub> = K<sub>d</sub> "
             "K<sub>a</sub> K<sub>c</sub> p<sub>z</sub> &ge; 0.7 p<sub>z</sub> (7.2).</p>"
-            + _t(["Quantity", "Value"], rows))
+            + _t(["Quantity", "Value"], rows) + RS.gust_factor_html(cfg))
 
 
 def _governing(cfg):
@@ -459,11 +500,16 @@ def _members(pkg):
     rows = []
     for m in mem:
         i = m.get("inputs") or {}
+        # second wave H1: the strength ratio and the slenderness ratio in their own columns (one 'D/C' mixed them)
         rows.append([m.get("id"), i.get("section"), i.get("n_elements", ""), i.get("governing_combo", ""),
                      _kN(i.get("P_comp_N")), _kN(i.get("P_tens_N")), _kNm(i.get("Mz_Nmm")), _kNm(i.get("My_Nmm")),
-                     _kN(i.get("V_N")), _num(m.get("DC")) if isinstance(m.get("DC"), (int, float)) else "not evaluated"])
-    return _t(["group", "section", "n", "governing combination", "P<sub>c</sub> (kN)", "P<sub>t</sub> (kN)",
-               "M<sub>z</sub> (kN-m)", "M<sub>y</sub> (kN-m)", "V (kN)", "D/C"], rows)
+                     _kN(i.get("V_N")), RS.kl_cell(m)] + RS.member_cells(m))
+    return ("<p>Strength ratio: the largest IS 800 member resistance / 9.3 interaction ratio over the combinations. "
+            "Slenderness: the governing KL/r against its IS 800 Table 3 limit (ratio in brackets). Both must be at most "
+            "1.0; the strength ratio is the design headline.</p>"
+            + _t(["group", "section", "n", "governing combination", "P<sub>c</sub> (kN)", "P<sub>t</sub> (kN)",
+                  "M<sub>z</sub> (kN-m)", "M<sub>y</sub> (kN-m)", "V (kN)", "KL<sub>z</sub> / KL<sub>y</sub> (m)",
+                  "strength ratio", "KL/r / limit (ratio)"], rows))
 
 
 def _checks_table(checks, max_rows=400):
@@ -498,8 +544,9 @@ def _is800_s12_detailing(cfg, pkg):
         worst = max(cs, key=lambda c: (c.get("ok") is False, c.get("ok") is None,
                                         c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1))
         nf = sum(1 for c in cs if c.get("ok") is False); nn = sum(1 for c in cs if c.get("ok") is None)
-        rows.append([cid, len(cs), nf, nn, _num(worst.get("value")), _num(worst.get("limit")), _num(worst.get("dc")),
-                     worst.get("clause") or ""])
+        # second wave H8: forces in kN, moments in kN-m, width-thickness records as 'b/tf .., d/tw ..' (not N, N-mm, dicts)
+        rows.append([cid, len(cs), nf, nn, RS.s12_value(cid, worst.get("value")), RS.s12_value(cid, worst.get("limit")),
+                     _num(worst.get("dc")), worst.get("clause") or ""])
     return summ + _t(["check", "n", "failing", "not evaluated", "worst value", "limit", "worst D/C",
                       "Ref. (IS 800)"], rows)
 
@@ -549,9 +596,11 @@ def _serviceability(cfg, pkg, run):
     if isinstance(dc, dict):
         rows = [[c.get("element"), c.get("section"), _num(c.get("value")), _num(c.get("limit")), _ok(c.get("ok")),
                  c.get("cite") or ""] for c in (dc.get("checks") or [])[:30]]
+        # second wave H8: say why there is nothing to check (the record's own reason), not a fixed sentence
         out.append("<h3>Deformation compatibility (IS 1893 7.11.2)</h3>" +
                    (_t(["element", "section", "value", "limit", "status", "basis"], rows) if rows else
-                    "<p>No non-SFRS member requires the check in this zone.</p>"))
+                    "<p>No member to check: %s.</p>" % RS._e(str(dc.get("note") or "no member outside the lateral "
+                                                                 "system requires the check").rstrip("."))))
         sep = dc.get("separation") or []
         if sep:
             out.append("<h4>Separation between adjacent units (7.11.3)</h4>" + _checks_table(sep))
@@ -655,14 +704,17 @@ def build_report_india(name, root):
     run = E.india_run_cached(cfg, name)
     parts = [f"<h1>{_title_name(name)} &mdash; structural analysis &amp; design report (IS 800 / IS 875 / IS 1893)</h1>",
              f"<p><b>{cfg.get('arch', '')}</b> &middot; generated {datetime.date.today()} &middot; units: kN, kN-m, "
-             "m, mm, MPa (engine N-mm)</p>", _toc()]
+             "m, mm, MPa (engine N-mm)</p>", RS.framing_html(name, cfg), _toc()]
+    RS.write_headline(root, pkg)              # second wave H1: design/headline.json for the site build / harness
     try:
         import plot_model as PM
         PM.figures(name, figdir, deformed_fig=bool(cfg.get("deformed_shape_figure")))
     except Exception as ex:
         parts.append(f"<p class='note'>[model figures failed: {ex}]</p>")
 
-    parts.append(FW.pv_check_section(cfg, root))
+    # second wave H5 (item 13): the strengthening option for the rooftop PV inside the PV answer section
+    _pv, _so = FW.pv_check_section(cfg, root), RS.strengthening_html(root)
+    parts.append(_pv + (_so if (_pv or not _so) else "<h2>Rooftop solar PV check: strengthening</h2>" + _so))
     # 1
     parts.append(_chapter(1))
     parts.append(_status_block(pkg))
@@ -675,13 +727,14 @@ def build_report_india(name, root):
         ["Plan extents", f"{_m(Lx)} m (X) &times; {_m(Ly)} m (Y)"],
         ["Grid", f"{cfg['NX']} &times; {cfg['NY']} bays @ {_m(cfg['SX'])} m / {_m(cfg['SY'])} m"],
         ["Storey heights (m)", ", ".join(_m(h) for h in cfg["heights"])],
-        ["Height", f"{_m(sum(cfg['heights']))} m"],
+        ["Height", RS.height_text(cfg, sum(cfg['heights']))],
         ["Occupancy", FW.occupancy_text(cfg)]]))
     parts.append("<h3>Materials</h3>" + _t(["Item", "Value"], [
         ["Steel (rolled sections and welded plates)", "IS 2062 (Part 1) %s (fy by thickness per IS 2062 Table 3)"
          % (cfg.get("steel_grade") or "&mdash;")],
         ["Braces", "%s %s" % (cfg.get("brace_grade") or cfg.get("steel_grade") or "&mdash;", cfg.get("brace_process") or "")],
         ["E", "200 000 MPa"]]))
+    parts.append(RS.assumptions_html(cfg, pkg))      # second wave H8: the design engineer's recorded assumptions
     try:
         parts.append(R._img(_plan_fig(cfg), "Plan grid (level 1)"))
     except Exception as ex:
@@ -703,8 +756,10 @@ def build_report_india(name, root):
     parts.append(_chapter(3))
     parts.append("<h3>Gravity loads</h3>" + _gravity_table(cfg))
     parts.append(FW.imposed_reduction_section(cfg))
-    parts.append("<h3>Earthquake (IS 1893 Part 1)</h3>" + _seismic_table(cfg, pkg, run))
-    parts.append("<h3>Wind (IS 875 Part 3)</h3>" + _wind_table(cfg))
+    parts.append(RS.snow_html(cfg, pkg))              # second wave H8: snow zone, s0, drift (IS 875 (Part 4):2021)
+    parts.append("<h3>Earthquake (IS 1893 (Part 1):2016)</h3>" + _seismic_table(cfg, pkg, run)
+                 + RS.base_shear_html(cfg, pkg, RS.plan_dims_m(cfg)))     # second wave H2 (item 12)
+    parts.append("<h3>Wind (IS 875 (Part 3):2015)</h3>" + _wind_table(cfg))
     parts.append("<h3>Governing lateral load</h3>" + _governing(cfg))
     # 4
     parts.append(_chapter(4))
@@ -725,6 +780,7 @@ def build_report_india(name, root):
         ["Second order", "P-&Delta; on every gravity state (Newton), laterals as linear increments"],
         ["Floor load distribution", str(cfg.get("floor_system") or "one-way")],
         ["Erection sequence (braces)", _erection_text(pkg)]]))
+    parts.append(RS.ridge_restraint_html(cfg, pkg))   # second wave H7: true-slope portals, the ridge out of plane
     try:
         parts.append(R._img(R._joint_figure(cfg), "Modelled joint and base fixity", full=True))
     except Exception as ex:
@@ -734,6 +790,7 @@ def build_report_india(name, root):
     # 6
     parts.append(_chapter(6))
     parts.append(_members(pkg))
+    parts.append(RS.composite_scope_html(cfg, pkg))   # second wave H3 (item 9): bare-steel scope, deck span
     parts.append(FW.crane_runway_section(cfg, pkg))
     parts.append(FW.takeoff_section(cfg, pkg, root))
     if (pkg or {}).get("peb"):
@@ -743,6 +800,7 @@ def build_report_india(name, root):
         except Exception as ex:
             parts.append(f"<p class='note'>[PEB section failed: {ex}]</p>")
         parts.append(FW.premium_note(cfg, pkg))
+    parts.append(RS.compliance_html(root))            # second wave H5 (item 13): cost of compliance, when supplied
     # 7
     parts.append(_chapter(7))
     n_not = sum(1 for c in cases if (getattr(c, "meta", {}) or {}).get("notional"))
@@ -774,9 +832,11 @@ def build_report_india(name, root):
     parts.append("<h2>Appendix B &mdash; Combinations analysed</h2>")
     if cases:
         parts.append(R._combo_table(cases))
-    parts.append(R._activity_section(name))
+    # second wave item 16: one citation style and 'design engineer' wording in the printed text; the activity log
+    # (Appendix C) is a record of the run and is left as logged
+    body = RS.tidy_html("".join(parts)) + R._activity_section(name)
     html = (f"<!doctype html><html><head><meta charset='utf-8'><title>{_title_name(name)} report</title>"
-            f"<style>{R.CSS}{R.CHK_CSS}</style>{R.MATHJAX}</head><body>" + "".join(parts) + "</body></html>")
+            f"<style>{R.CSS}{R.CHK_CSS}</style>{R.MATHJAX}</head><body>" + body + "</body></html>")
     fc = [0]
 
     def _fignum(_m):
