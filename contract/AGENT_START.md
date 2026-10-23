@@ -415,6 +415,15 @@ Before `pipeline.design_and_report`:
   elsewhere_mm, basis}} gives the spacing of the compression-flange restraints of SMRF beams within 2 db of the
   column face and elsewhere; {'provide_at_required': True, basis} adopts the 6.2 spacings as a drawing requirement
   (printed per beam).  Undeclared, the check is not evaluated and the job cannot be COMPLETE.
+- **Report statements (2026-10 second wave, report only; none changes a design)**: `soil_basis` (text) states where
+  the soil type comes from (default: "as declared in the brief ... assumed, confirm by site investigation"; the
+  report adds the next softer type's Sa/g and V_B as a note).  `facade_basis` (text) states why a bare-frame Ta
+  (IS 1893 7.6.2(a)) holds (default: no masonry infill built in contact with the frame; a brick dado declared in
+  `delegated_design` is described as self-supporting); the report adds the 7.6.2(c) Ta and V_B ratio as a note.
+  `deck` = {secondary_spacing_mm | span_mm, basis} gives the composite deck span; without it the span is read from
+  the construction-stage / delegated-design text ("secondary beams at 3.0 m") or taken as the full bay, which is a
+  non-blocking point for the design engineer.  `report_framing` = {title, what, practice} prints a
+  capability-demonstration box at the top of the report (the published Ex9, Ex10, Ex12 and Ex19 carry one).
 
 ## What the framework computes and what YOU do
 Framework: preflight; model; seismic weight; modal and response-spectrum analysis; all combinations;
