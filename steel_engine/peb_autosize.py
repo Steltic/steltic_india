@@ -2468,7 +2468,9 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
         elif kind == "secondary" and _gov == "strut":
             tighten("strut", 0.03, float(margins.get("member", 0.99))); hit = True
         elif kind in ("sway", "drift"):
-            tighten("sway", 0.03, 0.98); hit = True
+            # second wave: by the overshoot (at least 0.03) -- the multi-span IN_Ex2 frames overshot the predicted
+            # sway by 8-14 % run after run while the margin moved 0.03 at a time
+            tighten("sway", max(0.03, round(float(dc) - 1.0, 4)), 0.98); hit = True
         elif kind == "deflection":
             tighten("defl", 0.03, 0.98); hit = True
         elif kind == "stability":

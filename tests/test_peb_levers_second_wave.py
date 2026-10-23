@@ -510,3 +510,12 @@ def test_market_bundle_drops_rods_that_cannot_pass():
     assert kw["rods"] is True and "bracing" in kw["rules"]                       # the variant list is not mutated
     assert L.drop_failed_rods(kw, "market", {"rods": {"done": True, "best_x": {"COL": "x"}}}) is kw
     assert L.drop_failed_rods(kw, "compliant", failed) is kw
+
+
+def test_sway_feedback_follows_the_overshoot():
+    m = {}
+    A.feedback(m, {"fail_items": [(1.14, "sway", "wind Y eave", "IS 800 Table 6")]}, None, log_fn=lambda *a: None)
+    assert abs(m["sway"] - (0.98 - 0.14)) < 1e-9
+    m = {}
+    A.feedback(m, {"fail_items": [(1.01, "sway", "wind Y eave", "IS 800 Table 6")]}, None, log_fn=lambda *a: None)
+    assert abs(m["sway"] - 0.95) < 1e-9
