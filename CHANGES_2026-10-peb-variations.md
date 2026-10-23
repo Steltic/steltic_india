@@ -198,3 +198,5 @@ plates); in brackets the change from the strict design.
   check, the knee diagonal floor, the OCBF brace without Cw, the taper station labels, the sway overshoot feedback,
   the starting margins, the solar job and its IN_Ex5 wind block, the study zone-ban key and the OMRF patch.
 - `tests/test_peb_levers_2026_10.py`: the strengthen-only floor test also checks the knee diagonal stiffener.
+- Full suite: after the merge 1025 passed, 4 skipped; at the end of the second wave (798066b) 1052 passed,
+  4 skipped, 0 failed (the lever tests: 20 + 27).
