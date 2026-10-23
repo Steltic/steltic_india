@@ -785,8 +785,11 @@ def html_page(studies):
         parts.append("<div class='card'>%s</div>" % _bars(rows))
         wf = _waterfall(st)
         if wf:
-            parts.append("<div class='card'><div class='muted'>Cumulative: each lever added to the previous step "
-                         "(compliant levers first; faded bars are not compliant), kg/m²</div>%s</div>" % wf)
+            cap = ("Short ladder: the strict design, then every compliant lever together, then the market bundle "
+                   "(every lever and the market loads; faded: not compliant), kg/m²" if st.get("ladder") == "short"
+                   else "Cumulative: each lever added to the previous step (compliant levers first; faded bars are not "
+                        "compliant), kg/m²")
+            parts.append("<div class='card'><div class='muted'>%s</div>%s</div>" % (cap, wf))
         parts.append("<div class='card'>%s</div>" % _table(rows))
         parts.append("<details class='card'><summary class='muted'>member sizes and purlins of each variant</summary>%s"
                      "</details>" % _members(st))

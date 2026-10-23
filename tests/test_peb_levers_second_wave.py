@@ -519,3 +519,11 @@ def test_sway_feedback_follows_the_overshoot():
     m = {}
     A.feedback(m, {"fail_items": [(1.01, "sway", "wind Y eave", "IS 800 Table 6")]}, None, log_fn=lambda *a: None)
     assert abs(m["sway"] - 0.95) < 1e-9
+
+
+def test_short_ladder_caption():
+    import peb_lever_study as L
+    rows = {"strict": {"name": "strict", "label": "s", "status": "compliant", "kg_m2": {"total": 30.0}},
+            "compliant": {"name": "compliant", "label": "c", "status": "compliant", "kg_m2": {"total": 27.5}}}
+    page = L.html_page([{"job": "J", "rows": rows, "ladder": "short"}])
+    assert "Short ladder" in page and "each lever added to the previous step" not in page
