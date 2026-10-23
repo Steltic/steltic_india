@@ -325,3 +325,13 @@ def test_control_variant_is_optional():
     kw = v[1][1]
     assert kw["rules"] == {} and kw["start_from"] == "strict" and v[1][2] == "compliant"
     assert L.VARIANT_ORDER.index("control") == L.VARIANT_ORDER.index("strict") + 1
+
+
+def test_strengthen_only_floors_the_knee_diagonal_stiffener():
+    """IN_Ex1 solar-ready: the gold knee failed, the knee was re-sized and its diagonal stiffener came out 6 mm
+    against the gold's 16 mm.  In strengthen-only mode the diagonal stiffener is not thinner than the gold's."""
+    import inspect
+    sig = inspect.signature(A.size_knee)
+    assert "diag_min" in sig.parameters and sig.parameters["diag_min"].default is None
+    src = inspect.getsource(A.Evaluator.connections)
+    assert 'diag_min=float((fl.get("knee_panel") or {}).get("diag_t") or 0.0)' in src

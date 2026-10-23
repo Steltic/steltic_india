@@ -1507,7 +1507,7 @@ def _knee_mass(par, kp_par, kspec, kp, bsec, csec):
     return kg
 
 
-def size_knee(lm, x, par0, kp0, margin=1.0, t_min=None):
+def size_knee(lm, x, par0, kp0, margin=1.0, t_min=None, diag_min=None):
     """Lightest knee (end plate t, bolt d, rows beyond the flange, knee-zone column flange plate, column flange
     stiffeners, diagonal stiffener) for the members x.  par0 / kp0: the current design (its b_plate, n_in, pitch rule,
     grades kept).  Returns (par, kp_par, kg_per_knee, rows) or None when nothing in the catalogue passes."""
@@ -1526,7 +1526,7 @@ def size_knee(lm, x, par0, kp0, margin=1.0, t_min=None):
     t_lo = max(10.0, float(t_min or 0.0))
     # 1) diagonal stiffener: the panel shear row only
     best_d = None
-    for td in [t for t in PLATES_MM if t >= 6.0]:
+    for td in [t for t in PLATES_MM if t >= max(6.0, float(diag_min or 0.0)) - 1e-9]:   # diag_min: strengthen-only floor
         kp_t = copy.deepcopy(kp)
         if kp_t.get("diagonal_stiffener"):
             kp_t["diagonal_stiffener"]["t_mm"] = td
@@ -1959,7 +1959,8 @@ class Evaluator:
             r = knee_fixed(lm, x, fl["knee"], fl.get("knee_panel"), margin=self.margin("conn:knee")) \
                 if fl.get("knee") else None
             r = r or size_knee(lm, x, cp["knee"], cp.get("knee_panel") or {}, margin=self.margin("conn:knee"),
-                               t_min=max(float(self.m.get("tmin:knee") or 0.0), float((fl.get("knee") or {}).get("t") or 0.0)))
+                               t_min=max(float(self.m.get("tmin:knee") or 0.0), float((fl.get("knee") or {}).get("t") or 0.0)),
+                               diag_min=float((fl.get("knee_panel") or {}).get("diag_t") or 0.0))
             if r is None:
                 self.conn_cache[key] = (None, None, {"fail": "knee"})
                 return self.conn_cache[key]

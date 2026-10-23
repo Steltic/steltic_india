@@ -381,6 +381,8 @@ def test_strengthen_only_keeps_the_gold_as_a_floor(mini_job, tmp_path_factory):
     for slot in g:
         if isinstance(g[slot], dict) and "t" in g[slot]:
             assert b[slot]["t"] >= g[slot]["t"], slot
+        if isinstance(g[slot], dict) and g[slot].get("diag_t"):           # second wave: the knee diagonal too
+            assert b[slot]["diag_t"] >= g[slot]["diag_t"], slot
         if isinstance(g[slot], dict) and g[slot].get("key"):
             ka, kb = g[slot]["key"], b[slot]["key"]
             assert kb == ka or 2 * kb[0] * kb[1] * (kb[2] + 50) >= 2 * ka[0] * ka[1] * (ka[2] + 50), slot
