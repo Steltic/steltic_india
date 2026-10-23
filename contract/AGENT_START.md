@@ -405,6 +405,10 @@ Before `pipeline.design_and_report`:
     out for a strict design.  Only for a variations study the brief asks for; state the switch and its status.
     The auto-sizer (`steel_engine/peb_autosize.py`, used by `scripts/peb_lever_study.py`) re-sets
     `peb_connection_mass_kg` for its resized plates and records how in `peb_connection_mass_basis` (text only).
+    `study_allow_banned_system` = '<why>' (second wave, cost-of-compliance studies only): an ordinary frame in a
+    zone where IS 1893 Table 9 Note 1 / IS 800 12.7.1.1 / 12.10.1.1 do not permit it runs past the preflight ban
+    (the ERROR becomes a 'STUDY ONLY' warning); the design status keeps the ban, so the run is never COMPLETE.
+    Never set it in a design job.
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels
   {unit: k}, base_mm {unit: mm above a common datum}, level_tol_mm (50), id}])` runs each unit as its own job
