@@ -448,3 +448,30 @@ def test_local_panel_zone_matches_the_engine():
     A.feedback(m, {"fail_items": [(1.07, "section12", "12.11.2.3_panel_zone@J100100-Y", "IS 800")]}, None,
                log_fn=lambda *a: None)
     assert abs(m["panel"] - 0.98) < 1e-9 and "conn:knee" not in m
+
+
+def test_ocbf_brace_sizing_skips_sections_without_Cw(tmp_path):
+    """IN_Ex2 OMRF_R3: the OCBF brace came out WPB200X200X37.34, whose IS 808 record has no warping constant, so the
+    engine could not evaluate the brace (found:false) and every run stayed open.  Such a section is skipped."""
+    import peb_lever_study as L
+    assert not S.props("WPB200X200X37.34").get("Cw")
+    rd = tmp_path / "best"
+    rd.mkdir()
+    pkg = {"members": [{"inputs": {"kind": "brace", "P_comp_N": 150000.0, "length_mm": 10817.0}}]}
+    json.dump(pkg, open(rd / "calc_package.json", "w"))
+    lab, note = L.size_ocbf_braces(str(rd), "WPB160X160X30.44", 4.5)
+    assert lab != "WPB200X200X37.34" and S.props(lab).get("Cw"), (lab, note)
+
+
+def test_buckling_section_registers_taper_station_labels():
+    """A candidate taper's end-station label (e.g. WI325X290X22X12) must be registered before its properties are read
+    (IN_Ex2 OMRF_R3 stopped on a KeyError)."""
+    import peb_build as PB
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.chains = {"ch": {"members": ["m1"]}}
+    lm.members = {"m1": {"section": "TI450-200X190X12X5"}}
+    lm.const_of_label = {"TI450-200X190X12X5": "CAN_T"}
+    lab = "TI453-219X291X22X12"
+    PB.ensure(lab)
+    sec = lm.buckling_section("ch", {"CAN_T": lab})
+    assert sec == PB.section_at(lab, 1.0) and S.props(sec)["d"] > 0

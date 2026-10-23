@@ -284,6 +284,9 @@ def size_ocbf_braces(strict_run_dir, gold_brace, R_old_x, R_new_x=4.0, K=0.5):
             p = S.props(lab, grade="YSt 310", process="HFS") if tube else S.props(lab)
         except Exception:
             continue
+        if not tube and p.get("section_type") == "I" and not p.get("Cw"):
+            continue                     # second wave: no warping constant in the table (e.g. WPB200X200X37.34) -- the
+            #                              engine cannot evaluate LTB for the brace's bending, the run stays open
         cands.append((float(p.get("Mass_kg_m") or p["A"] * 7.85e-3), lab, p))
     cands.sort()
     for kg, lab, p in cands:

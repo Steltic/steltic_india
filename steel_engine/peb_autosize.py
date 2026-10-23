@@ -1066,6 +1066,8 @@ class LocalModel:
                 cands.append(PB.section_at(lab, 0.0 if p[1] <= p[2] else 1.0))
             else:
                 cands.append(lab)
+        for s_ in cands:
+            PB.ensure(s_)                 # second wave: a station label of a candidate taper is registered first
         return min(cands, key=lambda s_: float(S.props(s_)["Ix"])) if cands else None
 
     def element_dc(self, t, x):
