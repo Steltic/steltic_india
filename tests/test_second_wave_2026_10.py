@@ -155,7 +155,8 @@ def test_gust_factor_and_method_printed():
                           "Cf": {"X": 1.213, "Y": 1.335}, "VB_x_kN": 1883.1, "components_x": [1, 2]},
           "method": "dynamic (10.2 gust factor) both directions: f1 < 1 Hz (9.1(b))"}
     h = RS.gust_factor_html({"load_plan": {"wind_summary": ws}})
-    assert "gust factor G (10.2)" in h and "2.9320" in h and "Table 36" in h and "10.2 gust factor" in h
+    assert "gust factor G (10.2)" in h and "2.932" in h and "Table 36" in h and "10.2 gust factor" in h
+    assert "1,883.1<" in h and "X 1.213 / Y 1.335" in h
     assert "components_x" not in h
     h2 = RS.gust_factor_html({"load_plan": {"wind_summary": {"method": "10.2 gust factor where f1 < 1 Hz (9.1(b))"}}})
     assert "9.1(b)" in h2
@@ -406,3 +407,21 @@ def test_flexible_run_on_a_regular_plan_says_why():
            "irregularity": {"reentrant": {"irregular": False}}}
     h = RI._seismic_table({"load_plan": {}, "heights": [8000.0]}, pkg, {})
     assert "Why this run was made" in h and "declared in the job" in h and "does not require it here" in h
+
+
+def test_effective_lengths_and_ridge_height_printed():
+    import report_second_wave as RS
+    m = {"governing_element_result": {"capacities": {"compression": {"axes": {"z": {"KL_mm": 12369.3},
+                                                                               "y": {"KL_mm": 3000.0}}}}}}
+    assert RS.kl_cell(m) == "12.37 / 3.00" and RS.kl_cell({}) == "—"
+    cfg = {"roof_planes": [{"eave_z_mm": 8000.0, "ridge_z_mm": 11000.0}]}
+    assert RS.height_text(cfg, 8000.0) == "8.00 m to the eave, 11.00 m to the ridge"
+    assert RS.height_text({}, 31500.0) == "31.50 m"
+
+
+def test_identical_directions_give_one_ta_note():
+    import report_second_wave as RS
+    h = RS.base_shear_html(_ss(), dims={"X": 30.0, "Y": 30.0})
+    assert "Ta, X and Y direction" in h and h.count("7.6.2(c) would apply") == 1
+    h2 = RS.base_shear_html(_ss(), dims={"X": 36.0, "Y": 27.0})
+    assert h2.count("7.6.2(c) would apply") == 2

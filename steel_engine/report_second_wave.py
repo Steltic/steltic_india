@@ -247,6 +247,25 @@ def member_cells(m):
     return [s_txt, l_txt]
 
 
+def kl_cell(m):
+    """Chapter 6: the effective lengths KLz / KLy (m) the governing element was checked with (IS 800 7.1.2)."""
+    ax = ((((m or {}).get("governing_element_result") or {}).get("capacities") or {}).get("compression") or {}).get("axes") or {}
+    z, y = (ax.get("z") or {}).get("KL_mm"), (ax.get("y") or {}).get("KL_mm")
+    if not (_num(z) or _num(y)):
+        return "—"
+    return "%s / %s" % (_f(z / 1000.0 if _num(z) else None, 2), _f(y / 1000.0 if _num(y) else None, 2))
+
+
+def height_text(cfg, H_mm):
+    """Building height for the description: eave and ridge when the roof is modelled at its true slope."""
+    pls = [p for p in (cfg or {}).get("roof_planes") or [] if isinstance(p, dict)]
+    rz = max([float(p["ridge_z_mm"]) for p in pls if _num(p.get("ridge_z_mm"))] or [0.0])
+    ez = max([float(p["eave_z_mm"]) for p in pls if _num(p.get("eave_z_mm"))] or [0.0])
+    if rz > ez > 0:
+        return "%s m to the eave, %s m to the ridge" % (_f(ez / 1000.0, 2), _f(rz / 1000.0, 2))
+    return "%s m" % _f(H_mm / 1000.0, 2)
+
+
 # ============================================================================================ H2 base shear notes
 _NEXT_SOFTER = {"I": "II", "II": "III"}
 _SOIL_NAME = {"I": "rock or hard soil", "II": "medium stiff soil", "III": "soft soil"}
@@ -384,7 +403,10 @@ def base_shear_html(cfg, pkg=None, dims=None):
                     _tab(["dir", "design Ta (s)", "Sa/g Type %s" % _e(s["type"]), "Sa/g Type %s" % _e(s["next"]),
                           "V_B ratio"], rows))
         out.append(txt)
-    for r in n.get("ta") or []:
+    ta = list(n.get("ta") or [])
+    if len(ta) == 2 and all(ta[0].get(k) == ta[1].get(k) for k in ("formula", "h_m", "d_m", "Ta_infill_s", "VB_ratio")):
+        ta = [dict(ta[0], dir="X and Y")]                  # one note when both directions are the same
+    for r in ta:
         t = ("<p><b>Ta, %s direction:</b> %s with h = %s m, the formula for a bare moment frame without masonry infill. "
              "Assumption: %s.</p>" % (r["dir"], _e(r["formula"]), _f(r["h_m"], 2), _e(r["facade"])))
         if r.get("Ta_infill_s") is not None:
@@ -415,14 +437,18 @@ _GF_LABELS = [
     ("VB_applied_kN", "base shear applied (kN)"), ("method", "method"), ("note", "note"), ("cite", "reference")]
 
 
-def _gf_val(v):
+_GF_DIGITS = {"terrain": 0, "h_m": 1, "b_m": 1, "Vh_d": 2, "Vh_d_mps": 2, "E": 4}
+
+
+def _gf_val(v, key=""):
+    d = 1 if str(key).startswith(("VB", "static_VB")) else _GF_DIGITS.get(key, 3)
     if isinstance(v, dict):
         if all(_num(x) for x in v.values()) and v:
-            return " / ".join("%s %s" % (_e(k), _f(x, 4)) for k, x in v.items())
+            return " / ".join("%s %s" % (_e(k), _f(x, d)) for k, x in v.items())
         return None
     if isinstance(v, (list, tuple)):
         return None
-    return _f(v, 4) if _num(v) else _e(v)
+    return _f(v, d) if _num(v) else _e(v)
 
 
 def gust_factor_html(cfg, pkg=None):
@@ -441,7 +467,7 @@ def gust_factor_html(cfg, pkg=None):
     seen = set()
     for k, lab in _GF_LABELS:
         if k in gf and k not in seen:
-            v = _gf_val(gf[k])
+            v = _gf_val(gf[k], k)
             if v not in (None, ""):
                 lines.append([lab, v])
             seen.add(k)

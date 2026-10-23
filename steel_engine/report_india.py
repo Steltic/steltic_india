@@ -217,7 +217,7 @@ def _systems(cfg, pkg):
              else _num(G.declared_R(cfg))],
             ["Importance factor I (IS 1893 Table 8)", _num(G.importance_of(cfg))],
             ["Zone / Z", "%s / %s" % (G.zone_of(cfg), _num(ss.get("Z")))],
-            ["Soil type", ("Type %s: %s" % (_soil["type"], RS._e(_soil["basis"]))) if _soil else
+            ["Soil type", RS._e(_soil["basis"]) if _soil else
              str(ss.get("soil") or (cfg.get("seis") or {}).get("soil") or "&mdash;")],
             ["Brace configuration", str(cfg.get("brace_config") or "&mdash;")],
             ["Column bases / joints", "%s / %s" % ((cfg.get("model") or {}).get("bases", cfg.get("base")),
@@ -503,13 +503,13 @@ def _members(pkg):
         # second wave H1: the strength ratio and the slenderness ratio in their own columns (one 'D/C' mixed them)
         rows.append([m.get("id"), i.get("section"), i.get("n_elements", ""), i.get("governing_combo", ""),
                      _kN(i.get("P_comp_N")), _kN(i.get("P_tens_N")), _kNm(i.get("Mz_Nmm")), _kNm(i.get("My_Nmm")),
-                     _kN(i.get("V_N"))] + RS.member_cells(m))
+                     _kN(i.get("V_N")), RS.kl_cell(m)] + RS.member_cells(m))
     return ("<p>Strength ratio: the largest IS 800 member resistance / 9.3 interaction ratio over the combinations. "
             "Slenderness: the governing KL/r against its IS 800 Table 3 limit (ratio in brackets). Both must be at most "
             "1.0; the strength ratio is the design headline.</p>"
             + _t(["group", "section", "n", "governing combination", "P<sub>c</sub> (kN)", "P<sub>t</sub> (kN)",
-                  "M<sub>z</sub> (kN-m)", "M<sub>y</sub> (kN-m)", "V (kN)", "strength ratio",
-                  "KL/r / limit (ratio)"], rows))
+                  "M<sub>z</sub> (kN-m)", "M<sub>y</sub> (kN-m)", "V (kN)", "KL<sub>z</sub> / KL<sub>y</sub> (m)",
+                  "strength ratio", "KL/r / limit (ratio)"], rows))
 
 
 def _checks_table(checks, max_rows=400):
@@ -727,7 +727,7 @@ def build_report_india(name, root):
         ["Plan extents", f"{_m(Lx)} m (X) &times; {_m(Ly)} m (Y)"],
         ["Grid", f"{cfg['NX']} &times; {cfg['NY']} bays @ {_m(cfg['SX'])} m / {_m(cfg['SY'])} m"],
         ["Storey heights (m)", ", ".join(_m(h) for h in cfg["heights"])],
-        ["Height", f"{_m(sum(cfg['heights']))} m"],
+        ["Height", RS.height_text(cfg, sum(cfg['heights']))],
         ["Occupancy", FW.occupancy_text(cfg)]]))
     parts.append("<h3>Materials</h3>" + _t(["Item", "Value"], [
         ["Steel (rolled sections and welded plates)", "IS 2062 (Part 1) %s (fy by thickness per IS 2062 Table 3)"
