@@ -17,6 +17,23 @@ import json
 import os
 
 import engine3d as E
+import report_public as PUB
+
+
+def _pt(x):
+    """Text from a file written by a job script, as printed (check fixes 2026-10-23, finding 5): the strict public-text
+    pass, then escaped."""
+    return _e(PUB.strict_text("" if x is None else x))
+
+
+def pv_item_text(item, check=None):
+    """A PV-check item in words: 'gate wind_defl_Y' -> 'wind sway within the IS 800 Table 6 limit, Y (analysis gate)'."""
+    it = str(item or "")
+    if it.startswith("gate "):
+        it = "%s (analysis gate)" % PUB.gate_label(it[5:].strip(), plain=True)
+        ck = str(check or "")
+        return it + (": fails" if "fail" in ck.lower() else (": " + ck if ck else ""))
+    return it + ((": " + str(check)) if check else "")
 
 
 def _e(x):
@@ -43,6 +60,15 @@ def _ok(v):
 # ------------------------------------------------------------------------------------------------ occupancy
 def occupancy_text(cfg):
     o = cfg.get("occupancy")
+    if isinstance(o, (list, tuple)):
+        # check fixes (2026-10-23, finding 5): an occupancy given per use (a list of records, e.g. the CFS lateral
+        # frames) is printed one use per line, never as a raw list of dicts
+        items = [_occupancy_one(x) for x in o if x]
+        return "<br>".join(i for i in items if i) or "—"
+    return _occupancy_one(o)
+
+
+def _occupancy_one(o):
     if not isinstance(o, dict):
         return _e(o or "—")
     parts = []
@@ -52,9 +78,9 @@ def occupancy_text(cfg):
         parts.append("%s m² of floor" % _f(o["area_m2"], 0))
     if o.get("persons"):
         parts.append("%s persons" % _f(o["persons"], 0))
+    # check fixes (2026-10-23): a ruling keeps its id and is printed with its plain meaning by the public-text pass
+    # (report_public), so it is no longer cut out of the note here
     note = str(o.get("note") or "")
-    for tok in ("owner ruling ", "brief ruling ", "(D8)", ", D8", " D8"):
-        note = note.replace(tok, "" if tok.startswith(("(", ",", " ")) else "")
     if note:
         parts.append("basis: " + _e(note.strip(" ;,")))
     return "; ".join(parts) or "—"
@@ -223,7 +249,7 @@ def pv_check_section(cfg, root):
             ["capacity of the roof as built", "<b>%s kN/m²</b> (bisection to %s kN/m²)" % (
                 _f(cap.get("capacity_kNm2"), 2), _f(cap.get("resolution_kNm2"), 2))],
             ["first failure at", "%s kN/m²" % _f(cap.get("first_failure_kNm2"), 2)],
-            ["limiting check", _e("%s: %s" % (cap.get("limiting_item"), cap.get("limiting_check")))]]
+            ["limiting check", _pt(pv_item_text(cap.get("limiting_item"), cap.get("limiting_check")))]]
     for key, lab in (("capacity_H150_kNm2", "capacity with the dado detailed to move freely (eave sway H/150)"),
                      ("capacity_strength_kNm2", "capacity on strength alone (sway and dynamic-wind trigger aside)")):
         if cap.get(key) is not None:
@@ -233,7 +259,7 @@ def pv_check_section(cfg, root):
     if os.path.exists(sens):
         try:
             sj = json.load(open(sens))
-            out.append("<p><b>Why the capacity is low:</b> %s</p>" % _e(sj.get("conclusion") or ""))
+            out.append("<p><b>Why the capacity is low:</b> %s</p>" % _pt(sj.get("conclusion") or ""))
         except Exception:
             pass
     ba = _csv(os.path.join(d, "pv_before_after.csv"))
@@ -242,16 +268,16 @@ def pv_check_section(cfg, root):
         rows = [r for r in rows if str(r.get("change", "0")) not in ("0", "0.0")][:25]
         out.append("<h3>Before and after: the checks the PV load changes (largest first)</h3>")
         out.append(_tab(["item", "D/C as designed", "D/C with PV", "change", "over 1.0", "check"],
-                        [[_e(r.get("item")), _e(r.get("DC_IN_Ex1") or r.get("DC_before") or ""),
+                        [[_pt(pv_item_text(r.get("item"))), _e(r.get("DC_IN_Ex1") or r.get("DC_before") or ""),
                           _e(r.get("DC_with_PV")), _e(r.get("change")),
                           "<b>yes</b>" if str(r.get("over_1")).lower() == "true" else "no",
-                          _e(r.get("governing_check_with_PV") or "")] for r in rows]))
+                          _pt(r.get("governing_check_with_PV") or "")] for r in rows]))
     st = cap.get("strengthening") or []
     if st:
         out.append("<h3>Strengthening options to carry the array</h3>")
         out.append(_tab(["option", "what changes", "added steel", "result"],
-                        [[_e(s.get("option")), _e(s.get("what")), _e(s.get("added_steel") or ""),
-                          _e(s.get("result") or "")] for s in st]))
+                        [[_pt(s.get("option")), _pt(s.get("what")), _pt(s.get("added_steel") or ""),
+                          _pt(s.get("result") or "")] for s in st]))
     rc = _csv(os.path.join(d, "pv_reactions_change.csv"))
     def _fl(x):
         try:
@@ -283,7 +309,7 @@ def _md_lite(md):
             if not ul:
                 html_.append("<ul>")
                 ul = True
-            html_.append("<li>%s</li>" % _bold(_e(ln[2:]), _re))
+            html_.append("<li>%s</li>" % _bold(_pt(ln[2:]), _re))
             continue
         if ul:
             html_.append("</ul>")
@@ -291,9 +317,9 @@ def _md_lite(md):
         if not ln:
             continue
         if ln.startswith("#"):
-            html_.append("<p><b>%s</b></p>" % _e(ln.lstrip("# ")))
+            html_.append("<p><b>%s</b></p>" % _pt(ln.lstrip("# ")))
         else:
-            html_.append("<p>%s</p>" % _bold(_e(ln), _re))
+            html_.append("<p>%s</p>" % _bold(_pt(ln), _re))
     if ul:
         html_.append("</ul>")
     return "".join(html_)
@@ -346,12 +372,22 @@ def takeoff_section(cfg, pkg, root=None):
         except Exception:
             pass
     rows = [[k, _f(v, 0), _f(v / area, 1) if area else "—"] for k, v in sorted(kg.items())]
+    full_bay = ""
+    try:                                     # check fixes (2026-10-23, finding 10): say it where the kg/m2 is printed
+        import report_second_wave as _RS
+        _dk = _RS.deck_layout(cfg)
+        if _dk.get("composite") and _dk.get("full_bay") and _dk.get("span_m"):
+            full_bay = (" On this building the composite deck spans the full %s m bay with no secondary beams; the "
+                        "secondary beams that would be added in practice are not designed here and are not in this "
+                        "total (no estimate is given)." % _f(_dk["span_m"], 1))
+    except Exception:
+        full_bay = ""
     rows.append(["<b>TOTAL (modelled members)</b>", "<b>%s</b>" % _f(tot, 0), "<b>%s</b>" % (_f(tot / area, 1) if area else "—")])
     return ("<h3>Steel take-off (analysis members)</h3><p>Mass of the members in the analysis model from their section "
             "areas and lengths (7,850 kg/m³), per square metre of total floor area (%s m² over %d level(s)). Not "
             "included: secondary / filler beams that are not modelled, purlins and girts unless declared, deck, "
             "connections, base plates and stiffeners (allow about 8–12 %% for connections in a braced or moment "
-            "frame).</p>" % (_f(area, 0), NF) + _tab(["group", "kg", "kg/m² of floor"], rows))
+            "frame).%s</p>" % (_f(area, 0), NF, full_bay) + _tab(["group", "kg", "kg/m² of floor"], rows))
 
 
 # ------------------------------------------------------------------------------------------------ premium note
@@ -366,13 +402,15 @@ def premium_note(cfg, pkg):
             "The difference comes from design rules this report applies on purpose, not from the analysis:</p><ul>"
             "<li>IS 18168:2023 ductile detailing (route B, adopted for Zones III–V): compact webs (Table 2 d/tw) instead "
             "of 5–8 mm slender webs, knee and apex joints for 1.2 M<sub>p</sub> of the section at the joint face "
-            "(ruling D-T7) and splices for 1.8 times the required strength (6.5);</li>"
+            "(Steltic design ruling D-T7: joints designed for 1.2 M<sub>p</sub>) and splices for 1.8 times the "
+            "required strength (6.5);</li>"
             "<li>IS 800 Table 6 H/240 sway for a brick dado, which forces fixed bases and their base plates and anchors; "
             "many tenders use H/150 for metal cladding;</li>"
             "<li>base shear keys for 1.2 times the column shear capacity (IS 800 12.12 reading), compression bracing "
             "instead of rods, and purlins limited to the IS 811 range at F<sub>y</sub> 240 MPa;</li>"
             "<li>the IS 875-2 roof imposed load of 0.75 kN/m² on the whole roof, and collateral and PV kept off the "
             "uplift cases.</li></ul><p>The Steltic PEB lever study re-sizes this shed for each of these choices "
-            "in turn and shows the steel each one costs.</p>"
+            "in turn and shows the steel each one costs. It is not part of this report: it is run from the "
+            "Variations tab of the Steltic Hub.</p>"
             % (_f(k.get("total"), 1), _f(k.get("primary"), 1), _f(k.get("bracing"), 1), _f(k.get("secondary"), 1),
                _f(k.get("connections"), 1)))

@@ -80,7 +80,7 @@ def section(cfg, pkg, root):
            "rows, 3.7.2(d) effective section of a slender web, 8.2.2 LTB between restraints, 8.4.2 shear buckling, "
            "9.3 interaction, 7.1.2 compression). Design rulings applied (Steltic India defaults for PEB; the design "
            "engineer can change each one):</p>",
-           _tab(["ruling", "as applied"], rulings_applied(cfg))]
+           _tab(["Steltic design ruling", "as applied"], rulings_applied(cfg))]
     # members
     rows = []
     for mid, m in sorted((peb.get("members") or {}).items()):
@@ -107,12 +107,13 @@ def section(cfg, pkg, root):
         srows.append(["e%s" % t] + ["%s %s" % (r.get("section"), _f(r.get("dc"), 3)) for r in lst] +
                      [gov.get("where"), _f(gov.get("dc"), 3), str(gov.get("governing_check") or "")[:60]])
     if srows:
-        out.append("<h3>Station checks (D-T1): element at mid-depth, station i, station j</h3>")
+        out.append("<h3>Station checks (Steltic design ruling D-T1: tapered members checked segment by segment between "
+                   "restraints): element at mid-depth, station i, station j</h3>")
         out.append(_tab(["element", "element", "station i", "station j", "governs", "D/C", "check"], srows[:300]))
     # restraints
     fb = cfg.get("flange_braces") or {}
     if fb:
-        out.append("<h3>Restraints (IS 800 8.3.2; cfg['flange_braces'])</h3>")
+        out.append("<h3>Restraints (IS 800 8.3.2; flange braces as declared)</h3>")
         out.append(_tab(["member", "outer flange (purlins / girts)", "inner flange (fly braces)"], [
             ["rafter (plan m from each eave)", ", ".join(_f(x / 1000.0, 2) for x in (fb.get("rafter") or {}).get("purlins_mm") or []),
              ", ".join(_f(x / 1000.0, 2) for x in (fb.get("rafter") or {}).get("fly_braces_mm") or [])],
@@ -137,7 +138,7 @@ def section(cfg, pkg, root):
         out.append("<h3>Secondary members</h3>")
         out.append(_tab(["member", "kind", "section", "D/C", "mass (kg)", "design"], [
             [s_.get("id"), s_.get("kind"), s_.get("section"), _f(s_.get("DC"), 3), _f(s_.get("mass_kg"), 0),
-             s_.get("source") or s_.get("check") or "IS 800 (secondary_members)"] for s_ in sec]))
+             s_.get("source") or s_.get("check") or "IS 800"] for s_ in sec]))
     # tonnage
     tn = peb.get("tonnage") or {}
     if tn:
