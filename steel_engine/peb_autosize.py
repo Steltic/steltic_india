@@ -997,6 +997,12 @@ class LocalModel:
             self.cluster[c] = tuple(sorted(cl | {c}))
         self._dc_cache = {}
         self._t2_cache = {}
+        self._strut_cache = {}
+        # PEB-LEVERS (second wave): declared secondary struts on a resized section (IN_Ex1 / IN_Ex3: the gable rafter
+        # G_RAF is also the roof-girder chord, cfg['secondary_members'] kind 'strut') are checked with the candidate
+        # section and the job script's own demands (they do not depend on the section)
+        self.struts = [(self.const_of_label[s_["section"]], s_) for s_ in (self.cfg.get("secondary_members") or [])
+                       if str(s_.get("kind") or "").lower() == "strut" and s_.get("section") in self.const_of_label]
         self.is18 = self._is18()
         self.knees = self._knee_joints()
         self.knee_shear0 = self._knee_shear0()
@@ -1080,6 +1086,25 @@ class LocalModel:
                     if dc > best[0]:
                         best = (dc, "e%d %s" % (t, gov))
         self._dc_cache[key] = best
+        return best
+
+    def strut_dc(self, x):
+        """Max D/C of the declared secondary struts that use a resized section, with the labels of x (the engine's
+        design_pipeline.secondary_strut_checks).  Returns (dc, governing) -- (0, None) when there is none."""
+        import design_pipeline as DP
+        import peb_build as PB
+        best = (0.0, None)
+        for c, s_ in self.struts:
+            lab = x.get(c, s_["section"])
+            key = (s_.get("id"), lab)
+            if key not in self._strut_cache:
+                PB.ensure(lab)
+                r = DP.secondary_strut_checks(self.cfg, dict(s_, section=lab))
+                dc = r.get("DC")
+                self._strut_cache[key] = 9.99 if dc is None else float(dc)
+            dc = self._strut_cache[key]
+            if dc > best[0]:
+                best = (dc, "secondary strut %s (%s)" % (s_.get("id"), lab))
         return best
 
     def member_mass(self, x):
@@ -1987,6 +2012,13 @@ class Evaluator:
             if dc > mg:
                 viol += dc - mg
                 out["why"] = out["why"] or "member %s D/C %.3f > %.3f (%s)" % ("+".join(cl), dc, mg, gov)
+        if getattr(lm, "struts", None):
+            dcs_, govs_ = lm.strut_dc(x)
+            mg = self.margin("strut", self.margin("member", 0.99))
+            if dcs_ > mg:
+                viol += dcs_ - mg
+                out["why"] = out["why"] or "%s D/C %.3f > %.3f" % (govs_, dcs_, mg)
+            dcs[("secondary_struts",)] = (dcs_, govs_)
         if lm.is18:
             dc62, gov62 = lm.is18168_6_2_dc(x)
             mg = self.margin("is18168_6_2", 1.0)
@@ -2121,6 +2153,9 @@ def evaluate_run(run_dir, waivers=()):
     for c in (pkg.get("capacity_design") or {}).get("section12", {}).get("checks") or []:
         if isinstance(c.get("dc"), (int, float)) and c.get("ok") is not None:
             cands.append((c["dc"], "section12", "%s@%s" % (c.get("id"), c.get("member")), c.get("clause")))
+    for m in pkg.get("secondary_members") or []:           # PEB-LEVERS (second wave)
+        if isinstance(m.get("DC"), (int, float)):
+            cands.append((m["DC"], "secondary", "%s-%s" % (m.get("id"), m.get("section")), m.get("kind")))
     for dname, r in (pkg.get("wind_serviceability") or {}).items():
         if isinstance(r, dict):
             cands.append((r.get("ratio_top", 0.0), "sway", "wind %s eave" % dname, r.get("cite", "")[:80]))
@@ -2199,6 +2234,8 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
                 for k in list(margins):
                     pass
                 tighten("member", 0.02, 0.99); hit = True
+        elif kind == "secondary" and _gov == "strut":
+            tighten("strut", 0.03, float(margins.get("member", 0.99))); hit = True
         elif kind in ("sway", "drift"):
             tighten("sway", 0.03, 0.98); hit = True
         elif kind == "deflection":

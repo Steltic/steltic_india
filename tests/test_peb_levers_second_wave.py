@@ -133,3 +133,42 @@ def test_short_ladder_waterfall_and_tables():
     assert "-2.50" in svg and "-3.50" in svg
     md = L.markdown_tables([st])
     assert "(step -2.50)" in md and "(step -3.50)" in md
+
+
+def _strut_cfg():
+    return {"steel_grade": "E250 B0", "jurisdiction": "india", "units": "N-mm",
+            "secondary_members": [
+                {"kind": "strut", "id": "gable-rafter-as-girder-chord", "section": "WI350X160X8X5", "L_mm": 7500.0,
+                 "Kz": 1.0, "Ky": 1.0, "LLT_mm": 3000.0,
+                 "demands": [{"combo": "1.2DL+1.2LL+1.2WL", "P_N": 50706.1, "M_Nmm": 25649156.25},
+                             {"combo": "1.5DL+1.5LL", "P_N": 0.0, "M_Nmm": 32061445.3}]},
+                {"kind": "strut", "id": "roof-girder-strut", "section": "CHS139.7X4.5", "L_mm": 7500.0,
+                 "demands": [{"combo": "1.5DL+1.5WL", "P_N": 47002.8}]}]}
+
+
+def test_local_strut_check_follows_the_candidate_section():
+    """A declared secondary strut on a resized section (the IN_Ex1 gable rafter is also the roof-girder chord) is
+    checked locally with the candidate label exactly as the engine checks it (design_pipeline.secondary_strut_checks);
+    a strut on a section the sizer does not resize is left to the full run."""
+    import design_pipeline as DP
+    import peb_build as PB
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.cfg = _strut_cfg()
+    lm.const_of_label = {"WI350X160X8X5": "G_RAF"}
+    lm._strut_cache = {}
+    lm.struts = [(lm.const_of_label[s_["section"]], s_) for s_ in lm.cfg["secondary_members"]
+                 if s_["section"] in lm.const_of_label]
+    assert [s_["id"] for _, s_ in lm.struts] == ["gable-rafter-as-girder-chord"]
+    for lab in ("WI350X160X8X5", "WI250X125X8X4"):
+        PB.ensure(lab)
+        ref = DP.secondary_strut_checks(lm.cfg, dict(lm.cfg["secondary_members"][0], section=lab))["DC"]
+        dc, gov = lm.strut_dc({"G_RAF": lab})
+        assert abs(dc - ref) < 1e-12 and lab in gov
+    assert lm.strut_dc({"G_RAF": "WI250X125X8X4"})[0] > lm.strut_dc({"G_RAF": "WI350X160X8X5"})[0]
+
+
+def test_feedback_tightens_the_strut_margin():
+    m = {"member": 0.99}
+    A.feedback(m, {"fail_items": [(1.22, "secondary", "gable-rafter-as-girder-chord-WI250X125X8X4", "strut")]}, None,
+               log_fn=lambda *a: None)
+    assert abs(m["strut"] - 0.96) < 1e-9 and m["member"] == 0.99
