@@ -330,6 +330,20 @@ def design_changes(res):
     return out
 
 
+def drop_failed_rods(kw, name, rows):
+    """Second wave: the market bundle keeps the job's compression bracing when the rods alone found no passing design
+    (IN_Ex3: with rods the shed is torsionally irregular and its torsional mode is not below the first X mode, IS 1893
+    Table 5(i) (Amd 2) -- no design passes), so the bundle measures the other shortcuts.  Returns kw (a copy when
+    changed, with 'rods_dropped' explaining it)."""
+    r = rows.get("rods") or {}
+    if name != "market" or not kw.get("rods") or not r.get("done") or r.get("best_x"):
+        return kw
+    kw = dict(kw, rods=False, rules={k: v for k, v in kw["rules"].items() if k != "bracing"})
+    kw["rods_dropped"] = ("rods left out: the tension-rod variant found no passing design (%s)"
+                          % str(r.get("last_blocking") or r.get("error") or "")[:160])
+    return kw
+
+
 def solar_job(job_dir, spec, jobs_root, work):
     """The job the solar-ready variant is sized on (second wave): a copy of the job with spec['solar']['cfg_append']
     appended to its cfg.py (IN_Ex1: the IN_Ex5 gust-factor wind once the PV mass takes f1 below 1.0 Hz) and the
@@ -428,6 +442,9 @@ def run_job(job, a, solar=False):
             stopped = name
             break
         t0 = time.time()
+        kw = drop_failed_rods(kw, name, rows)
+        if kw.get("rods_dropped"):
+            note = note + "; " + kw["rods_dropped"]
         rules = dict(kw["rules"])
         args = dict(cfs_root=a.cfs_root, waivers=BASE_WAIVERS, max_full_runs=a.max_runs, secondary_cache=sec_cache)
         extra_ov, patch, rods, Lr, free = {}, {}, None, None, False

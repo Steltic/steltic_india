@@ -495,3 +495,18 @@ def test_canopy_root_checks_the_candidate_column_flange():
     ok = A.splice_fixed(lm, "canopy_root", dict(dem, col_sec="WI725X230X22X14"), face, par, 1.0)
     thin = A.splice_fixed(lm, "canopy_root", dict(dem, col_sec="WI675X200X12X8"), face, par, 1.0)
     assert ok is not None and thin is None
+
+
+def test_market_bundle_drops_rods_that_cannot_pass():
+    """IN_Ex3: with rod X-bracing the shed is torsionally irregular (IS 1893 Table 5(i), Amd 2) and no design passes;
+    the market bundle then keeps the compression bracing and says so.  With a passing rods row nothing changes."""
+    import peb_lever_study as L
+    kw = {"rules": {"bracing": "tension_rods", "ltb_c1": "gradient"}, "rods": True, "market": True}
+    failed = {"rods": {"done": True, "error": "no passing design within 8 full runs",
+                       "last_blocking": ["irregularity.torsion.verdict: revise configuration"]}}
+    k2 = L.drop_failed_rods(kw, "market", failed)
+    assert k2["rods"] is False and "bracing" not in k2["rules"] and k2["rules"]["ltb_c1"] == "gradient"
+    assert "rods left out" in k2["rods_dropped"] and "torsion" in k2["rods_dropped"]
+    assert kw["rods"] is True and "bracing" in kw["rules"]                       # the variant list is not mutated
+    assert L.drop_failed_rods(kw, "market", {"rods": {"done": True, "best_x": {"COL": "x"}}}) is kw
+    assert L.drop_failed_rods(kw, "compliant", failed) is kw
