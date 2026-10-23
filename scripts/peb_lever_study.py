@@ -325,6 +325,7 @@ def run_job(job, a, solar=False):
     vlist = variants_for(spec, solar=solar)
     want = set(a.variants.split(",")) if a.variants else None
     strict = rows.get("strict")
+    stopped = None
     for name, kw, status, note in vlist:
         if want and name not in want and not (name == "strict" and not strict):
             continue
@@ -343,6 +344,12 @@ def run_job(job, a, solar=False):
                 study["rows"] = rows
                 json.dump(study, open(study_p, "w"), indent=1, default=str)
             continue
+        if budget_spent(a):
+            # a resumable chunk: no new variant after --stop-after-min minutes (the run in hand is never cut)
+            log("== %s: time budget of %s min reached before '%s'; re-run with --resume to continue"
+                % (job, a.stop_after_min, name))
+            stopped = name
+            break
         t0 = time.time()
         rules = dict(kw["rules"])
         args = dict(cfs_root=a.cfs_root, waivers=BASE_WAIVERS, max_full_runs=a.max_runs, secondary_cache=sec_cache)
@@ -436,10 +443,25 @@ def run_job(job, a, solar=False):
         if r.get("kg_m2") and st.get("kg_m2"):
             r["delta_vs_strict_kg_m2"] = round(r["kg_m2"]["total"] - st["kg_m2"]["total"], 2)
             r["delta_vs_strict_pct"] = round(100.0 * r["delta_vs_strict_kg_m2"] / st["kg_m2"]["total"], 1)
-    study["finished"] = time.strftime("%Y-%m-%d %H:%M")
+    if stopped:
+        study["stopped_before"] = stopped
+        study.pop("finished", None)
+    else:
+        study.pop("stopped_before", None)
+        study["finished"] = time.strftime("%Y-%m-%d %H:%M")
     json.dump(study, open(study_p, "w"), indent=1, default=str)
     render_job(study, work)
     return study
+
+
+T_START = time.time()
+
+
+def budget_spent(a):
+    """True once the study has run for --stop-after-min minutes (0: no budget).  Used to cut a long study into
+    resumable chunks that finish between variants."""
+    lim = float(getattr(a, "stop_after_min", 0) or 0)
+    return lim > 0 and (time.time() - T_START) > 60.0 * lim
 
 
 # accepted non-compliances of the not-compliant variants (design_status reasons that the variant is about)
@@ -723,10 +745,15 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--solar", action="store_true", help="IN_Ex1: add the solar-ready variant (0.15 kN/m2 PV)")
     ap.add_argument("--render", action="store_true")
+    ap.add_argument("--stop-after-min", type=float, default=0.0,
+                    help="start no new variant after this many minutes (a resumable chunk; continue with --resume)")
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
     if not a.render:
         for job in a.job:
+            if budget_spent(a):
+                log("== %s: not started (time budget reached); re-run with --resume" % job)
+                continue
             run_job(job, a, solar=a.solar and job.startswith("IN_Ex1_"))
     studies = []
     for job in sorted(os.listdir(a.work)):

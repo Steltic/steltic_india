@@ -1866,6 +1866,18 @@ def _orientation_ok(x, x_gold):
     return True
 
 
+def _shared_label(x):
+    """PEB-LEVERS (second wave): two resized constants on one label (e.g. the gable corner and wind columns both at
+    the lightest plates) cannot be told apart in the next run's package, which maps members to constants by label, so
+    the proposal is refused.  Returns the reason, or None when every label is distinct."""
+    seen = {}
+    for c in sorted(x):
+        if x[c] in seen:
+            return "constants %s and %s would share the label %s" % (seen[x[c]], c, x[c])
+        seen[x[c]] = c
+    return None
+
+
 class Evaluator:
     """Local (frozen-force) feasibility and mass of member labels x, with the joints sized for them."""
 
@@ -1950,6 +1962,11 @@ class Evaluator:
         out = {"x": dict(x), "feasible": False, "mass": None, "why": None}
         if not _orientation_ok(x, self.x_gold):
             out["why"] = "taper orientation"
+            self.cache[key] = out
+            return out
+        why = _shared_label(x)
+        if why:
+            out["why"] = why
             self.cache[key] = out
             return out
         for c in sorted(x):
