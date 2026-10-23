@@ -508,7 +508,7 @@ def _is_numeric(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
-_DELEGATED_KEYS = ("delegated_criteria", "delegated_item")
+_DELEGATED_KEYS = ("delegated_criteria", "delegated_item", "delegated_design")   # the register handed to delegated designers
 
 
 def _gather_uncomputed_text(obj, acc):
