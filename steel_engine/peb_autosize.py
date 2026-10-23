@@ -1847,6 +1847,15 @@ def splice_demands(lm, x):
         else:
             Md, Mr = M_an, M_rev
         r = out.setdefault(key, {"Md": 0.0, "Mr": 0.0, "sec_min": sec_min, "kind": kind, "spec": sp, "n": 0})
+        if sp.get("column_section"):
+            # second wave: a joint bolted to a column flange (the IN_Ex2 canopy-beam root) -- the column flange is
+            # the other T-stub flange, so it follows the candidate column (peb_checks.splice_records' own row)
+            c_ = lm.const_of_label.get(sp["column_section"])
+            lab_c = x.get(c_, sp["column_section"]) if c_ else sp["column_section"]
+            if PB.parse(lab_c)[0] == "tapered":
+                lab_c = PB.section_at(lab_c, 1.0)
+            PB.ensure(lab_c)
+            r["col_sec"] = lab_c
         r["n"] += 1
         if Md >= r["Md"]:
             r["Md"], r["sec_min"] = Md, sec_min
@@ -1889,6 +1898,25 @@ def splice_fixed(lm, key, dem, face, par, margin=1.0):
             if lay["reverse_rows"] else 0.0
     if not (dem["Md"] <= margin * cap + 1e-6 and (dem["Mr"] <= 1.0 or dem["Mr"] <= margin * (cap_r or 0.0) + 1e-6)):
         return None
+    if dem.get("col_sec"):
+        # the column flange at the end-plate bolt rows (T-stub flange, both signs), as peb_checks.splice_records
+        import sections as S
+        csec_ = dem["col_sec"]
+        pcol = S.props(csec_)
+        t_cf = float(sp.get("column_flange_t_mm") or pcol["tf"])
+        g_cf = sp.get("gauge_mm")
+        lv_cf = float((float(g_cf) / 2.0 - pcol["tw"] / 2.0 - 8.0) if g_cf else ep.get("lv_mm"))
+        grade_c = (sp.get("column_flange_grade") or (lm.cfg.get("grade_by_section") or {}).get(csec_)
+                   or lm.cfg.get("steel_grade"))
+        cf = dict(ep, t_plate_mm=t_cf, fy_plate_MPa=PC._fy_plate(csec_, lm.cfg), lv_mm=lv_cf, plate_grade=grade_c,
+                  web_t_mm=float(pcol["tw"]) + float(sp.get("column_web_doubler_mm") or 0.0),
+                  web_fy_MPa=PC._fy_plate(csec_, lm.cfg), hf_mm=lay["hf_mm"])
+        caps_cf = [(PC.end_plate_capacity(cf, lm.cfg) or {}).get("capacity_Nmm")]
+        if not sym and lay["reverse_rows"]:
+            caps_cf.append((PC.end_plate_capacity(cf, lm.cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
+        caps_cf = [c_ for c_ in caps_cf if c_]
+        if not caps_cf or max(dem["Md"], dem["Mr"]) > margin * min(caps_cf) + 1e-6:
+            return None
     h = ep_height(face, par["n_out"], pitch_of(par, face))
     npl = 1 if key == "canopy_root" else 2
     kg = npl * par["b_plate"] * par["t"] * h * STEEL

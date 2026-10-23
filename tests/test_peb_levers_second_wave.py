@@ -475,3 +475,23 @@ def test_buckling_section_registers_taper_station_labels():
     PB.ensure(lab)
     sec = lm.buckling_section("ch", {"CAN_T": lab})
     assert sec == PB.section_at(lab, 1.0) and S.props(sec)["d"] > 0
+
+
+def test_canopy_root_checks_the_candidate_column_flange():
+    """IN_Ex2 OMRF_R3: the canopy-beam root is bolted to the column flange; the column flange (the other T-stub
+    flange) follows the candidate column, so a column too light for the canopy bolts fails locally instead of in
+    every full run.  The row is peb_checks.splice_records' own column-flange row."""
+    import peb_build as PB
+    face = "WI450X190X12X5"
+    for s_ in (face, "WI675X200X20X8", "WI725X230X22X14", "WI675X200X12X8"):
+        PB.ensure(s_)
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.cfg = {"steel_grade": "E350 B0", "units": "N-mm", "jurisdiction": "india"}
+    par = {"t": 32.0, "d": 20, "grade": "10.9", "plate_grade": "E250 B0", "n_out": 2, "n_in": 3,
+           "pitch_rule": ["ratio", 4], "b_plate": 220.0, "web_doubler": 0.0, "member_fy": 350.0, "gauge": 110.0}
+    sp = {"symmetric": True, "gauge_mm": 110.0, "column_flange_grade": "E350 B0", "column_section": "WI675X200X20X8"}
+    dem = {"Md": 2.0e8, "Mr": 1.5e8, "sec_min": face, "kind": "canopy_root", "spec": sp, "n": 1}
+    assert A.splice_fixed(lm, "canopy_root", dem, face, par, 1.0) is not None           # no column: plate only
+    ok = A.splice_fixed(lm, "canopy_root", dict(dem, col_sec="WI725X230X22X14"), face, par, 1.0)
+    thin = A.splice_fixed(lm, "canopy_root", dict(dem, col_sec="WI675X200X12X8"), face, par, 1.0)
+    assert ok is not None and thin is None
