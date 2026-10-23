@@ -261,3 +261,50 @@ def test_secondary_error_rows_are_not_read_as_results():
     assert rr == {}
     import inspect
     assert 'isinstance(r.get(role), dict)' in inspect.getsource(A.design_secondary)
+
+
+def _fake_lm(Ty, Tx=0.2, gust=False):
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.pkg = {"irregularity": {"modes": {"Ty": Ty, "Tx": Tx}}, "wind_serviceability": {}, "drift_table": []}
+    ws = {"pd_kNm2": 1.0}
+    if gust:
+        ws["gust_factor"] = {"G": 2.1}
+    lm.cfg = {"load_plan": {"wind_summary": ws}}
+    lm.spec = {}
+    return lm
+
+
+def test_first_mode_frequency_is_kept_at_or_above_1Hz():
+    """IS 875-3 9.1(b): below 1.0 Hz the engine requires the 10.2 gust-factor wind.  A run at or above 1.0 Hz without
+    a gust factor gets a predicted f1 = f1_run / sqrt(flexibility ratio); a run already below 1 Hz (or with a gust
+    factor) is not constrained; a failed dynamic_wind gate tightens the frequency margin."""
+    lm = _fake_lm(0.974)
+    g = lm._globals()
+    assert abs(g["freq_Y"] - 1.0 / 0.974) < 1e-12
+    lm.global0, lm.F0 = g, 100.0
+    lm.flexibility = lambda x: 121.0                   # 21 % more flexible -> f / 1.1
+    assert abs(lm.predicted({})["freq_Y"] - (1.0 / 0.974) / 1.1) < 1e-12
+    assert "freq_Y" not in _fake_lm(1.07)._globals()               # already below 1 Hz
+    assert "freq_Y" not in _fake_lm(0.9, gust=True)._globals()     # the job declares the gust factor
+    m = {}
+    A.feedback(m, {"fail_items": [], "gates_fail": ["dynamic_wind"]}, None, log_fn=lambda *a: None)
+    assert abs(m["freq"] - 0.95) < 1e-9 and "sway" not in m
+
+
+def test_waived_checks_do_not_govern(tmp_path):
+    """The rods / market variants waive the brace compression of tension-only rods: such a row (D/C ~ 134) must not be
+    reported as the governing check nor be fed back as a failure."""
+    import json as _j
+    rd = tmp_path / "run"
+    (rd / "design").mkdir(parents=True)
+    _j.dump({"ok": True, "design_status": {"status": "complete", "reasons": []}}, open(rd / "result.json", "w"))
+    pkg = {"peb": {"tonnage": {"kg": {"primary": 1.0}, "plan_area_m2": 1.0}},
+           "members": [{"id": "roof-WI500X200X10X6", "DC": 0.93, "governing_check": "9.3"}],
+           "capacity_design": {"section12": {"checks": [
+               {"id": "brace_compression", "member": "e355", "dc": 134.3, "ok": False, "clause": "IS 800 7.1.2"}]}}}
+    _j.dump(pkg, open(rd / "design" / "calc_package.json", "w"))
+    r = A.evaluate_run(str(rd), waivers=(r"(?i)brace_compression",))
+    assert r["governing"][2] == "roof-WI500X200X10X6" and not r["fail_items"]
+    assert r["waived_checks"][0][2] == "brace_compression@e355"
+    r0 = A.evaluate_run(str(rd))
+    assert r0["governing"][1] == "section12" and r0["fail_items"]

@@ -1213,6 +1213,16 @@ class LocalModel:
         cs = pkg.get("crane_sway") or {}
         if isinstance(cs, dict) and cs.get("ratio") is not None:
             g["crane_sway"] = float(cs["ratio"])
+        # PEB-LEVERS (second wave): IS 875-3 9.1(b) -- below f1 = 1.0 Hz the engine asks for the 10.2 gust-factor
+        # wind (dynamic_wind gate).  A job without a gust factor whose run is at or above 1.0 Hz must stay there: the
+        # first transverse (Y) mode is predicted from the frame flexibility (mass held, conservative for a lighter
+        # frame).  IN_Ex1: strict 1.03 Hz; the market bundle went below 1 Hz on every lighter proposal.
+        md = (pkg.get("irregularity") or {}).get("modes") or {}
+        ws_ = ((self.cfg.get("load_plan") or {}).get("wind_summary") or {}) if isinstance(self.cfg, dict) else {}
+        if md.get("Ty") and not isinstance(ws_.get("gust_factor"), dict):
+            f1 = 1.0 / float(md["Ty"])
+            if f1 >= 1.0 and float(md["Ty"]) >= float(md.get("Tx") or 0.0):
+                g["freq_Y"] = f1
         return g
 
     def flexibility(self, x):
@@ -1262,6 +1272,8 @@ class LocalModel:
                 out[k] = v * (r if k.endswith("Y") or k in ("beam_defl", "crane_sway") else 1.0)
             elif k.startswith("lambda_"):
                 out[k] = v / (r if k.endswith("Y") else 1.0)
+            elif k.startswith("freq_"):
+                out[k] = v / math.sqrt(r if k.endswith("Y") else 1.0)
         return out
 
     # ------------------------------------------------------------------ joints
@@ -2047,6 +2059,11 @@ class Evaluator:
                 if v < need:
                     viol += (need - v) / need
                     out["why"] = out["why"] or "%s %.2f < %.2f (predicted)" % (k, v, need)
+            elif k.startswith("freq_"):
+                need = 1.0 / self.margin("freq", 0.98)          # IS 875-3 9.1(b): f1 >= 1.0 Hz (no gust factor)
+                if v < need:
+                    viol += (need - v) / need
+                    out["why"] = out["why"] or "%s %.3f Hz < %.3f Hz (predicted)" % (k, v, need)
             else:
                 mg = self.margin("sway" if k.startswith(("wind", "drift", "crane")) else "defl", 0.98)
                 if v > mg:
@@ -2185,6 +2202,13 @@ def evaluate_run(run_dir, waivers=()):
         lam = (fs.get(dname) or {}).get("lambda_cr")
         if lam:
             cands.append((5.0 / lam, "stability", "lambda_cr %s = %.2f" % (dname, lam), "IS 800 4.6.2(b) B-2.1"))
+    # second wave: a check the variant is about (its waived non-compliance, e.g. the compression check of a
+    # tension-only rod) is neither the governing check nor a failure to feed back
+    def _waived(c):
+        txt = "%s %s %s" % (c[1], c[2], c[3])
+        return any(re.search(w, txt) for w in waivers)
+    out["waived_checks"] = sorted([c for c in cands if _waived(c)], key=lambda r: -r[0])[:8]
+    cands = [c for c in cands if not _waived(c)]
     cands.sort(key=lambda r: -r[0])
     out["governing"] = cands[0] if cands else None
     out["top_checks"] = cands[:8]
@@ -2257,7 +2281,9 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
         elif kind == "stability":
             tighten("lambda", 0.03, 0.97); hit = True
     for g in ev_run.get("gates_fail") or []:
-        if g.startswith(("wind_defl", "drift")):
+        if g.startswith("dynamic_wind"):
+            tighten("freq", 0.03, 0.98); hit = True
+        elif g.startswith(("wind_defl", "drift")):
             tighten("sway", 0.03, 0.98); hit = True
         elif g.startswith("beam_deflection"):
             tighten("defl", 0.03, 0.98); hit = True
