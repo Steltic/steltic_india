@@ -82,3 +82,54 @@ def test_study_stops_between_variants_and_resumes(tmp_path):
     json.dump(saved, open(os.path.join(a.work, job, "study.json"), "w"))
     st2 = L.run_job(job, _args(tmp_path), solar=True)
     assert "stopped_before" not in st2 and st2.get("finished")
+
+
+def test_short_ladder_variants():
+    """--ladder short (a study that would take too long): strict, each lever alone, every compliant lever together
+    (from the strict design), the market bundle (every lever + market loads, from the compliant design), solar-ready;
+    no one-lever-at-a-time steps."""
+    import peb_lever_jobs as J
+    import peb_lever_study as L
+    ex1 = {n: (kw, st) for n, kw, st, _ in L.variants_for(J.JOB_SPECS["IN_Ex1_PEB_factory_shed_tapered_Bengaluru"],
+                                                         solar=True, ladder="short")}
+    assert not [n for n in ex1 if n.startswith("cum:")]
+    comp = ex1["compliant"][0]
+    assert comp["start_from"] == "strict" and ex1["compliant"][1] == "compliant"
+    assert comp["rules"] == {"ltb_c1": "gradient", "joint_demand": "deliverable", "sway_limit": "H150_with_dado_check",
+                             "dado_height_mm": 3000.0, "purlins": "thin_G350"}
+    mk, st = ex1["market"]
+    assert mk["start_from"] == "compliant" and st.startswith("NOT") and mk["market"] and mk["rods"]
+    assert mk["rules"]["sway_limit"] == "H150_no_dado_check" and "dado_height_mm" not in mk["rules"]
+    assert mk["rules"]["base_shear_key"] == "analysis" and mk["rules"]["collateral_in_uplift"] is True
+    assert ex1["solar_ready"][0]["solar_pv"] == 0.15
+    for n in ("strict", "ltb_gradient", "joint_deliverable", "sway_H150_dado", "thin_purlins", "base_key_analysis",
+              "collateral_in_uplift", "rods"):
+        assert ex1[n][0] is not None, n
+    ex4 = {n: (kw, st) for n, kw, st, _ in L.variants_for(J.JOB_SPECS["IN_Ex4_PEB_warehouse_SMRF_Zone4_NCR"],
+                                                         ladder="short")}
+    assert ex4["market"][0]["seismic_route"] == "OMRF_R3" and ex4["omrf_r3"][1] == "market practice, not compliant"
+    assert "joint_demand" not in ex4["compliant"][0]["rules"]
+
+
+def test_ladder_mode_cannot_change_on_resume(tmp_path):
+    import pytest
+    import peb_lever_study as L
+    job = "IN_Ex1_PEB_factory_shed_tapered_Bengaluru"
+    d = tmp_path / "study" / job
+    d.mkdir(parents=True)
+    json.dump({"job": job, "rows": {}, "ladder": "full"}, open(d / "study.json", "w"))
+    with pytest.raises(SystemExit):
+        L.run_job(job, _args(tmp_path, ladder="short"), solar=True)
+
+
+def test_short_ladder_waterfall_and_tables():
+    import peb_lever_study as L
+    rows = {"strict": {"name": "strict", "label": "s", "status": "compliant", "kg_m2": {"total": 30.0}},
+            "compliant": {"name": "compliant", "label": "c", "status": "compliant", "kg_m2": {"total": 27.5}},
+            "market": {"name": "market", "label": "m", "status": "NOT COMPLIANT (market practice)",
+                       "kg_m2": {"total": 24.0}}}
+    st = {"job": "J", "rows": rows, "ladder": "short"}
+    svg = L._waterfall(st)
+    assert "-2.50" in svg and "-3.50" in svg
+    md = L.markdown_tables([st])
+    assert "(step -2.50)" in md and "(step -3.50)" in md

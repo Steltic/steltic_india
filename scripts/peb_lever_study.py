@@ -108,7 +108,7 @@ def _worst_status(sts):
     return "compliant"
 
 
-def variants_for(spec, solar=False):
+def variants_for(spec, solar=False, ladder="full"):
     """[(name, kwargs for autosize, status, note)] of a job; status: compliant / reading / not compliant / n/a.
     The levers alone start from the strict design; the cumulative steps ('cum:<lever>', the waterfall) add one lever
     at a time to the previous step, in CUM_ORDER (the compliant levers first, then the readings, then the not-compliant
@@ -158,6 +158,41 @@ def variants_for(spec, solar=False):
         if name in levers:
             r, st, nt, fl = levers[name]
             add(name, r, st, nt, **fl)
+    if ladder == "short":
+        # the short ladder (a study that would take too long): strict -> every compliant lever together (run from the
+        # strict design) -> the market-practice bundle (every lever + the market loads, run from the compliant design)
+        comp = [n for n in LEVER_ORDER if n in levers and levers[n][1] == "compliant"]
+        rules, flags = {}, {}
+        for n in comp:
+            rules.update(levers[n][0])
+            flags.update(levers[n][3])
+        if len(comp) == 1:
+            out.append(("compliant", {"alias": comp[0]}, "compliant", "every lever marked compliant (= %s)" % comp[0]))
+        elif comp:
+            add("compliant", rules, "compliant", "every lever marked compliant, together: " + " + ".join(comp),
+                start_from="strict", **flags)
+        sts = ["compliant"]
+        for n in LEVER_ORDER:
+            if n in levers and n not in comp:
+                rules = dict(rules, **levers[n][0])
+                flags = dict(flags, **levers[n][3])
+                sts.append(levers[n][1])
+        mk = dict(sway_limit="H150_no_dado_check", purlin_free_flange="sheeting_braced")
+        if not dado:
+            mk.pop("sway_limit")
+        rules = dict(rules, **mk)
+        rules.pop("dado_height_mm", None)
+        flags = dict(flags, market=True, seismic_route="OMRF_R3" if not omrf else flags.get("seismic_route"))
+        flags = {k: v for k, v in flags.items() if v}
+        add("market", rules, "NOT COMPLIANT (market practice)",
+            "every lever plus the market-practice loads: MBMA roof live 0.57 kN/m2 (IS 875-2: 0.75), ordinary frames "
+            "R 3 / R 4 in any zone, the sheeting taken as bracing the purlin free flange, H/150 without the dado check "
+            "(short ladder: run from the all-compliant design)", start_from="compliant" if comp else "strict", **flags)
+        if solar:
+            add("solar_ready", {}, "compliant", "the Ex1 gold strengthened for 0.15 kN/m2 rooftop PV (cfg D_roof_pv), "
+                                                "strict rules: nothing lighter than the gold, a gold joint or purlin "
+                                                "kept while it passes", solar_pv=0.15)
+        return out
     # the cumulative ladder
     rules, flags, sts, prev, last_comp = {}, {}, [], "strict", None
     for name in CUM_ORDER:
@@ -322,7 +357,11 @@ def run_job(job, a, solar=False):
                         "note": "the published gold package (%s)" % os.path.dirname(os.path.dirname(pub))}
     sec_p = os.path.join(work, "secondary_cache.json")
     sec_cache = _PersistentDict(sec_p)
-    vlist = variants_for(spec, solar=solar)
+    ladder = getattr(a, "ladder", "full") or "full"
+    if study.get("ladder") and study["ladder"] != ladder:
+        raise SystemExit("%s: the study in %s was run with --ladder %s" % (job, work, study["ladder"]))
+    study["ladder"] = ladder
+    vlist = variants_for(spec, solar=solar, ladder=ladder)
     want = set(a.variants.split(",")) if a.variants else None
     strict = rows.get("strict")
     stopped = None
@@ -580,6 +619,8 @@ def _waterfall(study):
     R = study["rows"]
     steps = [("strict", R.get("strict"))] + [(n, R.get("cum:" + n) if n != "market" else R.get("market"))
                                              for n in CUM_ORDER]
+    if study.get("ladder") == "short":
+        steps = [("strict", R.get("strict")), ("all compliant", R.get("compliant")), ("market", R.get("market"))]
     steps = [(n, r) for n, r in steps if r and r.get("kg_m2")]
     if len(steps) < 2:
         return ""
@@ -717,7 +758,8 @@ def markdown_tables(studies):
             gov = ("%.3f %s" % (g[0], str(g[2])[:48])) if g else (r.get("error") or ("" if r.get("status") != "n/a"
                                                                                        else str(r.get("note"))[:60]))
             dv = "" if (k is None or s0 is None or r["name"] in ("strict",)) else "%+.2f" % (k - s0)
-            if r["name"].startswith("cum:") or r["name"] == "market":
+            if r["name"].startswith("cum:") or r["name"] == "market" or (
+                    st.get("ladder") == "short" and r["name"] == "compliant"):
                 dv += "" if (k is None or prev is None) else " (step %+.2f)" % (k - prev)
                 prev = k if k is not None else prev
             tm = ("%.0f min" % (r["elapsed_s"] / 60.0)) if r.get("elapsed_s") and not r.get("alias_of") else \
@@ -744,6 +786,9 @@ def main():
     ap.add_argument("--max-runs", type=int, default=8)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--solar", action="store_true", help="IN_Ex1: add the solar-ready variant (0.15 kN/m2 PV)")
+    ap.add_argument("--ladder", choices=("full", "short"), default="full",
+                    help="full: the cumulative ladder one lever at a time; short: strict -> all compliant levers -> "
+                         "market bundle (for a study that would otherwise take too long)")
     ap.add_argument("--render", action="store_true")
     ap.add_argument("--stop-after-min", type=float, default=0.0,
                     help="start no new variant after this many minutes (a resumable chunk; continue with --resume)")
