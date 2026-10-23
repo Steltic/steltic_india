@@ -364,3 +364,40 @@ def test_solar_job_uses_the_IN_Ex5_wind_basis(tmp_path):
     compile(ap, "append", "exec")
     for name in ("SOLAR_PV", "E.modal", "WT.along_wind_story_forces", "CPE_W0", "F_Y", "gust_factor", "9.1 (b)"):
         assert name in ap, name
+
+
+def test_local_scwb_matches_the_engine_joint_check():
+    """IN_Ex2 / IN_Ex4 (SMRF): the local IS 800 12.11.3.2 check of a run's SCWB rows with candidate sections equals the
+    engine's scwb_joint for the same sections and column axial load."""
+    import india_is800_s12 as S12
+    import peb_build as PB
+    col0, col1, raf = "WI600X270X20X14", "WI700X300X22X14", "WI625X250X20X17"
+    for s_ in (col0, col1, raf):
+        PB.ensure(s_)
+    P = 222000.0
+    lm = A.LocalModel.__new__(A.LocalModel)
+    lm.dump = {16: {"member": {"section": col0, "node_i": 1000, "node_j": 100100, "grade": "E350 B0"},
+                    "peb": {"member": "m16", "f": [0.0, 1.0]}},
+               122: {"member": {"section": raf, "node_i": 100100, "node_j": 100101, "grade": "E350 B0"},
+                     "peb": {"member": "m122", "f": [0.0, 0.25]}}}
+    lm.members = {"m16": {"section": col0}, "m122": {"section": raf}}
+    lm.const_of_label = {col0: "COL", raf: "RAF_K"}
+    lm.pkg = {"capacity_design": {"section12": {"checks": [
+        {"id": "12.11.3.2_SCWB", "member": "J100100-Y", "value": 0.94, "dc": 1.27, "ok": False,
+         "columns": [{"member": "e16", "section": col0, "axis": "z", "P_N": P}],
+         "beams": [{"member": "e122", "section": raf}]}]}}}
+    lm._scwb_cache = {}
+    lm.scwb = lm._scwb_rows()
+    assert len(lm.scwb) == 1 and lm.scwb[0][1] == 100100
+    for col in (col0, col1):
+        dc, gov = lm.scwb_dc({"COL": col, "RAF_K": raf})
+        md = {"members": [{"id": "c", "section": col, "grade": "E350 B0"}, {"id": "b", "section": raf, "grade": "E350 B0"}],
+              "forces": {}}
+        ref = S12.scwb_joint({"id": "J100100-Y", "columns": [{"member_id": "c", "P_N": P}], "beams": [{"member_id": "b"}],
+                              "frame_dir": None}, md)
+        assert abs(dc - ref["dc"]) < 1e-9 and "J100100-Y" in gov, (col, dc, ref)
+    assert lm.scwb_dc({"COL": col1, "RAF_K": raf})[0] < lm.scwb_dc({"COL": col0, "RAF_K": raf})[0]
+    m = {}
+    A.feedback(m, {"fail_items": [(1.17, "section12", "12.11.3.2_SCWB@J100100-Y", "IS 800")]}, None,
+               log_fn=lambda *a: None)
+    assert abs(m["scwb"] - 0.98) < 1e-9 and "member" not in m

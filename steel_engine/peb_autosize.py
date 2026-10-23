@@ -1017,6 +1017,10 @@ class LocalModel:
         # section and the job script's own demands (they do not depend on the section)
         self.struts = [(self.const_of_label[s_["section"]], s_) for s_ in (self.cfg.get("secondary_members") or [])
                        if str(s_.get("kind") or "").lower() == "strut" and s_.get("section") in self.const_of_label]
+        # PEB-LEVERS (second wave): the IS 800 12.11.3.2 strong-column / weak-beam rows of an SMRF run (IN_Ex2 /
+        # IN_Ex4: the sizer lightened the columns against the rafters and every full run failed SCWB)
+        self._scwb_cache = {}
+        self.scwb = self._scwb_rows()
         self.is18 = self._is18()
         self.knees = self._knee_joints()
         self.knee_shear0 = self._knee_shear0()
@@ -1100,6 +1104,74 @@ class LocalModel:
                     if dc > best[0]:
                         best = (dc, "e%d %s" % (t, gov))
         self._dc_cache[key] = best
+        return best
+
+    def _scwb_rows(self):
+        """[(row, joint node, [(kind 'c' | 'b', element tag, term)])] of the run's 12.11.3.2 SCWB rows with a value."""
+        out = []
+        for c in ((self.pkg.get("capacity_design") or {}).get("section12") or {}).get("checks") or []:
+            if c.get("id") != "12.11.3.2_SCWB" or not isinstance(c.get("value"), (int, float)):
+                continue
+            m = re.match(r"J(\d+)", str(c.get("member") or ""))
+            if not m:
+                continue
+            terms = []
+            for kind, lst in (("c", c.get("columns") or []), ("b", c.get("beams") or [])):
+                for tm in lst:
+                    try:
+                        t = int(str(tm.get("member")).lstrip("e"))
+                    except ValueError:
+                        t = None
+                    if t is None or t not in self.dump:
+                        terms = []
+                        break
+                    terms.append((kind, t, tm))
+                if not terms:
+                    break
+            if terms and any(k == "c" for k, _, _ in terms) and any(k == "b" for k, _, _ in terms):
+                out.append((c, int(m.group(1)), terms))
+        return out
+
+    def face_section(self, t, node, x):
+        """The section of element t at the joint node with the labels of x (D-T7: a tapered member enters the joint
+        with its section at the joint face)."""
+        import peb_build as PB
+        e = self.dump[t]
+        pe = e.get("peb") or {}
+        mid = pe.get("member")
+        if mid is None or mid not in self.members:
+            return e["member"]["section"]
+        lab = self.lab_of_member(mid, x)
+        if PB.parse(lab)[0] != "tapered":
+            return lab
+        f0, f1 = pe.get("f") or (0.0, 1.0)
+        return PB.section_at(lab, f0 if int(e["member"]["node_i"]) == int(node) else f1)
+
+    def scwb_dc(self, x):
+        """Max 1.2 / (sum Mpc / sum Mpb) over the run's SCWB joints with the labels of x (the engine's
+        india_is800_s12 helpers: the column axial load of the run, Mpc reduced per 9.3.1.2, Mpb = Zp fy)."""
+        import india_is800_s12 as S12
+        import peb_build as PB
+        best = (0.0, None)
+        for c, node, terms in self.scwb:
+            secs = tuple(self.face_section(t, node, x) for _, t, _ in terms)
+            key = (c.get("member"),) + secs
+            if key not in self._scwb_cache:
+                sMpc = sMpb = 0.0
+                for (kind, t, tm), sec in zip(terms, secs):
+                    PB.ensure(sec)
+                    m = {k: v for k, v in self.dump[t]["member"].items() if k not in ("fy_MPa", "fu_MPa")}
+                    m["section"] = sec
+                    p = S12._props(m)
+                    fy, _ = S12._fy(m, p)
+                    if kind == "c":
+                        sMpc += S12._mpc_reduced(p, fy, tm.get("P_N"), tm.get("axis") or "z")[0]
+                    else:
+                        sMpb += float(p["Zx"]) * fy
+                self._scwb_cache[key] = (1.2 / (sMpc / sMpb)) if (sMpc > 0 and sMpb > 0) else 9.99
+            dc = self._scwb_cache[key]
+            if dc > best[0]:
+                best = (dc, "IS 800 12.11.3.2 SCWB at %s" % c.get("member"))
         return best
 
     def strut_dc(self, x):
@@ -2039,6 +2111,13 @@ class Evaluator:
             if dc > mg:
                 viol += dc - mg
                 out["why"] = out["why"] or "member %s D/C %.3f > %.3f (%s)" % ("+".join(cl), dc, mg, gov)
+        if getattr(lm, "scwb", None):
+            dcw, govw = lm.scwb_dc(x)
+            mg = self.margin("scwb", 1.0)
+            if dcw > mg:
+                viol += dcw - mg
+                out["why"] = out["why"] or "%s D/C %.3f > %.3f" % (govw, dcw, mg)
+            dcs[("SCWB",)] = (dcw, govw)
         if getattr(lm, "struts", None):
             dcs_, govs_ = lm.strut_dc(x)
             mg = self.margin("strut", self.margin("member", 0.99))
@@ -2268,8 +2347,9 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
                 tighten("conn:knee"); hit = True
             elif sid.startswith("12.12") or sid.startswith("7.4"):
                 tighten("conn:base"); hit = True
-            elif sid in ("12.11.3.2_SCWB", "is18168_8_2_SCWB", "is18168_7_2_column_KL_r", "smf_column_class",
-                         "is18168_table2_column"):
+            elif sid in ("12.11.3.2_SCWB", "is18168_8_2_SCWB"):
+                tighten("scwb", 0.02, 1.0); hit = True          # second wave: SCWB has its own local check
+            elif sid in ("is18168_7_2_column_KL_r", "smf_column_class", "is18168_table2_column"):
                 for k in list(margins):
                     pass
                 tighten("member", 0.02, 0.99); hit = True
