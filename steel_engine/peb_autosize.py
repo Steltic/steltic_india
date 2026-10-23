@@ -1214,15 +1214,15 @@ class LocalModel:
         if isinstance(cs, dict) and cs.get("ratio") is not None:
             g["crane_sway"] = float(cs["ratio"])
         # PEB-LEVERS (second wave): IS 875-3 9.1(b) -- below f1 = 1.0 Hz the engine asks for the 10.2 gust-factor
-        # wind (dynamic_wind gate).  A job without a gust factor whose run is at or above 1.0 Hz must stay there: the
-        # first transverse (Y) mode is predicted from the frame flexibility (mass held, conservative for a lighter
-        # frame).  IN_Ex1: strict 1.03 Hz; the market bundle went below 1 Hz on every lighter proposal.
+        # wind (dynamic_wind gate).  A job without a gust factor must reach f1 >= 1.0 Hz: the first transverse (Y)
+        # mode is predicted from the frame flexibility (mass held: conservative for a lighter frame).  IN_Ex1: strict
+        # 1.03 Hz; the market bundle went below 1 Hz on every lighter proposal, and the solar-ready variant (PV mass
+        # added) starts below 1 Hz, so it is stiffened until it is above.
         md = (pkg.get("irregularity") or {}).get("modes") or {}
         ws_ = ((self.cfg.get("load_plan") or {}).get("wind_summary") or {}) if isinstance(self.cfg, dict) else {}
-        if md.get("Ty") and not isinstance(ws_.get("gust_factor"), dict):
-            f1 = 1.0 / float(md["Ty"])
-            if f1 >= 1.0 and float(md["Ty"]) >= float(md.get("Tx") or 0.0):
-                g["freq_Y"] = f1
+        if md.get("Ty") and not isinstance(ws_.get("gust_factor"), dict) \
+                and float(md["Ty"]) >= float(md.get("Tx") or 0.0):
+            g["freq_Y"] = 1.0 / float(md["Ty"])
         return g
 
     def flexibility(self, x):

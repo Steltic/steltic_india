@@ -275,16 +275,18 @@ def _fake_lm(Ty, Tx=0.2, gust=False):
 
 
 def test_first_mode_frequency_is_kept_at_or_above_1Hz():
-    """IS 875-3 9.1(b): below 1.0 Hz the engine requires the 10.2 gust-factor wind.  A run at or above 1.0 Hz without
-    a gust factor gets a predicted f1 = f1_run / sqrt(flexibility ratio); a run already below 1 Hz (or with a gust
-    factor) is not constrained; a failed dynamic_wind gate tightens the frequency margin."""
+    """IS 875-3 9.1(b): below 1.0 Hz the engine requires the 10.2 gust-factor wind.  Without a gust factor the
+    predicted f1 = f1_run / sqrt(flexibility ratio) must reach 1.0 Hz (a run below it -- the solar-ready variant with
+    the PV mass -- is stiffened); a job with a gust factor is not constrained; a failed dynamic_wind gate tightens the
+    frequency margin."""
     lm = _fake_lm(0.974)
     g = lm._globals()
     assert abs(g["freq_Y"] - 1.0 / 0.974) < 1e-12
     lm.global0, lm.F0 = g, 100.0
     lm.flexibility = lambda x: 121.0                   # 21 % more flexible -> f / 1.1
     assert abs(lm.predicted({})["freq_Y"] - (1.0 / 0.974) / 1.1) < 1e-12
-    assert "freq_Y" not in _fake_lm(1.07)._globals()               # already below 1 Hz
+    assert abs(_fake_lm(1.07)._globals()["freq_Y"] - 1.0 / 1.07) < 1e-12   # below 1 Hz: constrained (stiffen)
+    assert "freq_Y" not in _fake_lm(0.2, Tx=0.5)._globals()          # the first mode is not the transverse one
     assert "freq_Y" not in _fake_lm(0.9, gust=True)._globals()     # the job declares the gust factor
     m = {}
     A.feedback(m, {"fail_items": [], "gates_fail": ["dynamic_wind"]}, None, log_fn=lambda *a: None)
