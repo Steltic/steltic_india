@@ -425,3 +425,13 @@ def test_identical_directions_give_one_ta_note():
     assert "Ta, X and Y direction" in h and h.count("7.6.2(c) would apply") == 1
     h2 = RS.base_shear_html(_ss(), dims={"X": 36.0, "Y": 27.0})
     assert h2.count("7.6.2(c) would apply") == 2
+
+
+def test_no_change_cases_are_said_plainly():
+    import report_second_wave as RS
+    flat = _ss(Ta_x_s=0.427, Ta_y_s=0.427, Ta_formula="0.085 h^0.75 (IS 1893 7.6.2(a), bare steel MRF)")
+    h = RS.base_shear_html(flat, {"seismic_analysis": {"method": "RSA"}}, dims={"X": 36.0, "Y": 24.0})
+    assert "so V_B would not change" in h and "re-designed" not in h and "V_B ratio" not in h
+    assert "higher Type III ordinates" in h
+    h2 = RS.base_shear_html(_ss(), {"seismic_analysis": {"method": "ESM"}}, dims={"X": 30.0, "Y": 30.0})
+    assert "V_B ratio" in h2 and "re-designed" in h2 and "higher Type III ordinates" not in h2

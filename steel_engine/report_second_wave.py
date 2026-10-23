@@ -396,12 +396,21 @@ def base_shear_html(cfg, pkg=None, dims=None):
     if s:
         txt = "<p><b>Soil:</b> Type %s, %s. Basis: %s.</p>" % (_e(s["type"]), _e(s["name"]), _e(s["basis"]))
         if s.get("next") and s["rows"]:
-            rows = [[r["dir"], _f(r["Ta_s"]), _f(r["Sa_g"]), _f(r["Sa_g_next"]), _f(r["VB_ratio"], 2)] for r in s["rows"]]
-            txt += ("<p>Note (not a design case): on Type %s soil the design acceleration at the same Ta would be as "
-                    "below (IS 1893 6.4.2, with the 7.2.2 Table 7 minimum). The design here is for Type %s.</p>"
-                    % (_e(s["next"]), _e(s["type"])) +
-                    _tab(["dir", "design Ta (s)", "Sa/g Type %s" % _e(s["type"]), "Sa/g Type %s" % _e(s["next"]),
-                          "V_B ratio"], rows))
+            rsa = str((((pkg or {}).get("seismic_analysis") or {}).get("method")) or "").upper() == "RSA"
+            if all(abs((r["VB_ratio"] or 1.0) - 1.0) < 0.005 for r in s["rows"]):
+                txt += ("<p>Note (not a design case): on Type %s soil, Sa/g at the design Ta (%s s) would be the same "
+                        "(IS 1893 6.4.2), so V_B would not change.</p>"
+                        % (_e(s["next"]), " / ".join(_f(r["Ta_s"]) for r in s["rows"])))
+            else:
+                rows = [[r["dir"], _f(r["Ta_s"]), _f(r["Sa_g"]), _f(r["Sa_g_next"]), _f(r["VB_ratio"], 2)] for r in s["rows"]]
+                txt += ("<p>Note (not a design case): on Type %s soil the design acceleration at the same Ta would be as "
+                        "below (IS 1893 6.4.2, with the 7.2.2 Table 7 minimum). The design here is for Type %s.</p>"
+                        % (_e(s["next"]), _e(s["type"])) +
+                        _tab(["dir", "design Ta (s)", "Sa/g Type %s" % _e(s["type"]), "Sa/g Type %s" % _e(s["next"]),
+                              "V_B ratio"], rows))
+            if rsa:
+                txt += ("<p>In the response-spectrum analysis, modes with periods above the Type %s corner period would "
+                        "also see the higher Type %s ordinates (IS 1893 6.4.2).</p>" % (_e(s["type"]), _e(s["next"])))
         out.append(txt)
     ta = list(n.get("ta") or [])
     if len(ta) == 2 and all(ta[0].get(k) == ta[1].get(k) for k in ("formula", "h_m", "d_m", "Ta_infill_s", "VB_ratio")):
@@ -410,11 +419,13 @@ def base_shear_html(cfg, pkg=None, dims=None):
         t = ("<p><b>Ta, %s direction:</b> %s with h = %s m, the formula for a bare moment frame without masonry infill. "
              "Assumption: %s.</p>" % (r["dir"], _e(r["formula"]), _f(r["h_m"], 2), _e(r["facade"])))
         if r.get("Ta_infill_s") is not None:
+            same = abs((r.get("VB_ratio") or 1.0) - 1.0) < 0.005
             t += ("<p>Note (not a design case): if masonry infill were built in contact with the frame, IS 1893 7.6.2(c) "
-                  "would apply: Ta = 0.09 h/&radic;d = 0.09 &times; %s / &radic;%s = %s s, Sa/g %s against %s, and "
-                  "V_B &times; %s. The frame would then have to be re-designed for that base shear.</p>"
+                  "would apply: Ta = 0.09 h/&radic;d = 0.09 &times; %s / &radic;%s = %s s, Sa/g %s against %s, %s</p>"
                   % (_f(r["h_m"], 2), _f(r["d_m"], 2), _f(r["Ta_infill_s"]), _f(r["Sa_g_infill"], 3), _f(r["Sa_g"], 3),
-                     _f(r["VB_ratio"], 2)))
+                     "so V_B would not change." if same else
+                     "and V_B &times; %s. The frame would then have to be re-designed for that base shear."
+                     % _f(r["VB_ratio"], 2)))
         out.append(t)
     if not out:
         return ""
