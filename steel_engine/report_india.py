@@ -8,6 +8,7 @@ code: a missing input is shown as "not evaluated" with the reason.
 from __future__ import annotations
 
 import report_first_wave as FW
+import report_public as PUB
 import report_second_wave as RS
 import datetime
 import json
@@ -22,7 +23,7 @@ CHAPTERS_IN = {
         "with Amendments 1 and 2, IS 808, IS 2062 (Part 1), IS 1161, IS 816 / IS 4000 where used.",
         "Importance factor (IS 1893 Table 8), zone and soil type, occupancy and imposed loads match the brief.",
         "Units (N, mm, MPa; kN/m2 for area loads) stated and consistent.",
-        "Design status from india_seismic_gates.design_status stated with every open reason."]),
+        "Design status (from every analysis gate and check) stated with every open reason."]),
     2: ("Structural system & load path", [
         "Lateral system per direction with its IS 1893 Table 9 R and the IS 800 Section 12 detailing class.",
         "Rigid diaphragm; collector and chord forces from the diaphragm load path added to the beam checks.",
@@ -182,9 +183,9 @@ def _status_block(pkg):
     reasons = st.get("reasons") or []
     # Indian usage in the printed text: "design engineer", not "EOR" (the package keeps the engine wording)
     warns = [re.sub(r"\bEORs?\b", "design engineer", str(w)) for w in (st.get("warnings") or []) if w]
+    # check fixes (2026-10-23, finding 5): no code module or specification reference in the printed status line
     head = (f"<p><b>Design status: {st.get('status', '?').upper()}</b> "
-            f"(authority: <code>{st.get('authority', 'india_seismic_gates.design_status')}</code>; "
-            f"{st.get('n_reasons', len(reasons))} open reason(s)"
+            f"({st.get('n_reasons', len(reasons))} open reason(s)"
             + (f", {len(warns)} point(s) for the checking engineer" if warns else "") + ").</p>")
     # second wave H1: the headline is the worst STRENGTH ratio; the slenderness ratio is printed beside it with its
     # limit, and the Section 12 / connection / drift ratios in their own rows (never one mixed 'governing D/C')
@@ -263,8 +264,8 @@ def _irregularity(pkg):
 def _gravity_table(cfg):
     import report_first_wave as FW
     shed = len(cfg.get("heights") or []) == 1 and not float(cfg.get("L_floor") or 0.0)
-    rows = [] if shed else [["Floor dead load D_floor", _num(cfg.get("D_floor")), "kN/m2"]]
-    rows.append(["Roof dead load D_roof (permanent)", _num(cfg.get("D_roof")), "kN/m2"])
+    rows = [] if shed else [["Floor dead load D<sub>floor</sub>", _num(cfg.get("D_floor")), "kN/m2"]]
+    rows.append(["Roof dead load D<sub>roof</sub> (permanent)", _num(cfg.get("D_roof")), "kN/m2"])
     rows += FW.dead_load_rows(cfg)
     if not shed:
         rows += [["Floor imposed load (IS 875 Part 2)", _num(cfg.get("L_floor")), "kN/m2"],
@@ -291,9 +292,10 @@ def _erection_text(pkg):
         return "braces present for all gravity loads (default; conservative for the braces)"
     rel = sorted({t for s in er.get("states") or [] for t in (s.get("braces_released") or [])})
     held = any(s.get("temporary_lateral_restraint") for s in er.get("states") or [])
-    return ("braces connected after the dead load (cfg braces_after_dead_load = %s; %d brace elements): %s. %s%s "
-            "Basis: %s -- to be shown on the drawings and confirmed by the EOR (verify)."
-            % (er.get("braces_after_dead_load"), len(rel), er.get("pre_brace_loads"), er.get("method"),
+    return ("braces connected after the dead load (%s; %d brace elements): %s. %s%s "
+            "Basis: %s -- to be shown on the drawings and confirmed by the design engineer (verify)."
+            % ("as declared" if er.get("braces_after_dead_load") else "not declared", len(rel), er.get("pre_brace_loads"),
+               er.get("method"),
                " The frame needed temporary lateral restraint in the pre-brace state." if held else "",
                er.get("cite")))
 
@@ -394,7 +396,7 @@ def _seismic_table(cfg, pkg, run):
             env = fd.get("envelope") or {}
             if env:
                 out += "<p>%s</p>" % html.escape(str(env.get("method") or ""))
-                rows = [[g, f, _num(v.get("rigid"), 0), _num(v.get("flexible"), 0), _num(v.get("ratio"), 3)]
+                rows = [[g, PUB.symbol(f), _num(v.get("rigid"), 0), _num(v.get("flexible"), 0), _num(v.get("ratio"), 3)]
                         for g, fl in sorted((env.get("ratio_flexible_over_rigid_by_group") or {}).items())
                         for f, v in fl.items() if isinstance(v, dict) and (v.get("rigid") or v.get("flexible"))]
                 out += _t(["group", "field", "rigid max (N / N-mm)", "flexible max (N / N-mm)", "flexible / rigid"],
@@ -409,7 +411,10 @@ def _wind_table(cfg):
     keys = ["Vb_mps", "Vb_source", "Vb_note", "terrain_category", "terrain_basis", "k1", "k2", "k3", "k3_basis", "k4",
             "Kd", "Ka", "Ka_basis", "Kc", "Vz_mps", "pz_kNm2", "pd_kNm2", "Cpe_windward", "Cpe_leeward", "Cpi",
             "cyclone_belt", "VB_x_kN", "VB_y_kN"]
-    rows = [[k, RS._e(ws.get(k)) if isinstance(ws.get(k), str) else _num(ws.get(k))] for k in keys if ws.get(k) is not None]
+    # check fixes (2026-10-23, finding 5): the quantities named in words (IS 875 (Part 3) 6.3 / 7.2), not by their keys
+    rows = [[PUB.wind_label(k), RS._e(PUB.humanise(ws.get(k)) if re.fullmatch(r"[a-z]+(?:_[a-z]+)+", str(ws.get(k)))
+                                      else ws.get(k)) if isinstance(ws.get(k), str) else _num(ws.get(k))]
+            for k in keys if ws.get(k) is not None]
     if ws.get("across_wind"):                  # X05: 10.3 across-wind case and 10.4 combination
         try:
             import india_combos as _IC
@@ -545,7 +550,8 @@ def _is800_s12_detailing(cfg, pkg):
                                         c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1))
         nf = sum(1 for c in cs if c.get("ok") is False); nn = sum(1 for c in cs if c.get("ok") is None)
         # second wave H8: forces in kN, moments in kN-m, width-thickness records as 'b/tf .., d/tw ..' (not N, N-mm, dicts)
-        rows.append([cid, len(cs), nf, nn, RS.s12_value(cid, worst.get("value")), RS.s12_value(cid, worst.get("limit")),
+        rows.append([RS._e(PUB.check_label(cid)), len(cs), nf, nn, RS.s12_value(cid, worst.get("value")),
+                     RS.s12_value(cid, worst.get("limit")),
                      _num(worst.get("dc")), worst.get("clause") or ""])
     return summ + _t(["check", "n", "failing", "not evaluated", "worst value", "limit", "worst D/C",
                       "Ref. (IS 800)"], rows)
@@ -556,9 +562,11 @@ def _connections(pkg):
     rows = []
     for c in con:
         dem = c.get("demand") or {}
-        dtxt = "; ".join((f"{k[:-4]} = " + _kNm(v) + " kN-m") if k.endswith("_Nmm") else
-                         (f"{k[:-2]} = " + _kN(v) + " kN") if k.endswith("_N") else
-                         (f"{k[:-3]} = " + _num(v, 0) + " mm") if k.endswith("_mm") else f"{k} = {_num(v)}"
+        # check fixes (2026-10-23, finding 5): demand keys printed as symbols (M<sub>design</sub>, not M_design)
+        dtxt = "; ".join((f"{PUB.symbol(k[:-4])} = " + _kNm(v) + " kN-m") if k.endswith("_Nmm") else
+                         (f"{PUB.symbol(k[:-2])} = " + _kN(v) + " kN") if k.endswith("_N") else
+                         (f"{PUB.symbol(k[:-3])} = " + _num(v, 0) + " mm") if k.endswith("_mm") else
+                         f"{PUB.symbol(k)} = {_num(v)}"
                          for k, v in dem.items() if isinstance(v, (int, float)))
         _ck = c.get("checks") or []
         chks = [x for x in (_ck.values() if isinstance(_ck, dict) else _ck) if isinstance(x, dict)]
@@ -746,7 +754,8 @@ def build_report_india(name, root):
     parts.append(_systems(cfg, pkg))
     parts.append("<h3>Collectors and chords</h3>" + _collectors(pkg))
     parts.append(_flexible_vs_rigid(pkg))
-    parts.append("<h3>Irregularity screens (IS 1893 Tables 5 and 6, Amd 2)</h3>" + _irregularity(pkg))
+    parts.append("<h3>Irregularity screens (IS 1893 Tables 5 and 6, Amd 2)</h3>" + _irregularity(pkg)
+                 + RS.part_level_note(cfg, pkg))         # check fixes (2026-10-23, finding 11): a part level's flags
     try:
         import viewer3d
         viewer3d.report_section(cfg, name, root)
@@ -786,7 +795,8 @@ def build_report_india(name, root):
     except Exception as ex:
         parts.append(f"<p class='note'>[joint figure failed: {ex}]</p>")
     parts.append("<h3>Modal properties</h3>" + _modal_table(run))
-    parts.append("<h3>Analysis gates</h3>" + _t(["gate", "status"], [[k, _ok(v)] for k, v in (run.get("chk") or {}).items()]))
+    parts.append("<h3>Analysis gates</h3>" + _t(["gate", "status"], [[PUB.gate_label(k), _ok(v)]
+                                                                    for k, v in (run.get("chk") or {}).items()]))
     # 6
     parts.append(_chapter(6))
     parts.append(_members(pkg))

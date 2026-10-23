@@ -28,6 +28,8 @@ import math
 import os
 import re
 
+import report_public as PUB
+
 # ---------------------------------------------------------------------------------------------------- helpers
 
 
@@ -203,7 +205,9 @@ def headline_html(pkg, h=None):
             val = _f(r["dc"])
             if k == "slenderness" and _num(r.get("value")) and _num(r.get("limit")):
                 val = "KL/r %s / %s = %s" % (_f(r["value"], 1), _f(r["limit"], 0), _f(r["dc"]))
-            rows.append([lab[k], val, "1.0", _e("%s%s" % (r.get("check"), (", " + str(r["member"])) if r.get("member") else "")),
+            # check fixes (2026-10-23, finding 5): the check id spelt out ('brace KL/r', not 'brace_KL_r')
+            rows.append([lab[k], val, "1.0", _e("%s%s" % (PUB.check_label(r.get("check")),
+                                                          (", " + str(r["member"])) if r.get("member") else "")),
                          _e(r.get("clause") or "")])
     if h.get("connections"):
         c = h["connections"]
@@ -564,9 +568,12 @@ def deck_span_warning(cfg):
         return None
     if not d["composite"] or not d["full_bay"] or not d["span_m"]:
         return None
+    # check fixes (2026-10-23, finding 10): say what happens in practice and that the kg/m2 leaves those beams out
     return ("deck span: the composite metal deck spans the full %.1f m bay between the girders (deck span %s) with no "
-            "secondary beams. The deck profile is not designed here: the deck supplier must confirm the profile for this "
-            "span (with propping during concreting if needed), or secondary beams must be added."
+            "secondary beams. In practice secondary beams would be added between the girders, at a spacing the chosen "
+            "deck can span; they are not designed here and their steel is not included in the kg/m2 of this report "
+            "(the engine does not size them, so no estimate is given). If the deck is to span the full bay, the deck "
+            "supplier must confirm the profile for this span, with propping during concreting if needed."
             % (d["span_m"], d["deck_span_dir"] or "X"))
 
 
@@ -593,9 +600,15 @@ def composite_scope_html(cfg, pkg):
                    % (_f(det.get("LLT_mm"), 0), _f(cs["DC"]), _e(det.get("section") or ""), _e(det.get("combo") or "")))
     if d["span_m"]:
         if d["full_bay"]:
-            out.append("<p><b>Deck span %s m</b> (%s, deck span %s). The deck profile must be checked for this span by "
-                       "the deck supplier, with propping during concreting if needed, or secondary beams added. This is "
-                       "listed as a point for the checking engineer in the design status.</p>"
+            # check fixes (2026-10-23, finding 10)
+            out.append("<p><b>Deck span %s m</b> (%s, deck span %s). In practice secondary beams would be added between "
+                       "the girders, at a spacing the chosen deck can span. They are not designed here, and their steel "
+                       "is <b>not included</b> in the kg/m² of this report: the engine does not size them, so no estimate "
+                       "is given, and the kg/m² is not comparable with examples whose take-off includes secondary "
+                       "beams. "
+                       "If the deck is to span the full bay, the deck supplier must confirm the profile for this span, "
+                       "with propping during concreting if needed. This is listed as a point for the checking engineer "
+                       "in the design status.</p>"
                        % (_f(d["span_m"], 2), _e(d["basis"]), _e(d["deck_span_dir"] or "X")))
         else:
             out.append("<p>Deck span %s m (%s). The secondary beams are a load path for the girders: they are sized by "
@@ -684,9 +697,10 @@ def framing_html(name, cfg=None):
     fr = framing_for(name, cfg)
     if not fr:
         return ""
+    # check fixes (2026-10-23, finding 5): no note about job IDs / folder names (an internal matter) in the box
     return ("<p><b>%s</b></p><div class='chk'><div class='chk-h'>Capability demonstration</div><p>This example shows "
-            "what the engine can do: %s. It is not typical Indian practice: %s. The job ID and folder name are "
-            "unchanged.</p></div>" % (_e(fr["title"]), _e(fr.get("what") or fr.get("blurb")), _e(fr.get("practice") or "")))
+            "what the engine can do: %s. It is not typical Indian practice: %s.</p></div>"
+            % (_e(fr["title"]), _e(fr.get("what") or fr.get("blurb")), _e(fr.get("practice") or "")))
 
 
 def titles():
@@ -705,26 +719,77 @@ def _load(root, fn):
         return {"_error": "%s could not be read: %s" % (fn, ex)}
 
 
+def _pt(x):
+    """Text from a file written by a script, as printed: the strict public-text pass (no path, file or module name,
+    JSON key or internal word survives; check fixes 2026-10-23, finding 5), then escaped."""
+    return _e(PUB.strict_text("" if x is None else x))
+
+
+def _difference_bases(cc):
+    """(compliant kg/m2, ordinary kg/m2) behind cc['difference']: given in the record, else the pair of rows whose
+    kg/m2 differ by the recorded difference (the higher-R row is the code-compliant design)."""
+    df = cc.get("difference") or {}
+    d = df.get("kg_m2")
+    if _num(df.get("compliant_kg_m2")) and _num(df.get("ordinary_kg_m2")):
+        return float(df["compliant_kg_m2"]), float(df["ordinary_kg_m2"])
+    if not _num(d):
+        return None, None
+    rows = [r for r in cc.get("rows") or [] if isinstance(r, dict) and _num(r.get("kg_m2")) and _num(r.get("R"))]
+    for a in rows:
+        for b in rows:
+            if a is not b and float(a["R"]) > float(b["R"]) and abs((float(a["kg_m2"]) - float(b["kg_m2"])) - float(d)) <= 0.015:
+                return float(a["kg_m2"]), float(b["kg_m2"])
+    return None, None
+
+
+def difference_text(cc):
+    """Check fixes (2026-10-23, finding 7): the cost-of-compliance difference with its base said in words, both ways
+    ('x % more steel than the ordinary frame; the ordinary frame uses y % less than the compliant design')."""
+    df = cc.get("difference") or {}
+    d = df.get("kg_m2")
+    if not _num(d):
+        return ""
+    d = float(d)
+    comp, ordi = _difference_bases(cc)
+    btw = (" (%s)" % _pt(df["between"])) if df.get("between") else ""
+    if comp and ordi:
+        p_ord = float(df["percent"]) if _num(df.get("percent")) else 100.0 * d / ordi
+        p_comp = 100.0 * d / comp
+        pair = "%s against %s kg/m²" % (_f(comp, 2), _f(ordi, 2))
+        if d > 0:
+            txt = ("%s kg/m² (%s): the code-compliant design uses %s %% more steel than the ordinary frame; put the "
+                   "other way, the ordinary frame uses %s %% less steel than the code-compliant design"
+                   % (_f(d, 2), pair, _f(p_ord, 1), _f(p_comp, 1)))
+        elif d < 0:
+            txt = ("%s kg/m² (%s): the ordinary frame uses %s %% more steel than the code-compliant design"
+                   % (_f(d, 2), pair, _f(-p_comp, 1)))
+        else:
+            txt = "none (%s)" % pair
+    else:
+        txt = "%s kg/m²%s" % (_f(d, 2), (" (%s %% of the ordinary frame)" % _f(df["percent"], 1))
+                              if _num(df.get("percent")) else "")
+    out = "<p><b>Difference:</b> %s%s.</p>" % (txt, btw)
+    if df.get("caveat"):
+        out += "<p>%s</p>" % _pt(df["caveat"])
+    return out
+
+
 def compliance_html(root):
     cc = _load(root, "compliance_comparison.json")
     if not cc:
         return ""
     if cc.get("_error"):
-        return "<p class='note'>%s</p>" % _e(cc["_error"])
-    rows = [[_e(r.get("variant")), _f(r.get("R"), 1), _f(r.get("steel_t"), 1), _f(r.get("kg_m2"), 1),
-             _f(r.get("worst_strength_dc"), 3), _e(r.get("governing") or ""), _e(r.get("status") or ""),
-             _e(r.get("code_status") or "")] for r in cc.get("rows") or [] if isinstance(r, dict)]
-    df = cc.get("difference") or {}
-    out = ["<h3>%s</h3>" % _e(cc.get("title") or "Cost of compliance"),
-           "<p>%s</p>" % _e(cc.get("basis") or ""),
+        return "<p class='note'>%s</p>" % _pt(cc["_error"])
+    rows = [[_pt(r.get("variant")), _f(r.get("R"), 1), _f(r.get("steel_t"), 1), _f(r.get("kg_m2"), 2),
+             _f(r.get("worst_strength_dc"), 3), _pt(r.get("governing") or ""), _pt(r.get("status") or ""),
+             _pt(r.get("code_status") or "")] for r in cc.get("rows") or [] if isinstance(r, dict)]
+    out = ["<h3>%s</h3>" % _pt(cc.get("title") or "Cost of compliance"),
+           "<p>%s</p>" % _pt(cc.get("basis") or ""),
            _tab(["design", "R", "steel (t)", "kg/m²", "largest check ratio", "governing check", "status", "code status"], rows),
            "<p class='note'>Largest check ratio: the highest ratio over every check of the design (members, Section 12, joints, purlins and girts, sway), so it can differ from the member strength headline above.</p>"]
-    if df:
-        out.append("<p><b>Difference:</b> %s kg/m² (%s %%)%s.</p>"
-                   % (_f(df.get("kg_m2"), 1), _f(df.get("percent"), 1),
-                      (": " + _e(df["between"])) if df.get("between") else " for the code-compliant design"))
+    out.append(difference_text(cc))
     if cc.get("source"):
-        out.append("<p class='note'>Source: %s</p>" % _e(cc["source"]))
+        out.append("<p class='note'>Source: %s</p>" % _pt(cc["source"]))
     return "".join(out)
 
 
@@ -733,20 +798,20 @@ def strengthening_html(root):
     if not so:
         return ""
     if so.get("_error"):
-        return "<p class='note'>%s</p>" % _e(so["_error"])
-    out = ["<h3>%s</h3>" % _e(so.get("title") or "Strengthening option"),
-           "<p>%s</p>" % _e(so.get("basis") or ""),
+        return "<p class='note'>%s</p>" % _pt(so["_error"])
+    out = ["<h3>%s</h3>" % _pt(so.get("title") or "Strengthening option"),
+           "<p>%s</p>" % _pt(so.get("basis") or ""),
            _tab(["result", "value"], [
                ["PV load carried", "%s kN/m²" % _f(so.get("pv_kNm2"), 2)],
-               ["status", _e(so.get("status") or "")],
+               ["status", _pt(so.get("status") or "")],
                ["largest check ratio after strengthening", _f(so.get("worst_strength_dc"), 3)],
                ["steel added", "%s t (%s kg/m²)" % (_f(so.get("added_steel_t"), 2), _f(so.get("added_kg_m2"), 2))]])]
-    ch = [[_e(c.get("item")), _e(c.get("from")), _e(c.get("to")), _f(c.get("added_kg"), 0)]
+    ch = [[_pt(c.get("item")), _pt(c.get("from")), _pt(c.get("to")), _f(c.get("added_kg"), 0)]
           for c in so.get("changes") or [] if isinstance(c, dict)]
     if ch:
         out.append(_tab(["item", "from", "to", "added (kg)"], ch))
     if so.get("source"):
-        out.append("<p class='note'>Source: %s</p>" % _e(so["source"]))
+        out.append("<p class='note'>Source: %s</p>" % _pt(so["source"]))
     return "".join(out)
 
 
@@ -798,9 +863,11 @@ def plain(text):
 
 
 def tidy_html(html_text):
-    """Citation style and 'design engineer' wording in the text of an HTML fragment (tags and attributes untouched)."""
+    """Citation style, 'design engineer' wording and the public-text pass (report_public: no paths, module names, JSON
+    keys or internal words; rulings with their meaning; check fixes 2026-10-23) in the text of an HTML fragment (tags
+    and attributes untouched)."""
     parts = re.split(r"(<[^>]+>)", html_text)
-    return "".join(p if p.startswith("<") else plain(normalise_citations(p)) for p in parts)
+    return "".join(p if p.startswith("<") else PUB.public_text(plain(normalise_citations(p))) for p in parts)
 
 
 def uses_is18168(cfg, pkg):
@@ -882,6 +949,83 @@ def snow_html(cfg, pkg=None):
     return "<h3>Snow (IS 875 (Part 4):2021)</h3>" + _tab(["quantity", "value"], rows) if rows else ""
 
 
+# ============================================================================================ check fixes (2026-10-23)
+def part_levels(cfg):
+    """Levels of the model that carry nodes at fewer than half of the column positions of the level above: a part
+    level (a lean-to roof or a part mezzanine modelled as a level of the building).  Read from the engine grid, the
+    same footprint the IS 1893 Table 6 screens use.  [{level, z_m, n_shared, n_above, plan_m, plan_above_m}]"""
+    try:
+        import engine3d as E
+        NF = len(cfg["heights"])
+        g = {k: {tuple(p) for p in E.grid(cfg, k)} for k in range(1, NF + 1)}
+
+        def dims(pts):
+            xy = [E._xy_in(cfg, i, j) for i, j in pts]
+            return ((max(p[0] for p in xy) - min(p[0] for p in xy)) / 1000.0,
+                    (max(p[1] for p in xy) - min(p[1] for p in xy)) / 1000.0)
+        out, z = [], 0.0
+        for k in range(1, NF):
+            z += float(cfg["heights"][k - 1])
+            lo, hi = g[k], g[k + 1]
+            if lo and hi and len(lo & hi) < 0.5 * len(hi):
+                out.append({"level": k, "z_m": z / 1000.0, "h_above_m": float(cfg["heights"][k]) / 1000.0,
+                            "n_shared": len(lo & hi), "n_above": len(hi), "plan_m": dims(lo), "plan_above_m": dims(hi)})
+        return out
+    except Exception:
+        return []
+
+
+def part_level_note(cfg, pkg):
+    """Finding 11 (Ex9): an NG row of the IS 1893 Table 6 screens that comes from a part level modelled as a storey
+    -- the vertical geometric row at the level above a part level, the soft-storey row of the storey under it -- gets
+    a note saying so and what the flag's requirements did to the design.  Nothing is printed for a flag that a part
+    level does not explain."""
+    irr = (pkg or {}).get("irregularity") or {}
+    parts = {p["level"]: p for p in part_levels(cfg or {})}
+    if not parts:
+        return ""
+    vg = irr.get("vertical_geometric") or {}
+    ss = irr.get("soft_storey") or {}
+    vg_lv = [s - 1 for s in (vg.get("storeys") or []) if vg.get("irregular") and (s - 1) in parts]
+    soft_lv = []
+    for d, v in ((ss.get("by_direction") or {}) if ss.get("irregular") else {}).items():
+        for i in (v or {}).get("soft_storey_indices") or []:
+            if (i + 1) in parts and (i + 1) not in soft_lv:
+                soft_lv.append(i + 1)
+    lv = sorted(set(vg_lv) | set(soft_lv))
+    if not lv:
+        return ""
+    arch = str((cfg or {}).get("arch") or "").lower()
+    what = "the lean-to roof" if "lean-to" in arch else ("the mezzanine" if "mezzanine" in arch else "a part level")
+    txt = []
+    for k in lv:
+        p = parts[k]
+        t = ("level %d of the model (z = %s m) is a part level, %s: it has nodes at %d of the %d column positions of "
+             "level %d (%s m &times; %s m against %s m &times; %s m)."
+             % (k, _f(p["z_m"], 1), what, p["n_shared"], p["n_above"], k + 1, _f(p["plan_m"][0], 1), _f(p["plan_m"][1], 1),
+                _f(p["plan_above_m"][0], 1), _f(p["plan_above_m"][1], 1)))
+        rows = []
+        if k in vg_lv:
+            rows.append("the vertical geometric row (Table 6(iii)) compares the plan of level %d with this part level "
+                        "below it" % (k + 1))
+        if k in soft_lv:
+            rows.append("the soft-storey row (Table 6(i)) compares the frames below the part level (%s m) with the "
+                        "%s m above it" % (_f(p["z_m"], 1), _f(p["h_above_m"], 1)))
+        txt.append(t + " The screens take consecutive levels as storeys of one building, so " + " and ".join(rows) + ".")
+    method = str((((pkg or {}).get("seismic_analysis") or {}).get("method")) or "").upper()
+    soft_dt = [r for r in (pkg or {}).get("drift_table") or [] if isinstance(r, dict) and _num(r.get("limit"))
+               and abs(float(r["limit"]) - 0.002) < 1e-9 and _num(r.get("dc"))]
+    did = []
+    if method == "RSA":
+        did.append("the analysis is the response spectrum analysis (IS 1893 7.7) the flags call for")
+    if soft_lv and soft_dt:
+        did.append("storeys at and below the flagged storey are held to the 0.2 %% drift limit (largest ratio %s)"
+                   % _f(max(float(r["dc"]) for r in soft_dt), 3))
+    return ("<p class='note'><b>Note on the NG rows above (a modelling artefact):</b> %s These flags come from modelling "
+            "%s as a level, not from a storey of the building. They are kept and their requirements are applied%s.</p>"
+            % (" ".join(txt), what, (": " + "; ".join(did)) if did else ""))
+
+
 S12_UNITS = {
     "N": {"11.2_link_design_shear", "12.3.2.1_link_shear", "12.3.2.2_beam_axial", "12.3.2.2_brace_axial",
           "12.3.2.2_column_axial", "12.3.2.2_link_overstrength", "12.3.4.5_brace_tension", "12.5.1.1_column_compression",
@@ -897,7 +1041,15 @@ def s12_value(cid, v):
     """A Section 12 value or limit in report units: forces in kN, moments in kN·m, lengths in mm, width-thickness
     records as 'b/tf 6.67, d/tw 18.89'."""
     if isinstance(v, dict):
-        return ", ".join("%s %s" % (_e(k), _f(x, 2) if _num(x) else _e(x)) for k, x in v.items())
+        # check fixes (2026-10-23, finding 5): 'width 285.50 mm, both sides: yes', not 'width_mm 285.50, both_sides True'
+        def _kv(k, x):
+            k = str(k)
+            unit = " mm" if k.endswith("_mm") else ""
+            name = PUB.humanise(k[:-3] if unit else k)
+            if isinstance(x, bool):
+                return "%s: %s" % (_e(name), "yes" if x else "no")
+            return "%s %s%s" % (_e(name), _f(x, 2) if _num(x) else _e(x), unit)
+        return ", ".join(_kv(k, x) for k, x in v.items())
     if isinstance(v, bool) or not _num(v):
         return "&mdash;" if v is None else ("yes" if v is True else "no" if v is False else _e(v))
     if cid in S12_UNITS["N"]:

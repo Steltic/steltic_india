@@ -236,7 +236,8 @@ def test_capability_framing():
     assert "stem" in RS.framing_for("IN_Ex19_EBF_12levels_Tplan_Guwahati/units/stem")["title"]
     assert RS.framing_for("IN_Ex13_SCBF_5levels_Delhi") is None
     h = RS.framing_html("IN_Ex9_Gable_warehouse_SMF_SCBF_snow_Shimla")
-    assert "not typical Indian practice" in h and "unchanged" in h
+    # check fixes (2026-10-23, finding 5): the box no longer carries the internal note on job IDs / folder names
+    assert "not typical Indian practice" in h and "unchanged" not in h
     t = RS.titles()
     assert len(t) == 7 and all(set(v) == {"title", "blurb"} for v in t.values())
     assert RS.framing_for("X", {"report_framing": {"title": "T", "what": "w", "practice": "p"}})["title"] == "T"
@@ -268,8 +269,10 @@ def test_cost_of_compliance_section(tmp_path):
     (tmp_path / "compliance_comparison.json").write_text(json.dumps(COMPLIANCE))
     h = RS.compliance_html(str(tmp_path))
     for t in ("Cost of compliance", "Ordinary frame, R = 3", "63.8", "51.0", "not permitted in Zone IV",
-              "12.8 kg/m²", "25.1 %", "peb_lever_study.py", "re-sized as an ordinary"):
+              "12.80 kg/m²", "25.1 %", "re-sized as an ordinary"):
         assert t in h, t
+    # check fixes (2026-10-23, finding 5): the source line names no script, repository, branch or commit
+    assert "peb_lever_study.py" not in h and "steltic_india" not in h and "abc1234" not in h
     (tmp_path / "compliance_comparison.json").write_text("{broken")
     assert "could not be read" in RS.compliance_html(str(tmp_path))
 

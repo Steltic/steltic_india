@@ -189,3 +189,127 @@ point (full-bay composite deck) is on Ex13, Ex14 and Ex16; it does not change th
 Comparison script: `compare2.py` in the HR agent scratchpad; report scan: `scan2.py` (headline, wind base shear row, gust
 factor, composite scope, deck point, framing, ridge, assumptions, Table 7, base-shear statements, IS 18168 row,
 US residue 0 and no old citation forms on all 24 reports).
+
+## Fix round after the independent check (2026-10-23, branch `fix/2026-10-check-fixes`)
+
+Branch `fix/2026-10-check-fixes`, from origin/main c7c9cc9 (the second wave and the PEB variations study merged). An
+independent check of the second-wave publish (CHECK2, findings 1–14) asked for report-only fixes; findings 5, 7, 8,
+10, 11 and 14 are in this repo. No design changes: no engine, pipeline or check module was touched apart from the
+printed text, and every gold is unchanged against the 2026-10-23 snapshot (table below).
+
+### Public text (finding 5)
+
+- **New `steel_engine/report_public.py`: the public-text pass.** `report_second_wave.tidy_html` runs it on the
+  text of the whole report body (tags and attributes untouched; Appendix C, the activity log, stays as logged).
+  It removes or rewrites:
+  - build-machine paths (`/home/...`), script and module file names (`*.py`), `<module>.<function>` references
+    (`india_seismic_gates.design_status`, `india_is800.member_check_is800` in the Appendix A source column,
+    `india_combos.expand_combinations`, `engine3d.run_india`, `india_cfs_members.design_purlins`), repository,
+    branch and commit references, and `spec WP0.2`;
+  - `cfg['…']` references in printed text ("flange braces as declared", "declared ponding input", …);
+  - the engine's IS 800 Table 6 row keys (`column_no_crane_brittle -> H/240` becomes "industrial buildings,
+    lateral, no cranes, column with masonry / brittle cladding -> H/240", the rows quoted from the corpus
+    transcription of Table 6) and `gamma_f` (γf);
+  - analysis-gate keys (`wind_defl_Y` becomes "wind sway within the IS 800 Table 6 limit, Y");
+  - internal words: "gold" (the published design), "owner rulings" (the project's design rules), "owner
+    decision" (adopted design decision), "(brief ruling)" (as set in the design brief), `ok:false`,
+    `secondary_member`, "(was None)", and the keys of the study records (`difference_vs_gold`,
+    `checks_that_fall_away`).
+- **Rulings keep their id and always carry the plain meaning:** "Steltic design ruling D-T7 (joints designed for
+  1.2 Mp)", "open Steltic design ruling D-T9: IS 18168 6.5 …", "(Steltic design ruling D-T2: IS 18168 adopted
+  voluntarily for Zone III-V portals, route B)", "Steltic design ruling D8: floor area taken as the proxy for the
+  number of occupants". The PEB rulings table is headed "Steltic design ruling" (the id cell sits beside its
+  meaning). D8 was cut out of the occupancy notes by the first wave; it is now printed with its meaning.
+- **Strict pass for text written by scripts** (`report_public.strict_text`): the cost-of-compliance and
+  strengthening sections (`compliance_comparison.json`, `strengthening_option.json`) and the PV answer, the PV
+  before / after table and the note to the PV installer also have every remaining snake_case token spelt out
+  (member ids such as `lateral_col-WI956X250X14X6` and load-case names such as `EQ_X` are kept).
+  `report_public.leaks()` lists what the pass refuses; the tests assert it is empty.
+- Printed at the source in words: the status line ("Design status: COMPLETE (0 open reason(s))", no authority /
+  module / spec), the Chapter 1 checklist item, the analysis-gates table (`report_public.GATE_LABELS`), the wind
+  table (IS 875 (Part 3):2015 factor names from the corpus 6.3 / 7.2: "k2, terrain roughness and height factor
+  (6.3.2)" …, and `frame_tributary` as "frame tributary"), the Section 12 check ids in the Governing-ratios and
+  Chapter 9 tables ("brace KL/r", "IS 18168 Table 2 column", "12.11.3.2 SCWB"), the combination note, the PEB
+  restraint heading and the secondary-member design column.
+- Calc keys in words (second commit): connection demand keys as symbols (M<sub>design</sub>, P<sub>12.2.3</sub>,
+  not `M_design`, `P_12_2_3`); the Appendix B "applies to" column in words ("columns, connections, beams of the
+  seismic system (IS 800 12.2.3 and IS 18168 5.5 cases)", not `col_only, conn_only, is800_12_2_3 …`); Section 12
+  records with their keys in words and units ("both sides: yes, width 285.50 mm", not `both_sides True,
+  width_mm 285.50`); `gamma_m0`, `lambda_cr`, `V-bar_B`, `tau_bd` as symbols; record paths such as
+  "(see wind_summary.Cf_fig4)" and bare `india_*` module names dropped; the PEB deliverable names and the gravity
+  table's D<sub>floor</sub> / D<sub>roof</sub>. Load-case names (EQ_X, W_Y_across) and member ids
+  (lateral_col-WI956X250X14X6) are names used throughout the report and are kept.
+- The capability box no longer says "The job ID and folder name are unchanged."
+- Ex5, the note to the PV installer: written by the gold job's `pv_check.py` (outside the repo, fixed and re-run
+  without the bisection: its CSV / JSON outputs are byte-identical): "FAIL (passes without the PV)" instead of
+  "FAIL (was None)", the check text in full (it was cut at 90 characters: "column_no_crane_brittl"), "the published
+  IN_Ex1 design", no `'solar_pv'`, the limiting item in words, the reaction changes pointed to the report table.
+- `report_first_wave.occupancy_text` prints an occupancy given per use (a list of records, as the CFS lateral frames
+  give it) one use per line, never as a raw list of dicts.
+
+### Cost of compliance (findings 7 and 8)
+
+- `report_second_wave.difference_text`: the difference is printed in kg/m² to two decimals with its base in
+  words, both ways, from the two rows it is taken between: Ex4 "6.09 kg/m² (55.63 against 49.54 kg/m²): the
+  code-compliant design uses 12.3 % more steel than the ordinary frame; put the other way, the ordinary frame uses
+  10.9 % less steel than the code-compliant design" (the 10.9 % is Video 6's figure); Ex8 43.7 % / 30.4 %; Ex2
+  "−0.26 kg/m²: the ordinary frame uses 0.5 % more steel than the code-compliant design".
+- An optional `difference.caveat` is printed under it. Ex8's says that both lightest designs are what the
+  group-by-group search found, not proven minima (the SMRF search changed only the eave beam, MB300 to MB125; the
+  ordinary-frame search moved to WPB600X300X128.79 and BOX400X400X14), and that the difference is an upper estimate
+  of the cost of compliance.
+- The four gold files (`IN_Ex2`, `IN_Ex4`, `IN_Ex8` `compliance_comparison.json`, `IN_Ex5`
+  `strengthening_option.json`) have their printed strings (title, basis, source, variant, status, between) and the
+  unprinted notes rewritten in plain English; every number is unchanged (asserted by the rewrite script).
+
+### Full-bay deck (finding 10)
+
+- Ex13, Ex14, Ex16: the design-status point, the Chapter 6 scope paragraph and the take-off now say that in
+  practice secondary beams would be added between the girders, that they are not designed here and that their
+  steel is not in the kg/m² (the engine does not size them, so no estimate is given; the kg/m² is not comparable
+  with examples whose take-off includes secondary beams).
+
+### Ex9 irregularity screens (finding 11)
+
+- `report_second_wave.part_levels` / `part_level_note`: a level of the model with nodes at fewer than half of the
+  column positions of the level above is a part level. Ex9's level 1 (z = 5.0 m) is the lean-to roof: 5 of the 18
+  column positions of level 2 (12.0 m × 30.0 m against 24.0 m × 60.0 m), read from the engine grid the IS 1893
+  Table 6 screens use. Where a soft-storey or vertical-geometric NG row comes from such a level, a note says so,
+  says what the row compared (the hall's plan with the lean-to roof; the frames below the lean-to roof with the
+  3.0 m above it) and what the flags did to the design: they are kept, the analysis is the response spectrum
+  analysis, and storey 1 is held to the 0.2 % drift limit (largest ratio 0.135). Ex19 stem and Ex20 (genuine soft
+  storeys) get no note.
+
+### PEB lever study (finding 14)
+
+- The PEB "why heavier" note says the lever study is not part of the report and is run from the Variations tab of
+  the Steltic Hub.
+
+### Tests
+
+- `tests/test_check_fixes_2026_10.py` (new, 36 tests). Two second-wave tests updated: the cost-of-compliance test asserted the
+  script name in the source line (now asserted absent) and "12.8 kg/m²" (now two decimals); the framing test
+  asserted the "unchanged" sentence (now asserted absent).
+- Whole suite (`python -m pytest tests -q -p no:cacheprovider`): 1,121 passed, 4 skipped, 0 failed (origin/main
+  c7c9cc9: 1,085 passed, 4 skipped; the 36 new tests make the difference).
+
+### Gold re-runs (all 24, each under /home/claude/bin/heavy, PEB secondary step first)
+
+- Re-run on bca5377: every job rc 0; 23 COMPLETE and IN_Ex5 PARTIAL as intended. `compare2.py` against
+  `/home/claude/gold/baseline_2026-10-23` (six decimals): member sections and every check ratio, value and limit,
+  connections, Section 12, drift, RSA scale, W, gates, status and open reasons, kg/m² and the PEB / IS 801
+  secondary results are identical on all 24. The only differences are combination labels on tied ratios
+  (21 jobs; the engine's visit order, as in the second wave). The summary table is identical to the c7c9cc9
+  re-run of 2026-10-23 (headline, slenderness, drift, kg/m²); the full table is the second-wave table above.
+- Public-text scan of the 24 printed reports (body before Appendix C) with `report_public.leaks`: no path, script
+  or module name, repository reference, JSON key, internal word or ruling without its meaning. What remains of
+  snake_case is load-case names, member ids and a few symbols inside check formulas (M_surge / Mdy_top, M_base).
+- The Ex9 part-level note is printed on Ex9 only; the full-bay deck wording on Ex13, Ex14 and Ex16; the
+  difference sentences on Ex2, Ex4 and Ex8 as quoted above.
+
+### Not changed here (outside this repo or a design / site item)
+
+- The site build (india.html, hr/index.json): the Ex9 meta "SMRF+SCBF", the Ex5 flag ("passes H/240" should read
+  "exceeds H/240"), "(no secondaries)" on the Ex13, Ex14, Ex16 meta lines, the anchor bolt plan button and the shed
+  note wording (findings 9, 10, 13, 14) are in the lead's site build.
+- Appendix C (the activity log) is left as logged.
