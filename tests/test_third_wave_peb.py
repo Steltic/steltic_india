@@ -174,3 +174,151 @@ def test_gable_wind_column_is_checked_for_the_wall_wind(mini_job):
     assert max(max(abs(r[13]), abs(r[14])) for r in el["records"].values() if len(r) > 14) == pytest.approx(M_ref, rel=0.05)
     rows = [c for c in m["checks"] if "9.3" in str(c.get("name"))]
     assert rows and max(c["dc"] for c in rows) > 0.05
+
+
+def test_base_plate_inside_the_column_outline_is_a_geometry_failure_not_a_crash():
+    """IN_Ex1 (sizing the gable wind column for its wall wind): a 425 mm deep column on the declared 400 x 260 plate
+    made base_plate_design divide by a zero bearing length and the whole Section 12 block went unevaluated."""
+    import india_connections as C
+    kw = dict(B_mm=260.0, L_mm=400.0, t_plate_mm=20.0, fy_plate_MPa=250.0, fck_MPa=30.0, col_d_mm=425.0,
+              col_bf_mm=150.0, col_tf_mm=8.0,
+              anchors={"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "8.8", "f_mm": 100.0, "pitch_mm": 160.0,
+                       "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0})
+    r = C.base_plate_design_biaxial(P_N=50e3, Mz_Nmm=5e6, My_Nmm=0.0, V_N=10e3, **kw)
+    assert r["checks"]["geometry_plate_outline"]["ok"] is False
+    assert r["ok"] is False
+    r2 = C.base_plate_design_biaxial(P_N=50e3, Mz_Nmm=5e6, My_Nmm=0.0, V_N=10e3, **dict(kw, col_d_mm=350.0))
+    assert "geometry_plate_outline" not in r2["checks"]
+
+
+# ------------------------------------------------------------------------------ the PEB sizer (handoff P12)
+def _lm_stub(members, chains, x, spec, res=None):
+    import peb_autosize as A
+    lm = object.__new__(A.LocalModel)
+    lm.members, lm.chains, lm.spec, lm.res = members, chains, spec, res or {}
+    lm.x0 = dict(x)
+    lm.const_of_label = {lab: c for c, lab in x.items()}
+    return lm
+
+
+def _frame(col_lab, raf_lab, H=13000.0, W=24000.0):
+    """One portal line q = 1: two fixed-base columns and two rafters (eave to ridge), labels as constants COL / RAF."""
+    members = {
+        "C-0": {"kind": "column", "section": col_lab, "line": [1, 0], "chain": "c0", "s0": 0.0, "s1": H},
+        "C-1": {"kind": "column", "section": col_lab, "line": [1, 4], "chain": "c1", "s0": 0.0, "s1": H},
+        "R-0": {"kind": "rafter", "section": raf_lab, "line": 1, "a0": 0.0, "a1": W / 2, "eave_end": "start",
+                "plane": 0},
+        "R-1": {"kind": "rafter", "section": raf_lab, "line": 1, "a0": W / 2, "a1": W, "eave_end": "end", "plane": 0},
+    }
+    chains = {"c0": {"kind": "column", "L_mm": H, "top": 100100}, "c1": {"kind": "column", "L_mm": H, "top": 100104}}
+    return members, chains
+
+
+def test_rafter_sway_weight_single_span_and_props():
+    import peb_autosize as A
+    w = A.LocalModel.rafter_sway_weight
+    # single portal span 0..24 m: 1 at the eaves, 0 at mid-span (the previous index)
+    assert w(0.0, [0.0, 24000.0], []) == pytest.approx(1.0)
+    assert w(6000.0, [0.0, 24000.0], []) == pytest.approx(0.5)
+    assert w(12000.0, [0.0, 24000.0], []) == pytest.approx(0.0)
+    # IN_Ex2: 96 m continuous over pinned props at 24 / 48 / 72 m -- the knee moment dies out at the first prop
+    mom, pin = [0.0, 96000.0], [24000.0, 48000.0, 72000.0]
+    assert w(12000.0, mom, pin) == pytest.approx(0.5)
+    assert w(24000.0, mom, pin) == pytest.approx(0.0)
+    assert w(40000.0, mom, pin) == 0.0 and w(60000.0, mom, pin) == 0.0
+    assert w(90000.0, mom, pin) == pytest.approx(0.75)
+    # interior moment columns: each span is a portal of its own
+    assert w(36000.0, [0.0, 24000.0, 48000.0], []) == pytest.approx(0.0)
+    assert w(30000.0, [0.0, 24000.0, 48000.0], []) == pytest.approx(0.5)
+
+
+def test_dado_index_follows_the_lower_column_not_the_rafter():
+    """A fixed-base frame: the dado-top index changes with the column, not with the rafter; the eave index changes
+    with both (IN_Ex2 H/150 + dado: the eave index sent the sizer to the rafters, which did not move the dado top)."""
+    import peb_autosize as A
+    import peb_build as PB
+    for lab in ("WI700X300X22X14", "WI700X300X32X14", "WI600X250X20X14", "WI600X250X32X14"):
+        PB.ensure(lab)
+    x = {"COL": "WI700X300X22X14", "RAF": "WI600X250X20X14"}
+    members, chains = _frame(x["COL"], x["RAF"])
+    spec = {"frame_line": 1, "base": "fixed", "dado_height_mm": 3000.0}
+    lm = _lm_stub(members, chains, x, spec)
+    Fd0, F0 = lm.flexibility_dado(x), lm.flexibility(x)
+    x_raf = dict(x, RAF="WI600X250X32X14")
+    x_col = dict(x, COL="WI700X300X32X14")
+    assert lm.flexibility_dado(x_raf) == pytest.approx(Fd0)
+    assert lm.flexibility(x_raf) < F0
+    assert lm.flexibility_dado(x_col) < 0.85 * Fd0
+    # pinned bases: the dado top follows the eave index
+    lm_p = _lm_stub(members, chains, x, dict(spec, base="pinned"))
+    assert lm_p.flexibility_dado(x_raf) == pytest.approx(lm_p.flexibility(x_raf))
+    # the prediction: dado by its own index, the eave sway by the frame index
+    lm.global0, lm.F0, lm.Fd0 = {"wind_Y": 0.9, "dado_Y": 1.08}, F0, None
+    pr = lm.predicted(x_col)
+    assert pr["dado_Y"] == pytest.approx(1.08 * lm.flexibility_dado(x_col) / Fd0)
+    assert pr["wind_Y"] == pytest.approx(0.9 * lm.flexibility(x_col) / F0)
+
+
+def test_feedback_tightens_the_dado_margin_alone():
+    import peb_autosize as A
+    m = {"sway": 0.98}
+    run = {"fail_items": [(1.08, "sway", "wind Y dado top", "IS 800 Table 6 H/240 at the dado")],
+           "gates_fail": ["wind_defl_Y"]}
+    A.feedback(m, run, None, log_fn=lambda *a: None)
+    assert m["dado"] == pytest.approx(0.98 - 0.08) and m["sway"] == 0.98
+    m2 = {"sway": 0.98}
+    run2 = {"fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]}
+    A.feedback(m2, run2, None, log_fn=lambda *a: None)
+    assert m2["sway"] == pytest.approx(0.93) and "dado" not in m2
+
+
+def _slab_spec(L=450.0, B=400.0, t=25.0, d=24):
+    return {"B_mm": B, "L_mm": L, "t_plate_mm": t, "fy_plate_MPa": 240.0, "plate_grade": "E250", "fck_MPa": 30.0,
+            "fixed": False, "anchors": {"n_total": 4, "n_tension": 2, "d_mm": d, "grade": "8.8", "f_mm": 100.0,
+                                        "pitch_mm": 160.0, "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0,
+                                        "embedment": {"method": "bond", "tau_bd_MPa": 1.5, "bar": "plain",
+                                                      "L_mm": 900.0, "source": "test input (as the IN_Ex1 gold)",
+                                                      "cite": "IS 456:2000 26.2.1.1"}}}
+
+
+def test_base_plate_sizing_picks_the_thinnest_passing_plate():
+    import peb_autosize as A
+    import peb_build as PB
+    PB.ensure("WI412X225X12X8")
+    cfg = {"plate_grade": "E250", "steel_grade": "E350"}
+    spec = _slab_spec()
+    entries = [{"el": 1, "sec": "WI412X225X12X8", "cases": [(250e3, 0.0, 0.0, 60e3), (-80e3, 0.0, 0.0, 40e3)]}]
+    pl = A.size_base_plate(cfg, spec, entries)
+    assert pl and pl["t"] in A.BASE_PLATE_T_MM and pl["d"] in A.ANCHOR_D_MM
+    assert A.base_plate_ok(cfg, spec, entries, pl)
+    i = A.BASE_PLATE_T_MM.index(pl["t"])
+    if i > 0:
+        assert not any(A.base_plate_ok(cfg, spec, entries, {"t": A.BASE_PLATE_T_MM[i - 1], "d": d})
+                       for d in A.ANCHOR_D_MM)
+    # strengthen-only floor
+    assert A.size_base_plate(cfg, spec, entries, floor={"t": 32.0, "d": 30})["t"] >= 32.0
+    # the plate and anchor values are applied with their IS 2062 fy and IS 4000 stress area
+    sp = A.apply_plate(dict(spec, anchors=dict(spec["anchors"])), {"t": 16.0, "d": 30})
+    assert sp["t_plate_mm"] == 16.0 and sp["fy_plate_MPa"] == 250.0 and sp["anchors"]["Anb_mm2"] == 561.0
+
+
+def test_base_plate_is_a_design_variable_and_itemised():
+    import peb_autosize as A
+    cfg = {"connections": {"column_base": {"WI412X225X12X8": dict(_slab_spec(), shear_key={
+        "capacity_N": 1e6, "size": "cruciform 2 x 400 x 28, 250 deep", "mass_kg": 52.8}),
+        "default": _slab_spec(400.0, 260.0, 20.0)}}}
+    d = A.read_conn_design(cfg, None)
+    assert d["base#0"]["key"] == [400.0, 28.0, 250.0] and d["base#0"]["plate"] == {"t": 25.0, "d": 24}
+    assert d["base#1"]["key"] is None and d["base#1"]["plate"] == {"t": 20.0, "d": 24}
+    items = A.connection_items(cfg, {"base#0": 18, "base#1": 6}, {})
+    assert items["base plates base#0"] == pytest.approx(18 * 450 * 400 * 25 * A.STEEL, abs=0.01)
+    assert items["base plates base#1"] == pytest.approx(6 * 400 * 260 * 20 * A.STEEL, abs=0.01)
+    # an older calibration (no base plates itemised) keeps its basis
+    old = {"items": {"shear keys base#0": 950.4}}
+    assert set(A.calib_items(old, items)) == {"shear keys base#0"}
+    assert A.calib_items({}, items) == items
+    # patching a slot with a plate changes thickness and anchors, keeps the key
+    A.patch_connections(cfg, {"base#0": {"key": [400.0, 28.0, 250.0], "fck": 30.0, "plate": {"t": 20.0, "d": 30}}},
+                        {})
+    sp = cfg["connections"]["column_base"]["WI412X225X12X8"]
+    assert sp["t_plate_mm"] == 20.0 and sp["anchors"]["d_mm"] == 30 and sp["shear_key"]

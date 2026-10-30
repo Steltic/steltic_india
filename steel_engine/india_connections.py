@@ -1245,6 +1245,13 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     # plate thickness
     a_proj = (L_mm - 0.95 * col_d_mm) / 2.0
     b_proj = (B_mm - 0.8 * col_bf_mm) / 2.0
+    if a_proj < 0.0 or b_proj < 0.0:
+        # third wave (2026-10-30): a plate inside the column outline is a geometric failure, not a crash (the
+        # compression-side cantilever below divided by a zero bearing length)
+        checks["geometry_plate_outline"] = _geom_gate(
+            round(max(0.95 * col_d_mm - L_mm, 0.8 * col_bf_mm - B_mm), 1), 0.0, clause="geometric feasibility",
+            cite="the base plate must extend beyond the column outline (0.95 d along L, 0.8 bf along B: the IS 800 "
+                 "7.4.3.1 projections)")
     big, small = max(a_proj, b_proj), min(a_proj, b_proj)
     if P > 0 and e <= L_mm / 6.0 and M_dem == 0:
         w = P / (B_mm * L_mm)
@@ -1258,7 +1265,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         if fp is not None:
             m = a_proj
             Y = bearing.get("Y_mm", L_mm)
-            if Y >= m:
+            if m <= 0.0:
+                Mcomp = 0.0                     # no projection beyond the column face (geometry_plate_outline fails)
+            elif Y >= m:
                 f_face = fp * (1 - m / Y) if Y < L_mm else fp
                 Mcomp = f_face * m ** 2 / 2 + (fp - f_face) * m ** 2 / 3
             else:

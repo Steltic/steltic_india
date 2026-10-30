@@ -413,7 +413,22 @@ def read_conn_design(cfg, knee_col_face):
             dims = sk.get("_dims") or _key_dims_from_size(sk.get("size"))
             out[slot] = {"key": dims, "fck": float(spec.get("fck_MPa") or 30.0),
                          "b_max": min(float(spec.get("B_mm") or 1e9), float(spec.get("L_mm") or 1e9))}
+        pl = _plate_params(spec)
+        if pl:
+            # third wave: the base plate thickness and the anchor diameter are design variables too
+            out.setdefault(slot, {"key": None, "fck": float(spec.get("fck_MPa") or 30.0),
+                                  "b_max": min(float(spec.get("B_mm") or 1e9), float(spec.get("L_mm") or 1e9))})
+            out[slot]["plate"] = pl
     return out
+
+
+def _plate_params(spec):
+    """{'t', 'd'} of a slab base (plate thickness, anchor diameter) or None (embedded / gusseted / no plate)."""
+    if not isinstance(spec, dict) or not spec.get("t_plate_mm") or spec.get("stiffeners") or \
+            str(spec.get("type") or "").lower() == "embedded":
+        return None
+    a = spec.get("anchors") if isinstance(spec.get("anchors"), dict) else {}
+    return {"t": float(spec["t_plate_mm"]), "d": int(a["d_mm"]) if a.get("d_mm") else None}
 
 
 def _key_dims_from_size(size):
@@ -478,9 +493,27 @@ def patch_connections(cfg, design, sections):
             if par.get("key"):
                 b, t, h = par["key"]
                 spec["shear_key"] = shear_key(b, t, h, plate_fy(t, "E250"), par.get("fck", 30.0))
-            else:
+            elif "key" in par:
                 spec.pop("shear_key", None)
+            if par.get("plate"):
+                apply_plate(spec, par["plate"], cfg.get("plate_grade"))
     return cfg
+
+
+def apply_plate(spec, pl, plate_grade=None):
+    """Third wave: set a base spec's plate thickness (IS 2062 Table 3 fy for it) and anchor diameter (IS 4000
+    Table 2 thread stress area)."""
+    import india_connections as C
+    t = float(pl["t"])
+    spec["t_plate_mm"] = t
+    spec["fy_plate_MPa"] = plate_fy(t, spec.get("plate_grade") or plate_grade or "E250")
+    a = spec.get("anchors")
+    if isinstance(a, dict) and pl.get("d"):
+        d = int(pl["d"])
+        a["d_mm"] = d
+        if d in C.IS4000_STRESS_AREA_MM2:
+            a["Anb_mm2"] = C.IS4000_STRESS_AREA_MM2[d][1]
+    return spec
 
 
 # ------------------------------------------------------------------------------- itemised connection mass
@@ -535,6 +568,9 @@ def connection_items(cfg, counts, faces):
         sk = spec.get("shear_key")
         if n:
             out["shear keys %s" % slot] = n * float((sk or {}).get("mass_kg") or 0.0)
+        if n and spec.get("t_plate_mm") and spec.get("L_mm") and spec.get("B_mm"):
+            # third wave: base plates are resized (base_plate_cases / size_base_plate)
+            out["base plates %s" % slot] = n * float(spec["L_mm"]) * float(spec["B_mm"]) * float(spec["t_plate_mm"]) * STEEL
     return {k: round(v, 2) for k, v in out.items()}
 
 
@@ -576,7 +612,7 @@ def frame_worker(run_dir):
             cb = v.get("conn_mass_basis")
             if cb:
                 # the gold's declared plate take-off, corrected by the change of the itemised (resized) plates
-                items = connection_items(cfg, cb["counts"], faces)
+                items = calib_items(cb, connection_items(cfg, cb["counts"], faces))
                 cfg["peb_connection_mass_kg"] = round(float(cb["gold_kg"]) + sum(items.values()) - float(cb["items_kg"]), 1)
                 cfg["peb_connection_mass_basis"] = (
                     "PEB-LEVERS: the gold's declared plate take-off %.0f kg corrected by the auto-sized connection plates "
@@ -616,6 +652,15 @@ def frame_worker(run_dir):
     open(os.path.join(run_dir, "worker_stdout.txt"), "w").write(buf.getvalue()[-200000:])
     json.dump(res, open(os.path.join(run_dir, "result.json"), "w"), indent=1, default=str)
     return res
+
+
+def calib_items(calib, items):
+    """Third wave: the itemised plates of a variant on the basis of the calibration -- a calibration made before the
+    base plates were itemised (the October study) has no 'base plates' items, so they are left out of the correction
+    (the gold's declared take-off still holds them)."""
+    if isinstance((calib or {}).get("items"), dict):
+        return {k: v for k, v in items.items() if k in calib["items"]}
+    return dict(items)
 
 
 def _set_path(d, path, val):
@@ -1027,8 +1072,10 @@ class LocalModel:
         self.knees = self._knee_joints()
         self.knee_shear0 = self._knee_shear0()
         self.base_info = self._bases()
+        self.base_fit = self._base_fit()
         self.global0 = self._globals()
         self.F0 = self.flexibility(self.x0)
+        self.Fd0 = None                     # third wave: the dado index of the run's design (flexibility_dado), lazily
 
     # ------------------------------------------------------------------ helpers
     def lab_of_member(self, mid, x):
@@ -1307,6 +1354,15 @@ class LocalModel:
                 out = (False, "depth outside the fabrication range")
             elif bf > float(fab.get("bf_max", 400.0)) + 1e-9 or bf < float(fab.get("bf_min", 120.0)) - 1e-9:
                 out = (False, "flange width outside the fabrication range")
+            if out[0] and c in getattr(self, "base_fit", {}):
+                # third wave: the column must sit inside its base plate with 15 mm each side for the welds (sizer rule)
+                L_, B_, f_ = self.base_fit[c]
+                sb = PB.section_at(lab, f_)
+                PB.ensure(sb)
+                pb_ = S.props(sb)
+                if float(pb_["d"]) > L_ - 30.0 + 1e-9 or float(pb_["bf"]) > B_ - 30.0 + 1e-9:
+                    out = (False, "column %.0f x %.0f does not fit its %.0f x %.0f base plate" % (
+                        pb_["d"], pb_["bf"], L_, B_))
             if out[0] and self.is18 and self.spec["members"][c].get("sfrs", True):
                 import india_is18168 as I18
                 import india_is800_s12 as S12
@@ -1345,8 +1401,11 @@ class LocalModel:
         g = {}
         for dname in ("X", "Y"):
             r = ws.get(dname) or {}
-            g["wind_" + dname] = max(float(r.get("ratio_top") or 0.0), float(r.get("ratio_storey") or 0.0),
-                                     float(r.get("ratio_dado") or 0.0))
+            g["wind_" + dname] = max(float(r.get("ratio_top") or 0.0), float(r.get("ratio_storey") or 0.0))
+            if r.get("ratio_dado") is not None:
+                # third wave: the dado-top ratio has its own predictor (flexibility_dado): on a fixed-base frame the
+                # column moves at the dado top with the stiffness of its lower part, not with the eave sway index
+                g["dado_" + dname] = float(r["ratio_dado"])
         for row in pkg.get("drift_table") or []:
             k = "drift_" + str(row.get("dir"))
             g[k] = max(g.get(k, 0.0), float(row.get("dc") or 0.0))
@@ -1372,10 +1431,65 @@ class LocalModel:
             g["freq_Y"] = 1.0 / float(md["Ty"])
         return g
 
+    def _frame_columns(self, q):
+        """Moment-connected columns of frame line q: [(member, chain, label constant member id)]."""
+        out = []
+        for mid, m in sorted(self.members.items()):
+            if m["kind"] == "column" and list(m.get("line") or [])[:1] == [q]:
+                ch = self.chains.get(m["chain"]) or {}
+                if ch.get("releases") in ("J", "both"):
+                    continue
+                out.append((mid, m, ch))
+        return out
+
+    def _rafter_supports(self, q, plane):
+        """Third wave (multi-span frames): (moment supports, pinned props) of the rafter line of frame line q -- plan
+        positions of the rafter-line supports whose column is moment-connected (the eaves of a portal, the interior
+        columns of a multi-span moment frame) and of the pinned props (IN_Ex2: CHS gravity columns)."""
+        ln = (self.res.get("rafter_lines") or {}).get("%s,%s" % (plane, q))
+        if not ln:
+            return None
+        tops = {}
+        for ch in self.chains.values():
+            if ch.get("kind") == "column" and ch.get("top") is not None:
+                tops[int(ch["top"])] = ch
+        mom, pin = set(), set()
+        for a, nd in zip(ln.get("a_mm") or [], ln.get("nodes") or []):
+            if nd not in (ln.get("supports") or []):
+                continue
+            ch = tops.get(int(nd))
+            if ch is not None and ch.get("releases") in ("J", "both"):
+                pin.add(float(a))
+            else:
+                mom.add(float(a))
+        mom |= {float(ln["lo"]), float(ln["hi"])}
+        return sorted(mom), sorted(pin - mom)
+
+    @staticmethod
+    def rafter_sway_weight(a, mom, pin):
+        """Third wave: |m| of the rafter under a unit sway at plan position a.  Between two moment supports with no
+        prop the moment is anti-symmetric (1 at each support, 0 at mid-span: the portal case, unchanged); where pinned
+        props stand between them (a rafter continuous over gravity columns, IN_Ex2) the support moment decays to zero
+        at the first prop -- before, the whole 96 m was weighted as one portal span, so the sizer saw the interior
+        rafters as sway members and the full runs overshot the predicted sway."""
+        i = max(k for k in range(len(mom)) if mom[k] <= a + 1e-6) if any(m_ <= a + 1e-6 for m_ in mom) else 0
+        i = min(i, len(mom) - 2)
+        s0, s1 = mom[i], mom[i + 1]
+        props = [p_ for p_ in pin if s0 + 1e-6 < p_ < s1 - 1e-6]
+        if not props:
+            half = (s1 - s0) / 2.0
+            return max(0.0, 1.0 - min(a - s0, s1 - a) / half) if half > 0 else 0.0
+        if a <= props[0]:
+            return max(0.0, 1.0 - (a - s0) / (props[0] - s0))
+        if a >= props[-1]:
+            return max(0.0, 1.0 - (s1 - a) / (s1 - props[-1]))
+        return 0.0
+
     def flexibility(self, x):
         """Virtual-work flexibility index of the typical frame (spec 'frame_line'): sum of int m^2 / Ix ds over its
-        columns (m = z/H, pinned bases; z/H - 1/2, fixed) and rafters (m = 1 at the eaves, 0 at mid-width).  Used as a
-        ratio only (sway, drift, lambda_cr)."""
+        columns (m = z/H, pinned bases; z/H - 1/2, fixed) and rafters (m = 1 at the eaves, 0 at mid-width; third
+        wave: per span between moment-connected supports, decaying to 0 at the first pinned prop of a multi-span
+        rafter, rafter_sway_weight).  Used as a ratio only (sway, drift, lambda_cr)."""
         import peb_build as PB
         import sections as S
         q = int(self.spec.get("frame_line", 1))
@@ -1385,37 +1499,76 @@ class LocalModel:
         for mid, m in sorted(self.members.items()):
             if m["kind"] == "rafter" and int(m.get("line", -1)) == q:
                 width = max(width or 0.0, float(m.get("a1") or 0.0))
-        for mid, m in sorted(self.members.items()):
+        sup = {}
+        for mid, m, ch in self._frame_columns(q):
             lab = self.lab_of_member(mid, x)
-            if m["kind"] == "column" and list(m.get("line") or [])[:1] == [q]:
-                ch = self.chains.get(m["chain"]) or {}
-                if ch.get("releases") in ("J", "both"):
-                    continue
-                H = float(ch.get("L_mm") or 1.0)
-                s0, s1 = float(m.get("s0") or 0.0), float(m.get("s1") or H)
-                for k in range(8):
-                    f = (k + 0.5) / 8.0
-                    z = s0 + (s1 - s0) * f
-                    mm = (z / H - 0.5) if fixed else z / H
-                    F += mm * mm / float(S.props(PB.section_at(lab, f))["Ix"]) * (s1 - s0) / 8.0
-            elif m["kind"] == "rafter" and int(m.get("line", -1)) == q and width:
-                a0, a1 = float(m.get("a0") or 0.0), float(m.get("a1") or 0.0)
-                start_is_eave = m.get("eave_end") == "start"
-                for k in range(8):
-                    f = (k + 0.5) / 8.0
-                    a = a0 + (a1 - a0) * f
+            H = float(ch.get("L_mm") or 1.0)
+            s0, s1 = float(m.get("s0") or 0.0), float(m.get("s1") or H)
+            for k in range(8):
+                f = (k + 0.5) / 8.0
+                z = s0 + (s1 - s0) * f
+                mm = (z / H - 0.5) if fixed else z / H
+                F += mm * mm / float(S.props(PB.section_at(lab, f))["Ix"]) * (s1 - s0) / 8.0
+        for mid, m in sorted(self.members.items()):
+            if not (m["kind"] == "rafter" and int(m.get("line", -1)) == q and width):
+                continue
+            lab = self.lab_of_member(mid, x)
+            pl = m.get("plane", 0)
+            if pl not in sup:
+                sup[pl] = self._rafter_supports(q, pl)
+            a0, a1 = float(m.get("a0") or 0.0), float(m.get("a1") or 0.0)
+            start_is_eave = m.get("eave_end") == "start"
+            for k in range(8):
+                f = (k + 0.5) / 8.0
+                a = a0 + (a1 - a0) * f
+                if sup[pl] and len(sup[pl][0]) >= 2:
+                    mm = self.rafter_sway_weight(a, sup[pl][0], sup[pl][1])
+                else:
                     dist = min(a, width - a)
                     mm = max(0.0, 1.0 - dist / (width / 2.0))
-                    ff = f if start_is_eave else 1.0 - f
-                    F += mm * mm / float(S.props(PB.section_at(lab, ff))["Ix"]) * abs(a1 - a0) / 8.0
+                ff = f if start_is_eave else 1.0 - f
+                F += mm * mm / float(S.props(PB.section_at(lab, ff))["Ix"]) * abs(a1 - a0) / 8.0
         return F
+
+    def flexibility_dado(self, x):
+        """Third wave: index of the column displacement at the top of the brick dado (spec 'dado_height_mm' = a).  A
+        fixed-base frame column: int_0^a (H/2 - z)(a - z) / Ix dz over the moment columns of the frame line (the sway
+        moment of a fixed-base portal column, inflection at mid-height, times the moment of a unit load at the dado
+        top on the column cantilevered from its base) -- the dado top moves with the stiffness of the column's lower
+        part, so a stiffer rafter or upper column barely helps (IN_Ex2 H/150 + dado: the eave index stiffened the
+        rafters and the full runs failed).  Pinned bases: the dado top follows the eave (the eave index)."""
+        import peb_build as PB
+        import sections as S
+        a = float(self.spec.get("dado_height_mm") or 0.0)
+        if a <= 0.0 or str(self.spec.get("base", "pinned")) != "fixed":
+            return self.flexibility(x)
+        q = int(self.spec.get("frame_line", 1))
+        F = 0.0
+        for mid, m, ch in self._frame_columns(q):
+            lab = self.lab_of_member(mid, x)
+            H = float(ch.get("L_mm") or 1.0)
+            s0, s1 = float(m.get("s0") or 0.0), float(m.get("s1") or H)
+            n = 16
+            for k in range(n):
+                f = (k + 0.5) / n
+                z = s0 + (s1 - s0) * f
+                if z >= a:
+                    continue
+                F += (H / 2.0 - z) * (a - z) / float(S.props(PB.section_at(lab, f))["Ix"]) * (s1 - s0) / n
+        return F if F > 0.0 else self.flexibility(x)
 
     def predicted(self, x):
         r = self.flexibility(x) / self.F0 if self.F0 else 1.0
         g = self.global0
         out = {}
         for k, v in g.items():
-            if k.startswith(("wind_", "drift_", "beam_defl", "crane_sway")):
+            if k.startswith("dado_"):
+                # third wave: the dado top by its own index (flexibility_dado), frames (Y) only
+                if self.Fd0 is None:
+                    self.Fd0 = self.flexibility_dado(self.x0)
+                rd = self.flexibility_dado(x) / self.Fd0 if self.Fd0 else r
+                out[k] = v * (rd if k.endswith("Y") else 1.0)
+            elif k.startswith(("wind_", "drift_", "beam_defl", "crane_sway")):
                 out[k] = v * (r if k.endswith("Y") or k in ("beam_defl", "crane_sway") else 1.0)
             elif k.startswith("lambda_"):
                 out[k] = v / (r if k.endswith("Y") else 1.0)
@@ -1511,6 +1664,33 @@ class LocalModel:
         labc, labb = self.lab_of_member(ec["member"], x), self.lab_of_member(eb["member"], x)
         fb = eb["f"][0] if int(self.dump[k["tb"]]["member"]["node_i"]) == k["node"] else eb["f"][1]
         return PB.section_at(labc, ec["f"][1]), PB.section_at(labb, fb)
+
+    def _base_fit(self):
+        """Third wave: {const: (L_mm, B_mm, f)} -- the smallest slab base plate under the columns of a resized constant
+        and the station of its base element (a column deeper than its plate made the engine divide by zero, and a
+        plate must extend beyond the column outline)."""
+        conn = self.cfg.get("connections") or {}
+        specs = sorted((conn.get("column_base") or {}).items(),
+                       key=lambda kv: (0 if ":" in kv[0] else (2 if kv[0] == "default" else 1)))
+        out, assigned = {}, set()
+        for key, spec in specs:
+            sec_k = key.split(":", 1)[1] if ":" in key else key
+            for t in self.base_info:
+                if t in assigned:
+                    continue
+                pe = self.dump[t].get("peb") or {}
+                mlab = (self.members.get(pe.get("member")) or {}).get("section")
+                if not (key == "default" or self.reg[t][1] == sec_k or (":" in key and mlab == sec_k)):
+                    continue
+                assigned.add(t)
+                c = self.const_of_label.get(mlab)
+                if not c or not _plate_params(spec) or not spec.get("L_mm") or not spec.get("B_mm"):
+                    continue
+                f = 0.5 * (pe["f"][0] + pe["f"][1]) if pe.get("f") else 0.0
+                L, B = float(spec["L_mm"]), float(spec["B_mm"])
+                if c not in out or (L, B) < out[c][:2]:
+                    out[c] = (L, B, f)
+        return out
 
     def _bases(self):
         out = []
@@ -1992,6 +2172,161 @@ def base_demands(lm, x, base_counts):
     return out
 
 
+# --------------------------------------------------------------------------- base plates and anchors (third wave)
+BASE_PLATE_T_MM = tuple(t for t in PLATES_MM if t >= 12.0)
+ANCHOR_D_MM = (20, 24, 30, 36)
+
+
+def _base_rows(lm):
+    rows = {}
+    for c in (lm.pkg.get("capacity_design") or {}).get("section12", {}).get("checks") or []:
+        if c.get("id") in ("12.12_base", "7.4_base"):
+            rows[str(c.get("member"))] = c
+    return rows
+
+
+def _governing_cases(per, k=4):
+    """A small set of the per-case base demands that governs a plate / anchor check: the largest Mz, My, V, the
+    most compressive and the most tensile P, and the cases with the largest D/C in the run."""
+    if len(per) <= 4 * k:
+        return list(per)
+    keep = set()
+    for key, sign in (("Mz_Nmm", 1), ("My_Nmm", 1), ("V_N", 1), ("P_N", 1), ("P_N", -1), ("dc", 1)):
+        idx = sorted(range(len(per)), key=lambda i: -sign * float(abs(per[i].get(key) or 0.0) if key != "P_N"
+                                                                  else (per[i].get(key) or 0.0)))
+        keep |= set(idx[:k])
+    return [per[i] for i in sorted(keep)]
+
+
+def base_plate_cases(lm, x):
+    """{slot: [{'el': tag, 'sec': candidate base section, 'cases': [(P, Mz, My, V)]}]}: per base element of each slab
+    base spec, the governing per-case demands of the run's IS 800 12.12 / 7.4 base row; the capacity / minimum
+    sub-cases (fixed SFRS bases: 1.2 Mpc or 1.1 Ry Mpc; IS 18168 9.4 minimum) follow the candidate column section in
+    the ratio of its Mpc (IS 800 9.3.1.2) to the run's at the same P."""
+    import india_is800_s12 as S12
+    import peb_build as PB
+    import sections as S
+    cfg = lm.cfg
+    conn = cfg.get("connections") or {}
+    rows = _base_rows(lm)
+    specs = sorted((conn.get("column_base") or {}).items(),
+                   key=lambda kv: (0 if ":" in kv[0] else (2 if kv[0] == "default" else 1)))
+    slot_of = {k: sl for sl, k in base_slots(conn)}
+    out, assigned = {}, set()
+    for key, spec in specs:
+        sec_k = key.split(":", 1)[1] if ":" in key else key
+        for t in lm.base_info:
+            if t in assigned:
+                continue
+            sec_old = lm.reg[t][1]
+            pe = lm.dump[t].get("peb") or {}
+            mlab_old = (lm.members.get(pe.get("member")) or {}).get("section")
+            if not (key == "default" or sec_old == sec_k or (":" in key and mlab_old == sec_k)):
+                continue
+            assigned.add(t)
+            if not _plate_params(spec):
+                continue
+            row = rows.get("base-e%d" % t)
+            if not row:
+                continue
+            lab_new = lm.lab_of_member(pe.get("member"), x) if pe else sec_old
+            sec_new = PB.section_at(lab_new, pe["f"][0] * 0.5 + pe["f"][1] * 0.5) if pe else sec_old
+            PB.ensure(sec_new)
+            p0, p1 = S.props(sec_old), S.props(sec_new)
+            fy0, fy1 = fy_of(sec_old, cfg.get("steel_grade")), fy_of(sec_new, cfg.get("steel_grade"))
+            cases = []
+            for c in _governing_cases(row.get("per_case") or []):
+                P = float(c.get("P_N") or 0.0)
+                mz, my, v = float(c.get("Mz_Nmm") or 0.0), float(c.get("My_Nmm") or 0.0), float(c.get("V_N") or 0.0)
+                ax = c.get("axis")
+                if ax in ("z", "y") and sec_new != sec_old:
+                    m0 = S12.mpc_9_3_1_2(p0, fy0, P, ax)[0]
+                    m1 = S12.mpc_9_3_1_2(p1, fy1, P, ax)[0]
+                    if m0 > 0:
+                        if ax == "z":
+                            mz *= m1 / m0
+                        else:
+                            my *= m1 / m0
+                cases.append((P, mz, my, v))
+            out.setdefault(slot_of[key], []).append({"el": t, "sec": sec_new, "cases": cases})
+    return out
+
+
+def _base_geo(cfg, spec, sec, pl, key_dims=None):
+    """The base_plate_design_biaxial geometry of a slab base spec with plate / anchors pl and the shear key key_dims
+    (as india_is800_s12.base_checks assembles it from india_connection_design.base_entry)."""
+    import inspect
+    import india_connection_design as CD
+    import india_connections as C
+    import sections as S
+    sp = copy.deepcopy(spec)
+    apply_plate(sp, pl, cfg.get("plate_grade"))
+    if key_dims:
+        b, t, h = key_dims
+        sp["shear_key"] = shear_key(b, t, h, plate_fy(t, "E250"), float(sp.get("fck_MPa") or 30.0))
+    b = {k: v for k, v in sp.items() if k not in ("fixed", "axis")}
+    pg, jg = CD._plate_grades(cfg, sp)
+    if pg is not None:
+        b.setdefault("plate_grade", pg)
+    if jg is not None:
+        b.setdefault("job_steel_grade", jg)
+    bd = CD.breakout_delegation(cfg)
+    if bd is not None:
+        b.setdefault("breakout_delegation", bd)
+    allowed = set(inspect.signature(C.base_plate_design).parameters)
+    geo = {k: v for k, v in b.items() if k in allowed and k not in (
+        "sfrs_fixed_base", "col_Zp_mm3", "col_fy_MPa", "col_Vd_N", "sfrs_moment_factor", "col_A_mm2", "P_N", "M_Nmm",
+        "V_N")}
+    p = S.props(sec)
+    geo.setdefault("col_d_mm", p["d"])
+    geo.setdefault("col_bf_mm", p["bf"])
+    geo.setdefault("col_tf_mm", p["tf"])
+    return geo
+
+
+def base_plate_ok(cfg, spec, entries, pl, key_dims=None, margin=1.0):
+    """Every governing case of every base of the slot passes base_plate_design_biaxial (evaluated, D/C <= margin)."""
+    import india_connections as C
+    for e in entries:
+        geo = _base_geo(cfg, spec, e["sec"], pl, key_dims)
+        for P, mz, my, v in e["cases"]:
+            try:
+                r = C.base_plate_design_biaxial(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v, **geo)
+            except Exception:
+                return False
+            if r.get("ok") is not True or r.get("dc") is None or float(r["dc"]) > margin + 1e-9:
+                return False
+    return True
+
+
+def size_base_plate(cfg, spec, entries, key_dims=None, margin=1.0, floor=None):
+    """Lightest slab base of a slot: the thinnest plate (IS 2062 plate thicknesses from 12 mm) that passes with some
+    anchor diameter (M20 ... M36), then the smallest such anchor; the plan size and the anchor layout stay as
+    declared (they follow the column outline and the anchor pitch / edge rules).  floor = {'t', 'd'}: strengthen
+    only.  Returns {'t', 'd'} or None."""
+    fl = floor or {}
+    ts = [t for t in BASE_PLATE_T_MM if t >= float(fl.get("t") or 0.0)]
+    a0 = spec.get("anchors") if isinstance(spec.get("anchors"), dict) else {}
+    ds = [d for d in ANCHOR_D_MM if d >= int(fl.get("d") or 0)] if a0.get("d_mm") else [None]
+    best = None
+    for d in ds:
+        lo, hi = 0, len(ts) - 1
+        if not ts or not base_plate_ok(cfg, spec, entries, {"t": ts[hi], "d": d}, key_dims, margin):
+            continue
+        while lo < hi:                       # plate checks only gain from a thicker plate: bisection on t
+            mid = (lo + hi) // 2
+            if base_plate_ok(cfg, spec, entries, {"t": ts[mid], "d": d}, key_dims, margin):
+                hi = mid
+            else:
+                lo = mid + 1
+        cand = (ts[lo], d or 0)
+        if best is None or cand < best:
+            best = cand
+    if best is None:
+        return None
+    return {"t": best[0], "d": best[1] or None}
+
+
 def key_catalogue():
     cat = []
     for b in KEY_B_MM:
@@ -2112,6 +2447,12 @@ class Evaluator:
         self.counts = lm.res.get("counts") or {}
         self.cache, self.conn_cache = {}, {}
         self.n_eval = 0
+        # third wave: the constants that carry a base (their base plate follows them)
+        self.base_cs = sorted({c for t in (getattr(lm, "base_info", None) or []
+                                           if self.spec.get("size_base_plates", True) else [])
+                               for c in [lm.const_of_label.get((lm.members.get((lm.dump[t].get("peb") or {})
+                                                                                .get("member")) or {}).get("section"))]
+                               if c})
 
     def margin(self, key, default=1.0):
         return float(self.m.get(key, default))
@@ -2123,14 +2464,18 @@ class Evaluator:
         import peb_build as PB
         fkey = tuple(sorted((k, PB.section_at(x[v[0]], v[1]) if isinstance(v, (list, tuple)) else x[v])
                             for k, v in faces.items() if (v[0] if isinstance(v, (list, tuple)) else v) in x))
-        bkey = tuple(sorted((c, x[c]) for c in self.spec.get("base_consts") or []))
+        bkey = tuple(sorted((c, x[c]) for c in set(self.spec.get("base_consts") or []) | set(self.base_cs)
+                            if c in x))
         key = (csec, bsec, fkey, bkey)
         if key in self.conn_cache:
             return self.conn_cache[key]
         design, kg, info = {}, 0.0, {}
         cp = self.conn_prev
         fl = self.spec.get("_conn_floor") or {}           # strengthen-only: keep a floor joint that still passes
-        if cp.get("knee") and lm.knees:
+        hold = self.spec.get("hold_joints") or {}         # third wave: joints held at given values (adopting a design)
+        for slot in sorted(hold):
+            design[slot] = copy.deepcopy(hold[slot])
+        if cp.get("knee") and lm.knees and "knee" not in hold:
             r = knee_fixed(lm, x, fl["knee"], fl.get("knee_panel"), margin=self.margin("conn:knee")) \
                 if fl.get("knee") else None
             r = r or size_knee(lm, x, cp["knee"], cp.get("knee_panel") or {}, margin=self.margin("conn:knee"),
@@ -2148,7 +2493,7 @@ class Evaluator:
         sd = splice_demands(lm, x)
         for skey, dem in sd.items():
             slot = "splice:" + skey
-            if not cp.get(slot) or skey not in faces:
+            if not cp.get(slot) or skey not in faces or slot in hold:
                 continue
             v = faces[skey]
             face = PB.section_at(x[v[0]], v[1]) if isinstance(v, (list, tuple)) else x[v]
@@ -2163,7 +2508,7 @@ class Evaluator:
             info[slot] = {"kg_each": round(r[1], 1), "Md_kNm": round(dem["Md"] / 1e6, 1), "cap_kNm": round(r[2][1] / 1e6, 1)}
         bd = base_demands(lm, x, self.counts)
         for slot, need in bd.items():
-            if slot not in cp:
+            if slot not in cp or slot in hold:
                 continue
             dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
                                  b_max=cp[slot].get("b_max"))
@@ -2177,6 +2522,26 @@ class Evaluator:
             design[slot] = {"key": dims, "fck": cp[slot].get("fck", 30.0), "b_max": cp[slot].get("b_max")}
             kg += self.counts.get(slot, 0) * (kgk or 0.0)
             info[slot] = {"need_kN": round(need / 1e3, 1), "key": dims}
+        if self.spec.get("size_base_plates", True):
+            # third wave: base plate thickness and anchor diameter for the candidate columns (and the key above)
+            conn_ = lm.cfg.get("connections") or {}
+            bkeys = dict(base_slots(conn_))
+            for slot, entries in sorted(base_plate_cases(lm, x).items()):
+                if not (cp.get(slot) or {}).get("plate") or slot in hold:
+                    continue
+                spec_b = (conn_.get("column_base") or {}).get(bkeys.get(slot))
+                kd = (design.get(slot) or {}).get("key") if slot in design else (cp.get(slot) or {}).get("key")
+                pl = size_base_plate(lm.cfg, spec_b, entries, key_dims=kd if kd != "none_fits" else None,
+                                     margin=self.margin("conn:base_plate", self.margin("conn:base", 1.0)),
+                                     floor=(fl.get(slot) or {}).get("plate"))
+                if pl is None:
+                    self.conn_cache[key] = (None, None, {"fail": slot + " plate"})
+                    return self.conn_cache[key]
+                d_ = design.setdefault(slot, {"key": cp[slot].get("key"), "fck": cp[slot].get("fck", 30.0),
+                                              "b_max": cp[slot].get("b_max")})
+                d_["plate"] = pl
+                kg += self.counts.get(slot, 0) * float(spec_b["L_mm"]) * float(spec_b["B_mm"]) * pl["t"] * STEEL
+                info.setdefault(slot, {})["plate"] = pl
         self.conn_cache[key] = (design, kg, info)
         return self.conn_cache[key]
 
@@ -2255,7 +2620,10 @@ class Evaluator:
                     viol += (need - v) / need
                     out["why"] = out["why"] or "%s %.3f Hz < %.3f Hz (predicted)" % (k, v, need)
             else:
-                mg = self.margin("sway" if k.startswith(("wind", "drift", "crane")) else "defl", 0.98)
+                if k.startswith("dado"):
+                    mg = self.margin("dado", self.margin("sway", 0.98))      # third wave: its own margin
+                else:
+                    mg = self.margin("sway" if k.startswith(("wind", "drift", "crane")) else "defl", 0.98)
                 if v > mg:
                     viol += v - mg
                     out["why"] = out["why"] or "%s %.3f > %.3f (predicted)" % (k, v, mg)
@@ -2457,6 +2825,8 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
                 tighten("panel", 0.02, 1.0); hit = True         # second wave: the panel zone has its own local check
             elif sid in ("connection_moment", "connection_shear"):
                 tighten("conn:knee"); hit = True
+            elif sid in ("12.12_base", "7.4_base"):
+                tighten("conn:base_plate", 0.03, float(margins.get("conn:base", 1.0))); hit = True   # third wave
             elif sid.startswith("12.12") or sid.startswith("7.4"):
                 tighten("conn:base"); hit = True
             elif sid in ("12.11.3.2_SCWB", "is18168_8_2_SCWB"):
@@ -2467,6 +2837,9 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
                 tighten("member", 0.02, 0.99); hit = True
         elif kind == "secondary" and _gov == "strut":
             tighten("strut", 0.03, float(margins.get("member", 0.99))); hit = True
+        elif kind == "sway" and "dado" in str(ident):
+            # third wave: the dado top has its own predictor and margin
+            tighten("dado", max(0.03, round(float(dc) - 1.0, 4)), float(margins.get("sway", 0.98))); hit = True
         elif kind in ("sway", "drift"):
             # second wave: by the overshoot (at least 0.03) -- the multi-span IN_Ex2 frames overshot the predicted
             # sway by 8-14 % run after run while the margin moved 0.03 at a time
@@ -2475,7 +2848,12 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
             tighten("defl", 0.03, 0.98); hit = True
         elif kind == "stability":
             tighten("lambda", 0.03, 0.97); hit = True
+    fi = ev_run.get("fail_items") or []
+    dado_only = (any(k_ == "sway" and "dado" in str(i_) for _d, k_, i_, _g in fi)
+                 and not any(k_ == "sway" and "dado" not in str(i_) for _d, k_, i_, _g in fi))
     for g in ev_run.get("gates_fail") or []:
+        if g.startswith("wind_defl") and dado_only:
+            continue                     # third wave: the gate failed on the dado top alone (its margin is set above)
         if g.startswith("dynamic_wind"):
             tighten("freq", 0.03, 0.98); hit = True
         elif g.startswith(("wind_defl", "drift")):
