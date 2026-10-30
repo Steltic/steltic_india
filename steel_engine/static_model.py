@@ -206,8 +206,10 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
                 i, j, k = dec(a[2]); cols.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3],
                                                   "i": i, "j": j, "k": k, "axis": "col",
                                                   "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None)})
-            elif kind == "brace":
-                braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3]})
+            elif kind in ("brace", "truss"):
+                # MSME (2026-10): kind 'truss' (pin-ended truss member, engine3d.add_truss) is analysed like a brace
+                # (truss element, self-weight lumped at its end nodes, axial force record)
+                braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3], "kind": kind})
     for a in rec["rigidDiaphragm"]:
         master = a[1]; slaves = list(a[2:])
         mz = round(coord[master][2], 6) if master in coord else None
@@ -487,7 +489,7 @@ def _member_kinds(model):
     kinds = {}
     for c in model["cols"]:   kinds[frozenset((c["n1"], c["n2"]))] = ("col", c.get("sec"))
     for b in model["beams"]:  kinds[frozenset((b["A"], b["B"]))]   = ("beam", b.get("sec"))
-    for b in model["braces"]: kinds[frozenset((b["n1"], b["n2"]))] = ("brace", b.get("sec"))
+    for b in model["braces"]: kinds[frozenset((b["n1"], b["n2"]))] = (b.get("kind") or "brace", b.get("sec"))
     return kinds
 
 def _extract(model, cfg, fD, fL, fLr, floor_system):
@@ -530,7 +532,7 @@ def _merge(env, kinds, res, label, col_only):
         e = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0))
         e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
         e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
-        sc = abs(N) if kind in ("col", "brace") else abs(Mz)
+        sc = abs(N) if kind in ("col", "brace", "truss") else abs(Mz)
         if sc > e["score"]: e["score"] = sc; e["combo"] = label
 
 def _grav_key(cfg, nseg, floor_system, determinate, sec_sig):
@@ -1024,6 +1026,29 @@ def _plane_member_gravity(cfg, b, fD, fLr, fS, fEv, fdead, self_weight, snow_spl
     wy, wz, wx = RG.gravity_components(ca, cb, b.get("vecxz") or (0.0, 0.0, 1.0))
     sp_axis, sp_side, sp_mid = snow_split
     tot = 0.0
+    if role == "rafter" and pl["raw"].get("purlins_at_nodes"):
+        # MSME (2026-10): truss top chord with the purlins at the panel points -- the roof area load (and the gable
+        # cladding on an end truss) reaches the chord as purlin reactions at the element end nodes (lever rule per
+        # segment); the chord's self-weight stays distributed
+        FA = FB = 0.0
+        for s_, tag in enumerate(segs):
+            s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+            pp = p
+            if sp_axis is not None and S and fS:
+                xm = ca[sp_axis] + (cb[sp_axis] - ca[sp_axis]) * (smid / L)
+                mid = pl["ridge"] if sp_axis == ax else sp_mid
+                if not ((xm <= mid + 1e-6) if sp_side == "lo" else (xm >= mid - 1e-6)):
+                    pp = p_ns
+            am = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
+            wcl = fdead * clad * (th + max(RG.surface_z(pl, am) - pl["ez"], 0.0)) / 1000.0 if gable else 0.0
+            Fs = (pp * trib / 1000.0 + wcl) * cos_t * (s1 - s0)          # N, global -Z
+            FA += Fs * (1.0 - smid / L); FB += Fs * smid / L
+            if wsw:
+                ops.eleLoad("-ele", tag, "-type", "-beamUniform", wsw * wy, wsw * wz, wsw * wx)
+            tot += Fs + wsw * (s1 - s0)
+        ops.load(b["A"], 0.0, 0.0, -FA, 0.0, 0.0, 0.0)
+        ops.load(b["B"], 0.0, 0.0, -FB, 0.0, 0.0, 0.0)
+        return tot
     for s_, tag in enumerate(segs):
         s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
         pp = p
@@ -1300,6 +1325,20 @@ def _plane_member_wind(b, pat, f, ax, split, wside, pw, pl_):
     ny_, nz_ = sum(n[i] * y[i] for i in range(3)), sum(n[i] * z[i] for i in range(3))
     sp = pl["ridge"] if ax == pl["ax"] else split
     L = b["L"]; segs = b["segs"]; tot = 0.0
+    if pl["raw"].get("purlins_at_nodes"):
+        # MSME (2026-10): truss top chord, purlins at the panel points -- the normal wind pressure reaches the chord as
+        # purlin reactions at the element end nodes (lever rule per segment), force = -w n (n = upward normal)
+        FA = FB = 0.0
+        for s_, t in enumerate(segs):
+            s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+            xm = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
+            windward = (xm <= sp + 1e-6) if wside == "lo" else (xm >= sp - 1e-6)
+            Ws = f * float(pw if windward else pl_) * trib / 1000.0 * (s1 - s0)     # N, + = towards the roof
+            FA += Ws * (1.0 - smid / L); FB += Ws * smid / L
+            tot += Ws
+        ops.load(b["A"], *[-FA * v for v in n], 0.0, 0.0, 0.0)
+        ops.load(b["B"], *[-FB * v for v in n], 0.0, 0.0, 0.0)
+        return tot
     for s_, t in enumerate(segs):
         s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
         xm = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
@@ -1812,7 +1851,7 @@ def envelope_from_records(per_case, kinds, cases):
             N, Mz, My, V = rec[0], rec[1], rec[2], rec[3]
             e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
             e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
-            sc = abs(N) if kind in ("col", "brace") else abs(Mz)
+            sc = abs(N) if kind in ("col", "brace", "truss") else abs(Mz)
             if sc > e["score"]:
                 e["score"] = sc; e["combo"] = lab
     return env

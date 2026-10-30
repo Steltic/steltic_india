@@ -403,12 +403,76 @@ def tapered(name):
     return TAPERED[normalize_label(name)]
 
 
+def register_double_angle(name, angle, gap_mm, *, connected_leg="D", source=None):
+    """MSME (2026-10): two IS 808 angles back to back on opposite sides of a gusset of thickness gap_mm (IS 800 7.5.2 /
+    7.8; Table 2 'double angles with the components separated').  The connected legs (the leg named by connected_leg:
+    'D' = the first leg of the IS 808 designation, 'B' = the second) lie flat against the gusset, in the plane of the
+    truss; the outstanding legs stand normal to it.  Axes (engine convention for a member in a vertical truss plane):
+      x (in-plane bending, the engine's 'major' z-z slot: Ix, Sx, Zx, rx) -- axis normal to the gusset;
+          Ix = 2 I1 about the component's own axis parallel to the outstanding leg (no parallel-axis term);
+      y (out-of-plane bending: Iy, Sy, Zy, ry) -- axis in the gusset plane at the gap centre;
+          Iy = 2 (I1' + A1 (c + g/2)^2), c = the component centroid from the back of its connected leg.
+    Sx = the smaller elastic modulus (toe of the connected leg); Zx = 2 Zp1; Zy = 2 A1 (c + g/2) (each component on one
+    side of the axis).  J = 2 J1, Cw = 0 (as for the single angle).  Properties from the IS 808:2021 row of the
+    component (sections.props); the gap is the gusset thickness declared by the job.  Returns the mm property dict
+    (also stored in CUSTOM under the normalised label)."""
+    p1 = props(angle)
+    if p1.get("section_type") != "angle":
+        raise ValueError("double angle %r: component %r is not an IS 808 angle" % (name, angle))
+    g = float(gap_mm)
+    if g < 0:
+        raise ValueError("double angle %r: gap %r mm" % (name, gap_mm))
+    A1, t = float(p1["A"]), float(p1["tw"])
+    leg = str(connected_leg or "D").upper()
+    if leg == "D":                      # connected leg = D (along y of the IS 808 row): in-plane axis = z-z of the row
+        Dc, Bo = float(p1["d"]), float(p1["bf"])
+        I_in1, I_out1 = float(p1["Ix"]), float(p1["Iy"])
+        c_back = float(p1["Cz"])                    # centroid from the back of the D leg (measured along B)
+        c_toe_in = float(p1["Cy"])                  # centroid from the back of the B leg (measured along D)
+        Zp_in1 = float(p1["Zx"])
+    elif leg == "B":
+        Dc, Bo = float(p1["bf"]), float(p1["d"])
+        I_in1, I_out1 = float(p1["Iy"]), float(p1["Ix"])
+        c_back = float(p1["Cy"])
+        c_toe_in = float(p1["Cz"])
+        Zp_in1 = float(p1["Zy"])
+    else:
+        raise ValueError("double angle %r: connected_leg must be 'D' or 'B'" % (name,))
+    A = 2.0 * A1
+    Ix = 2.0 * I_in1
+    a = c_back + g / 2.0
+    Iy = 2.0 * (I_out1 + A1 * a ** 2)
+    Sx = Ix / max(Dc - c_toe_in, c_toe_in)                 # extreme fibre (the toe of the connected leg)
+    Sy = Iy / (Bo + g / 2.0)
+    Zx = 2.0 * Zp_in1
+    Zy = 2.0 * A1 * a
+    J = 2.0 * float(p1.get("J") or 0.0)
+    mass = 2.0 * float(p1.get("Mass_kg_m") or A1 * 7850.0 / 1e6)
+    props_ = {"_units": "mm", "section_type": "double_angle", "Type": "DOUBLE_ANGLE",
+              "source": source or ("two IS 808:2021 %s back to back, %g mm gusset (declared in cfg)" % (angle, g)),
+              "A": A, "Ix": Ix, "Iy": Iy, "Zx": Zx, "Zy": Zy, "Sx": Sx, "Sy": Sy, "rx": math.sqrt(Ix / A),
+              "ry": math.sqrt(Iy / A), "r_min": math.sqrt(min(Ix, Iy) / A), "d": Dc, "bf": 2.0 * Bo + g, "tf": t,
+              "tw": t, "J": J, "Cw": 0.0, "ho": Dc - t / 2.0, "Aw": 2.0 * Dc * t, "R1": 0.0, "Mass_kg_m": mass,
+              "component": normalize_label(angle), "gap_mm": g, "connected_leg": leg, "leg_connected_mm": Dc,
+              "leg_outstanding_mm": Bo, "t_mm": t, "A1_mm2": A1, "c_back_mm": c_back,
+              "r1_min_mm": float(p1.get("r_min") or p1.get("rv")), "rv1_mm": float(p1.get("rv") or p1["r_min"])}
+    CUSTOM[normalize_label(name)] = props_
+    return props_
+
+
+def double_angle_label(angle, gap_mm=None):
+    """'2' + the IS 808 angle label (the gap is part of the registered spec, not the label): 2ISA65X65X6."""
+    return "2" + normalize_label(angle)
+
+
 def register_custom_sections(cfg):
     """cfg['custom_sections'] = {name: spec} -> CUSTOM.  spec 'type':
       'box'       {B_mm, D_mm, tf_mm, tw_mm, source}            built-up welded box (WP6-fix)
       'welded_I'  {D_mm, bf_mm, tf_mm, tw_mm, source}           welded plate I (PEB, 2026-10)
       'tapered_I' {D_start_mm, D_end_mm, bf_mm, tf_mm, tw_mm, n_seg (default cfg['taper_nseg'] or 8), source}
-                  web-tapered welded I, registered as its stepped welded I segments (PEB, 2026-10)."""
+                  web-tapered welded I, registered as its stepped welded I segments (PEB, 2026-10)
+      'double_angle' {angle, gap_mm, connected_leg ('D' | 'B'), source}
+                  two IS 808 angles back to back on a gusset (MSME angle truss, 2026-10)."""
     nseg_default = int(cfg.get("taper_nseg") or 8)
     for nm, spec in (cfg.get("custom_sections") or {}).items():
         typ = str(spec.get("type", "box")).lower()
@@ -421,8 +485,12 @@ def register_custom_sections(cfg):
             register_tapered_I(nm, spec["D_start_mm"], spec["D_end_mm"], spec["bf_mm"], spec["tf_mm"], spec["tw_mm"],
                                spec.get("n_seg") or nseg_default, source=spec.get("source"),
                                round_mm=spec.get("round_mm", 1.0))
+        elif typ in ("double_angle", "angle_pair", "2l"):
+            register_double_angle(nm, spec["angle"], spec["gap_mm"], connected_leg=spec.get("connected_leg", "D"),
+                                  source=spec.get("source"))
         else:
-            raise KeyError("custom section %r: type %r is not supported (box | welded_I | tapered_I)" % (nm, typ))
+            raise KeyError("custom section %r: type %r is not supported (box | welded_I | tapered_I | double_angle)"
+                           % (nm, typ))
 
 
 def props(name, SEC=None, unit_system=None, *, grade=None, process=None):

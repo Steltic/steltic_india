@@ -1,0 +1,63 @@
+IN_Ex21 — MSME shed: 18 m angle roof trusses on ISMB columns with knee braces, brick dado, Hosur (SIPCOT-type estate)
+
+The typical small-industry shed of a south Indian industrial estate (SIPCOT Hosur, MIDC, GIDC): a light engineering
+or fabrication unit of about 650 m2, rolled IS 808 sections throughout, angle roof trusses fabricated and bolted on
+site, cold-formed purlins and girts, GI sheeting. Rolled sections only (ISMB columns, ISA angles); the IS 1161 CHS
+are kept to the members IS 800 Section 12 slenderness rules out for single angles (wall bracing, eave struts, bottom-chord
+ties) -- say why in the report.
+
+Site: Hosur, Krishnagiri district, Tamil Nadu (SIPCOT industrial complex). Seismic per IS 1893 (Part 1):2016 + Amd 1 +
+  Amd 2: Hosur is not in Annex E -- RETRIEVE the nearest listed town (Bangalore (Bengaluru), about 40 km) and state
+  that basis; Z from Table 3. Wind per IS 875 (Part 3):2015: Hosur is not in Annex A -- the nearest listed town
+  (Bengaluru), state the basis. Soil medium (Type II, design engineer's assumption pending the geotechnical report).
+Occupancy: light engineering / fabrication unit (no hazardous process) -> I = 1.0 (IS 1893 Table 8 (iii)).
+Lateral system: transverse -- knee-braced truss portals (the truss pinned on the column cap, a knee brace from each
+  column to the bottom chord) as a steel ordinary moment resisting frame (OMRF, IS 800 12.10; IS 1893 Table 9 i)(c),
+  permitted in Zone II by Note 1); longitudinal -- X-braced end bays in both side walls (OCBF, IS 800 12.7; Table 9
+  ii)(a)), braces designed for compression (owner decision D-T4). Per-direction R: cfg['R_x'] / cfg['R_y'].
+
+Geometry (metres; the engine works in N-mm):
+- span 18 m between column centrelines; length 36 m: 7 frame lines at 6 m (6 bays); eave (column top, truss heel)
+  6.5 m; roof slope 1 in 4 (14.0 deg; rise 2.25 m, apex 8.75 m)
+- roof trusses: Pratt (N-type) angle trusses, 12 panels of 1.5 m on plan, purlins at every top-chord panel point;
+  chords double angles back to back on 8 mm gussets (IS 800 7.5.2 / 7.5.3 / 7.8), webs single angles bolted through
+  one leg (IS 800 7.5.1.2), bolted site joints (property class 4.6 bolts, IS 800 10.3); the heel is a pinned seat on
+  the column cap
+- columns: ISMB (IS 808), strong axis across the span, pinned or fixed bases as the design needs (H/240 governs);
+  knee braces (angles) from each column 1.5 m below the eave to the first bottom-chord panel point
+- gables: the end trusses as the main trusses, gable posts (ISMB, strong axis along the building) at 6 m (y = 6 and
+  12 m) from a pinned base to the top chord, carrying the gable wind to the roof bracing
+- bracing: end-bay roof bracing in the plane of the top chords (angles, designed as struts), eave struts, side-wall
+  X-bracing in the end bays, longitudinal bottom-chord ties at 4.5 m (lateral restraint of the bottom chords)
+- secondary members: cold-formed Z purlins at the panel points (1.5 m plan), Z girts above the dado -- IS 801 /
+  IS 811 members designed by the CFS engine (owner decision D-T5), as the PEB jobs
+- walls: 230 mm brick masonry dado to 3.0 m on a plinth beam all round (self-supporting, tied to the columns for
+  out-of-plane load only); GI profiled sheeting above; a roller-shutter door 4 m x 4.5 m in each gable and windows /
+  louvres: openings 5-20 % of each wall
+- roof: 0.5 mm GI profiled sheeting, a ridge ventilator; no crane, no mezzanine
+
+Loads (RETRIEVE -- do not invent): dead IS 875 (Part 1):2026 (sheeting, purlins, girts, bracing; the trusses and
+  columns from the member areas); collateral (lights, cable trays) 0.15 kN/m2 on plan as the named roof dead-load
+  component 'collateral' (owner value, the series value); imposed IS 875 (Part 2) Table 2 (ii), sloping roof over 10
+  degrees; wind IS 875 (Part 3):2015 -- Vb of the nearest listed town; terrain category for an industrial estate
+  (state it); k1, k3, k4 by clause; Ka (7.2.2, Table 4) on the frame tributary; wall Cpe Table 5; pitched-roof Cpe
+  Table 6 at the real pitch (interpolated); Cpi per 7.3.2 for the openings. Member wind including roof uplift with
+  0.9 DL. Seismic: equivalent static (7.6), seismic weight from the dead and collateral loads (7.3.2: no roof imposed
+  load). No snow.
+Design: IS 800:2007 LSD.
+- Truss members: chords as continuous double-angle members (axial force with the secondary bending of the
+  continuous chord, 9.3), webs and knee braces as pin-ended members (axial only): 7.1.2 with 7.2.4 / 7.5.1.2 /
+  7.5.2.1 effective lengths, 6.2 / 6.3.3 / 6.3.4 / 6.4.1 with the declared bolted end connections, Table 3
+  slenderness, 7.8 back-to-back interconnection.
+- Connections: bolts in shear and bearing (10.3), spacing and edge distances (10.2), the gusset yield on the Whitmore
+  width (engineering practice, stated); Section 12.10 at the knees: the truss delivers moment to the column only
+  through the knee-brace / heel couple -- design the knee connections for 1.2 times the moment that couple can
+  deliver (12.10.2.1) with the 12.10.2.4 shear.
+- Serviceability: IS 800 Table 6 industrial building -- truss (rafter) supporting profiled metal sheeting, span/180;
+  column lateral with masonry / brittle cladding (the brick dado), H/240. RETRIEVE both.
+- Bases: anchor bolts for uplift and the frame thrust; 12.12.2 base shear; foundations delegated with the interface
+  forces.
+Deliverable: report.html + viewer_3d.html; design/member_schedule.csv; design/bom.csv; design/reactions.csv and
+  design/anchor_bolt_plan.svg; model.std (STAAD.Pro export of the analysis model); steel tonnage and kg/m2 of plan
+  area split primary / bracing / secondary, compared with the typical range for such sheds (sourced). Fill
+  cfg['load_plan'] from the corpus (rag/) before the pipeline.

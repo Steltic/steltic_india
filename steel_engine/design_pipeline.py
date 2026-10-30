@@ -700,6 +700,23 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
         m["overrides"] = used
     if kind == "col":
         m["sway"] = bool(cfg.get("sway_frame"))
+    try:
+        import truss_design as _TD
+    except ImportError:
+        _TD = None
+    if _TD is not None and _TD.is_truss_role(role):
+        # MSME (2026-10): angle truss members -- end connection geometry (6.3.3 / 6.3.4 / 6.4.1 inputs), single-angle
+        # end condition (7.5.1.2); webs / knee braces are axial-only (truss elements), chords are continuous members
+        ac, ti, trec = _TD.member_inputs(cfg, role, sec, length)
+        if ti is not None:
+            m["tension_inputs"] = ti
+        if ac is not None:
+            m["angle_connection"] = ac
+        m["truss_connection"] = trec
+        if kind == "truss":
+            m["axial_only"] = True
+        if _TD.is_chord_role(role):
+            m["truss_chord"] = True
     return m
 
 
@@ -1002,6 +1019,38 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
     return md
 
 
+def _truss_knee_records(cfg, info0, reg, length, elem_results):
+    """MSME (2026-10): the knee records declared by the custom_build (info['truss_knees'] = [{id, heel_node,
+    knee_node, chord_node, brace_tag, truss, span_mm, trib_mm}]) with the node coordinates, the knee brace's design
+    strength N_d = min(Pd, Td) from its member check, and the 1.2DL + 0.5LL end reaction of the truss (roof dead load
+    incl. collateral and PV, roof imposed load, over the truss tributary width and span, + half the truss self-weight)."""
+    import roof_geometry as RG
+    import static_model as SM
+    pls = RG.planes(cfg) if RG.has_planes(cfg) else []
+    D_, _L0, Lr_, S_ = RG.plane_pressures(cfg, pls[0]) if pls else (float(cfg.get("D_roof") or 0.0), 0.0,
+                                                                     float(cfg.get("Lr") or 0.0), 0.0)
+    D_ += E.roof_nonpermanent_kNm2(cfg)
+    tinfo = info0.get("truss") or {}
+    out = []
+    for k_ in info0.get("truss_knees") or []:
+        r = dict(k_)
+        r["coords"] = {n: tuple(ops.nodeCoord(n)) for n in (k_["heel_node"], k_["knee_node"], k_["chord_node"])}
+        t = k_["brace_tag"]
+        r["brace_section"] = reg[t][1]
+        r["brace_role"] = "truss_%s" % (tinfo.get(t) or {}).get("group", "knee_brace")
+        caps = (elem_results.get(t) or {}).get("capacities") or {}
+        vals = [v for v in ((caps.get("compression") or {}).get("Pd_N"), (caps.get("tension") or {}).get("Td_N")) if v]
+        r["member_capacity"] = min(vals) if vals else None
+        sw = sum(SM.STEEL_UNIT_WEIGHT_N_PER_MM3 * E.Ipack(reg[tt][1])[0] * length[tt] for tt, v in tinfo.items()
+                 if v.get("truss") == k_.get("truss") and tt in reg)
+        span, trib = float(k_.get("span_mm") or 0.0), float(k_.get("trib_mm") or 0.0)
+        r["V_gravity_N"] = (1.2 * D_ + 0.5 * max(Lr_, S_)) * trib / 1000.0 * span / 2.0 + 1.2 * sw / 2.0
+        r["V_gravity_basis"] = ("1.2DL + 0.5LL end reaction: (1.2 x %.3f + 0.5 x %.3f) kN/m2 x %.0f mm x %.0f mm / 2 + "
+                                "1.2 x half the truss self-weight %.1f kN" % (D_, max(Lr_, S_), trib, span, sw / 2e3))
+        out.append(r)
+    return out
+
+
 def ebf_link_tags(cfg, info0):
     """Element tags of the EBF shear links declared by the custom_build (info['links']) or cfg['ebf_links'] (H39)."""
     out = set()
@@ -1157,6 +1206,9 @@ def design_india(name, cfg, outdir):
     lateral_lines = brace_lines | moment_lines
 
     link_tags = ebf_link_tags(cfg, info0)                     # H39: EBF shear links get their own role / group
+    truss_info = info0.get("truss") or {}                     # MSME (2026-10): angle truss members (truss_design)
+    knee_lines = {((k_["heel_node"] % 100000) // 100, k_["heel_node"] % 100) for k_ in (info0.get("truss_knees") or [])}
+    lateral_lines = lateral_lines | knee_lines                # knee-braced truss portals are moment frames
 
     col_rel = info0.get("col_rel") or {}
     try:
@@ -1173,6 +1225,8 @@ def design_india(name, cfg, outdir):
             pinned_top_lines.add(((n_ % 100000) // 100, n_ % 100))
 
     def _role(kind, n1, n2, t=None):
+        if t in truss_info:
+            return "truss_%s" % truss_info[t]["group"]
         if kind == "brace":
             return "brace"
         if kind == "beam" and t in link_tags:
@@ -1328,6 +1382,9 @@ def design_india(name, cfg, outdir):
                                "ts_records": ts_rec, "ts_labels": {k: v for k, v in ts_labels.items() if k in ("X", "Y")}},
                               cases, info0, run=run)
     mem_by_id = {m["id"]: m for m in md["members"]}
+    if info0.get("truss_knees"):
+        # MSME (2026-10): knee-braced truss portals (truss_design.knee_checks, IS 800 12.10.2.1 / 12.10.2.4)
+        md["truss_knees"] = _truss_knee_records(cfg, info0, reg, length, elem_results)
     s12_cfg = dict(cfg.get("section12_inputs") or {}, zone=G.zone_of(cfg), I=G.importance_of(cfg),
                    height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
                    apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
@@ -1489,6 +1546,13 @@ def design_india(name, cfg, outdir):
 
     def _conn_group(key, tags):
         kind, sec, role = key
+        if role.startswith("truss_"):
+            # MSME (2026-10): angle truss member ends bolted to the gussets (truss_design)
+            import truss_design as _TD
+            pkg["connections"].append(_TD.end_connection_record(
+                cfg, role, sec, tags, envt, elem_results, length,
+                sls_force_N=max(_conn_force_sls(t, "brace") for t in tags), sfrs=bool(info0.get("truss_knees"))))
+            return
         g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
         conn_max = 0.0
         for t in tags:
@@ -2280,6 +2344,11 @@ def secondary_strut_checks(cfg, s_):
     mem = {"id": s_.get("id"), "section": sec, "grade": s_.get("grade") or cfg.get("steel_grade"), "role": "column",
            "L_mm": L, "Kz": float(s_.get("Kz") or 1.0), "Ky": float(s_.get("Ky") or 1.0), "LLT_sag_mm": llt, "LLT_hog_mm": llt,
            "process": s_.get("process")}
+    # MSME (2026-10): an angle strut (roof bracing) -- pin-ended, axial only: the single-angle end condition (7.5.1.2) and
+    # the end-connection tension inputs (6.3.3 / 6.4.1) pass through to the axial check
+    for k_ in ("angle_connection", "tension_inputs", "axial_only"):
+        if s_.get(k_) is not None:
+            mem[k_] = s_[k_]
     cf = [{"combo": d["combo"], "P_N": abs(float(d["P_N"])), "Mz_i_Nmm": float(d.get("M_Nmm") or 0.0), "Mz_j_Nmm": 0.0,
            "Mz_mid_Nmm": 0.0, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0, "Vy_N": abs(float(d.get("V_N") or 0.0)), "Vz_N": 0.0}
           for d in (s_.get("demands") or [])]                     # PEB (2026-10): optional V_N (e.g. a crane bracket)

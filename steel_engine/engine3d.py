@@ -361,7 +361,7 @@ def build(cfg,transf="Linear"):
         # the ACTUAL framed plan (non-rectangular safe). The real build below then re-runs the
         # builder with that footprint visible to any floor_w()/floor_grav() calls it makes.
         try:
-            _MOMENT_NODES.clear(); _BEAM_REL.clear(); _COL_DIR.clear(); _COL_REL.clear()
+            _MOMENT_NODES.clear(); _BEAM_REL.clear(); _COL_DIR.clear(); _COL_REL.clear(); _TRUSS.clear()
             probe = cb(cfg, transf)
             cfg["present"] = {int(kk): {tuple(p) for p in v}
                               for kk, v in (probe.get("present") or {}).items()}
@@ -369,7 +369,7 @@ def build(cfg,transf="Linear"):
             cfg["present"] = None          # don't re-probe every build; fall back to plan/full grid
     _MOMENT_NODES.clear()                  # repopulated by add_beam for THIS build (B3)
     _BEAM_REL.clear(); _COL_DIR.clear()    # repopulated by add_beam/add_column for THIS build (viewer3d)
-    _COL_REL.clear()
+    _COL_REL.clear(); _TRUSS.clear()
     try:
         import peb_build as _PB                        # PEB (2026-10): stepped tapered-member registry of THIS build
         _PB.reset()
@@ -401,6 +401,7 @@ def build(cfg,transf="Linear"):
     info["beam_rel"] = dict(_BEAM_REL)          # snapshot: per-beam end releases (viewer3d)
     info["col_dir"] = dict(_COL_DIR)            # snapshot: per-column strong-axis direction (viewer3d)
     info["col_rel"] = dict(_COL_REL)            # PEB (2026-10): pinned column ends
+    info["truss"] = {t: dict(v) for t, v in _TRUSS.items()}   # MSME (2026-10): pin-ended truss members
     return info
 
 
@@ -503,6 +504,35 @@ def add_beam(tag, n1, n2, sec, releases=None):
     if relz not in ("I", "both"): _MOMENT_NODES.add(n1)
     if relz not in ("J", "both"): _MOMENT_NODES.add(n2)
     _BEAM_REL[tag] = (relz, (releases[1] if releases else "none"))   # viewer3d: end releases
+    return tag
+
+
+_TRUSS = {}              # MSME (2026-10): truss member tag -> {'group', 'truss', ...} (pin-ended, axial only)
+TRUSS_MAT = 990_999      # uniaxialMaterial Elastic tag of the truss members (E)
+
+
+def add_truss(tag, n1, n2, sec, *, group="web", truss=None, **extra):
+    """MSME (2026-10): a pin-ended truss member (angle truss web, knee brace) for custom_build -- an OpenSees 'Truss'
+    element (axial force only) with the section area and E; info kind 'truss' (append (tag, 'truss', sec, n1, n2) to
+    the element list).  Every end node must be held by continuous members (the truss chords, a column) -- a node
+    reached only by truss members has no rotational stiffness.  group names the member family for the design roles
+    ('web', 'vertical', 'diagonal', 'knee_brace', ...); truss = the truss id.  Registered in _TRUSS (info['truss'])."""
+    _ensure_col_transf()
+    A = Ipack(sec)[0]
+    try:                                       # defined once per OpenSees domain (a duplicate tag raises)
+        import roof_geometry as _RG
+        _RG._quiet(ops.testUniaxialMaterial, TRUSS_MAT)
+    except Exception:
+        ops.uniaxialMaterial("Elastic", TRUSS_MAT, E)
+    ops.element("Truss", tag, n1, n2, A, TRUSS_MAT)
+    _TRUSS[tag] = dict(extra, group=str(group), truss=truss, section=sec)
+    return tag
+
+
+def register_truss_member(tag, *, group, truss=None, sec=None, **extra):
+    """MSME (2026-10): register a CONTINUOUS truss member built with add_beam (a chord) under its truss group
+    ('top_chord' | 'bottom_chord'), so the design gives it the role 'truss_<group>' (truss_design)."""
+    _TRUSS[tag] = dict(extra, group=str(group), truss=truss, section=sec, continuous=True)
     return tag
 
 

@@ -1634,7 +1634,21 @@ def section12_checks(system, model_data, cfg=None):
                                    "applied (decision D2)."})
     if has_joints:
         joints = model_data.get("joints") or []
-        if not joints:
+        knees = model_data.get("truss_knees") or []
+        if knees and sys_mf == "OMF":
+            # MSME (2026-10): knee-braced truss portals -- the truss is pinned on the column cap and the frame moment
+            # passes through the knee-brace / heel couple; 12.10.2.1 / 12.10.2.4 at every knee (truss_design)
+            import truss_design as _TD
+            for kn in knees:
+                checks += _TD.knee_checks(kn, model_data, cfg, nodes=kn["coords"],
+                                          member_capacity=kn.get("member_capacity"))
+            advisories.append({"clause": "IS 800:2007 12.10.2", "applies": True,
+                               "note": "knee-braced truss portals: the truss seat is pinned, the knee brace and the heel "
+                                       "seat form the moment connection; checked at %d knees (truss_design)" % len(knees)})
+        elif knees:
+            checks.append(_na("truss_knees", clause="IS 800:2007 12.11", cite="knee-braced truss portal",
+                              reason="knee-braced truss portals are covered for OMF (12.10) only"))
+        if not joints and not knees:
             checks.append(_na("moment_frame_joints", clause="IS 800:2007 12.11 / 12.10",
                               cite="every frame joint from model connectivity", reason="no joints in model_data"))
         for j in joints:
