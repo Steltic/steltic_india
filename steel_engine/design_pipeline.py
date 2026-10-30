@@ -710,6 +710,9 @@ def _top_records(recs, k=12):
     keep = set()
     for idx in range(4):
         keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx]))[: max(3, k // 4)])
+    for idx in (13, 14):        # third wave (2026-10-30): the combinations with the largest column span moments
+        if any(len(r) > idx and r[idx] for r in recs.values()):
+            keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx] if len(recs[l]) > idx else 0.0))[:3])
     comp = sorted(recs, key=lambda l: recs[l][0])[:3]        # most compressive
     keep |= set(comp)
     return {l: recs[l] for l in keep}
