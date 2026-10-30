@@ -712,7 +712,10 @@ def _top_records(recs, k=12):
         keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx]))[: max(3, k // 4)])
     comp = sorted(recs, key=lambda l: recs[l][0])[:3]        # most compressive
     keep |= set(comp)
-    return {l: recs[l] for l in keep}
+    # third wave P3 (2026-10): keep the combinations in the order of the combination list (not the set's hash order),
+    # so a tie between two combinations is always broken the same way (the first in the list governs) and the
+    # printed governing-combination labels repeat run to run whatever PYTHONHASHSEED is
+    return {l: recs[l] for l in recs if l in keep}
 
 
 def member_checks_is800(cfg, elem):
