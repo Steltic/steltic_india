@@ -1417,7 +1417,11 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
 
 
 REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin",
-              "N_LAT", "V_LAT")
+              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span")
+# Mmaj_span / Mmin_span (third wave, 2026-10-30): COLUMNS only -- the signed extreme bending moment INSIDE the element
+# span (major / minor axis, same sign convention as Mmaj_i / Mmin_i) under a span load (the member wind on a wall
+# column), 0.0 when the extreme is at an end.  Before this a pinned-pinned gable wind column under the wall wind was
+# checked for its end moments only (zero): the w L^2/8 at mid-height was never checked (column_span_moments).
 # N_LAT / V_LAT (WP6, EBF): the LATERAL-load part of the member axial force / major shear in this combination
 # (static lateral increment or fLat x RSA response) -- the EL share that IS 18168 12.3.2.2 / 12.3.4.5 amplify to
 # the link overstrength. Zero on gravity-only combinations; records without the field read as 0.0.
@@ -1435,6 +1439,39 @@ def _lateral_axial_shear(model, RL):
         segs = b["segs"]
         out[frozenset((b["A"], b["B"]))] = (float(RL[segs[0]][6]),
                                            max(max(abs(RL[t][2]), abs(RL[t][8])) for t in segs))
+    return out
+
+
+def _span_extreme(m_i, v_i, v_j, L, sign):
+    """Signed extreme of the bending moment inside an element of length L from its local end forces, for a uniform
+    span load w = -(v_i + v_j) / L (the resultant of the span load: forces ON the element, OpenSees localForce).
+    sign = +1 for the major axis (local z, shears local y: M(x) = M_i + v_i x + w x^2/2), -1 for the minor axis (local
+    y, shears local z: M(x) = M_i - v_i x - w x^2/2); M_i is the end moment in the member_records convention
+    (M(0) = -f_i).  Returns 0.0 when there is no span load or the extreme is not inside the span."""
+    L = float(L)
+    if L <= 0.0:
+        return 0.0
+    w = -(float(v_i) + float(v_j)) / L
+    if abs(w) * L < 1.0:                     # < 1 N of span load: no span load (numerical noise)
+        return 0.0
+    x = -float(v_i) / w
+    if not (1e-6 * L < x < (1.0 - 1e-6) * L):
+        return 0.0
+    return float(m_i) + sign * (float(v_i) * x + 0.5 * w * x * x)
+
+
+def column_span_moments(model, R):
+    """{fset: (Mmaj_span, Mmin_span)} of every column element from a STATIC response dict R (gravity + member wind;
+    never an RSA response: its end forces are peak values, not an equilibrium set).  Third wave (2026-10-30)."""
+    out = {}
+    for c in model["cols"]:
+        lf = R[c["tag"]]
+        L = c.get("L")
+        if L is None:
+            c1, c2 = ops.nodeCoord(c["n1"]), ops.nodeCoord(c["n2"])
+            L = math.sqrt(sum((b - a) ** 2 for a, b in zip(c1, c2)))
+        out[frozenset((c["n1"], c["n2"]))] = (_span_extreme(-lf[5], lf[1], lf[7], L, +1),
+                                             _span_extreme(-lf[4], lf[2], lf[8], L, -1))
     return out
 
 
@@ -1495,6 +1532,14 @@ def combo_forces_for_member_check(records, kind):
               "P_LAT_N": -d["N_LAT"], "V_LAT_N": d["V_LAT"]}
         if kind == "beam":
             cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
+        elif kind == "col":
+            # third wave (2026-10-30): a column whose span moment exceeds both end moments (a gable wind column, pinned
+            # top and base, under the wall wind) is checked with it (span load: Cm = 1.0, IS 800 9.3.2.2); where the
+            # end moments are larger the end-moment check stands unchanged
+            if abs(d["Mmaj_span"]) > max(abs(d["Mmaj_i"]), abs(d["Mmaj_j"])) + 1.0:
+                cf["Mz_mid_Nmm"] = d["Mmaj_span"]
+            if abs(d["Mmin_span"]) > max(abs(d["Mmin_i"]), abs(d["Mmin_j"])) + 1.0:
+                cf["My_mid_Nmm"] = d["Mmin_span"]
         out.append(cf)
     return out
 
@@ -1763,6 +1808,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                 RC = {t: RGe[t] + (R1[t] - RG[t]) for t in RG}
             else:
                 RC = RGe
+            RC_static = RC
             rs = m.get("rsa") or {}
             if rs:
                 if not rsa:
@@ -1779,6 +1825,10 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             if RC is not RGe:
                 lat = _lateral_axial_shear(model, {t: RC[t] - RGe[t] for t in RG})
                 recs = {fs: tuple(r) + lat.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
+            # third wave (2026-10-30): column span moments from the static part of the combination (gravity + member
+            # wind; the RSA part has no span load and its end forces are peak values)
+            spn = column_span_moments(model, RC_static)
+            recs = {fs: tuple(list(r) + [0.0] * (13 - len(r)))[:13] + spn.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
             _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
                         or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
             if N_LL and not _eq_case:
@@ -1810,6 +1860,8 @@ def envelope_from_records(per_case, kinds, cases):
                 e["conn"][lab] = [round(float(x), 1) for x in rec]     # 12.2.3 forces kept for connections
                 continue
             N, Mz, My, V = rec[0], rec[1], rec[2], rec[3]
+            if len(rec) > 14:                       # third wave: a column's span moment is part of its envelope
+                Mz, My = max(abs(Mz), abs(rec[13])), max(abs(My), abs(rec[14]))
             e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
             e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
             sc = abs(N) if kind in ("col", "brace") else abs(Mz)
@@ -1842,7 +1894,8 @@ def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rs
                         floor_system, nseg, [(tuple(c)[:4], sorted((c[4] or {}).items()), c[5],
                                               sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
                                               .__repr__()) for c in cases],
-                        {d: sorted((t, list(v)) for t, v in a.items()) for d, a in (rsa or {}).items()}))
+                        {d: sorted((t, list(v)) for t, v in a.items()) for d, a in (rsa or {}).items()},
+                        REC_FIELDS))                   # third wave: the record layout (a cache of an older one is stale)
             key = "SI" + _hashlib.md5(sig.encode()).hexdigest()
             p = _os.path.join(cache_dir, "_demand_cache_si.json")
             d = _json.load(open(p))
