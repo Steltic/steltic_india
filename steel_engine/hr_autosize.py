@@ -1157,9 +1157,10 @@ def _substitute(m, lab, grade, cfg):
             m.pop("process", None)
 
 
-def s12_local(lm, x, *, tags_changed=None):
+def s12_local(lm, x, *, tags_changed=None, margins=None):
     """Section 12 checks of the model with the proposed sections (frozen forces).  Returns the failing member-level
-    rows [(row, group)]."""
+    rows [(row, group)]; margins {group: m}: a row of that group with a ratio above m also counts (a row the full run
+    failed although the frozen forces passed it -- IS 18168 12.3.2.2 brace axial at the link overstrength)."""
     import india_is800_s12 as S12
     if lm.s12 is None:
         return []
@@ -1188,13 +1189,13 @@ def s12_local(lm, x, *, tags_changed=None):
     out = []
     mem_tag = {m["id"]: int(m.get("tag") or str(m["id"]).lstrip("e")) for m in md.get("members") or []}
     for c in r.get("checks") or []:
-        if c.get("ok") is not False:
-            continue
         if S12_CONNECTION_ROWS.search(str(c.get("id"))):
             continue
         mid = c.get("member")
         g = lm.groups_of.get(mem_tag.get(mid)) if mid in mem_tag else None
-        out.append((c, g))
+        dc = c.get("dc")
+        if c.get("ok") is False or (g in (margins or {}) and isinstance(dc, (int, float)) and dc > margins[g] + 1e-9):
+            out.append((c, g))
     return out
 
 
@@ -2166,8 +2167,17 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                 st.setdefault("stiff_boost", {})[g] = round(float(st["stiff_boost"].get(g, 1.0)) * 1.05, 3)
         x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed, barred=st.get("barred"),
                                 conn_req=st.get("conn_req"))
+        # Section 12 rows the full run failed although the frozen forces passed them: that group's rows get a margin
+        mem_tag_ = {m["id"]: int(m.get("tag") or str(m["id"]).lstrip("e")) for m in (lm.s12[1].get("members") or [])} \
+            if lm.s12 is not None else {}
+        for r_ in ev.get("s12_fail") or []:
+            g_ = lm.groups_of.get(mem_tag_.get(r_.get("member")))
+            if g_ is not None and isinstance(r_.get("dc"), (int, float)) and r_["dc"] > 1.0 and \
+                    not S12_CONNECTION_ROWS.search(str(r_.get("id"))):
+                m0 = st.setdefault("s12_margin", {}).get(g_, 1.0)
+                st["s12_margin"][g_] = round(max(0.8, min(m0, 1.0) - 0.04), 3)
         for k in range(8):
-            rows = s12_local(lm, x1)
+            rows = s12_local(lm, x1, margins=st.get("s12_margin"))
             bumped = set()
             for row, g in rows:
                 gs = [g] if g else []
