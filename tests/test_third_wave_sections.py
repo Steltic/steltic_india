@@ -382,3 +382,15 @@ def test_torsion_requirement_stiffens_the_frames_of_the_other_direction():
     assert req["raf"] == pytest.approx(AZ.stiffness("MB400", "I") * f, rel=1e-6)
     # kept on later passes, also when the torsion check passes
     assert AZ.torsion_requirements(LM(), {"torsion_fail": False, "torsion": {"Y": 1.1}}, x, st) == req
+
+
+def test_preflight_accepts_the_tube_grade_and_process_for_chs_braces():
+    """IN_Ex11 (OCBF, CHS braces): the cfg declares tube_grade / tube_process (IS 1161 YSt 310, HFS), which the
+    member grade lookup uses first; brace_grade stays the rolled-brace grade.  Preflight no longer blocks it."""
+    import preflight as PF
+    base = {"steel_grade": "E250 B0", "system": "OCBF", "braces": True, "brace": "CHS168.3X4.5"}
+    ok = PF.chs_brace_grade_declared
+    assert not ok(dict(base, brace_grade="E250 B0", brace_process=None))
+    assert ok(dict(base, brace_grade="E250 B0", brace_process=None, tube_grade="YSt 310", tube_process="HFS"))
+    assert ok(dict(base, brace_grade="YSt 310", brace_process="HFS"))
+    assert ok(dict(base, brace="WPB180X180X35.52"))

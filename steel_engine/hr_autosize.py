@@ -1521,6 +1521,28 @@ _BOND_TEXT = re.compile(r"bond length [0-9.]+ mm into the pedestal / pile cap ->
                         r"anchor")
 
 
+def _minor_axis_anchors(sp):
+    """A rectangular plate (B != L) needs the minor-axis anchor pattern for My (india_connections.
+    base_plate_design_biaxial: anchors.f_y_mm / n_tension_y): rows of n_per_row anchors at the pitch, so about the
+    minor axis the tension side holds one anchor of each row (n_total / n_per_row) at the outermost position,
+    f_y = min(B / 2 - edge, (n_per_row - 1) pitch / 2).  A declared pattern is kept."""
+    an = sp.get("anchors") if isinstance(sp, dict) else None
+    if not isinstance(an, dict) or an.get("f_y_mm") is not None or "B_mm" not in sp or "L_mm" not in sp:
+        return sp
+    if abs(float(sp["B_mm"]) - float(sp["L_mm"])) < 1e-6:
+        return sp
+    n_row = int(an.get("n_per_row") or 2)
+    rows = max(1, int(an.get("n_total") or 2 * n_row) // max(n_row, 1))
+    d = float(an.get("d_mm") or 24.0)
+    edge = float(an.get("edge_mm") or math.ceil(1.7 * (d + 3.0) / 5.0) * 5.0)
+    fy_ = float(sp["B_mm"]) / 2.0 - edge
+    if an.get("pitch_mm") and n_row > 1:
+        fy_ = min(fy_, (n_row - 1) * float(an["pitch_mm"]) / 2.0)
+    an["f_y_mm"] = round(fy_, 1)
+    an["n_tension_y"] = rows
+    return sp
+
+
 def _restate_base_texts(sp):
     """The base's note (base_note) and the embedment record's bond sentence ('bond length 600 mm into the pedestal /
     pile cap -> pi d L tau_bd = 79 kN per M30 anchor') re-stated from the base's own geometry."""
@@ -1539,14 +1561,15 @@ def _restate_base_texts(sp):
 
 
 def adapt_base(template, old_col, new_col):
-    """_adapt_base, with the geometry-stating texts re-stated (_restate_base_texts)."""
+    """_adapt_base, with the minor-axis anchor pattern of a rectangular plate (_minor_axis_anchors) and the
+    geometry-stating texts re-stated (_restate_base_texts)."""
     sp = _adapt_base(template, old_col, new_col)
-    return _restate_base_texts(sp) if sp != template else sp
+    return _restate_base_texts(_minor_axis_anchors(sp)) if sp != template else sp
 
 
 def bump_base(sp, failing, col=None):
-    """_bump_base, with the geometry-stating texts re-stated (_restate_base_texts)."""
-    return _restate_base_texts(_bump_base(sp, failing, col=col))
+    """_bump_base, with _minor_axis_anchors and _restate_base_texts."""
+    return _restate_base_texts(_minor_axis_anchors(_bump_base(sp, failing, col=col)))
 
 
 def adapt_splice(template, old_col, new_col):
