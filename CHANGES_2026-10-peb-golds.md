@@ -46,7 +46,7 @@ What changed, per job (from → to):
   deep (was 250 × 36, 230); girts LZ210X60X20X2 (was LZ230X75X20X2), purlins unchanged.
 - **IN_Ex2**: COL WI700X300X22X14 → WI725X230X22X14; RAF_K TI600-500X250X20X17 → TI575-525X260X22X16; RAF_B
   WI500X250X20X14 → WI525X210X32X14; RAF_S WI500X300X25X14 → WI525X290X22X14; CAN_T TI550-250X200X12X6 →
-  TI450-200X190X12X5; G_RAF WI500X250X16X8 → WI250X220X12X4; G_COL WI450X350X20X10 → WI225X270X18X4; W_COL
+  TI450-200X190X12X5; G_RAF WI500X250X16X8 → WI250X220X12X4; G_COL WI450X350X20X10 → WI225X280X18X4 (WI225X270X18X4 at adoption, see below); W_COL
   WI600X250X14X8 → WI400X220X20X4; knee end plate 45 (was 50, 18 M36) with a 45 mm column flange plate (was 50),
   stiffeners 14 (was 25), diagonal 6 (was 20); rafter splice 300 × 32 (was 36); canopy root 220 × 32, 18 M20 (was
   14 M24); keys 2 × 600 × 28, 250 deep (was 600 × 50, 400) and SCBF 2 × 800 × 56, 400 deep (was 800 × 60, 420);
@@ -63,15 +63,17 @@ What changed, per job (from → to):
   LZ230X75X20X2.55 (was LZ250X75X20X2.55).
 - `SOLUTION.md` of each job: a third-wave block at the top with the new key results; the tables below it describe the
   October design and are marked as such.
-- **Provisional:** the column span-moment fix is being corrected on `fix/2026-10-column-span-moment` (independent
-  review: the gable column check ran with Cm 0.9 from the frame sway flag instead of the Table 18 transverse-load
-  value, among other points). When the final version is on main it is merged here and IN_Ex1 … IN_Ex5 are re-run; the
-  gable columns may grow slightly.
+- **Re-verified on the final span-moment fix** (the review fixes 28831f8, merged here as b67c09b; Table 18
+  uniform-loading Cm in place of the 0.9 sway value): IN_Ex1, IN_Ex3 and IN_Ex4 are unchanged (same kg/m², same
+  ratios: their gable columns are governed by the lateral-torsional equation of 9.3.2.2, where Cm hardly enters;
+  wind / corner columns IN_Ex1 0.994 / 0.911, IN_Ex3 0.975 / 0.911, IN_Ex4 0.994 / 0.970). IN_Ex2's corner column
+  WI225X270X18X4 went from 0.972 to 1.066: its minor-axis span moment is about equal to its end moment, so Table 18
+  gives Cmy 1.0 where the first version took 0.9. The sizer re-sized that one constant with every other plate and joint held: WI225X280X18X4 (flanges 280 wide, +147 kg, 52.69 → 52.71 kg/m²), which passes the full run; the base plate follows the section in the job's take-off.
 
 
 ## Engine fixes the adoption needed
 
-### Column span moment (`static_model`, `design_pipeline`, `india_is800`) — commit 2cb42ff
+### Column span moment (`static_model`, `design_pipeline`, `india_is800`) — commit 2cb42ff, review fixes 28831f8
 - **Wrong:** a column's member check used its end moments only. A gable wind column is pinned at the base and at the
   end rafter and carries the gable wall wind as a span load (the IS 875 (Part 3) member wind, applied by
   `static_model.member_wind_loads` as a uniform load on the exposed column line): its end moments are zero, so the
@@ -88,10 +90,16 @@ What changed, per job (from → to):
 - **Fix:** every column record carries the signed extreme moment inside its span about both axes (`REC_FIELDS`
   `Mmaj_span` / `Mmin_span`), found from the element end forces for its uniform span load
   (`static_model.column_span_moments`), from the static part of each combination only (the response-spectrum part has
-  no span load and its end forces are peak values). The member check uses it (span load: Cm = 1.0, IS 800 9.3.2.2)
-  where it exceeds both end moments; where an end moment is larger (a portal column's knee) the end-moment check is
-  unchanged. `member_check_is800` takes `My_mid_Nmm` beside `Mz_mid_Nmm`. The demand cache is keyed on the record
-  layout. The lead carries the same patch on `fix/2026-10-column-span-moment` (00336f6).
+  no span load and its end forces are peak values). The demand cache is keyed on the record layout. The lead carries
+  the same patch on `fix/2026-10-column-span-moment` (00336f6).
+- **Review fixes (28831f8, the lead's branch, merged here as b67c09b; see CHANGES_2026-10-column-span-moment.md):** an
+  independent review found the first version's use of the span moment wrong in places. The records now carry the
+  free moment of the span load (`Mmaj_free` / `Mmin_free`), and the member check rebuilds the moment diagram from it,
+  checks the in-span extreme of either sign with its own LTB length, and takes Cmy / Cmz from the IS 800 Table 18
+  uniform-loading rows (0.95 for a pinned column under the wall wind; was 0.9 from the frame's sway flag); CmLT takes
+  the row value only with the compression flange unrestrained over the member, else 1.0. Gravity columns have no sway
+  mode under a span load. Splice, base and beam-to-column demands keep the end moments. The PEB golds below were
+  re-verified, and their gable columns re-sized where needed, on the merged engine.
 - **Who it touches:** every hot-rolled job with member wind on single-element pinned columns. CFS vendors the HR
   engine (re-vendor: the lead).
 
