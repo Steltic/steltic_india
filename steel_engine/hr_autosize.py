@@ -1002,7 +1002,7 @@ def stiffness(label, kind):
     return float(p["Ix"])
 
 
-def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
+def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None):
     """Lightest candidate per group under the frozen forces.  x: {group: (label, grade)}; stiff_req: {group:
     minimum stiffness (I or A)}.  Returns the new x and a per-group note."""
     new, notes = {}, {}
@@ -1019,7 +1019,10 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
         need = stiff_req.get(g)
         chosen = None
         dem = lm.group_demand(g)
+        bar = set((barred or {}).get(g) or ())
         for lab, grade, tier in candidates(spec):
+            if lab in bar:
+                continue
             if not _capacity_screen(lab, grade, dem, family_of(lab) == "CHS"):
                 continue
             if spec.get("role") == "gantry":
@@ -2028,8 +2031,17 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                     if x[g][0] == m.get("section") and any(
                             str(lm.elems[t]["member"].get("role_group")) == m.get("role") or
                             str(lm.elems[t]["member"].get("role")) == m.get("role") for t in lm.by_group[g]):
-                        st["margins"][g] = round(min(st["margins"].get(g, specs[g].get("margin", 0.95)), 0.95) - 0.04, 3)
-                        log_fn("    margin %s -> %.2f (%s strength %s)" % (g, st["margins"][g], mid, m.get("strength")))
+                        if (m.get("strength") or 0.0) > 1.0 + 1e-9:
+                            st["margins"][g] = round(min(st["margins"].get(g, specs[g].get("margin", 0.95)), 0.95) - 0.04, 3)
+                            log_fn("    margin %s -> %.2f (%s strength %s)" % (g, st["margins"][g], mid, m.get("strength")))
+                        if (m.get("slender") or 0.0) > 1.0 + 1e-9:
+                            # the Table 3 limit depends on the forces of the run (a beam that picks up compression
+                            # in its own run, IN_Ex12 gym): the frozen forces cannot see it, so the label is barred
+                            bl = st.setdefault("barred", {}).setdefault(g, [])
+                            if x[g][0] not in bl:
+                                bl.append(x[g][0])
+                                log_fn("    barred %s for %s (%s slenderness %s in its own run)" % (x[g][0], g, mid,
+                                                                                               m.get("slender")))
         # ---- local sizing under the frozen forces
         req, info = stiffness_requirements(lm, ev, x, specs)
         for g, f in (st.get("stiff_boost") or {}).items():
@@ -2041,7 +2053,7 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         if lat_fail and ev["passed"] is False:
             for g in req:
                 st.setdefault("stiff_boost", {})[g] = round(float(st["stiff_boost"].get(g, 1.0)) * 1.05, 3)
-        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed)
+        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed, barred=st.get("barred"))
         for k in range(8):
             rows = s12_local(lm, x1)
             bumped = set()
