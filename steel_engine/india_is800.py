@@ -2960,8 +2960,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
               flag), Lz_mm/Ly_mm (optional member lengths if different from L_mm), LLT_sag_mm, LLT_hog_mm (unbraced
               compression-flange lengths for sagging / hogging), welded, support, sway (bool), fy_MPa (override)}
     combo_forces = [{combo, P_N (+compression), Mz_i_Nmm, Mz_j_Nmm, My_i_Nmm, My_j_Nmm (bending-moment-diagram
-              values at the two ends, sagging +), Mz_mid_Nmm (optional span moment), My_mid_Nmm (optional minor-axis
-              span moment, third wave), Vy_N, Vz_N}]
+              values at the two ends, sagging +), Mz_mid_Nmm (optional span moment), Vy_N, Vz_N}]
     Returns {governing_combo, dc, ok, per_combo[...], capacities{...}, clause}.
     """
     import sections as _S
@@ -3042,11 +3041,10 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         zs = [Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else [])
         Mz_sag = max([m for m in zs if m > 0] or [0.0])
         Mz_hog = -min([m for m in zs if m < 0] or [0.0])
-        Mym = cf.get("My_mid_Nmm")              # third wave (2026-10-30): optional minor-axis span moment (columns)
-        My = max([abs(Myi), abs(Myj)] + ([abs(float(Mym))] if Mym is not None else []))
+        My = max(abs(Myi), abs(Myj))
         sway = bool(member.get("sway"))
         cmz = cm_factor(Mzi, Mzj, sway=sway) if Mzm is None else {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
-        cmy = cm_factor(Myi, Myj, sway=sway) if Mym is None else {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
+        cmy = cm_factor(Myi, Myj, sway=sway)
         psi = cmz.get("psi")
         rec = {"combo": cf.get("combo"), "P_N": P, "Mz_sag_Nmm": Mz_sag, "Mz_hog_Nmm": Mz_hog, "My_Nmm": My,
                "Cmz": cmz["Cm"], "Cmy": cmy["Cm"]}
