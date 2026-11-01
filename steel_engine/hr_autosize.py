@@ -679,6 +679,9 @@ def evaluate_run(run_dir, waivers=()):
                          if isinstance(md_.get("first3_mass_" + d.lower()), (int, float))}
     out["modes_fail"] = any(r.startswith("irregularity.modes") for r in blocking)
     out["periods"] = {d: float(md_["T" + d.lower()]) for d in ("X", "Y") if isinstance(md_.get("T" + d.lower()), (int, float))}
+    ss_ = ((pkg.get("irregularity") or {}).get("soft_storey") or {}).get("by_direction") or {}
+    out["soft"] = {d: [(int(i), float((v.get("ratio_to_above") or [None] * (i + 1))[i] or 1.0))
+                       for i in (v.get("soft_storey_indices") or [])] for d, v in ss_.items() if isinstance(v, dict)}
     out["dynamic_wind_fail"] = (pkg.get("gates") or {}).get("dynamic_wind") is False
     return out
 
@@ -742,6 +745,27 @@ def torsion_requirements(lm, ev, x, st):
                 if need > req.get(g, 0.0):
                     req[g] = round(need, 1)
                     log("    period T%s %.3f s > 1 s (IS 875-3 9.1(b)): %s keeps %s >= %.4g" % (d.lower(), T, g, kind, need))
+    for d, lst in sorted((ev.get("soft") or {}).items()):
+        # IS 1893 Table 6(i): storey i softer than the storey above (K_i < K_i+1) -- the drift limit of that storey
+        # and below drops to 0.2 %: the columns of storey i keep their stiffness x (K_i+1 / K_i) / 0.97
+        for i, ratio in lst:
+            gs = set()
+            mems = (lm.s12[1].get("members") or []) if lm.s12 is not None else []
+            lv = i + 1 if any(m.get("role") == "column" and m.get("level") == i + 1 for m in mems) else i   # storeys 1-based
+            for m in mems:
+                if m.get("role") == "column" and m.get("level") == lv:
+                    g = lm.groups_of.get(int(m.get("tag") or str(m["id"]).lstrip("e")))
+                    if g is not None and lm.specs.get(g, {}).get("role") not in (None, "fixed"):
+                        gs.add(g)
+            f = min(max(1.0 / max(ratio, 0.3) / 0.97, 1.05), 1.6)
+            for g in sorted(gs):
+                kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
+                if not kind:
+                    continue
+                need = stiffness(x[g][0], kind) * f
+                if need > req.get(g, 0.0):
+                    req[g] = round(need, 1)
+                    log("    soft storey %d (%s, K / K above %.2f): %s keeps %s >= %.4g" % (i + 1, d, ratio, g, kind, need))
     if ev.get("modes_fail"):
         # IS 1893 Table 6(vii): the d-direction mass sits in rotation-dominant modes (translation coupled with
         # torsion): a stiffer torsional system for that direction separates them -- the same groups, 25 % up
@@ -2032,7 +2056,8 @@ def stiffness_requirements(lm, ev, x_run, specs, target=0.95, floor=0.5):
     stiffness fall, but never below floor x the current); a beam with a deflection row keeps I >= I x ratio /
     target."""
     lat = max(list((ev.get("drift") or {}).values()) + list((ev.get("wind") or {}).values()) + [0.0])
-    f_lat = max(lat / target, floor)
+    # at most 1.35 per pass: a drift limit that changes in steps (a soft storey's 0.2 %) is answered where it arises
+    f_lat = min(max(lat / target, floor), 1.35)
     defl = {}
     for sec, ratio, roof in ev.get("deflection") or []:
         if isinstance(ratio, (int, float)):
