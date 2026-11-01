@@ -203,7 +203,7 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
            "demand": {"axial_N": round(N, 1), "P_comp_N": round(N_c, 1), "P_tens_N": round(N_t, 1)},
            "inputs": {"axial_N": round(N, 1), "V_N": round(N, 1)},
            "design_basis": "IS 800:2007 10.2 / 10.3 (bolts), 7.5.2.1 / 7.8 (double angles); gusset Whitmore yield "
-                           "(engineering practice); declared geometry in cfg['truss_connections'] (truss_design)",
+                           "(engineering practice); the bolted geometry declared for each member end",
            "limit_state": "IS 800:2007 10 / 7.5 / 7.8", "notes": [], "checks": []}
     if not sp:
         rec["checks"].append({"name": "truss member end connection", "value": None, "limit": None, "dc": None,

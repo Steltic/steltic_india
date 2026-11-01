@@ -236,7 +236,8 @@ def _viewer_data(cfg, name, root):
     moment_nodes = info.get("moment_nodes") or set()
     coords = {t: tuple(c[:3]) for t, c in ms["coords"].items()}
     nmodes = min(6, ms.get("nmodes", len(ms["T"])))
-    kindmap = {"col": "column", "beam": "beam", "brace": "brace", "column": "column"}
+    kindmap = {"col": "column", "beam": "beam", "brace": "brace", "column": "column",
+               "truss": "brace"}                  # MSME (2026-10): pin-ended truss members draw as axial members
 
     used = set()
     elements = []

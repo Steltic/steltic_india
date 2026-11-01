@@ -1644,7 +1644,7 @@ def section12_checks(system, model_data, cfg=None):
                                           member_capacity=kn.get("member_capacity"))
             advisories.append({"clause": "IS 800:2007 12.10.2", "applies": True,
                                "note": "knee-braced truss portals: the truss seat is pinned, the knee brace and the heel "
-                                       "seat form the moment connection; checked at %d knees (truss_design)" % len(knees)})
+                                       "seat form the moment connection; checked at %d knees" % len(knees)})
         elif knees:
             checks.append(_na("truss_knees", clause="IS 800:2007 12.11", cite="knee-braced truss portal",
                               reason="knee-braced truss portals are covered for OMF (12.10) only"))
