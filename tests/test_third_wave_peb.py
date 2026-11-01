@@ -278,6 +278,28 @@ def test_feedback_tightens_the_dado_margin_alone():
     assert m2["sway"] == pytest.approx(0.93) and "dado" not in m2
 
 
+def test_feedback_tightens_the_failed_splice_kind_by_its_overshoot():
+    """A rafter splice end plate that failed at 1.20 (frozen splice moments under-predicted on the multi-span frame)
+    takes its margin down by the overshoot, and only the rafter splice margin moves; a splice bolt-slip failure, or a
+    splice check that names no joint kind, keeps the old 0.02 step on every splice kind."""
+    import peb_autosize as A
+    m = {}
+    run = {"fail_items": [(1.20, "connection", "conn-peb-splice-190701", "end-plate moment (rafter splice)"),
+                          (1.10, "connection", "conn-peb-splice-190702", "end-plate moment (rafter splice)")],
+           "gates_fail": []}
+    A.feedback(m, run, None, log_fn=lambda *a: None)
+    assert m == {"conn:splice:rafter_splice": pytest.approx(0.80)}
+    m2 = {}
+    A.feedback(m2, {"fail_items": [(1.03, "connection", "conn-peb-splice-1", "end-plate moment (canopy beam root)")]},
+               None, log_fn=lambda *a: None)
+    assert m2 == {"conn:splice:canopy_root": pytest.approx(0.97)}
+    m3 = {}
+    A.feedback(m3, {"fail_items": [(1.30, "connection", "conn-peb-splice-2", "bolt slip in shear")]}, None,
+               log_fn=lambda *a: None)
+    assert m3 == {k: pytest.approx(0.98) for k in ("conn:splice:apex", "conn:splice:rafter_splice",
+                                                   "conn:splice:canopy_root")}
+
+
 def _slab_spec(L=450.0, B=400.0, t=25.0, d=24):
     return {"B_mm": B, "L_mm": L, "t_plate_mm": t, "fy_plate_MPa": 240.0, "plate_grade": "E250", "fck_MPa": 30.0,
             "fixed": False, "anchors": {"n_total": 4, "n_tension": 2, "d_mm": d, "grade": "8.8", "f_mm": 100.0,

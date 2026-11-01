@@ -2842,8 +2842,16 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
             if "knee" in ident:
                 tighten("conn:knee"); hit = True
             elif "splice" in ident:
-                for k in ("conn:splice:apex", "conn:splice:rafter_splice", "conn:splice:canopy_root"):
-                    tighten(k, 0.02)
+                # third wave: the splice demands of the local model are the last run's frozen moments; on the
+                # continuous multi-span IN_Ex2 rafters a re-sized frame moves them by 20-30 % (R = 3 route: 356
+                # predicted, 452 kN-m in the run), so the margin follows the overshoot (as the sway margin does) and
+                # only the joint kind that failed is tightened
+                g_ = str(_gov or "").lower()
+                ks = [k for k, w in (("conn:splice:rafter_splice", "rafter splice"), ("conn:splice:canopy_root", "canopy"),
+                                     ("conn:splice:apex", "apex")) if w in g_]
+                by = max(0.02, round(float(dc) - 1.0, 4)) if "moment" in g_ else 0.02
+                for k in ks or ("conn:splice:apex", "conn:splice:rafter_splice", "conn:splice:canopy_root"):
+                    tighten(k, by)
                 hit = True
         elif kind == "section12":
             sid = ident.split("@")[0]
