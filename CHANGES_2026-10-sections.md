@@ -1,8 +1,9 @@
 # steltic-india — 2026-10 third wave: Indian section families for IN_Ex7 … IN_Ex20 (agent SECT)
 
-Branch `fix/2026-10-third-sections`, based on main 44b74de. It also carries 2cb42ff (column in-span moment, the
-PEB agent's fix, cherry-picked on the lead's instruction). That fix is being corrected on the lead's branch, so the
-sizing of jobs with pinned or span-loaded wall columns is provisional until it reaches main.
+Branch `fix/2026-10-third-sections`, based on main 44b74de. On the lead's instruction it merges
+`fix/2026-10-column-span-moment` (28831f8: IS 800 Table 18 uniform-loading Cm / CmLT for columns with a span load,
+both signs, end-moment-only connection demands, 17-field records). The provisional cherry-pick of the first cut
+(2cb42ff) was reverted first. Every job was sized, and every sized design verified, against the merged checks.
 
 Scope (owner decisions of 2026-10-30):
 - re-size IN_Ex7 … IN_Ex20 and their units (Ex11 workshop, Ex12 unit B and unit C, Ex19 stem) to Indian section
@@ -75,10 +76,27 @@ D8).
     roof beam under snow drift and ponding, are checked with the engine's own functions;
   - brace ends are designed under the braced part of a combined system (`SMRF+SCBF` → SCBF), as
     `section12_checks` checks them.
+- **Groups without frame elements** are sized from their own checks: the IN_Ex7 gantry girder
+  (`design_pipeline.gantry_girder_checks`, with its MC cap) and groups used only by declared secondary members.
+  No IS 808 MB / WB section passes the IN_Ex7 gantry (WB600 × 145 kg/m: vertical deflection 1.40 of the Table 6
+  limit), so welded plate girders are its fallback. The deflection under the static wheel loads scales with 1 / Ix
+  and screens the candidates.
+- **Torsional irregularity (IS 1893 Table 5(i), Amd 2).** The worker records Δmax / Δavg for each loading direction.
+  When a run is torsionally irregular (above 1.2), the frames of the other plan direction and the lateral columns
+  keep at least their stiffness × (ratio − 1) / (1.164 − 1) from then on, since ratio − 1 grows with K_d / K_θ.
+  This was found on IN_Ex9: lighter portal frames raised the ratio under Y loading from 1.14 to 1.24, and the
+  torsional mode became the second mode.
+- **Preflight** (`preflight.chs_brace_grade_declared`): CHS braces are declared by either the
+  (`brace_grade`, `brace_process`) or the (`tube_grade`, `tube_process`) pair. The member grade lookup takes the tube
+  pair first. IN_Ex11 keeps `brace_grade` for rolled braces and declares YSt 310 / HFS as the tube pair.
 - **Fixed column bases on a new column** (no stiffeners) are laid out again as a perimeter ring of anchors (the
   IN_Ex8 detail) for the new column: plate = column + 2 × projection, n anchors on each face, edge 1.7 d0
   (IS 800 10.2.4.2), pitch ≥ 2.5 d (10.2.2). They are then stepped up from the failing rows of the verification run:
   plate thickness up to 150 mm, anchor number and then diameter, bearing projection, embedment.
+  - Pinned bases keep their projections. When the plate is no longer square they get the minor-axis anchor pattern
+    (`f_y_mm`, `n_tension_y`) that `base_plate_design_biaxial` needs for My.
+  - A base note that states the plate and anchors (IN_Ex14) and the bond sentence of an embedment record ("bond
+    length 600 mm … = 79 kN per M30 anchor") are re-stated from the new geometry.
 - **Mass:** the engine's take-off of the modelled members (`design/takeoff.json`). Connections are not in the
   kg/m², as in every hot-rolled gold.
 - **CLI:**

@@ -704,13 +704,19 @@ def framing_html(name, cfg=None):
 
 
 def context_html(cfg):
-    """Third wave (2026-10, handoff P8): the practice context and the fire-resistance basis a job declares
-    (cfg['practice_context'] text; cfg['fire_resistance'] {statement, cite}), printed after the framing box."""
+    """Third wave (2026-10, handoff P8): the practice context, the section families (cfg['section_families']
+    {statement, cite}: the IS 808 / IS 1161 families and the brace-material basis) and the fire-resistance basis a
+    job declares (cfg['practice_context'] text; cfg['fire_resistance'] {statement, cite}), after the framing box."""
     cfg = cfg or {}
     out = []
     pc = cfg.get("practice_context")
     if pc:
         out.append("<div class='chk'><div class='chk-h'>Practice context</div><p>%s</p></div>" % _e(PUB.strict_text(pc)))
+    sf = cfg.get("section_families")       # third wave (2026-11): the section families and the brace basis
+    if isinstance(sf, dict) and sf.get("statement"):
+        out.append("<div class='chk'><div class='chk-h'>Section families</div><p>%s</p>%s</div>"
+                   % (_e(PUB.strict_text(sf["statement"])),
+                      ("<p class='cnote'>%s</p>" % _e(PUB.strict_text(sf["cite"]))) if sf.get("cite") else ""))
     fr = cfg.get("fire_resistance")
     if isinstance(fr, dict) and fr.get("statement"):
         out.append("<div class='chk'><div class='chk-h'>Fire resistance</div><p>%s</p>%s</div>"

@@ -394,3 +394,13 @@ def test_preflight_accepts_the_tube_grade_and_process_for_chs_braces():
     assert ok(dict(base, brace_grade="E250 B0", brace_process=None, tube_grade="YSt 310", tube_process="HFS"))
     assert ok(dict(base, brace_grade="YSt 310", brace_process="HFS"))
     assert ok(dict(base, brace="WPB180X180X35.52"))
+
+
+def test_section_families_box_prints_the_brace_basis():
+    import report_second_wave as RS
+    cfg = {"section_families": {"statement": "The braces are IS 808 rolled sections in IS 2062 E250 B0, not IS 1161 "
+                                             "tubes (IS 800:2007 12.8.2.1; IS 18168:2023 5.2(b)).",
+                                "cite": "IS 808:2021; IS 1161:2014 Table 2"}}
+    h = RS.context_html(cfg)
+    assert "Section families" in h and "12.8.2.1" in h and "5.2(b)" in h and "IS 1161:2014 Table 2" in h
+    assert RS.context_html({}) == ""
