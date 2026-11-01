@@ -1517,20 +1517,36 @@ def base_note(sp, note):
     return head + (";" + note.split(";", 1)[1] if ";" in note else "")
 
 
-def adapt_base(template, old_col, new_col):
-    """_adapt_base, with a geometry-stating note re-stated (base_note)."""
-    sp = _adapt_base(template, old_col, new_col)
-    if isinstance(sp, dict) and sp != template and sp.get("note"):
+_BOND_TEXT = re.compile(r"bond length [0-9.]+ mm into the pedestal / pile cap -> pi d L tau_bd = [0-9.]+ kN per M\d+ "
+                        r"anchor")
+
+
+def _restate_base_texts(sp):
+    """The base's note (base_note) and the embedment record's bond sentence ('bond length 600 mm into the pedestal /
+    pile cap -> pi d L tau_bd = 79 kN per M30 anchor') re-stated from the base's own geometry."""
+    if not isinstance(sp, dict):
+        return sp
+    if sp.get("note"):
         sp["note"] = base_note(sp, sp["note"])
+    an = sp.get("anchors") or {}
+    emb = an.get("embedment") if isinstance(an, dict) else None
+    if isinstance(emb, dict) and isinstance(emb.get("source"), str) and emb.get("L_mm") and emb.get("tau_bd_MPa"):
+        d, L = float(an.get("d_mm") or 0.0), float(emb["L_mm"])
+        kn = math.pi * d * L * float(emb["tau_bd_MPa"]) / 1000.0
+        emb["source"] = _BOND_TEXT.sub("bond length %s mm into the pedestal / pile cap -> pi d L tau_bd = %.0f kN per "
+                                       "M%d anchor" % (_fmt(L), kn, int(d)), emb["source"])
     return sp
 
 
+def adapt_base(template, old_col, new_col):
+    """_adapt_base, with the geometry-stating texts re-stated (_restate_base_texts)."""
+    sp = _adapt_base(template, old_col, new_col)
+    return _restate_base_texts(sp) if sp != template else sp
+
+
 def bump_base(sp, failing, col=None):
-    """_bump_base, with a geometry-stating note re-stated (base_note)."""
-    out = _bump_base(sp, failing, col=col)
-    if isinstance(out, dict) and out.get("note"):
-        out["note"] = base_note(out, out["note"])
-    return out
+    """_bump_base, with the geometry-stating texts re-stated (_restate_base_texts)."""
+    return _restate_base_texts(_bump_base(sp, failing, col=col))
 
 
 def adapt_splice(template, old_col, new_col):
