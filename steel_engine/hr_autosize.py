@@ -87,8 +87,11 @@ FAMILIES_BY_ROLE = {
     "channel": ["MC"],
     "angle": ["ISA"],
 }
-BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": None, "strut": None,
+BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": "welded_I_brace", "strut": None,
                     "gantry": "welded_I"}
+# braces: CHS families (OCBF) have no built-up fallback; IS 808 rolled braces (SCBF / EBF, E250 B0) fall back to a
+# welded I from IS 2062 E250 B0 plates when no rolled section passes (IN_Ex10: 17.8 m X-braces -- the rolled sections
+# with the radius of gyration fail the IS 18168 Table 2 brace flange limit, the compact ones the KL/r limit)
 STIFF_BY_ROLE = {"beam": "I", "link": "I", "column": "I", "brace": "A", "strut": "A", "gantry": None}
 LOG = []
 
@@ -266,11 +269,12 @@ def built_up_catalogue(kind, *, min_depth=None, max_depth=None, square=True):
                 lab = box_label(B, B, t)
                 out.append((mass_kg_m(lab), lab))
     else:
-        for D in range(300, 1201, 50):
+        brace = kind == "welded_I_brace"         # compact, nearly square welded I braces, D 150-500 mm in 25 mm steps
+        for D in (range(150, 501, 25) if brace else range(300, 1201, 50)):
             if min_depth and D < min_depth - 1e-6 or max_depth and D > max_depth + 1e-6:
                 continue
             for bf in range(150, 501, 25):
-                if bf > D:
+                if bf > D or (brace and bf < 0.75 * D):
                     continue
                 for tf in PLATES_MM:
                     if tf > 40 or bf / tf > 27.2 or bf / tf < 6:
@@ -297,6 +301,8 @@ def candidates(spec, current=None):
     fams = spec.get("families") or FAMILIES_BY_ROLE.get(role, ["MB", "WB"])
     grades = spec.get("grades") or (["E250 B0", "E350 B0"] if role == "column" else [None])
     bu = spec.get("built_up", BUILT_UP_BY_ROLE.get(role))
+    if "CHS" in fams and "built_up" not in spec:
+        bu = None                               # OCBF tube braces: no built-up fallback
     rolled_labs = []
     for f in fams:
         rolled_labs += rolled(f)
@@ -363,19 +369,20 @@ def plastic_props(lab):
     return float(p["A"]), float(p.get("Zx") or 0.0), float(p.get("Zy") or 0.0)
 
 
-def eligible(x, specs):
+def eligible(x, specs, skip=()):
     """A design counts as a re-sized design only when every sized group is in its own families (or the built-up
-    fallback): the gold's own (NPB / WPB) sections never count as the best design."""
+    fallback): the gold's own (NPB / WPB) sections never count as the best design.  skip: groups no member of the
+    model takes (dead branches of the cfg's section functions, e.g. IN_Ex11 corner columns that are all braced)."""
     for g, (lab, grade) in x.items():
         sp = specs.get(g) or {}
-        if sp.get("role") == "fixed" or sp.get("same_as"):
+        if sp.get("role") == "fixed" or sp.get("same_as") or g in skip:
             continue
         fams = sp.get("families") or FAMILIES_BY_ROLE.get(sp.get("role", "beam"), [])
         bu = sp.get("built_up", BUILT_UP_BY_ROLE.get(sp.get("role")))
         f = family_of(lab)
         if f in fams:
             continue
-        if bu == "box" and f == "BOX" or bu == "welded_I" and f == "WI":
+        if bu == "box" and f == "BOX" or bu in ("welded_I", "welded_I_brace") and f == "WI":
             continue
         return False
     return True
@@ -1349,7 +1356,7 @@ def design_brace_end(lm, g, sec, grade, template=None, margin=0.95):
     mems = [m for m in md.get("members") or [] if int(m.get("tag") or str(m["id"]).lstrip("e")) in tags]
     if not mems:
         return None
-    if family_of(sec) not in ("CHS", "HB", "WB", "MB", "NPB", "WPB"):
+    if family_of(sec) not in ("CHS", "HB", "WB", "MB", "NPB", "WPB", "WI"):
         return None
     for tg in (10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 25.0, 28.0, 32.0, 36.0, 40.0):
         for Lw in range(150, 1201, 50):
@@ -2007,7 +2014,10 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         log_fn("it%02d %s kg/m2 %s  (%.0f s)  blocking %d: %s" % (it, "PASS" if ev["passed"] else "FAIL", ev.get("kg_m2"),
                                                            el, len(ev.get("blocking") or []),
                                                            "; ".join((ev.get("blocking") or [])[:4])[:600]))
-        if ev["passed"] and eligible(x, specs) and (st["best"] is None or ev["kg_m2"] < st["best"]["kg_m2"] - 1e-9):
+        st["unused"] = sorted(g for g in specs if not lm.by_group.get(g) and not lm.secondary.get(g) and
+                              specs[g].get("role") not in ("gantry", "fixed") and not specs[g].get("same_as"))
+        if ev["passed"] and eligible(x, specs, st["unused"]) and \
+                (st["best"] is None or ev["kg_m2"] < st["best"]["kg_m2"] - 1e-9):
             st["best"] = {"it": it, "kg_m2": ev["kg_m2"], "x": st["x"], "gbs": st["gbs"], "conns": st["conns"],
                           "headline": ev.get("headline")}
             log_fn("    best so far: it%02d %.2f kg/m2" % (it, ev["kg_m2"]))
@@ -2115,6 +2125,16 @@ def write_best(job_dir, work, dst=None):
     src = open(path, encoding="utf-8").read()
     lit = read_literals(src, ("GRADE_BY_SECTION", "CONNECTIONS"))
     vals = {"SECTIONS": {g: v[0] for g, v in sorted(b["x"].items())}}
+    unused = st.get("unused") or []
+    if unused:                 # groups no member of the model takes: say so in SIZING_GROUPS (their label is kept)
+        sg = read_literals(src, ("SIZING_GROUPS",)).get("SIZING_GROUPS") or {}
+        for g in unused:
+            if g in sg:
+                sg[g] = dict(sg[g], unused=True)
+                note = str(sg[g].get("note") or g)
+                if "not used by this model" not in note:
+                    sg[g]["note"] = note + " (not used by this model: no member takes this group)"
+        vals["SIZING_GROUPS"] = sg
     if "GRADE_BY_SECTION" in lit:
         vals["GRADE_BY_SECTION"] = b["gbs"]
     if "CONNECTIONS" in lit and b.get("conns") is not None:
