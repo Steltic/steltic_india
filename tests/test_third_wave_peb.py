@@ -328,3 +328,14 @@ def test_base_plate_is_a_design_variable_and_itemised():
                         {})
     sp = cfg["connections"]["column_base"]["WI412X225X12X8"]
     assert sp["t_plate_mm"] == 20.0 and sp["anchors"]["d_mm"] == 30 and sp["shear_key"]
+
+
+def test_study_page_says_base_plates_and_anchors_are_sized():
+    """The lever study page footer states the sizer's basis: slab base plates and anchors are sized (third wave), not
+    kept at the published sizes; no 'gold' jargon on the page."""
+    if os.path.join(ROOT, "scripts") not in sys.path:
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import peb_lever_study as L
+    h = L.html_page([])
+    assert "plate thickness and the anchor diameter are sized" in h
+    assert "keep the gold sizes" not in h and "gold" not in h.lower()
