@@ -14,6 +14,7 @@ Run (operator, Linux/WSL where openseespy runs):
     python report.py T01 T06 B02
 """
 import os, sys, math, re, base64, io, json, datetime
+import html as _html
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa
@@ -1738,9 +1739,12 @@ def _india_wind_serviceability_html(cfg):
                      ("%.5f / %.5f" % (max(r["storey_drift"]), r["limit_storey"])) if r.get("limit_storey") else "-",
                      "OK" if r["ratio_top"] <= 1.0 and r.get("ratio_storey", 0.0) <= 1.0 else "NG"])
     cite = next(iter(wsv.values()))["cite"]
+    # third wave (2026-10, handoff P8): the declared basis of the cladding class behind the Table 6 limit
+    basis = cfg.get("cladding_basis")
+    basis_p = ("<p>Limit basis: %s</p>" % _html.escape(str(basis))) if basis else ""
     return ("<h3>Wind serviceability (IS 800 Table 6)</h3>"
             "<p>Lateral deflection under the unfactored IS 875 (Part 3) wind story forces "
-            "(&gamma;<sub>f</sub> = 1.0) with 1.0 DL + 1.0 LL, P-&Delta;. %s.</p>" % cite
+            "(&gamma;<sub>f</sub> = 1.0) with 1.0 DL + 1.0 LL, P-&Delta;. %s.</p>" % cite + basis_p
             + _table(["Dir", "top defl. (mm)", "limit (mm)", "ratio", "max storey drift / limit", "status"], rows))
 
 def _wind_drift_section(cfg):

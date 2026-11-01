@@ -92,7 +92,9 @@ def test_order_of_preference_rolled_e250_then_e350_then_built_up():
     e350 = [x for x in c if x[2] == 1]
     assert e350 and all(x[1] == "E350 B0" and x[0].startswith("HB") for x in e350)
     bu = [x for x in c if x[2] == 2]
-    assert bu and all(x[0].startswith("BOX") and x[1] == "E350 B0" for x in bu)
+    assert bu and all(x[0].startswith("BOX") for x in bu)
+    assert {x[1] for x in bu} == {"E250 B0", "E350 B0"}
+    assert bu[0][1] == "E250 B0" and bu[1] == (bu[0][0], "E350 B0", 2)
     # braces: IS 1161 tubes only, no IS 2062 grade (the tube grade comes from the cfg)
     b = AZ.candidates({"role": "brace"})
     assert b and all(l.startswith("CHS") and g is None for (l, g, _) in b)
@@ -245,3 +247,61 @@ def test_splice_adapter_resizes_flange_plates_to_the_new_flange():
     up = AZ.bump_splice(sp, ["column splice: bolts_10_3", "column splice: plate_yield_6_2"])
     assert up["bolts"]["n_bolts"] == 8 and up["plate"]["t_mm"] == 14.0
     assert AZ.adapt_splice({"none": True, "note": "x"}, "HB250", "HB300") == {"none": True, "note": "x"}
+
+
+# ------------------------------------------------------------------------------------------------ P8 report items
+def test_p8_practice_context_and_fire_resistance_boxes_print_in_plain_words():
+    import report_second_wave as RS
+    cfg = {"practice_context": "An 18-storey office would usually have a reinforced concrete core.",
+           "fire_resistance": {"statement": "The FRL is set under IS 800:2007 16.2 by the fire consultant.",
+                               "cite": "IS 800:2007 16.1, 16.1.1 and 16.2"}}
+    h = RS.context_html(cfg)
+    assert "Practice context" in h and "reinforced concrete core" in h
+    assert "Fire resistance" in h and "16.2" in h and "16.1.1" in h
+    assert RS.context_html({}) == ""
+    assert "cfg[" not in h and "_" not in h.replace("chk-h", "")
+
+
+def test_p8_cladding_basis_is_printed_with_the_wind_limits(monkeypatch):
+    import report as R
+    import engine3d as E
+    ws = {"X": {"storey_drift": [0.001], "top_mm": 40.0, "H_mm": 40000.0, "limit_top_mm": 80.0, "ratio_top": 0.5,
+                "limit_storey": 1 / 300.0, "ratio_storey": 0.3,
+                "cite": "IS 800:2007 Table 6 (5.6.1): building_wind_brittle -> H/500; storey drift h/300"}}
+    monkeypatch.setattr(E, "india_run_cached", lambda cfg: {"wind_serviceability": ws})
+    h = R._india_wind_serviceability_html({"cladding_basis": "the facade is treated as brittle cladding: Height/500"})
+    assert "Limit basis: the facade is treated as brittle cladding: Height/500" in h
+    assert "Limit basis" not in R._india_wind_serviceability_html({})
+
+
+def test_p8_ex20_style_cfg_selects_the_brittle_row():
+    import engine3d as E
+    st, top, key = E._wind_limits({"building_type": "office", "cladding_brittle": True})
+    assert key == "building_wind_brittle" and top == 500.0 and st == 300.0
+    st, top, key = E._wind_limits({"building_type": "office"})
+    assert key == "building_wind_elastic" and top == 300.0
+
+
+# ------------------------------------------------------------------------------------------------ lead request (2026-11)
+def test_recorded_values_print_in_words_not_as_a_raw_dict():
+    import report_second_wave as RS
+    import report_public as P
+    assert RS.value_words({"X": 0.002, "Y": 0.002}) == "0.002 (X) and 0.002 (Y)"
+    assert RS.value_words([1.5, 2.0, 3]) == "1.5, 2 and 3"
+    assert RS.value_words(0.75) == "0.75" and RS.value_words("Type II") == "Type II"
+    cfg = {"eor_assumptions": [{"query": "across wind Cfs below the plotted range (x < 2)",
+                                "value": {"X": 0.002, "Y": 0.002}, "source": "design engineer: x < 2",
+                                "cite": "IS 875 (Part 3):2015 Fig. 10", "verify": True}]}
+    h = RS.assumptions_html(cfg, {})
+    assert "0.002 (X) and 0.002 (Y)" in h
+    assert P.leaks(h, kinds=["raw dict"]) == []
+
+
+def test_public_text_scan_catches_a_raw_dict_and_ignores_page_style():
+    import report_public as P
+    bad = "<table><tr><td>across wind Cfs</td><td>{&quot;X&quot;: 0.002, &quot;Y&quot;: 0.002}</td></tr></table>"
+    assert P.leaks(bad, kinds=["raw dict"]) == [("raw dict", '{"X": 0.002, "Y": 0.002}')]
+    assert P.leaks("<p>{'id': 'e1', 'dc': 0.9}</p>", kinds=["raw dict"])
+    ok = ("<style>h1{border-bottom:3px solid #2c5aa0} td{padding:4px}</style><script>window.MathJax={tex:{inlineMath:"
+          "[['\\\\(','\\\\)']]}};</script><p>0.002 (X) and 0.002 (Y)</p>")
+    assert P.leaks(ok, kinds=["raw dict"]) == []

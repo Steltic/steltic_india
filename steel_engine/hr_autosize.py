@@ -282,9 +282,16 @@ def built_up_catalogue(kind, *, min_depth=None, max_depth=None, square=True):
     return [l for _, l in sorted(out)]
 
 
+_CAND_CACHE = {}
+
+
 def candidates(spec, current=None):
     """[(label, grade, tier)] for a group, in the order of preference: rolled E250 (families in order, each family
-    lightest first; merged by mass), then rolled E350 (columns), then the built-up fallback (E350 for columns)."""
+    lightest first; merged by mass), then rolled E350 (columns), then the built-up fallback (box or welded I, each
+    plate set in the group's grades, lightest first)."""
+    key = json.dumps(spec, sort_keys=True, default=str)
+    if key in _CAND_CACHE:
+        return _CAND_CACHE[key]
     role = spec.get("role", "beam")
     fams = spec.get("families") or FAMILIES_BY_ROLE.get(role, ["MB", "WB"])
     grades = spec.get("grades") or (["E250 B0", "E350 B0"] if role == "column" else [None])
@@ -302,26 +309,73 @@ def candidates(spec, current=None):
         out += [(l, g, tier) for l in rolled_labs]
         tier += 1
     if bu:
-        g = grades[-1]
+        # built-up fallback: every plate set in each grade of the group (E250 first at equal mass: the E350 Table 2
+        # width-thickness limits are stricter), lightest first
         labs = built_up_catalogue(bu, min_depth=spec.get("min_depth_mm"), max_depth=spec.get("max_depth_mm"))
-        out += [(l, g, tier) for l in labs if _limits_ok(spec, l)]
+        out += [(l, g, tier) for l in labs if _limits_ok(spec, l) for g in grades]
+    _CAND_CACHE[key] = out
     return out
+
+
+def _dims(lab):
+    """(d, bf) of a label without registering it (built-up labels are parsed)."""
+    pb = parse_built_up(lab)
+    if pb:
+        k, d = pb
+        return (d[1], d[0]) if k == "box" else (d[0], d[1])
+    p = _S().props(lab)
+    return float(p.get("d") or 0.0), float(p.get("bf") or 0.0)
 
 
 def _limits_ok(spec, lab):
     try:
-        p = props(lab)
+        d, bf = _dims(lab)
     except Exception:
         return False
-    if spec.get("min_depth_mm") and float(p.get("d") or 0) < spec["min_depth_mm"] - 1e-6:
+    if spec.get("min_depth_mm") and d < spec["min_depth_mm"] - 1e-6:
         return False
-    if spec.get("max_depth_mm") and float(p.get("d") or 1e9) > spec["max_depth_mm"] + 1e-6:
+    if spec.get("max_depth_mm") and d > spec["max_depth_mm"] + 1e-6:
         return False
-    if spec.get("min_bf_mm") and float(p.get("bf") or 0) < spec["min_bf_mm"] - 1e-6:
+    if spec.get("min_bf_mm") and bf < spec["min_bf_mm"] - 1e-6:
         return False
     if spec.get("max_mass_kg_m") and mass_kg_m(lab) > spec["max_mass_kg_m"] + 1e-9:
         return False
     if spec.get("allow") and not any(re.match(a, lab) for a in spec["allow"]):
+        return False
+    return True
+
+
+def plastic_props(lab):
+    """(A, Zx, Zy) without registering a built-up label (plates; rolled from the table)."""
+    pb = parse_built_up(lab)
+    if pb:
+        k, d = pb
+        if k == "box":
+            B, D, tf, tw = d
+            dw = D - 2 * tf
+            return 2 * B * tf + 2 * dw * tw, B * tf * (D - tf) + 2 * tw * (dw / 2.0) ** 2, \
+                dw * tw * (B - tw) + 2 * tf * (B / 2.0) ** 2
+        D, bf, tf, tw = d
+        hw = D - 2 * tf
+        return 2 * bf * tf + hw * tw, bf * tf * (D - tf) + tw * hw ** 2 / 4.0, tf * bf ** 2 / 2.0 + hw * tw ** 2 / 4.0
+    p = _S().props(lab)
+    return float(p["A"]), float(p.get("Zx") or 0.0), float(p.get("Zy") or 0.0)
+
+
+def eligible(x, specs):
+    """A design counts as a re-sized design only when every sized group is in its own families (or the built-up
+    fallback): the gold's own (NPB / WPB) sections never count as the best design."""
+    for g, (lab, grade) in x.items():
+        sp = specs.get(g) or {}
+        if sp.get("role") == "fixed" or sp.get("same_as"):
+            continue
+        fams = sp.get("families") or FAMILIES_BY_ROLE.get(sp.get("role", "beam"), [])
+        bu = sp.get("built_up", BUILT_UP_BY_ROLE.get(sp.get("role")))
+        f = family_of(lab)
+        if f in fams:
+            continue
+        if bu == "box" and f == "BOX" or bu == "welded_I" and f == "WI":
+            continue
         return False
     return True
 
@@ -497,6 +551,8 @@ def worker(run_dir):
             pkg = json.load(open(os.path.join(run_dir, "design", "calc_package.json")))
             import india_seismic_gates as G
             st = G.design_status(E.CFG[name], pkg, job_dir=run_dir)
+            import report_first_wave as RF               # the take-off the report prints (design/takeoff.json)
+            RF.takeoff_section(E.CFG.get(name, cfg), pkg, root=run_dir)
             res["design_status"] = {"status": st["status"], "reasons": st["reasons"]}
             res["ok"] = True
     except Exception:
@@ -593,6 +649,9 @@ class Local:
         import static_model as SM
         self._cf = {t: SM.combo_forces_for_member_check(e["records"], e["kind"]) for t, e in self.elems.items()}
         self.by_group = {}
+        self._dem = {}
+        self._md_cache = {}
+        self._t2 = {}
         for t in sorted(self.elems):
             g = groups_of.get(t)
             if g is not None:
@@ -600,6 +659,7 @@ class Local:
 
     def member_dc(self, t, label, grade):
         import india_is800 as I8
+        register(label)
         e = self.elems[t]
         m = dict(e["member"], section=label)
         if grade is not None or family_of(label) != "CHS":
@@ -627,12 +687,98 @@ class Local:
             if err or st > margin + 1e-9 or t3 > 1.0 + 1e-9:
                 return False, (st, t3)
             worst = (max(worst[0], st), max(worst[1], t3))
+        bad = self.self_rows(g, label, grade)
+        if bad:
+            return False, (worst[0], 99.0)
         if (self.specs.get(g) or {}).get("role") == "gantry":
             dc = self.gantry_dc(label, grade)
             if dc is None or dc > margin + 1e-9:
                 return False, (dc if dc is not None else 99.0, worst[1])
             worst = (max(worst[0], dc), worst[1])
         return True, worst
+
+    def _sub_md(self, g):
+        """The Section 12 model data reduced to one group's members (their forces and links): the base of the group's
+        own Section 12 rows (Table 2, brace / column / link proportioning rules) for a candidate section."""
+        if g in self._md_cache:
+            return self._md_cache[g]
+        if self.s12 is None:
+            self._md_cache[g] = None
+            return None
+        system, md, sc = self.s12
+        tags = set(self.by_group.get(g) or [])
+        mems = [m for m in md.get("members") or [] if int(m.get("tag") or str(m["id"]).lstrip("e")) in tags]
+        ids = {m["id"] for m in mems}
+        sub = {k: v for k, v in md.items() if k not in ("members", "forces", "links", "joints", "connections", "bases",
+                                                         "brace_lines")}
+        sub["members"] = mems
+        sub["forces"] = {i: md.get("forces", {}).get(i, []) for i in ids}
+        sub["links"] = [ln for ln in md.get("links") or [] if ln.get("member_id") in ids]
+        sub["joints"], sub["connections"], sub["bases"], sub["brace_lines"] = [], [], [], []
+        self._md_cache[g] = (system, sub, sc)
+        return self._md_cache[g]
+
+    def self_rows(self, g, label, grade):
+        """The failing Section 12 rows that depend on the group's own section only (SELF_S12_ROWS), for a
+        candidate: [row id, ...]."""
+        import india_is800_s12 as S12
+        base = self._sub_md(g)
+        if not base or not base[1]["members"]:
+            return []
+        system, sub, sc = base
+        bad = self._table2_screen(g, label, grade)
+        if bad:
+            return bad
+        md = copy.deepcopy(sub)
+        register(label)
+        for m in md["members"]:
+            _substitute(m, label, grade, self.cfg)
+        for ln in md["links"]:
+            ln["section"] = label
+            if grade:
+                ln["grade"] = grade
+        try:
+            r = S12.section12_checks(system, md, sc)
+        except Exception:
+            return []
+        return [c.get("id") for c in r.get("checks") or []
+                if c.get("ok") is False and SELF_S12_ROWS.search(str(c.get("id")))]
+
+    def _table2_screen(self, g, label, grade):
+        """Quick IS 18168 Table 2 width-thickness screen of a candidate (india_is18168.table2_check), live only for a
+        group whose current section gets a Table 2 row in the Section 12 checks (that row's component)."""
+        import india_is18168 as I18
+        import india_is800 as I8
+        if g not in self._t2:
+            self._t2[g] = None
+            base = self._sub_md(g)
+            if base and base[1]["members"]:
+                import india_is800_s12 as S12
+                try:
+                    r = S12.section12_checks(base[0], copy.deepcopy(base[1]), base[2])
+                    ids = [str(c.get("id")) for c in r.get("checks") or [] if str(c.get("id")).startswith("is18168_table2_")]
+                    if ids:
+                        self._t2[g] = ids[0].replace("is18168_table2_", "")
+                except Exception:
+                    pass
+        comp = self._t2[g]
+        if not comp:
+            return []
+        try:
+            p = props(label)
+        except Exception:
+            return ["props"]
+        if p.get("section_type") not in I18.TABLE2_SECTION_TYPES:
+            return []
+        gr = grade or self.cfg.get("steel_grade")
+        fy = I8.material_for_section(p, gr).get("fy_MPa") or 250.0
+        key = I8.parse_is2062_grade(str(gr))[0]
+        Ry = I18.ry_for_grade(key) or 1.4
+        Ca = None
+        if comp == "column":
+            Ca = self.group_demand(g)["N"] / (fy * float(p["A"]) / 1.1)
+        r = I18.table2_check(comp, p, fy, Ry, Ca=Ca)
+        return [] if r.get("ok") is not False else ["is18168_table2_%s (screen)" % comp]
 
     def gantry_dc(self, label, grade):
         """The engine's gantry girder checks (design_pipeline.gantry_girder_checks: LTB + surge on the capped top
@@ -664,8 +810,37 @@ class Local:
     def _gantry_group(self):
         return next((g for g, sp in self.specs.items() if sp.get("role") == "gantry"), None)
 
+    def group_demand(self, g):
+        """Largest |N|, |Mz|, |My| over the group's elements and combinations (frozen forces), for the screen."""
+        if g in self._dem:
+            return self._dem[g]
+        N = Mz = My = 0.0
+        for t in self.by_group.get(g, []):
+            for c in self._cf[t]:
+                N = max(N, abs(c.get("P_N") or 0.0))
+                Mz = max(Mz, abs(c.get("Mz_i_Nmm") or 0.0), abs(c.get("Mz_j_Nmm") or 0.0), abs(c.get("Mz_mid_Nmm") or 0.0))
+                My = max(My, abs(c.get("My_i_Nmm") or 0.0), abs(c.get("My_j_Nmm") or 0.0), abs(c.get("My_mid_Nmm") or 0.0))
+        self._dem[g] = {"N": N, "Mz": Mz, "My": My}
+        return self._dem[g]
+
     def group_length_mm(self, g):
         return sum(float(self.elems[t]["member"].get("L_mm") or 0.0) for t in self.by_group.get(g, []))
+
+
+def _capacity_screen(lab, grade, dem, tube=False):
+    """Cheap necessary conditions before the exact checks: squash load A fy / gamma_m0 >= the largest compression or
+    tension, plastic moments Zp fy / gamma_m0 >= 0.9 x the largest end / span moments (the exact checks decide)."""
+    try:
+        A, Zx, Zy = plastic_props(lab)
+    except Exception:
+        return False
+    fy = 310.0 if tube else (350.0 if "350" in str(grade or "") else 250.0)
+    cap = fy / 1.1
+    if A * cap < dem["N"] * 0.98:
+        return False
+    if Zx * cap < 0.9 * dem["Mz"] or Zy * cap < 0.9 * dem["My"]:
+        return False
+    return True
 
 
 def stiffness(label, kind):
@@ -691,7 +866,10 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
         kind = spec.get("stiff", STIFF_BY_ROLE.get(spec.get("role")))
         need = stiff_req.get(g)
         chosen = None
+        dem = lm.group_demand(g)
         for lab, grade, tier in candidates(spec):
+            if not _capacity_screen(lab, grade, dem, family_of(lab) == "CHS"):
+                continue
             if need and kind and stiffness(lab, kind) < need - 1e-6:
                 continue
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
@@ -748,6 +926,32 @@ S12_CONNECTION_ROWS = re.compile(r"(brace_conn|gusset|connection_moment|connecti
                                  r"panel_zone|splice|12\.3\.4\.4_connection)")
 
 
+# Section 12 rows decided by a member's own section and forces (checked for every candidate in the local sizing)
+SELF_S12_ROWS = re.compile(r"(table2|smf_beam_class|smf_column_class|brace_KL_r|brace_plastic|brace_not_slender|"
+                           r"brace_compression|brace_gross_yield|7_2_column_KL_r|material_E250B|scbf_column_plastic|"
+                           r"link_section|link_length|link_shear|link_rotation)")
+
+
+def _substitute(m, lab, grade, cfg):
+    """Put a candidate section (and grade) into a Section 12 member record."""
+    if lab == m.get("section") and grade is None:
+        return
+    m["section"] = lab
+    if family_of(lab) == "CHS":
+        m["grade"] = cfg.get("tube_grade") or cfg.get("brace_grade")
+        m["process"] = cfg.get("tube_process") or cfg.get("brace_process")
+        p = props(lab)
+        m["An_mm2"] = float(p["A"]) - 2.0 * float(p["tw"]) * 22.0          # slot for a 20 mm gusset (estimate)
+    else:
+        if grade is not None:
+            m["grade"] = grade
+        elif str(m.get("grade") or "").upper().replace(" ", "").startswith("YST"):
+            m["grade"] = cfg.get("steel_grade")
+        if m.get("role") == "brace":
+            m["An_mm2"] = float(props(lab)["A"])                         # flanges welded to the gusset, no holes
+            m.pop("process", None)
+
+
 def s12_local(lm, x, *, tags_changed=None):
     """Section 12 checks of the model with the proposed sections (frozen forces).  Returns the failing member-level
     rows [(row, group)]."""
@@ -762,18 +966,8 @@ def s12_local(lm, x, *, tags_changed=None):
         if g is None or g not in x:
             continue
         lab, grade = x[g]
-        if lab != m.get("section"):
-            m["section"] = lab
-            register(lab)
-            if family_of(lab) == "CHS":
-                m["grade"] = lm.cfg.get("tube_grade") or lm.cfg.get("brace_grade")
-                m["process"] = lm.cfg.get("tube_process") or lm.cfg.get("brace_process")
-                p = props(lab)
-                m["An_mm2"] = float(p["A"]) - 2.0 * float(p["tw"]) * 22.0     # slot for a 20 mm gusset (estimate)
-            elif grade is not None:
-                m["grade"] = grade
-        elif grade is not None:
-            m["grade"] = grade
+        register(lab)
+        _substitute(m, lab, grade, lm.cfg)
     for ln in md.get("links") or []:
         t = int(str(ln.get("member_id")).lstrip("e")) if str(ln.get("member_id", "")).lstrip("e").isdigit() else None
         g = lm.groups_of.get(t) if t is not None else None
@@ -1318,6 +1512,55 @@ def connection_bumps(ev, x, roles):
     return out
 
 
+def joint_bumps(lm, ev, x, conns):
+    """Moment-joint step-ups from the failing Section 12 rows of a run: a panel zone (12.11.2.3 / IS 18168) -> a
+    thicker doubler on the joint's spec (the beam group whose beam_column spec the joint uses), sized from the row's
+    ratio on the column web plus doubler; a connection moment -> a thicker cover plate."""
+    import india_connection_design as CD
+    out = {}
+    if lm.s12 is None:
+        return out
+    joints = {str(j.get("id")): j for j in (lm.s12[1].get("joints") or [])}
+    mems = {m["id"]: m for m in lm.s12[1].get("members") or []}
+    cc = {"connections": conns or {}}
+    for r in ev.get("s12_fail") or []:
+        rid = str(r.get("id"))
+        if not re.search(r"panel_zone|connection_moment", rid):
+            continue
+        g_beam = None
+        if "panel_zone" in rid:
+            j = joints.get(str(r.get("member")))
+            if not j:
+                continue
+            for bb in j.get("beams") or []:
+                m = mems.get(bb.get("member_id"))
+                if m and CD.spec_for(cc, "beam_column", m["section"], "beam"):
+                    g_beam = lm.groups_of.get(int(str(m["id"]).lstrip("e")))
+                    break
+            col = next((mems.get(c.get("member_id")) for c in j.get("columns") or [] if mems.get(c.get("member_id"))), None)
+            if g_beam is None or col is None:
+                continue
+            sp = CD.spec_for(cc, "beam_column", x[g_beam][0], "beam") or {}
+            t0 = float(sp.get("doubler_t_mm") or 0.0)
+            twc = float(props(col["section"])["tw"])
+            dc = float(r.get("dc") or 1.1)
+            need = max(t0 + 6.0, (twc + t0) * dc * 1.05 - twc)
+            cur = out.setdefault(g_beam, {})
+            cur["doubler_t_mm"] = max(cur.get("doubler_t_mm", 0.0), _plate_up(need, 1.0))
+        else:
+            m = mems.get(r.get("member"))
+            if not m:
+                continue
+            g_beam = lm.groups_of.get(int(str(m["id"]).lstrip("e")))
+            if g_beam is None:
+                continue
+            sp = CD.spec_for(cc, "beam_column", x[g_beam][0], "beam") or {}
+            t0 = float(((sp.get("cover_plate") or {}).get("plate_t_mm")) or 10.0)
+            cur = out.setdefault(g_beam, {})
+            cur["cp_t"] = max(cur.get("cp_t", 0.0), _plate_up(t0, 1.0001))
+    return out
+
+
 def stiffness_requirements(lm, ev, x_run, specs, target=0.95, floor=0.5):
     """Minimum stiffness per group from the run's drift / sway / deflection ratios: a group of the lateral system
     keeps I (or A) >= its current value x ratio / target (the run's worst lateral ratio; a ratio below target lets the
@@ -1429,7 +1672,7 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         log_fn("it%02d %s kg/m2 %s  (%.0f s)  blocking %d: %s" % (it, "PASS" if ev["passed"] else "FAIL", ev.get("kg_m2"),
                                                            el, len(ev.get("blocking") or []),
                                                            "; ".join((ev.get("blocking") or [])[:4])[:600]))
-        if ev["passed"] and (st["best"] is None or ev["kg_m2"] < st["best"]["kg_m2"] - 1e-9):
+        if ev["passed"] and eligible(x, specs) and (st["best"] is None or ev["kg_m2"] < st["best"]["kg_m2"] - 1e-9):
             st["best"] = {"it": it, "kg_m2": ev["kg_m2"], "x": st["x"], "gbs": st["gbs"], "conns": st["conns"],
                           "headline": ev.get("headline")}
             log_fn("    best so far: it%02d %.2f kg/m2" % (it, ev["kg_m2"]))
@@ -1478,6 +1721,9 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
                                                                        if ":" not in k and k not in _labels_in_use(x)})
         bumps = connection_bumps(ev, x, roles)
+        bumps["beam_column"].update(joint_bumps(lm, ev, x, st["conns"]))
+        for g_, b_ in bumps["beam_column"].items():
+            log_fn("    joint step-up %s: %s" % (g_, b_))
         conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps) \
             if st["conns"] is not None else None
         rec["proposal"] = {g: list(v) for g, v in x1.items()}
