@@ -475,7 +475,13 @@ def exec_cfg(path, overrides=None, name="cfg_mod"):
         src = rewrite_source(src, overrides)
     mod = types.ModuleType(name)
     mod.__file__ = os.path.abspath(path)
-    exec(compile(src, os.path.abspath(path), "exec"), mod.__dict__)
+    d = os.path.dirname(os.path.abspath(path))
+    sys.path.insert(0, d)               # job-local modules (IN_Ex15 / IN_Ex17: hrb_build.py next to cfg.py)
+    try:
+        exec(compile(src, os.path.abspath(path), "exec"), mod.__dict__)
+    finally:
+        if sys.path and sys.path[0] == d:
+            sys.path.pop(0)
     return mod
 
 
