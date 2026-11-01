@@ -1757,9 +1757,7 @@ def _bump_base(sp, failing, col=None):
             out["stiffeners"] = copy.deepcopy(sp["stiffeners"])        # a stiffened ring base stays stiffened
             dcg = _dc_of(rows, r"gusset")
             if dcg:
-                st0 = out["stiffeners"]
-                st0["t_mm"] = _plate_up(max(float(st0.get("t_mm") or 20.0) * dcg * 1.05, float(st0.get("t_mm") or 20.0) + 1.0), 1.0)
-                st0["fy_MPa"] = plate_fy(st0["t_mm"], st0.get("grade") or "E250")
+                out["stiffeners"] = _step_stiffeners(out["stiffeners"], dcg)
         dcp = _dc_of(rows, r"plate_thickness")
         if dcp and float(sp.get("t_plate_mm") or 0.0) >= BASE_T_MM[-1] - 1e-9:
             out["stiffeners"] = _base_stiffeners(out.get("stiffeners"), out, col)
@@ -1805,15 +1803,26 @@ def _bump_base(sp, failing, col=None):
     st = sp.get("stiffeners")
     dc = _dc_of(rows, r"gusset") if isinstance(st, dict) else None
     if dc:
-        # gusset stresses and the CJP weld-to-plate stress scale with 1 / t (IS 2062 fy falls with t: one more step)
-        t0 = float(st.get("t_mm") or 12.0)
-        st["t_mm"] = _plate_up(max(t0 * dc * 1.05, t0 + 1.0), 1.0)
-        st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
-        if isinstance(st.get("note"), str):
-            st["note"] = re.sub(r"\b(\d+) x [0-9.]+ \(IS 2062 E250, fy [0-9.]+\)",
-                                lambda m_: "%s x %s (IS 2062 E250, fy %s)" % (m_.group(1), _fmt(st["t_mm"]), _fmt(st["fy_MPa"])),
-                                st["note"])
+        sp["stiffeners"] = _step_stiffeners(st, dc)
     return sp
+
+
+def _step_stiffeners(st, dc):
+    """Base gussets stepped up for their worst row ratio dc: the thickness first (stresses ~ 1 / t; IS 2062 fy falls
+    with t, so one more step), then -- at the thickest plate (63 mm) -- the height (bending and the CJP weld to the
+    column ~ 1 / h^2).  The note is re-stated."""
+    st = dict(st)
+    t0 = float(st.get("t_mm") or 12.0)
+    if t0 < 63.0 - 1e-9:
+        st["t_mm"] = min(_plate_up(max(t0 * dc * 1.05, t0 + 1.0), 1.0), 63.0)
+    else:
+        st["h_mm"] = float(math.ceil(float(st.get("h_mm") or 300.0) * max(math.sqrt(dc) * 1.05, 1.1) / 50.0) * 50.0)
+    st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
+    if isinstance(st.get("note"), str):
+        st["note"] = re.sub(r"\b(\d+) gussets [0-9.]+ x [0-9.]+ \(IS 2062 E250, fy [0-9.]+\)",
+                            lambda m_: "%s gussets %s x %s (IS 2062 E250, fy %s)" % (
+                                m_.group(1), _fmt(st.get("h_mm")), _fmt(st["t_mm"]), _fmt(st["fy_MPa"])), st["note"])
+    return st
 
 
 def bump_splice(sp, failing):
