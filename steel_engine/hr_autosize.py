@@ -1811,6 +1811,15 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
                     cp_t=b.get("cp_t"), continuity_t=b.get("continuity_t"))
             else:
                 out["beam_column"][lab] = welded_joint_spec(lab, tplj)
+            # the web plate for the joint shear (12.11.2.2: 1.2DL + 0.5LL + 2 x 1.2 Mp / L') of the new beam
+            jsp = out["beam_column"][lab]
+            if isinstance(jsp.get("shear"), dict):
+                Vj = max(joint_shear_demand(lm, g, lab, grade),
+                         float((bumps.get("beam_column", {}).get(g, {}) or {}).get("V_shear") or 0.0))
+                if Vj > 0:
+                    sh = _joint_shear_spec(lab, 1.05 * Vj)
+                    if sh is not None:
+                        jsp["shear"] = sh
         # brace ends
         if role == "brace" or any(r == "brace" for r in rl):
             tplb = CD.spec_for(conn_cfg, "brace_end", lab0, "brace") or {}
@@ -1860,6 +1869,32 @@ def connection_bumps(ev, x, roles):
     return out
 
 
+def joint_shear_demand(lm, g, lab, grade):
+    """IS 800:2007 12.11.2.2 / 12.10.2.4 shear of the moment joints of beam group g with section lab: the largest
+    |V_gravity| + 2 x 1.2 Mp / L' over the group's beams in the Section 12 model data (fy 350 for an E350 grade,
+    else 250 -- the thickness reduction of IS 2062 is left out, which is conservative here)."""
+    if lm.s12 is None:
+        return 0.0
+    tags = set(lm.by_group.get(g) or [])
+    fy = 350.0 if "350" in str(grade or "") else 250.0
+    Mp = float(props(lab)["Zx"]) * fy
+    V = 0.0
+    for m in lm.s12[1].get("members") or []:
+        t = int(m.get("tag") or str(m["id"]).lstrip("e"))
+        if t in tags and m.get("L_clear_mm") and m.get("V_gravity_N") is not None:
+            V = max(V, abs(float(m["V_gravity_N"])) + 2.0 * 1.2 * Mp / float(m["L_clear_mm"]))
+    return V
+
+
+def _joint_shear_spec(lab, V):
+    """The bolted web plate of a moment joint for the joint shear V (design_fin_plate), in the joint spec's keys."""
+    sh = design_fin_plate(lab, V, {}, margin=0.95)
+    if sh is None:
+        return None
+    return {k: v for k, v in sh.items() if k in ("t_plate_mm", "h_plate_mm", "fy_plate_MPa", "fu_plate_MPa", "bolts",
+                                                 "block_shear_areas", "cjp", "n_plates")}
+
+
 def joint_bumps(lm, ev, x, conns):
     """Moment-joint step-ups from the failing Section 12 rows of a run: a panel zone (12.11.2.3 / IS 18168) -> a
     thicker doubler on the joint's spec (the beam group whose beam_column spec the joint uses), sized from the row's
@@ -1873,7 +1908,19 @@ def joint_bumps(lm, ev, x, conns):
     cc = {"connections": conns or {}}
     for r in ev.get("s12_fail") or []:
         rid = str(r.get("id"))
-        if not re.search(r"panel_zone|connection_moment", rid):
+        if not re.search(r"panel_zone|connection_moment|connection_shear", rid):
+            continue
+        if "connection_shear" in rid:
+            m = mems.get(r.get("member"))
+            g_beam = lm.groups_of.get(int(str(m["id"]).lstrip("e"))) if m else None
+            if g_beam is None:
+                continue
+            try:
+                vdem = float(str(r.get("value")).split()[0])
+            except (TypeError, ValueError):
+                vdem = 0.0
+            cur = out.setdefault(g_beam, {})
+            cur["V_shear"] = max(cur.get("V_shear", 0.0), 1.05 * vdem)
             continue
         g_beam = None
         if "panel_zone" in rid:
