@@ -1782,6 +1782,7 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
                 new[k] = v
         out[kind] = new
     import india_connection_design as CD
+    shear_done = {}                     # label -> demand designed for (groups that share a label: the largest wins)
     for g in sorted(x):
         spec = specs[g]
         lab, grade = x[g]
@@ -1793,11 +1794,12 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
         if any(r in ("floor", "roof") for r in rl) and family_of(lab) not in ("CHS", "ISA"):
             tpl = CD.spec_for(conn_cfg, "beam_shear", lab0, "beam") or {}
             V = _group_conn_demand(ev, rl, lab0)
-            if V > 0 or lab != lab0:
+            if (V > 0 or lab != lab0) and max(1.2 * V, 30.0e3) > shear_done.get(lab, 0.0):
                 Vd = max(1.2 * V, 30.0e3)
                 sp = design_fin_plate(lab, Vd, tpl)
                 if sp is not None:
                     out["beam_shear"][lab] = sp
+                    shear_done[lab] = Vd
                 elif infeasible is not None:
                     infeasible.append((g, Vd, tpl))
         # moment joints
