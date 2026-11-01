@@ -87,8 +87,8 @@ FAMILIES_BY_ROLE = {
     "channel": ["MC"],
     "angle": ["ISA"],
 }
-BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": "welded_I_brace", "strut": None,
-                    "gantry": "welded_I"}
+BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": "welded_I_brace",
+                    "strut": "welded_I_brace", "gantry": "welded_I"}
 # braces: CHS families (OCBF) have no built-up fallback; IS 808 rolled braces (SCBF / EBF, E250 B0) fall back to a
 # welded I from IS 2062 E250 B0 plates when no rolled section passes (IN_Ex10: 17.8 m X-braces -- the rolled sections
 # with the radius of gyration fail the IS 18168 Table 2 brace flange limit, the compact ones the KL/r limit)
@@ -674,6 +674,10 @@ def evaluate_run(run_dir, waivers=()):
     out["headline"] = _headline(pkg)
     out["torsion"] = {d: float(v) for d, v in (res.get("torsion_by_dir") or {}).items()}
     out["torsion_fail"] = any(r.startswith("irregularity.torsion") for r in blocking)
+    md_ = (pkg.get("irregularity") or {}).get("modes") or {}
+    out["modes_mass"] = {d: float(md_["first3_mass_" + d.lower()]) for d in ("X", "Y")
+                         if isinstance(md_.get("first3_mass_" + d.lower()), (int, float))}
+    out["modes_fail"] = any(r.startswith("irregularity.modes") for r in blocking)
     return out
 
 
@@ -721,6 +725,20 @@ def torsion_requirements(lm, ev, x, st):
                 if need > req.get(g, 0.0):
                     req[g] = round(need, 1)
                     log("    torsion %s (Delta_max / Delta_ave %.3f): %s keeps %s >= %.4g" % (d, r, g, kind, need))
+    if ev.get("modes_fail"):
+        # IS 1893 Table 6(vii): the d-direction mass sits in rotation-dominant modes (translation coupled with
+        # torsion): a stiffer torsional system for that direction separates them -- the same groups, 25 % up
+        for d, mass in sorted((ev.get("modes_mass") or {}).items()):
+            if mass >= 0.65:
+                continue
+            for g in torsion_groups(lm, d):
+                kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
+                if not kind:
+                    continue
+                need = max(stiffness(x[g][0], kind), req.get(g, 0.0)) * 1.25
+                req[g] = round(need, 1)
+                log("    modes %s (first three translational modes %.0f %% of the mass): %s keeps %s >= %.4g"
+                    % (d, 100.0 * mass, g, kind, need))
     return {g: v for g, v in req.items()}
 
 
