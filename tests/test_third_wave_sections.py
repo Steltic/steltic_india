@@ -404,3 +404,40 @@ def test_section_families_box_prints_the_brace_basis():
     h = RS.context_html(cfg)
     assert "Section families" in h and "12.8.2.1" in h and "5.2(b)" in h and "IS 1161:2014 Table 2" in h
     assert RS.context_html({}) == ""
+
+
+# ------------------------------------------------------------------------------------------------ P3: frame builder
+_FB_SCRIPT = r"""
+import sys
+sys.path.insert(0, ENGINE_DIR)
+import frame_build as FB
+spec = {"NX": 3, "NY": 2, "heights_m": [4.0, 4.0], "col": "HB300", "beam": "MB400",
+        "gold": {"moment_lines": ML, "xbays": {"1-2": [["Y", 3, 0], ["X", 1, 2]]}}}
+g = FB.make_gold(spec)
+print(";".join("%d,%d:%s" % (i, j, g["col_strong"](i, j)) for i in range(4) for j in range(3)))
+"""
+
+
+def _fb_orient(ml, seed):
+    import subprocess
+    src = ("ENGINE_DIR = %r\nML = %r\n" % (ENGINE, ml)) + _FB_SCRIPT
+    env = dict(os.environ, PYTHONHASHSEED=str(seed))
+    out = subprocess.run([sys.executable, "-c", src], capture_output=True, text=True, env=env, timeout=120)
+    assert out.returncode == 0, out.stderr[-2000:]
+    return dict(kv.split(":") for kv in out.stdout.strip().splitlines()[-1].split(";"))
+
+
+def test_frame_build_column_orientation_is_the_same_for_every_hash_seed_and_follows_the_rule():
+    """Column orientation rule (frame_build.col_strong): the first DECLARED moment line through the column, else the
+    first braced bay that uses it in the order listed, else X.  Before, the moment lines were read from a set, so a
+    column on both an X and a Y moment line took whichever the hash seed put first."""
+    ml = [["Y", 0], ["X", 0]]
+    runs = [_fb_orient(ml, s) for s in (0, 1, 2, 3, 7)]
+    assert all(r == runs[0] for r in runs)
+    r = runs[0]
+    assert r["0,0"] == "Y"                  # on both moment lines: the first declared (Y0) wins
+    assert r["1,0"] == "X" and r["0,2"] == "Y"
+    assert r["3,1"] == "Y"                  # no moment line: the Y-braced bay at x-line 3 (listed first)
+    assert r["2,2"] == "X"                  # the X-braced bay along y-line 2
+    assert r["2,1"] == "X"                  # neither: X
+    assert _fb_orient([["X", 0], ["Y", 0]], 5)["0,0"] == "X"   # declared the other way round

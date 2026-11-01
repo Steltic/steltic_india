@@ -33,6 +33,17 @@ D8).
     `report.html`. Before the fix there were 86 differences.
   - The printed tie labels can differ from the published golds; no ratio changes.
 - Test: `tests/test_third_wave_sections.py`, run in subprocesses with four hash seeds.
+- **Shared frame builder (`frame_build.py`, lead request 2026-11-01, found by the CFS agent).** The moment lines
+  were read from a set, so a column on both an X and a Y moment line took the orientation of whichever line the hash
+  seed put first. With main's builder, seeds 0 and 7 gave Y and seeds 1, 2, 3 and 11 gave X for the same corner
+  column. The lines are now kept in their declared order.
+  - **Column orientation rule (`col_strong`):** the strong axis resists the direction of the first declared moment
+    line through the column. Else it resists the direction of the first braced (X or EBF) bay that uses the column,
+    in the order listed (storey 1 upwards). Else it uses `default_strong`, which defaults to X. This is the rule the
+    CFS runner now uses.
+  - Test: the orientation of every column of a 3 × 2 plan, with a corner on two moment lines, is the same for five
+    hash seeds and follows the rule.
+  - No HR gold uses `frame_build`, so no gold changes.
 
 ## The general sizer (`steel_engine/hr_autosize.py`, new)
 
