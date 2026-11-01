@@ -844,6 +844,31 @@ def _check_rows(res):
     return rows
 
 
+def group_table3_row(rows, tags, elem_results, t_gov):
+    """Review 2026-11 (MSME): the Table 3 line of a member GROUP shows the element with the largest Table 3 ratio,
+    with its own row and ratio -- not the Table 3 record of the element that governs the group's overall D/C (the
+    IN_Ex21 bottom chord printed row (iii) 0.56 from its 9.3-governing element while the elements near the knees,
+    with gravity compression, sit on row (i) at 0.78).  The group D/C is unchanged (each element's Table 3 ratio is
+    already in its own D/C)."""
+    best = None
+    for t in tags:
+        t3 = (elem_results.get(t) or {}).get("table3_slenderness")
+        if isinstance(t3, dict) and isinstance(t3.get("dc"), (int, float)):
+            if best is None or t3["dc"] > best[1]["dc"] + 1e-12:
+                best = (t, t3)
+    if best is None or best[0] == t_gov:
+        return rows
+    t, t3 = best
+    out = [r for r in rows if not str(r.get("name") or "").startswith("IS 800 Table 3")]
+    gc3 = t3.get("governing_combo")
+    out.append({"name": "IS 800 Table 3 slenderness KL/r (element e%s%s; the largest in the group)"
+                        % (t, (", combination %s" % gc3) if gc3 else ""),
+                "value": t3.get("value"), "limit": t3.get("limit"), "dc": t3.get("dc"), "ok": t3.get("ok"),
+                "clause": t3.get("clause"), "cite": t3.get("cite"), "source": "india_is800.member_check_is800",
+                "governing": False, "combo": gc3, "element": t})
+    return out
+
+
 def sfrs_beam_tags(reg, info0):
     """Beams that are part of the lateral system: moment-frame beams (both ends rigid) and braced-bay beams
     (a brace frames into the bay at the beam's level)."""
@@ -1225,6 +1250,10 @@ def design_india(name, cfg, outdir):
         cases = combos(cfg)
         flex_note = ("IS 1893 Table 5(ii): three-dimensional dynamic analysis -> RSA adopted for the rigid case too "
                      "(cfg['analyses'] += ['RSA'])")
+    # review 2026-11 (MSME): the IS 800 Table 3 row choice reads each combination's own record (wind / earthquake
+    # terms), not its label text -- member-wind labels such as WMX+ (IN_Ex6) carry no 'W_' / 'WL'
+    import india_is800 as _I8r
+    _I8r.register_combinations(cases)
     rsa_el = None
     if _has_rsa(cases):
         rsa = run.get("rsa") or E.rsa_analysis(cfg)
@@ -1428,7 +1457,7 @@ def design_india(name, cfg, outdir):
         gsp = {q: max(float(envt[t].get(q + "_span") or 0.0) for t in tags) for q in ("Mz", "My")}
         if gsp["Mz"] or gsp["My"]:              # span-moment fix: the in-span extremes, shown apart
             inp.update(Mz_span_Nmm=round(gsp["Mz"], 1), My_span_Nmm=round(gsp["My"], 1))
-        rows = _check_rows(res)
+        rows = group_table3_row(_check_rows(res), tags, elem_results, t0)
         dc = res.get("dc")
         pkg["members"].append({"id": "%s-%s" % (role, sec), "inputs": inp, "checks": rows,
                                "limit_state": "IS 800:2007 7-9 (member_check_is800)", "cited": res.get("clause"),

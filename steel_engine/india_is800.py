@@ -3046,14 +3046,41 @@ def peb_buckling_section(comp, p, bsec, fy, KLz, KLy, *, process=None, welded=Tr
 # review 2026-11 (MSME): IS 800 Table 3 row choice -- which combinations are wind / earthquake combinations, and the
 # axial force below which a member is not 'in compression' (analysis noise, e.g. 0.3 N in an eave strut)
 P_COMP_TOL_N = 1.0
-_LATERAL_TOKEN = re.compile(r"(?:EQ|EL|WL|WM\d|W_)")
+_LATERAL_TOKEN = re.compile(r"(?:EQ|EL|WL|WM|W_)")
+_LATERAL_REGISTRY = {}
+
+
+def combination_is_lateral(case):
+    """True when a combination record (india_loads.Case with .meta, or a combination dict) has a wind or earthquake
+    term: kind 'W' / 'EQ', a member-wind pattern (fWM / member_wind), response-spectrum terms (rsa) or vertical
+    earthquake (fEv)."""
+    meta = getattr(case, "meta", None)
+    if meta is None and isinstance(case, dict):
+        meta = case
+    meta = meta or {}
+    return bool(meta.get("kind") in ("EQ", "W") or meta.get("lateral_kind") in ("EQ", "W") or meta.get("fWM")
+                or meta.get("member_wind") or meta.get("rsa") or meta.get("fEv") or meta.get("fE") or meta.get("fW"))
+
+
+def register_combinations(cases):
+    """design_india registers its combinations, so is_lateral_combo classifies a label by its combination record
+    (review 2026-11).  The registry is per process (each job runs in its own process)."""
+    _LATERAL_REGISTRY.clear()
+    for c in cases or []:
+        lab = c[0] if isinstance(c, tuple) else (c.get("label") if isinstance(c, dict) else None)
+        if lab is not None:
+            _LATERAL_REGISTRY[str(lab)] = combination_is_lateral(c)
 
 
 def is_lateral_combo(label):
-    """True for a combination label with a wind or earthquake action: storey wind W_X / W_Y, member wind WM0+ /
-    WM90-R / ..., WL, EQ_X / EQ_Y and EL (IS 800 Table 3 row (iii): 'compression forces resulting only from a
-    combination with wind / earthquake actions').  Notional loads (N_X) and gravity are not lateral."""
-    return bool(_LATERAL_TOKEN.search(str(label or "")))
+    """True for a combination with a wind or earthquake action (IS 800 Table 3 row (iii): 'compression forces
+    resulting only from a combination with wind / earthquake actions').  A registered combination is classified by
+    its record (register_combinations: its load terms); otherwise by the label: storey wind W_X / W_Y, member wind
+    WM0+ / WM90-R / WMX+ / ..., WL, EQ_X / EQ_Y and EL.  Notional loads (N_X) and gravity are not lateral."""
+    lab = str(label or "")
+    if lab in _LATERAL_REGISTRY:
+        return _LATERAL_REGISTRY[lab]
+    return bool(_LATERAL_TOKEN.search(lab))
 
 
 def table3_row_combo(Ps, row):
