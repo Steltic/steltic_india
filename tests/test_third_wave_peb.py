@@ -3,8 +3,10 @@
 Before this fix a column's member check used its end moments only.  A gable wind column (pinned at the base and at the
 end rafter) carries the wall wind as a span load: its end moments are zero and the w L^2 / 8 at mid-height was never
 checked -- the auto-sizer then took the IN_Ex1..4 wind columns down to 200 x 120 plates.  static_model now records the
-signed span extreme of every column (Mmaj_span / Mmin_span) from the static part of each combination, and the member
-check uses it (Cm = 1.0) wherever it exceeds both end moments.
+signed span extreme of every column (Mmaj_span / Mmin_span) and the free moment of its span load (Mmaj_free /
+Mmin_free) from the static part of each combination; the member check rebuilds the moment diagram from them, checks
+both signs and takes Cm / CmLT from the IS 800 Table 18 uniform-loading rows (span-moment fix, 2026-11-01:
+tests/test_span_moment_fix.py has the review's cases).
 """
 import json
 import math
@@ -35,7 +37,7 @@ def _column(vecxz, Wy, Wz, Mbase=(0.0, 0.0), L=10000.0):
     ops.system("BandGeneral"); ops.numberer("Plain"); ops.constraints("Plain")
     ops.integrator("LoadControl", 1.0); ops.algorithm("Linear"); ops.analysis("Static")
     assert ops.analyze(1) == 0
-    return ops.eleResponse(1, "localForce"), {"cols": [{"tag": 1, "n1": 1, "n2": 2}]}
+    return ops.eleResponse(1, "localForce"), {"cols": [{"tag": 1, "n1": 1, "n2": 2, "L": L}]}
 
 
 @pytest.mark.parametrize("vecxz", [(0, 1, 0), (1, 0, 0)])
@@ -44,7 +46,7 @@ def test_span_moment_of_a_pinned_column_is_wL2_over_8(vecxz, axis):
     import static_model as SM
     w, L = 1.5, 10000.0
     lf, model = _column(vecxz, w if axis == "y" else 0.0, w if axis == "z" else 0.0, L=L)
-    mz, my = SM.column_span_moments(model, {1: lf})[frozenset((1, 2))]
+    mz, my, fz, fy = SM.column_span_moments(model, {1: lf})[frozenset((1, 2))]
     got = mz if axis == "y" else my                      # a local-y load bends about local z (major), z about y
     other = my if axis == "y" else mz
     assert abs(got) == pytest.approx(w * L * L / 8.0, rel=1e-6)
@@ -86,7 +88,7 @@ def test_span_moment_with_end_moments_matches_a_finely_split_column(vecxz, load)
     import static_model as SM
     Mb = (3.0e6, -2.0e6)
     lf, model = _column(vecxz, load[0], load[1], Mbase=Mb)
-    mz, my = SM.column_span_moments(model, {1: lf})[frozenset((1, 2))]
+    mz, my, _fz, _fy = SM.column_span_moments(model, {1: lf})[frozenset((1, 2))]
     fz, fy = _split_column_moments(vecxz, load[0], load[1], Mb)
     for got, ref in ((mz, fz), (my, fy)):
         ext = max(ref, key=abs)
@@ -100,24 +102,28 @@ def test_span_moment_with_end_moments_matches_a_finely_split_column(vecxz, load)
 def test_no_span_load_no_span_moment():
     import static_model as SM
     lf, model = _column((0, 1, 0), 0.0, 0.0, Mbase=(2.0e6, 1.0e6))
-    assert SM.column_span_moments(model, {1: lf})[frozenset((1, 2))] == (0.0, 0.0)
+    assert SM.column_span_moments(model, {1: lf})[frozenset((1, 2))] == (0.0, 0.0, 0.0, 0.0)
 
 
-def test_combo_forces_use_the_span_moment_only_where_it_governs():
+def test_combo_forces_hand_the_span_load_to_the_member_check():
+    """Span-moment fix (2026-11-01): every column record with a span load hands its free moment to the member check
+    (which rebuilds the diagram), also where the end moments govern (the portal knee) -- not only where the span
+    extreme exceeds both ends."""
     import static_model as SM
     n = len(SM.REC_FIELDS)
-    assert SM.REC_FIELDS[13:] == ("Mmaj_span", "Mmin_span")
+    assert SM.REC_FIELDS[13:] == ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
     base = dict.fromkeys(SM.REC_FIELDS, 0.0)
-    pin = dict(base, N=-1e4, Mmaj_span=-2.0e7, Mmin_span=5.0e6)               # wind column: zero end moments
-    knee = dict(base, N=-1e5, Mmaj_i=0.0, Mmaj_j=-9.0e8, Mmaj_span=-1.0e8)   # portal column: the knee moment governs
+    pin = dict(base, N=-1e4, Mmaj_span=-2.0e7, Mmin_span=5.0e6, Mmaj_free=-2.0e7, Mmin_free=5.0e6)   # wind column
+    knee = dict(base, N=-1e5, Mmaj_i=0.0, Mmaj_j=-9.0e8, Mmaj_free=-1.0e8)   # portal column: the knee moment governs
     recs = {"pin": tuple(pin[f] for f in SM.REC_FIELDS), "knee": tuple(knee[f] for f in SM.REC_FIELDS)}
     cf = {c["combo"]: c for c in SM.combo_forces_for_member_check(recs, "col")}
-    assert cf["pin"]["Mz_mid_Nmm"] == -2.0e7 and cf["pin"]["My_mid_Nmm"] == 5.0e6
-    assert "Mz_mid_Nmm" not in cf["knee"] and "My_mid_Nmm" not in cf["knee"]
+    assert cf["pin"]["Mz_free_Nmm"] == -2.0e7 and cf["pin"]["My_free_Nmm"] == 5.0e6
+    assert cf["knee"]["Mz_free_Nmm"] == -1.0e8 and "My_free_Nmm" not in cf["knee"]
+    assert not {"Mz_mid_Nmm", "My_mid_Nmm"} & set(cf["pin"])
     # an old 13-field record (no span fields) reads as no span moment
     old = {"o": tuple(pin[f] for f in SM.REC_FIELDS[:13])}
-    assert "Mz_mid_Nmm" not in SM.combo_forces_for_member_check(old, "col")[0]
-    assert n == 15
+    assert "Mz_free_Nmm" not in SM.combo_forces_for_member_check(old, "col")[0]
+    assert n == 17
 
 
 def test_member_check_counts_the_minor_axis_span_moment():
@@ -169,7 +175,7 @@ def test_gable_wind_column_is_checked_for_the_wall_wind(mini_job):
     M_rec = max(float(inp.get("Mz_Nmm") or 0.0), float(inp.get("My_Nmm") or 0.0))
     assert M_rec == pytest.approx(M_ref, rel=0.05)
     recs = json.load(open(os.path.join(out["root"], "design", "member_combo_forces.json")))
-    assert recs["fields"][13:] == ["Mmaj_span", "Mmin_span"]
+    assert recs["fields"][13:] == ["Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free"]
     el = recs["elements"][str(inp["governing_element"])]
     assert max(max(abs(r[13]), abs(r[14])) for r in el["records"].values() if len(r) > 14) == pytest.approx(M_ref, rel=0.05)
     rows = [c for c in m["checks"] if "9.3" in str(c.get("name"))]

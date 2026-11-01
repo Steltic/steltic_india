@@ -295,6 +295,7 @@ def _interval(pts, a0, a1):
 def _c1_segment(chain, recs_of, combo, p0, p1, short):
     """C1 over the restrained length [p0, p1] of an ordered chain [(t, a0, a1)] for one combination, or 1.0."""
     import india_is800 as I8
+    import static_model as SM
     vals = []                                           # (position, moment) at element ends inside / bounding
     m_at = {}
     for t, a0, a1 in chain:
@@ -302,7 +303,11 @@ def _c1_segment(chain, recs_of, combo, p0, p1, short):
             continue
         if not short.get(t):
             return 1.0, "restrained length runs into a prismatic element"
-        r = list(recs_of(t).get(combo) or []) + [0.0] * 13
+        r = list(recs_of(t).get(combo) or []) + [0.0] * 17
+        if any(r[SM.REC_FIELDS.index(f)] for f in ("Mmaj_span", "Mmaj_free")):
+            # span-moment fix (2026-11-01): a span load inside the restrained length (wall wind on the column) --
+            # the end-moment gradient does not describe the diagram there; the D-T1 C1 = 1.0 stands
+            return 1.0, "span load inside the restrained length"
         Mi, Mj = float(r[4]), float(r[5])
         for p in (p0, p1):
             if a0 - 1e-6 <= p <= a1 + 1e-6 and p not in m_at:

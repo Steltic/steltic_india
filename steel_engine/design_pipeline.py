@@ -165,12 +165,15 @@ def design(name, outdir=None):
                                       floor_system=cfg.get("floor_system", "one-way"),
                                       determinate=determinate, sec_sig=sec_sig, lat_sig=lat_sig,
                                       cache_dir=outdir)
-    env = {t: dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="") for t in reg}
+    env = {t: dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", Mz_end=0.0) for t in reg}
     score = {t: -1.0 for t in reg}
     for t in reg:
         se = senv.get(frozenset((reg[t][2], reg[t][3])))
         if se:
-            env[t] = dict(comp=se["comp"], tens=se["tens"], Mz=se["Mz"], My=se["My"], V=se["V"], combo=se["combo"])
+            # span-moment fix (2026-11-01): Mz / My = member moments (a column's span extreme included) for the
+            # schedule and the member demands; Mz_end = the end-moment envelope for the splice / base demand
+            env[t] = dict(comp=se["comp"], tens=se["tens"], Mz=_member_moment(se, "Mz"), My=_member_moment(se, "My"),
+                          V=se["V"], combo=se["combo"], Mz_end=se["Mz"])
         score[t] = (max(env[t]["comp"], env[t]["tens"]) if reg[t][0] in ("col", "brace") else env[t]["Mz"])
 
     # ---- member_schedule.csv (every element: DEMANDS only; SI headers when N-mm) ----
@@ -221,10 +224,10 @@ def design(name, outdir=None):
         kind, sec, n1, n2 = reg[t]; by.setdefault((kind, sec, role_of[t]), []).append(t)
     genv = {}
     for key, tags in by.items():
-        gg = dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0)
+        gg = dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, Mz_end=0.0)
         for t in tags:
             e = env[t]
-            for kk in ("comp", "tens", "Mz", "My", "V"): gg[kk] = max(gg[kk], e[kk])
+            for kk in ("comp", "tens", "Mz", "My", "V", "Mz_end"): gg[kk] = max(gg[kk], e[kk])
         tg = max(tags, key=lambda t: score[t])
         gg["combo"] = env[tg]["combo"]; gg["L"] = max(length[t] for t in tags); genv[key] = gg
     with open(os.path.join(outdir, "member_demands.md"), "w") as f:
@@ -310,10 +313,10 @@ def design(name, outdir=None):
             basis = "IS 800 / IS 816 / IS 4000 connection; seismic capacity design per IS 800 §12 + IS 1893 (agent/RAG)"
         else:
             ctype = "column splice / base plate"
-            if _SI:
-                dem = {"P_N": round(e["comp"], 1), "M_kNm": round(e["Mz"]/_mdiv, 3)}
+            if _SI:      # the END-moment envelope: a column's span moment is no splice / base demand
+                dem = {"P_N": round(e["comp"], 1), "M_kNm": round(e["Mz_end"]/_mdiv, 3)}
             else:
-                dem = {"P_kip": round(e["comp"], 1), "M_kipft": round(e["Mz"]/12, 1)}
+                dem = {"P_kip": round(e["comp"], 1), "M_kipft": round(e["Mz_end"]/12, 1)}
             basis = "IS 800 base plate / splice; foundation anchorage per applicable IS (agent/RAG)"
         entry = {"id": "conn-%s-%s" % (role, sec), "type": ctype, "section": sec,
                 "demand": dem, "design_basis": basis,
@@ -700,19 +703,38 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
         m["overrides"] = used
     if kind == "col":
         m["sway"] = bool(cfg.get("sway_frame"))
+        if m["sway"] and role == "gravity_col":
+            # IS 800 Table 18 note: "For members with sway buckling mode, the equivalent uniform moment factor
+            # Cmy = Cmz = 0.9".  cfg['sway_frame'] marks a job with moment lines; a gravity column (no moment beam and
+            # no brace on its line, pinned into the frame, its ends held by the lateral system -- a gable wind column
+            # under the end rafter held by the roof bracing) has no sway buckling mode of its own, so under a span load
+            # it takes the Table 18 uniform-loading row (span-moment fix, 2026-11-01).  Scope: the span-load path
+            # only -- its end-moment-only checks (Table 4, IS 1893 7.11.2) keep 'sway' as before (an owner ruling)
+            m["sway_span_load"] = False
     return m
 
 
+def _member_moment(e, q):
+    """Member-check moment envelope of one element: the end-moment envelope e[q] ('Mz' / 'My') or a column's in-span
+    extreme e[q + '_span'], whichever is larger -- for the member schedule and the member inputs only; connection,
+    splice and base demands keep the end-moment envelope e[q] (span-moment fix, 2026-11-01)."""
+    return max(float(e.get(q) or 0.0), float(e.get(q + "_span") or 0.0))
+
+
 def _top_records(recs, k=12):
-    """The governing combinations of one member (largest |N|, |Mmaj|, |Mmin|, |V|) -- concurrent tuples."""
+    """The governing combinations of one member (largest |N|, |Mmaj|, |Mmin|, |V|) -- concurrent tuples -- plus EVERY
+    combination in which a column carries a span load (span-moment fix, 2026-11-01): the span moment of the member
+    wind does not depend on the gravity factors, so ranking by |span| alone can drop the combination whose concurrent
+    axial force governs the 9.3.2.2 interaction (1.2DL+1.2LL+1.2WM against 1.5DL+1.5WM).  The check is cheap; the
+    member-wind combinations of a column are kept whole instead of ranked."""
     if len(recs) <= k:
         return recs
+    import static_model as SM
     keep = set()
     for idx in range(4):
         keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx]))[: max(3, k // 4)])
-    for idx in (13, 14):        # third wave (2026-10-30): the combinations with the largest column span moments
-        if any(len(r) > idx and r[idx] for r in recs.values()):
-            keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx] if len(recs[l]) > idx else 0.0))[:3])
+    span_idx = [SM.REC_FIELDS.index(f) for f in ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")]
+    keep |= {l for l, r in recs.items() if any(len(r) > i and r[i] for i in span_idx)}
     comp = sorted(recs, key=lambda l: recs[l][0])[:3]        # most compressive
     keep |= set(comp)
     return {l: recs[l] for l in keep}
@@ -749,7 +771,10 @@ def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
         for c in cf:
             m_ = c.get("Mz_%s_Nmm" % end) or 0.0
             my_ = c.get("My_%s_Nmm" % end) or 0.0
-            cfe.append(dict(c, Mz_i_Nmm=m_, Mz_j_Nmm=m_, My_i_Nmm=my_, My_j_Nmm=my_, Mz_mid_Nmm=None))
+            # the station carries its END forces only: the span moment of either axis (and a span load's free
+            # moment) belongs to the element check above (span-moment fix, 2026-11-01: My_mid / *_free cleared too)
+            cfe.append(dict(c, Mz_i_Nmm=m_, Mz_j_Nmm=m_, My_i_Nmm=my_, My_j_Nmm=my_, Mz_mid_Nmm=None,
+                            My_mid_Nmm=None, Mz_free_Nmm=None, My_free_Nmm=None))
         m2 = dict(mem, section=sec_e, id="%s@%s" % (mem.get("id"), end))
         try:
             r_ = I8.member_check_is800(m2, cfe, cfg=cfg)
@@ -1221,7 +1246,8 @@ def design_india(name, cfg, outdir):
         for t in sorted(reg):
             kind, sec, n1, n2 = reg[t]; e = envt[t]
             row_ = [t, kind, role_of[t], sec, round(length[t], 1), round(e["comp"] / 1e3, 2),
-                    round(e["tens"] / 1e3, 2), round(e["Mz"] / _mdiv, 3), round(e["My"] / _mdiv, 3),
+                    round(e["tens"] / 1e3, 2), round(_member_moment(e, "Mz") / _mdiv, 3),
+                    round(_member_moment(e, "My") / _mdiv, 3),
                     round(e["V"] / 1e3, 2), e["combo"]]
             if _pebcols:
                 d0_, d1_, pl_, kg_, pm_ = PO.schedule_extra(t, sec, length[t])
@@ -1282,12 +1308,16 @@ def design_india(name, cfg, outdir):
         t0, res = worst
         e = envt[t0]
         g = {q: max(envt[t][q] for t in tags) for q in ("comp", "tens", "Mz", "My", "V")}
+        g.update({q: max(_member_moment(envt[t], q) for t in tags) for q in ("Mz", "My")})   # + column span moments
         inp = {"kind": kind, "role": role, "section": sec, "n_elements": len(tags), "governing_element": t0,
                "length_mm": round(max(length[t] for t in tags), 1),
                "P_comp_N": round(g["comp"], 1), "P_tens_N": round(g["tens"], 1), "Mz_Nmm": round(g["Mz"], 1),
                "My_Nmm": round(g["My"], 1), "V_N": round(g["V"], 1), "governing_combo": e["combo"],
                "combo_forces_file": "design/member_combo_forces.json",
                "grade": _member_input_record(cfg, t0, kind, sec, 0, 0, 0, role).get("grade")}
+        gsp = {q: max(float(envt[t].get(q + "_span") or 0.0) for t in tags) for q in ("Mz", "My")}
+        if gsp["Mz"] or gsp["My"]:              # span-moment fix: the in-span extremes, shown apart
+            inp.update(Mz_span_Nmm=round(gsp["Mz"], 1), My_span_Nmm=round(gsp["My"], 1))
         rows = _check_rows(res)
         dc = res.get("dc")
         pkg["members"].append({"id": "%s-%s" % (role, sec), "inputs": inp, "checks": rows,
