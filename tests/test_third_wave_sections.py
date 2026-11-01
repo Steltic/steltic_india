@@ -359,3 +359,26 @@ def test_local_member_ratio_governs_over_every_member_check_call_of_an_element(t
         lm = AZ.Local(str(d), {9: "g"}, {"g": {"role": "column"}}, {"g": "HB200"}, {}, {})
         out.append(lm.member_dc(9, "HB200", None)[0])
     assert out[1] > out[0] * 2.0
+
+
+def test_torsion_requirement_stiffens_the_frames_of_the_other_direction():
+    """IS 1893 Table 5(i): Delta_max / Delta_ave above 1.2 under Y loading -> the X-direction frames (and the lateral
+    columns) keep a larger stiffness from then on; the Y braces are not asked for more."""
+    AZ = _az()
+
+    class LM:
+        s12 = ("SMRF+SCBF", {"members": [
+            {"id": "e1", "tag": 1, "role": "beam", "frame_dir": "X"},
+            {"id": "e2", "tag": 2, "role": "column"},
+            {"id": "e3", "tag": 3, "role": "brace", "frame_dir": "Y"}]}, {})
+        groups_of = {1: "raf", 2: "col", 3: "brace"}
+        specs = {"raf": {"role": "beam", "lateral": True}, "col": {"role": "column", "lateral": True},
+                 "brace": {"role": "brace", "lateral": True}}
+    x = {"raf": ("MB400", None), "col": ("HB300", None), "brace": ("HB150", None)}
+    st = {}
+    req = AZ.torsion_requirements(LM(), {"torsion_fail": True, "torsion": {"X": 1.05, "Y": 1.25}}, x, st)
+    assert sorted(req) == ["col", "raf"]
+    f = min(max(0.25 / (AZ.TORSION_TARGET - 1.0), 1.05), 1.6)
+    assert req["raf"] == pytest.approx(AZ.stiffness("MB400", "I") * f, rel=1e-6)
+    # kept on later passes, also when the torsion check passes
+    assert AZ.torsion_requirements(LM(), {"torsion_fail": False, "torsion": {"Y": 1.1}}, x, st) == req

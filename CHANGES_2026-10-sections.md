@@ -68,6 +68,17 @@ D8).
      connection.
   7. The loop stops when a passing design no longer changes. The lightest passing design in the target families
      is kept.
+- **Details the local step uses so that it predicts the full run:**
+  - every member-check call of an element is kept. The IS 1893 7.11.2 check of a gravity column calls the member
+    check a second time for the same element; before, that call replaced the strength check's forces;
+  - declared secondary members (`cfg['secondary_members']`) whose section is a sized group, such as the IN_Ex9 lean-to
+    roof beam under snow drift and ponding, are checked with the engine's own functions;
+  - brace ends are designed under the braced part of a combined system (`SMRF+SCBF` → SCBF), as
+    `section12_checks` checks them.
+- **Fixed column bases on a new column** (no stiffeners) are laid out again as a perimeter ring of anchors (the
+  IN_Ex8 detail) for the new column: plate = column + 2 × projection, n anchors on each face, edge 1.7 d0
+  (IS 800 10.2.4.2), pitch ≥ 2.5 d (10.2.2). They are then stepped up from the failing rows of the verification run:
+  plate thickness up to 150 mm, anchor number and then diameter, bearing projection, embedment.
 - **Mass:** the engine's take-off of the modelled members (`design/takeoff.json`). Connections are not in the
   kg/m², as in every hot-rolled gold.
 - **CLI:**

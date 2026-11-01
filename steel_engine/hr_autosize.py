@@ -87,7 +87,8 @@ FAMILIES_BY_ROLE = {
     "channel": ["MC"],
     "angle": ["ISA"],
 }
-BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": None, "strut": None}
+BUILT_UP_BY_ROLE = {"beam": "welded_I", "link": "welded_I", "column": "box", "brace": None, "strut": None,
+                    "gantry": "welded_I"}
 STIFF_BY_ROLE = {"beam": "I", "link": "I", "column": "I", "brace": "A", "strut": "A", "gantry": None}
 LOG = []
 
@@ -562,6 +563,17 @@ def worker(run_dir):
                 return _s12(system, md, s12cfg)
             DP.member_checks_is800 = mc
             S12.section12_checks = s12
+            import india_seismic as ISM
+            _irr = ISM.irregularity_screens
+
+            def irr(cfg_, run_):
+                out_ = _irr(cfg_, run_)
+                try:          # Delta_max / Delta_ave per loading direction (the package keeps only the largest)
+                    res["torsion_by_dir"] = {d: max(v["ratio"]) for d, v in (run_.get("drift") or {}).items()}
+                except Exception:
+                    pass
+                return out_
+            ISM.irregularity_screens = irr
             import importlib.util
             spec = importlib.util.spec_from_file_location("cfg_mod", os.path.join(run_dir, "cfg.py"))
             mod = importlib.util.module_from_spec(spec)
@@ -647,7 +659,54 @@ def evaluate_run(run_dir, waivers=()):
                          if isinstance(r, dict)]
     out["gates_false"] = [g for g, v in (pkg.get("gates") or {}).items() if v is False]
     out["headline"] = _headline(pkg)
+    out["torsion"] = {d: float(v) for d, v in (res.get("torsion_by_dir") or {}).items()}
+    out["torsion_fail"] = any(r.startswith("irregularity.torsion") for r in blocking)
     return out
+
+
+TORSION_TARGET = 1.2 * 0.97         # Table 5(i) (Amd 2) regular band <= 1.2, with a margin
+
+
+def torsion_groups(lm, d):
+    """The lateral groups that resist the torsion of a d-direction loading with their lever arm: the members of the
+    frames in the other plan direction (beams / braces whose frame direction is the other one) and the lateral
+    columns (they belong to the moment or braced frames of both directions)."""
+    other = "X" if d == "Y" else "Y"
+    if lm.s12 is None:
+        return []
+    out = set()
+    for m in lm.s12[1].get("members") or []:
+        t = int(m.get("tag") or str(m["id"]).lstrip("e"))
+        g = lm.groups_of.get(t)
+        if g is None or (lm.specs.get(g) or {}).get("role") == "fixed":
+            continue
+        sp = lm.specs.get(g) or {}
+        if m.get("frame_dir") == other and (sp.get("lateral") or m.get("role") == "brace"):
+            out.add(g)
+        elif m.get("role") == "column" and sp.get("lateral"):
+            out.add(g)
+    return sorted(out)
+
+
+def torsion_requirements(lm, ev, x, st):
+    """IS 1893 Table 5(i): when the run is torsionally irregular (Delta_max / Delta_ave > 1.2 in a direction d), the
+    groups that give the torsional stiffness for that direction (torsion_groups) keep at least their stiffness x
+    (ratio - 1) / (TORSION_TARGET - 1) from now on (ratio - 1 is proportional to K_d / K_theta)."""
+    req = st.setdefault("tor_req", {})
+    if ev.get("torsion_fail"):
+        for d, r in sorted((ev.get("torsion") or {}).items()):
+            if r <= 1.2:
+                continue
+            f = min(max((r - 1.0) / (TORSION_TARGET - 1.0), 1.05), 1.6)
+            for g in torsion_groups(lm, d):
+                kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
+                if not kind:
+                    continue
+                need = stiffness(x[g][0], kind) * f
+                if need > req.get(g, 0.0):
+                    req[g] = round(need, 1)
+                    log("    torsion %s (Delta_max / Delta_ave %.3f): %s keeps %s >= %.4g" % (d, r, g, kind, need))
+    return {g: v for g, v in req.items()}
 
 
 def _headline(pkg):
@@ -864,6 +923,7 @@ class Local:
         cr = copy.deepcopy(cfg.get("crane") or {})
         if not cr:
             return None
+        register(label)
         cr["gantry_section"] = label
         if grade:
             cr["gantry_grade"] = grade
@@ -877,9 +937,18 @@ class Local:
             log("    gantry check failed for %s: %s" % (label, ex))
             return None
         dcs = [c.get("dc") for c in r.get("checks") or [] if isinstance(c.get("dc"), (int, float))]
+        # the vertical deflection under the static wheel loads scales exactly with 1 / Ix: the Ix it asks for screens
+        # the remaining candidates (gantry_ix_req)
+        dv = [c["dc"] for c in r.get("checks") or [] if isinstance(c.get("dc"), (int, float)) and
+              "vertical deflection" in str(c.get("name") or c.get("id") or "")]
+        if dv:
+            self._gantry_ix = max(getattr(self, "_gantry_ix", 0.0), float(props(label)["Ix"]) * max(dv))
         if any(c.get("ok") is None for c in r.get("checks") or []):
             return None
         return max(dcs) if dcs else None
+
+    def gantry_ix_req(self, margin):
+        return getattr(self, "_gantry_ix", 0.0) / max(margin, 1e-6)
 
     def _gantry_group(self):
         return next((g for g, sp in self.specs.items() if sp.get("role") == "gantry"), None)
@@ -933,8 +1002,8 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
         if spec.get("role") == "fixed" or g in fixed or spec.get("same_as"):
             new[g] = x[g]
             continue
-        if not lm.by_group.get(g):
-            new[g] = x[g]
+        if not lm.by_group.get(g) and spec.get("role") != "gantry" and not lm.secondary.get(g):
+            new[g] = x[g]                   # a gantry girder or a secondary member is sized from its own checks
             notes[g] = "no elements"
             continue
         kind = spec.get("stiff", STIFF_BY_ROLE.get(spec.get("role")))
@@ -944,6 +1013,10 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
         for lab, grade, tier in candidates(spec):
             if not _capacity_screen(lab, grade, dem, family_of(lab) == "CHS"):
                 continue
+            if spec.get("role") == "gantry":
+                register(lab)
+                if float(props(lab)["Ix"]) < lm.gantry_ix_req(margins.get(g, spec.get("margin", 0.95))) * 0.999:
+                    continue
             if need and kind and stiffness(lab, kind) < need - 1e-6:
                 continue
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
@@ -1408,7 +1481,7 @@ def ring_base(col, template, *, d=None, n=None, t=None, proj=None):
     return sp
 
 
-def adapt_base(template, old_col, new_col):
+def _adapt_base(template, old_col, new_col):
     """A column base for a new column section from the base of the old one: the plate keeps its projections beyond
     the column (B and L grow or shrink with the column, never below the old anchor layout's fit), the anchors and
     every other declared item (embedment, stiffeners, shear key) are kept; the plate fy follows its thickness."""
@@ -1426,6 +1499,38 @@ def adapt_base(template, old_col, new_col):
     if sp.get("t_plate_mm"):
         sp["fy_plate_MPa"] = plate_fy(sp["t_plate_mm"], sp.get("plate_grade") or "E250")
     return sp
+
+
+_GEOM_NOTE = re.compile(r"plate\s+\d+(\.\d+)?\s*x\s*\d+(\.\d+)?\s*x\s*\d+|\b\d+\s*M\d\d\b")
+
+
+def base_note(sp, note):
+    """A base note that states the plate and anchors (IN_Ex14: 'plate 800 x 1400 x 90 (E250, fy 230), 12 M48 8.8
+    anchors; grout ...') is re-stated from the base's own geometry; the rest of the note (after the first ';') is
+    kept.  Other notes are returned unchanged."""
+    if not isinstance(note, str) or not _GEOM_NOTE.search(note):
+        return note
+    an = sp.get("anchors") or {}
+    head = "plate %s x %s x %s (%s, fy %s), %s M%s %s anchors" % (
+        _fmt(sp.get("B_mm")), _fmt(sp.get("L_mm")), _fmt(sp.get("t_plate_mm")), sp.get("plate_grade") or "E250",
+        _fmt(sp.get("fy_plate_MPa")), an.get("n_total"), an.get("d_mm"), an.get("grade") or "8.8")
+    return head + (";" + note.split(";", 1)[1] if ";" in note else "")
+
+
+def adapt_base(template, old_col, new_col):
+    """_adapt_base, with a geometry-stating note re-stated (base_note)."""
+    sp = _adapt_base(template, old_col, new_col)
+    if isinstance(sp, dict) and sp != template and sp.get("note"):
+        sp["note"] = base_note(sp, sp["note"])
+    return sp
+
+
+def bump_base(sp, failing, col=None):
+    """_bump_base, with a geometry-stating note re-stated (base_note)."""
+    out = _bump_base(sp, failing, col=col)
+    if isinstance(out, dict) and out.get("note"):
+        out["note"] = base_note(out, out["note"])
+    return out
 
 
 def adapt_splice(template, old_col, new_col):
@@ -1466,7 +1571,7 @@ def _dc_of(rows, pattern):
     return max(v) if v else None
 
 
-def bump_base(sp, failing, col=None):
+def _bump_base(sp, failing, col=None):
     """Step up a column base for its failing rows (the run's 'column base' rows, with their ratios): plate t by
     sqrt(ratio) (bending), plan by sqrt(ratio) (bearing), anchor area by the ratio (a bigger diameter, then more
     anchors), embedment length by the ratio (bond), stiffeners one plate up."""
@@ -1879,6 +1984,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         for g, f in (st.get("stiff_boost") or {}).items():
             if g in req:
                 req[g] *= float(f)
+        for g, v in torsion_requirements(lm, ev, x, st).items():
+            req[g] = max(req.get(g, 0.0), v)
         lat_fail = [k for k, v in list((ev.get("drift") or {}).items()) + list((ev.get("wind") or {}).items()) if v > 1.0]
         if lat_fail and ev["passed"] is False:
             for g in req:
