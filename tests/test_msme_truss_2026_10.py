@@ -390,3 +390,15 @@ def test_column_line_read_from_the_grid_end():
     assert DP.column_line(182400, 100001, grid) == (0, 1)
     assert DP.column_line(1, 100001, grid) == (0, 1)                # an ordinary column: its first node
     assert DP.column_line(182400, 100001, None) == (824, 0)        # no grid information: as before
+
+
+def test_activity_appendix_without_a_log_is_plain_text(monkeypatch):
+    """A job designed without a tool-call log (IN_Ex21) printed the developer note '[no activity_log.jsonl found --
+    call new_activity_log() ...]' in Appendix C.  It now says so in plain words."""
+    import report as R
+    import report_public as PUB
+    monkeypatch.setattr(R, "_load_activity", lambda name: ([], None))
+    h = R._activity_section("IN_Ex21_MSME_angle_truss_shed_Hosur")
+    assert "Appendix C" in h and "No tool-call log was recorded" in h
+    assert "activity_log" not in h and "new_activity_log" not in h and "MCP" not in h
+    assert not PUB.leaks(PUB.public_html(h))
