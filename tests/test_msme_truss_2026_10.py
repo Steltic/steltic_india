@@ -361,3 +361,32 @@ def test_truss_report_section_rulings_and_public_text():
     printed = PUB.public_html(html_)
     assert not PUB.leaks(printed)
     assert "Steltic design ruling D-T10" in printed
+
+
+# ------------------------------------------------------------------------------------------------ pipeline plumbing
+def test_section12_cfg_carries_the_truss_connections_to_the_knee_checks():
+    """First IN_Ex21 gold run: every knee was 'not evaluated' because the Section 12 cfg did not carry
+    cfg['truss_connections'].  design_india now builds it with section12_cfg, which does."""
+    import design_pipeline as DP
+    cfg = dict(_cfg_conn(), zone="II", I=1.0, heights=[6500.0])
+    s12 = DP.section12_cfg(cfg)
+    assert s12["truss_connections"] is cfg["truss_connections"] and s12["zone"] == "II"
+    assert "truss_connections" not in DP.section12_cfg({"zone": "II"})
+    nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
+    knee = {"id": "K0-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": "ISA65X65X6",
+            "brace_role": "truss_diagonal", "span_mm": 18000.0, "V_gravity_N": 40e3}
+    rows = TD.knee_checks(knee, {}, s12, nodes=nodes, member_capacity=80e3)
+    assert rows and all(r["dc"] is not None for r in rows)
+    bare = TD.knee_checks(knee, {}, DP.section12_cfg({"zone": "II"}), nodes=nodes, member_capacity=80e3)
+    assert all(r["dc"] is None for r in bare)
+
+
+def test_column_line_read_from_the_grid_end():
+    """First IN_Ex21 gold run: the upper piece of a gable post runs from the truss bottom-chord node (off the grid,
+    tag 182400 decodes to the truss-node line (824, 0)) to the post top on the grid (0, 1).  Its column line is now
+    read from the grid end, so it is a gravity column of line (0, 1), not a frame column of a truss-node line."""
+    import design_pipeline as DP
+    grid = {(0, 0), (0, 1), (0, 2), (0, 3)}
+    assert DP.column_line(182400, 100001, grid) == (0, 1)
+    assert DP.column_line(1, 100001, grid) == (0, 1)                # an ordinary column: its first node
+    assert DP.column_line(182400, 100001, None) == (824, 0)        # no grid information: as before

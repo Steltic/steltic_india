@@ -798,8 +798,10 @@ def _check_rows(res):
         # RR-BUG-5: the 9.3 row carries the interaction value and its combination; the Table 3 row its own
         dci = res.get("interaction_dc", res["dc"])
         gci = res.get("interaction_governing_combo", res.get("governing_combo"))
-        rows.append({"name": "IS 800 9.3 interaction / member resistance (%scombination %s)"
-                             % ("" if gov_t3 else "governing ", gci), "value": float(dci), "limit": 1.0,
+        what = ("IS 800 axial resistance (6 tension / 7 compression, pin-ended member)" if res.get("axial_only")
+                else "IS 800 9.3 interaction / member resistance")          # MSME (2026-10): truss webs
+        rows.append({"name": "%s (%scombination %s)"
+                             % (what, "" if gov_t3 else "governing ", gci), "value": float(dci), "limit": 1.0,
                      "dc": float(dci), "ok": bool(dci <= 1.0), "clause": res.get("clause"),
                      "cite": res.get("interaction_cite") or res.get("cite") or res.get("clause"), "source": src,
                      "governing": not gov_t3, "combo": gci})
@@ -1022,6 +1024,34 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
     return md
 
 
+def section12_cfg(cfg):
+    """The cfg that india_is800_s12.section12_checks (and the other Section 12 helpers) receive from design_india."""
+    import india_seismic_gates as G
+    s12_cfg = dict(cfg.get("section12_inputs") or {}, zone=G.zone_of(cfg), I=G.importance_of(cfg),
+                   height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
+                   apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
+                   is18168_table2=cfg.get("is18168_table2"))
+    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis", "beam_lateral_bracing") if k in cfg})  # H52 / H46; first wave 6.2
+    if cfg.get("truss_connections"):        # MSME (2026-10): the knee checks (12.10.2.1 / 12.10.2.4) read the specs
+        s12_cfg["truss_connections"] = cfg["truss_connections"]
+    if cfg.get("peb_rules"):                                        # PEB-LEVERS: base_shear_key switch (base_checks)
+        s12_cfg["peb_rules"] = cfg["peb_rules"]
+    return s12_cfg
+
+
+def column_line(n1, n2, grid_lines=None):
+    """MSME (2026-10): a column's grid line (i, j) from its end that lies on the grid (info['present']).  A column
+    piece that starts at an off-grid node -- the upper piece of a gable post, from the truss bottom-chord node to the
+    top chord -- is read from its other end.  Before, the off-grid node decoded to a line that is not a column line
+    (a truss-node line, which is also a moment line), so the post's upper piece was taken as a frame column.
+    Without grid information the first node is used, as before."""
+    ln1 = ((n1 % 100000) // 100, n1 % 100)
+    if not grid_lines or ln1 in grid_lines:
+        return ln1
+    ln2 = ((n2 % 100000) // 100, n2 % 100)
+    return ln2 if ln2 in grid_lines else ln1
+
+
 def _truss_knee_records(cfg, info0, reg, length, elem_results):
     """MSME (2026-10): the knee records declared by the custom_build (info['truss_knees'] = [{id, heel_node,
     knee_node, chord_node, brace_tag, truss, span_mm, trib_mm}]) with the node coordinates, the knee brace's design
@@ -1227,6 +1257,12 @@ def design_india(name, cfg, outdir):
             n_ = reg.get(t_, (None, None, 0, 0))[3]
             pinned_top_lines.add(((n_ % 100000) // 100, n_ % 100))
 
+    grid_lines = set()
+    for _v in ((info0.get("present") or {}).values()):
+        grid_lines |= set(_v)
+
+    _col_line = lambda n1, n2: column_line(n1, n2, grid_lines)
+
     def _role(kind, n1, n2, t=None):
         if t in truss_info:
             return "truss_%s" % truss_info[t]["group"]
@@ -1236,7 +1272,7 @@ def design_india(name, cfg, outdir):
             return "link"
         if kind == "beam":
             return "roof" if (n1 // 100000) >= NFlev else "floor"
-        ln_ = ((n1 % 100000) // 100, n1 % 100)
+        ln_ = _col_line(n1, n2)
         if ln_ in pinned_top_lines and ln_ not in brace_lines:
             return "gravity_col"
         return "lateral_col" if ln_ in lateral_lines else "gravity_col"
@@ -1388,13 +1424,7 @@ def design_india(name, cfg, outdir):
     if info0.get("truss_knees"):
         # MSME (2026-10): knee-braced truss portals (truss_design.knee_checks, IS 800 12.10.2.1 / 12.10.2.4)
         md["truss_knees"] = _truss_knee_records(cfg, info0, reg, length, elem_results)
-    s12_cfg = dict(cfg.get("section12_inputs") or {}, zone=G.zone_of(cfg), I=G.importance_of(cfg),
-                   height_m=G.building_height_m(cfg), brace_config=cfg.get("brace_config"),
-                   apply_is18168=cfg.get("apply_is18168"), eor_weld_exception=cfg.get("eor_weld_exception"),
-                   is18168_table2=cfg.get("is18168_table2"))
-    s12_cfg.update({k: cfg[k] for k in ("occupancy", "scwb_pu_basis", "beam_lateral_bracing") if k in cfg})  # H52 / H46; first wave 6.2
-    if cfg.get("peb_rules"):                                        # PEB-LEVERS: base_shear_key switch (base_checks)
-        s12_cfg["peb_rules"] = cfg["peb_rules"]
+    s12_cfg = section12_cfg(cfg)
     joint_conn = {}
     try:
         import india_is800_s12 as S12
