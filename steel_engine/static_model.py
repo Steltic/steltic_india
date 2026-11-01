@@ -205,7 +205,9 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
             if kind == "col":
                 i, j, k = dec(a[2]); cols.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3],
                                                   "i": i, "j": j, "k": k, "axis": "col",
-                                                  "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None)})
+                                                  "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None),
+                                                  # element length (column_span_moments; span-moment fix 2026-11-01)
+                                                  "L": math.dist(coord[a[2]], coord[a[3]])})
             elif kind == "brace":
                 braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3]})
     for a in rec["rigidDiaphragm"]:
@@ -277,8 +279,10 @@ def build_static(cfg, transf="PDelta", nseg=10):
                 if (i, j) in present[k] and (i, j) in present[k+1]:
                     ops.element("elasticBeamColumn", et, ntag(i, j, k), ntag(i, j, k+1),
                                 cA, eng.E, eng.Gmod, cJ, cIy, cIx, tt)
+                    # no 'transf' key: member_wind_loads then takes its nodal fallback (no column span load) --
+                    # parametric models carry the wall wind as storey forces (span-moment fix, 2026-11-01)
                     cols.append({"tag": et, "sec": cfg["col"], "n1": ntag(i, j, k), "n2": ntag(i, j, k+1),
-                                 "i": i, "j": j, "k": k, "axis": "col"})
+                                 "i": i, "j": j, "k": k, "axis": "col", "L": abs(z[k + 1] - z[k])})
                     et += 1
 
     def _add_beam(i, j, k, dirn, A, B):
@@ -1417,11 +1421,19 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
 
 
 REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin",
-              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span")
+              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
 # Mmaj_span / Mmin_span (third wave, 2026-10-30): COLUMNS only -- the signed extreme bending moment INSIDE the element
 # span (major / minor axis, same sign convention as Mmaj_i / Mmin_i) under a span load (the member wind on a wall
 # column), 0.0 when the extreme is at an end.  Before this a pinned-pinned gable wind column under the wall wind was
 # checked for its end moments only (zero): the w L^2/8 at mid-height was never checked (column_span_moments).
+# Mmaj_free / Mmin_free (span-moment fix, 2026-11-01): COLUMNS only -- the free (simply supported) moment of the span
+# load at mid-length, signed in the same convention: M(mid) = (M_i + M_j) / 2 + M_free, so with the two end moments it
+# fixes the whole moment diagram M(t) = M_i (1 - t) + M_j t + 4 M_free t (1 - t) (india_is800.span_moment_diagram).
+# 0.0 exactly when the column carries no span load; the member check takes its IS 800 Table 18 factors from it
+# (uniform-loading rows) and checks both signs of moment along the column.  Values only in the static part of a
+# combination (gravity + member wind); RSA responses carry no span load.
+# These span fields are NOT end moments: the column envelope keeps Mz / My as end-moment envelopes (connection,
+# splice and base demands) and carries the span extremes separately (envelope_from_records Mz_span / My_span).
 # N_LAT / V_LAT (WP6, EBF): the LATERAL-load part of the member axial force / major shear in this combination
 # (static lateral increment or fLat x RSA response) -- the EL share that IS 18168 12.3.2.2 / 12.3.4.5 amplify to
 # the link overstrength. Zero on gravity-only combinations; records without the field read as 0.0.
@@ -1460,18 +1472,34 @@ def _span_extreme(m_i, v_i, v_j, L, sign):
     return float(m_i) + sign * (float(v_i) * x + 0.5 * w * x * x)
 
 
+def _free_moment(v_i, v_j, L, sign):
+    """Free (simply supported) mid-length moment of the uniform span load w = -(v_i + v_j) / L, signed in the record
+    convention of _span_extreme: M(L/2) - (M_i + M_j) / 2 = -sign w L^2 / 8.  0.0 below 1 N of span load (noise)."""
+    L = float(L)
+    if L <= 0.0:
+        return 0.0
+    w = -(float(v_i) + float(v_j)) / L
+    if abs(w) * L < 1.0:
+        return 0.0
+    return -sign * w * L * L / 8.0
+
+
 def column_span_moments(model, R):
-    """{fset: (Mmaj_span, Mmin_span)} of every column element from a STATIC response dict R (gravity + member wind;
-    never an RSA response: its end forces are peak values, not an equilibrium set).  Third wave (2026-10-30)."""
+    """{fset: (Mmaj_span, Mmin_span, Mmaj_free, Mmin_free)} of every column element from a STATIC response dict R
+    (gravity + member wind; never an RSA response: its end forces are peak values, not an equilibrium set).
+    The element length is the column dict's 'L' (set by the model builders, build_static / _staticize_custom) --
+    never read from whatever OpenSees model happens to be live (span-moment fix, 2026-11-01)."""
     out = {}
     for c in model["cols"]:
         lf = R[c["tag"]]
         L = c.get("L")
         if L is None:
-            c1, c2 = ops.nodeCoord(c["n1"]), ops.nodeCoord(c["n2"])
-            L = math.sqrt(sum((b - a) ** 2 for a, b in zip(c1, c2)))
+            raise ValueError("column_span_moments: column %s carries no element length 'L' (the model builder sets "
+                             "it)" % c.get("tag"))
         out[frozenset((c["n1"], c["n2"]))] = (_span_extreme(-lf[5], lf[1], lf[7], L, +1),
-                                             _span_extreme(-lf[4], lf[2], lf[8], L, -1))
+                                             _span_extreme(-lf[4], lf[2], lf[8], L, -1),
+                                             _free_moment(lf[1], lf[7], L, +1),
+                                             _free_moment(lf[2], lf[8], L, -1))
     return out
 
 
@@ -1520,26 +1548,50 @@ def member_records(model, R, cfg, case_grav, floor_system):
     return out
 
 
+def free_from_span_extreme(m_i, m_j, m_ext):
+    """The free mid-length moment M_free of the parabola M(t) = M_i (1 - t) + M_j t + 4 M_free t (1 - t) whose extreme
+    INSIDE the span is m_ext (0.0 when m_ext is 0.0: no interior extreme recorded).  The extreme of that parabola is
+    (M_i + M_j) / 2 + M_free + (M_j - M_i)^2 / (16 M_free); of the two roots the one with the vertex inside the span
+    (|M_free| >= |M_j - M_i| / 4) is returned."""
+    if not m_ext:
+        return 0.0
+    c = float(m_ext) - 0.5 * (float(m_i) + float(m_j))
+    dl = float(m_j) - float(m_i)
+    if abs(c) < 1e-9:
+        return 0.0
+    disc = max(c * c - 0.25 * dl * dl, 0.0)
+    return 0.5 * (c + math.copysign(math.sqrt(disc), c))
+
+
 def combo_forces_for_member_check(records, kind):
     """{label: rec} -> the combo_forces list of india_is800.member_check_is800 (HR-MEMBERS API):
     P_N compression +, Mz = major axis, My = minor axis, Mz_mid (beams), Vy = major shear."""
     out = []
+    i_free = REC_FIELDS.index("Mmaj_free")
     for lab, r in records.items():
+        n0 = len(r)
         r = list(r) + [0.0] * (len(REC_FIELDS) - len(r))
         d = dict(zip(REC_FIELDS, r))
+        if kind == "col" and REC_FIELDS.index("Mmin_span") < n0 <= i_free:
+            # a record of the first span layout (00336f6: span extremes, no free moments): the free moment is
+            # recovered from an in-span extreme; an extreme at an end was not recorded there (re-run such a job)
+            d["Mmaj_free"] = free_from_span_extreme(d["Mmaj_i"], d["Mmaj_j"], d["Mmaj_span"])
+            d["Mmin_free"] = free_from_span_extreme(d["Mmin_i"], d["Mmin_j"], d["Mmin_span"])
         cf = {"combo": lab, "P_N": -d["N"], "Mz_i_Nmm": d["Mmaj_i"], "Mz_j_Nmm": d["Mmaj_j"],
               "My_i_Nmm": d["Mmin_i"], "My_j_Nmm": d["Mmin_j"], "Vy_N": d["Vmaj"], "Vz_N": d["Vmin"],
               "P_LAT_N": -d["N_LAT"], "V_LAT_N": d["V_LAT"]}
         if kind == "beam":
             cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
         elif kind == "col":
-            # third wave (2026-10-30): a column whose span moment exceeds both end moments (a gable wind column, pinned
-            # top and base, under the wall wind) is checked with it (span load: Cm = 1.0, IS 800 9.3.2.2); where the
-            # end moments are larger the end-moment check stands unchanged
-            if abs(d["Mmaj_span"]) > max(abs(d["Mmaj_i"]), abs(d["Mmaj_j"])) + 1.0:
-                cf["Mz_mid_Nmm"] = d["Mmaj_span"]
-            if abs(d["Mmin_span"]) > max(abs(d["Mmin_i"]), abs(d["Mmin_j"])) + 1.0:
-                cf["My_mid_Nmm"] = d["Mmin_span"]
+            # span-moment fix (2026-11-01): a column carrying a span load (the member wind on a wall or gable wind
+            # column) hands the free moment of that load to the member check, which rebuilds the moment diagram from
+            # it and the end moments: the in-span extreme of EITHER sign is checked (with its own LLT, so the other
+            # flange's LTB is checked too) and Cm / CmLT come from the IS 800 Table 18 uniform-loading rows -- also
+            # where the end moments govern (india_is800.cm_factor_span_load).  No span load: the end-moment check.
+            if d["Mmaj_free"]:
+                cf["Mz_free_Nmm"] = d["Mmaj_free"]
+            if d["Mmin_free"]:
+                cf["My_free_Nmm"] = d["Mmin_free"]
         out.append(cf)
     return out
 
@@ -1828,7 +1880,8 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             # third wave (2026-10-30): column span moments from the static part of the combination (gravity + member
             # wind; the RSA part has no span load and its end forces are peak values)
             spn = column_span_moments(model, RC_static)
-            recs = {fs: tuple(list(r) + [0.0] * (13 - len(r)))[:13] + spn.get(fs, (0.0, 0.0)) for fs, r in recs.items()}
+            recs = {fs: tuple(list(r) + [0.0] * (13 - len(r)))[:13] + spn.get(fs, (0.0, 0.0, 0.0, 0.0))
+                    for fs, r in recs.items()}
             _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
                         or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
             if N_LL and not _eq_case:
@@ -1844,6 +1897,9 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
     return per_case, kinds or {}, info
 
 
+ENVELOPE_LAYOUT = "2026-11-01: Mz / My end moments; Mz_span / My_span column span extremes"
+
+
 def envelope_from_records(per_case, kinds, cases):
     """Envelope + governing combination + per-combination records per member."""
     env = {}
@@ -1854,14 +1910,18 @@ def envelope_from_records(per_case, kinds, cases):
         for fs, rec in res.items():
             kind = kinds.get(fs, ("beam", None))[0]
             e = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0,
-                                        records={}, conn={}))
+                                        records={}, conn={}, Mz_span=0.0, My_span=0.0))
             e["records"][lab] = [round(float(x), 1) for x in rec]
             if col_only.get(lab) and kind != "col":
                 e["conn"][lab] = [round(float(x), 1) for x in rec]     # 12.2.3 forces kept for connections
                 continue
             N, Mz, My, V = rec[0], rec[1], rec[2], rec[3]
-            if len(rec) > 14:                       # third wave: a column's span moment is part of its envelope
-                Mz, My = max(abs(Mz), abs(rec[13])), max(abs(My), abs(rec[14]))
+            # span-moment fix (2026-11-01): Mz / My stay END-moment envelopes (they feed the column splice / base and
+            # beam-to-column connection demands); a column's in-span extremes are enveloped apart (Mz_span / My_span)
+            # and enter only the member schedule and the member inputs (design_pipeline _member_moment)
+            if len(rec) > 14:
+                e["Mz_span"] = max(e.get("Mz_span", 0.0), abs(rec[13]))
+                e["My_span"] = max(e.get("My_span", 0.0), abs(rec[14]))
             e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
             e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
             sc = abs(N) if kind in ("col", "brace") else abs(Mz)
@@ -1895,7 +1955,7 @@ def demand_envelope_si(cfg, cases, nseg=6, floor_system=None, cache_dir=None, rs
                                               sorted(((getattr(c, "meta", {}) or {}).items()), key=str)
                                               .__repr__()) for c in cases],
                         {d: sorted((t, list(v)) for t, v in a.items()) for d, a in (rsa or {}).items()},
-                        REC_FIELDS))                   # third wave: the record layout (a cache of an older one is stale)
+                        REC_FIELDS, ENVELOPE_LAYOUT))  # the record / envelope layout (a cache of an older one is stale)
             key = "SI" + _hashlib.md5(sig.encode()).hexdigest()
             p = _os.path.join(cache_dir, "_demand_cache_si.json")
             d = _json.load(open(p))
