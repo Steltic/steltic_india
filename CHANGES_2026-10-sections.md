@@ -110,6 +110,21 @@ D8).
 - **A label that fails Table 3 slenderness in its own full run** is barred for its group. The limit depends on
   whether the member carries compression, which the frozen forces cannot show. On the IN_Ex12 gym, a roof beam
   picks up axial force only in its own run.
+- **Global checks the local step cannot see** are answered with stiffness requirements that are kept from then on:
+  - IS 1893 Table 6(i) soft storey (K_i < K_i+1, which drops the drift limit to 0.2 %): the columns of that storey
+    keep their stiffness × (K_i+1 / K_i) / 0.97;
+  - IS 1893 Table 6(vii) modal mass (first three translational modes below 65 % in a direction): the torsional
+    system of that direction is stiffened by 25 %;
+  - IS 875-3 9.1(b) first-mode period above 1 s, which calls for a dynamic wind response the job does not declare:
+    the frames of that direction keep stiffness × (T / 0.97)²;
+  - the drift factor is capped at 1.35 per pass, so a stepped limit is answered where it arises.
+- **Section 12 rows that the full run fails** although the frozen forces passed them get a margin for their group
+  (−0.04 per pass, down to 0.80). Example: the IS 18168 12.3.2.2 EBF brace axial force at the link overstrength.
+  EBF brace ends are designed for the brace's expected strength, 1.1 Ry fy Ag (IS 18168 10.4.1a), which caps the
+  connection force.
+- **Bases at the thickness limit.** A fixed base whose plate has reached 150 mm and still fails in bending gets gusset
+  stiffeners (IS 800 7.4.2, the IN_Ex12 detail), which are then stepped up by their ratio. Designed bases and
+  splices are cached per column label, so a label that comes back keeps its stepped-up base.
 - **Unused groups.** Groups that no member of the model takes (IN_Ex11 corner and perimeter columns: every corner
   column is braced) are left out of the eligibility test and marked `unused` in `SIZING_GROUPS`.
 - **Preflight** (`preflight.chs_brace_grade_declared`): CHS braces are declared by either the
