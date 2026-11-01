@@ -98,6 +98,8 @@ them):
   - The knee checks of IS 800 12.10.2.1 / 12.10.2.4 (D-T10, below).
   - Angles only: a CHS or other non-angle truss member takes the general member check, and its end connection is
     reported as not covered (it crashed before).
+  - A declared chord splice at a panel-point gusset (`splice`: {at, gusset_depth_mm}): 7.3.4.2, the gusset across
+    the cut for the full chord force.
 - **`design_pipeline.py`:**
   - Truss roles `truss_<group>`, which are not part of the brace / SFRS-brace logic.
   - Knee-braced column lines count as lateral lines.
@@ -144,36 +146,46 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 - The truss joints use fully tensioned HSFG bolts (12.4.1). The welds to the column are CJP (12.4.2).
 - The Mp alternative of 12.10.2.1 is not used: a triangular truss has no plastic moment at the column face.
 
-## Gold run (IN_Ex21, 2026-11-01, on the merged span-moment fix)
+## Gold run (IN_Ex21, 2026-11-01, after the independent review; on main `41fb2f7` with the span-moment fix)
 
-**Result:** design status COMPLETE, no open reasons, 30 s run.
+**Result:** design status COMPLETE, no open reasons.
 
 **Final sizes (IS 808 / IS 1161, E250 / YSt 310):**
 
 | Member | Section | Ratio | Governing |
 |---|---|---|---|
 | Main columns | MB300 | 0.73 | 9.3 interaction |
-| Gable posts | MB225 | 0.71 | slenderness |
-| Top chord | 2ISA70X70X6 on 8 mm gussets | 0.71 | — |
-| Bottom chord | 2ISA70X70X6 | 0.95 | 9.3, under 0.9DL + 1.5WL uplift |
+| Gable posts | MB225 (strong-axis buckling length 8.0 m, base to top chord) | 0.71 | slenderness |
+| Top chord | 2ISA70X70X6-G8 (on 8 mm gussets) | 0.71 | — |
+| Bottom chord | 2ISA70X70X6-G8 | 0.95 | 9.3, under 0.9DL + 1.5WL uplift |
 | Verticals up to 1.5 m | ISA60X60X6 | 0.71 | — |
 | Long verticals (1.875 m and 2.25 m) | ISA70X70X6 | 0.90 | Table 3 |
 | Diagonals | ISA70X70X6 | 0.96 | Table 3 KL/r 172.7 / 180 |
 | End diagonals | ISA80X80X8 | 0.68 | — |
 | Knee braces | ISA90X90X8 | 0.82 | 7.5.1.2 |
 | Wall X-bracing | CHS114.3X3.6 | 0.63 | — |
-| Eave struts | CHS114.3X3.6 | 0.85 | — |
+| Eave struts | CHS114.3X3.6 | 0.61 | Table 3 (iii): its compression is wind-only (0.85 on row (i) before the member-wind fix) |
 | Roof-girder diagonals | ISA90X90X8 | 0.97 | Table 3 (iii) 250 |
 | Roof-girder struts and bottom-chord ties | CHS76.1X3.6 | 0.94 | — |
 | Purlins | LZ200X60X20X1.6 with 2 sag-rod lines | 0.96 | IS 801, CFS engine |
 | Girts | LZ170X60X20X1.6 | 0.85 | IS 801, CFS engine |
 
 **Connections:**
-- All truss bolts are M16 8.8 HSFG: 3 per chord and knee-brace end, 3 per end diagonal, 2 elsewhere.
-- The highest connection ratio is 0.96 (the edge distance of the 60 mm vertical).
-- Knees, IS 800 12.10.2.1 under Steltic design ruling D-T10 (knee designed for 1.2 times the moment the knee brace can
-  deliver): 0.79.
-- Heel seats, 12.10.2.4: 0.31.
+- All truss bolts are M16 8.8 HSFG: 8 per knee-brace end, 4 per chord end (heel and apex), 3 per end diagonal, 2
+  elsewhere. Angle ends sheared (end distance 35 mm >= 1.7 d0); 8 mm gussets with a declared detail (bolt line to the
+  gusset edge 40 mm, free length 150 mm, K 0.65).
+- The highest connection ratio is 0.96 (the edge distance of the 60 mm vertical). The chord-end gussets carry the full
+  chord force (Whitmore yield, block shear, buckling).
+- Knees, under Steltic design ruling D-T10 (the knee designed for 1.2 times the moment the knee brace can deliver in
+  either direction): N_del = max(Pd 114.7, Tdg 315.9) = 315.9 kN, so 1.2 N_del = 379.1 kN at each knee-brace end and
+  M_del = 335.1 kN-m.
+  - bolts 0.85 (8 M16: 448 kN);
+  - gusset block shear 0.92, Whitmore yield 0.52, buckling (1.2 Pd) 0.22;
+  - the brace yields first: its bolted end (rupture 348.8 kN) against its gross yield 315.9 kN, 0.91;
+  - heel seats (12.10.2.4) 0.78.
+  So the knee and heel connections are designed so that the brace yields (gross section) before they fail. With the
+  first implementation's min(Pd, Td) the knee took 1.2 x 114.7 kN on 3 bolts (0.79), and in tension the connection
+  (174 kN) was weaker than the brace.
 - Fly braces have an M16 4.6 bolt: 0.32 (with M12 the check was not evaluated, because the corpus thread table has no
   M12).
 
@@ -181,18 +193,20 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 0.20 of the 0.004 limit (Zone II; wind governs).
 
 **Steel:**
-- Total 19,740 kg on 648 m², which is **30.5 kg/m²** of plan:
+- Total 19,859 kg on 648 m², which is **30.6 kg/m²** of plan:
 
   | Group | kg/m² |
   |---|---|
   | Primary | 15.8 |
   | Bracing | 5.65 |
   | Secondary | 5.0 |
-  | Connections | 4.0 |
+  | Connections | 4.2 (longer knee gussets and the chord-end bolts after the review) |
 
 - A published comparison of conventional hot-rolled steel sheds gives 27.7 kg/m² at 15 m span and 35.8 kg/m² at
   20 m (N. Kumar and K. S. Grover, IJRASET, June 2022, Table 4). The 18 m shed sits inside that range. The report
-  prints the range with its source next to the take-off.
+  prints the range with its source next to the take-off. That study is for Delhi (Vb 47 m/s, about twice Hosur's
+  wind pressure), so a mid-range position is on the heavy side: this design is not lean (the Table 3 180 rows, the
+  ISA90 roof-girder angles at KL/r 242 / 250, and 4.2 kg/m² of connections including the shear keys of ruling O1).
 
 **Outputs:**
 - STAAD export (`model.std`), as for the PEB jobs: the double angles as `TABLE D ISA70X70X6 SP 8.0`, webs and braces as
@@ -206,6 +220,17 @@ Knee-braced truss portal, IS 800 12.10.2.1:
   chord 2ISA65 (1.11), gable post MB200 (1.05).
 - It also found an unevaluated fly-brace bolt and a slender ISA90X90X6 roof-girder diagonal.
 - Four size variants were then run in one slot (all COMPLETE). The lightest was kept.
+
+**Stated, not modelled (review 2026-11):**
+- Two load paths for the gable wind: in the analysis the gable wind reaches the side walls through the rigid roof
+  diaphragm (the post tops are tied to it). The roof girder, the bottom-chord ties and the bottom-chord X-bracing are
+  designed outside the model; the bottom-chord X-bracing is in the take-off only. The roof-girder chord forces (about
+  18.5 kN factored) are not added to the top chords of the gable truss and the first inner truss: they do not govern
+  (148 kN against the 166 kN top-chord force the chords are sized for).
+- Chord splices: the 18 m bottom chord is spliced at the mid-span panel-point gusset, checked (new `splice` spec key)
+  for all the chord force (IS 800 7.3.4.2, not faced for bearing): the chord-end bolts on each side and the gusset
+  across the cut (gross yield and net rupture). The top chords end at the apex gusset and need no other splice
+  within a 12 m stock length (design-engineer assumption).
 
 ## Nonlinear run (stage 2): what the shed needs from the nonlinear engine
 
@@ -221,9 +246,10 @@ The nonlinear engine was not changed here. It needs:
    a truss material capped at the 7.5 compression strength.
 3. The knee braces as the frame's yielding / buckling members in the transverse direction. The truss seat stays pinned.
    Check that the knee brace, not its connection, is the first to buckle or yield: the knee connections are designed
-   for 1.2 times the brace strength.
-4. The restraints for the member checks: purlins at every top-chord panel point, bottom-chord ties at 4.5 m, girts and
-   fly braces at 3.0 m and 4.75 m.
+   for 1.2 times the larger of the brace's compression strength and its gross-section yield (D-T10).
+4. The restraints for the member checks: purlins at every top-chord panel point, the bottom-chord ties at the plan
+   positions published as `cfg['bottom_chord_ties_mm']` = [4500, 9000, 13500] (from the y = 0 eave; the bottom-chord
+   Ly 4.5 m is derived from them), girts and fly braces at 3.0 m and 4.75 m.
 
 Wind governs the design in Zone II. Across the span the earthquake base shear is 10.7 kN; the wind storey force is
 47.7 kN, and the member wind on walls and roof totals 100.8 kN horizontally.
@@ -231,7 +257,7 @@ A pushover will mainly show reserve, not a seismic demand check.
 
 ## Tests
 
-`tests/test_msme_truss_2026_10.py` (29 tests) checks every new path against hand calculations:
+`tests/test_msme_truss_2026_10.py` (40 tests) checks every new path against hand calculations:
 
 - double-angle properties;
 - Table 2 / 10;

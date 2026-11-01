@@ -369,6 +369,28 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
         tag_ = " (full chord force: heel / apex gusset)" if chord else ""
         for nm_, c_ in gusset_rows(sp, N, N_c):
             rec["checks"].append(_row(nm_ + tag_, c_))
+    if chord and isinstance(sp.get("splice"), dict):
+        # review 2026-11: a chord splice made at a panel-point gusset.  IS 800 7.3.4.2: a compression member not faced
+        # for bearing is spliced for all the forces -- the chord-end bolts and gusset rows above (full chord force) are
+        # the splice connection on each side; the gusset itself carries the full chord force across the cut (gross
+        # yield 6.2, net section across the one bolt line 6.3.1)
+        spl = sp["splice"]
+        bgd, tg = spl.get("gusset_depth_mm"), float(sp.get("gusset_t_mm") or 0.0)
+        if bgd and tg:
+            fy_g, fu_g = _fy_fu(sp.get("gusset_grade") or "E250", tg)
+            Tg = min(float(bgd) * tg * fy_g / I8.GAMMA_M0_DEFAULT,
+                     0.9 * (float(bgd) - float(sp["d0_mm"])) * tg * fu_g / I8.GAMMA_M1_DEFAULT)
+            c = C._check(N, Tg, clause="IS 800:2007 7.3.4.2 + 6.2 / 6.3.1",
+                         cite="chord splice at %s: gusset %.0f x %.0f mm across the cut, min(Ag fy / gamma_m0, 0.9 An "
+                              "fu / gamma_m1) = %.1f kN for the full chord force %.1f kN; each side joined by the "
+                              "chord-end bolts above" % (spl.get("at") or "a panel-point gusset", float(bgd), tg,
+                                                         Tg / 1e3, N / 1e3))
+            rec["checks"].append(_row("chord splice at a panel-point gusset (7.3.4.2)", c))
+            rec["splice"] = {"at": spl.get("at"), "gusset_depth_mm": float(bgd), "capacity_N": round(Tg, 1)}
+        else:
+            rec["checks"].append(_row("chord splice at a panel-point gusset (7.3.4.2)",
+                                      {"ok": None, "clause": "IS 800:2007 7.3.4.2",
+                                       "reason": "splice gusset_depth_mm or gusset_t_mm not declared"}))
     if S.props(sec).get("section_type") == "double_angle":
         t0 = tags[0]
         res = elem_results.get(t0) or {}

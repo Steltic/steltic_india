@@ -623,3 +623,21 @@ def test_double_angle_label_carries_the_gusset_and_guards_overwrites():
         S.register_double_angle("2ISA75X75X6-G10", "ISA75X75X6", 8.0)
     import peb_outputs as PO
     assert S.props("2ISA75X75X6-G10")["gap_mm"] == 10.0 and PO.staad_label("2ISA75X75X6-G10") == "2ISA75X75X6-G10"
+
+
+def test_chord_splice_at_a_panel_gusset():
+    """A declared chord splice (7.3.4.2: not faced for bearing -> all the forces) at a panel-point gusset: the gusset
+    carries the full chord force across the cut, min(gross yield, net rupture across the bolt line)."""
+    S.register_double_angle("2ISA70X70X6-G8", "ISA70X70X6", 8.0)
+    sp = dict(_cfg_conn()["truss_connections"]["truss_diagonal:ISA65X65X6"], n_bolts=4, gauge_mm=40.0,
+              splice={"at": "the mid-span node", "gusset_depth_mm": 200.0})
+    cfg = {"truss_connections": {"truss_bottom_chord": sp}}
+    envt = {1: {"comp": 82.5e3, "tens": 148e3}}
+    cr = TD.end_connection_record(cfg, "truss_bottom_chord", "2ISA70X70X6-G8", [1], envt, {}, {1: 1500.0})
+    row = [c for c in cr["checks"] if c["name"].startswith("chord splice")][0]
+    Tg = min(200.0 * 8.0 * 250.0 / GM0, 0.9 * (200.0 - 18.0) * 8.0 * 410.0 / GM1)
+    assert row["value"] == pytest.approx(148e3) and row["limit"] == pytest.approx(Tg) and row["ok"]
+    nos = dict(sp); nos.pop("splice")
+    cr2 = TD.end_connection_record({"truss_connections": {"truss_bottom_chord": nos}}, "truss_bottom_chord",
+                                   "2ISA70X70X6-G8", [1], envt, {}, {1: 1500.0})
+    assert not any(c["name"].startswith("chord splice") for c in cr2["checks"])     # no splice declared, no row
