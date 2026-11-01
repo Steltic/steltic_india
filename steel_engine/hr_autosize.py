@@ -670,7 +670,8 @@ TORSION_TARGET = 1.2 * 0.97         # Table 5(i) (Amd 2) regular band <= 1.2, wi
 def torsion_groups(lm, d):
     """The lateral groups that resist the torsion of a d-direction loading with their lever arm: the members of the
     frames in the other plan direction (beams / braces whose frame direction is the other one) and the lateral
-    columns (they belong to the moment or braced frames of both directions)."""
+    columns sized for bending stiffness (moment-frame columns; the columns of braced bays, sized for axial stiffness,
+    are left out)."""
     other = "X" if d == "Y" else "Y"
     if lm.s12 is None:
         return []
@@ -683,8 +684,9 @@ def torsion_groups(lm, d):
         sp = lm.specs.get(g) or {}
         if m.get("frame_dir") == other and (sp.get("lateral") or m.get("role") == "brace"):
             out.add(g)
-        elif m.get("role") == "column" and sp.get("lateral"):
-            out.add(g)
+        elif m.get("role") == "column" and sp.get("lateral") and \
+                sp.get("stiff", STIFF_BY_ROLE.get(sp.get("role"))) == "I":
+            out.add(g)            # moment-frame columns (bending stiffness); braced-bay columns (axial) are left out
     return sorted(out)
 
 
