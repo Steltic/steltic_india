@@ -1612,6 +1612,28 @@ _BOND_TEXT = re.compile(r"bond length [0-9.]+ mm into the pedestal / pile cap ->
                         r"anchor")
 
 
+def _base_stiffeners(st, sp, col):
+    """Gusset stiffeners for a fixed base whose plate is at its largest thickness and still fails in bending (IS 800
+    7.4.2 gusseted base, the IN_Ex12 detail): a cross of gussets, 3 on each face, CJP to the column and the plate,
+    25 mm thick and 0.4 x the plate's projection beyond the column high (at least 300 mm); a declared set is
+    stepped one plate up instead."""
+    if isinstance(st, dict) and st:
+        st = dict(st)
+        st["t_mm"] = _plate_up(float(st.get("t_mm") or 20.0), 1.0001)
+        st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
+        return st
+    proj = 200.0
+    try:
+        p = props(col)
+        proj = max((float(sp["L_mm"]) - float(p["d"])) / 2.0, (float(sp["B_mm"]) - float(p["bf"])) / 2.0)
+    except Exception:
+        pass
+    h = float(max(300.0, math.ceil(0.4 * proj * 2.0 / 50.0) * 50.0))
+    return {"layout": "cross", "n_per_side": 3, "n_per_side_y": 3, "t_mm": 25.0, "h_mm": h,
+            "fy_MPa": plate_fy(25.0, "E250"), "weld_column": {"type": "cjp"}, "weld_plate": {"type": "cjp"},
+            "note": "12 gussets %s x 25 (IS 2062 E250, fy %s), CJP with matching electrode" % (_fmt(h), _fmt(plate_fy(25.0, "E250")))}
+
+
 def _minor_axis_anchors(sp):
     """A rectangular plate (B != L) needs the minor-axis anchor pattern for My (india_connections.
     base_plate_design_biaxial: anchors.f_y_mm / n_tension_y): rows of n_per_row anchors at the pitch, so about the
@@ -1731,12 +1753,25 @@ def _bump_base(sp, failing, col=None):
                     proj += 50.0
         emb_dc = _dc_of(rows, r"anchorage_embedment")
         out = ring_base(col, sp, d=d, n=n, t=t, proj=proj)
+        if sp.get("stiffeners"):
+            out["stiffeners"] = copy.deepcopy(sp["stiffeners"])        # a stiffened ring base stays stiffened
+            dcg = _dc_of(rows, r"gusset")
+            if dcg:
+                st0 = out["stiffeners"]
+                st0["t_mm"] = _plate_up(max(float(st0.get("t_mm") or 20.0) * dcg * 1.05, float(st0.get("t_mm") or 20.0) + 1.0), 1.0)
+                st0["fy_MPa"] = plate_fy(st0["t_mm"], st0.get("grade") or "E250")
+        dcp = _dc_of(rows, r"plate_thickness")
+        if dcp and float(sp.get("t_plate_mm") or 0.0) >= BASE_T_MM[-1] - 1e-9:
+            out["stiffeners"] = _base_stiffeners(out.get("stiffeners"), out, col)
+            out["layout"] = "ring"
         emb = (out.get("anchors") or {}).get("embedment")
         if emb_dc and isinstance(emb, dict) and emb.get("L_mm"):
             emb["L_mm"] = float(math.ceil(float(emb["L_mm"]) * emb_dc * 1.05 / 50.0) * 50.0)
         return out
     dc = _dc_of(rows, r"plate_thickness")
     if dc:
+        if float(sp.get("t_plate_mm") or 0.0) >= BASE_T_MM[-1] - 1e-9 and sp.get("fixed"):
+            sp["stiffeners"] = _base_stiffeners(sp.get("stiffeners"), sp, col)    # the plate is at its largest
         sp["t_plate_mm"] = _base_t_up(float(sp.get("t_plate_mm") or 20.0), max(1.05, math.sqrt(dc) * 1.03))
         sp["fy_plate_MPa"] = plate_fy(sp["t_plate_mm"], sp.get("plate_grade") or "E250")
     dc = _dc_of(rows, r"bearing|geometry_anchor_fit")
