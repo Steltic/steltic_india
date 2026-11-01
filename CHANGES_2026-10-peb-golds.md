@@ -24,15 +24,15 @@ runs: secondary design (CFS engine, main dcda6c2) then the harness, `PYTHONHASHS
 | job | kg/m² old → new | worst strength ratio old → new (governing, new) | wind sway Y / limit old → new | storey drift / limit old → new | status old → new |
 |---|---|---|---|---|---|
 | Ex1 | 34.55 → **32.38** (-2.17) | 0.961 → 0.996 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.939 → 0.973 | 0.266 → 0.272 | COMPLETE → COMPLETE |
-| Ex2 | 56.17 → **52.69** (-3.48) | 0.930 → 1.000 (roof-WI408X190X12X5, IS 800 9.3 interaction / member resistance) | 0.891 → 0.936 | 0.390 → 0.401 | COMPLETE → COMPLETE |
+| Ex2 | 56.17 → **52.71** (-3.46) | 0.930 → 1.000 (roof-WI408X190X12X5, IS 800 9.3 interaction / member resistance) | 0.891 → 0.936 | 0.390 → 0.402 | COMPLETE → COMPLETE |
 | Ex3 | 56.97 → **51.50** (-5.47) | 0.849 → 0.994 (lateral_col-WI475X220X16X5, IS 800 9.3 interaction / member resistance) | 0.412 → 0.662 | 0.086 → 0.129 | COMPLETE → COMPLETE |
 | Ex4 | 63.78 → **57.11** (-6.67) | 0.890 → 0.994 (gravity_col-WI475X190X12X4, IS 800 9.3 interaction / member resistance) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
 | Ex5 | 34.55 → **32.38** (-2.17) | 1.102 → 1.132 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 1.155 → 1.198 | 0.363 → 0.373 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
 
-kg/m² of plan (the gold take-off). The gold figures differ from the sizer's verified runs by at most 0.09 kg/m² (Ex1
-32.38 / 32.40, Ex2 52.69 / 52.60, Ex3 51.50 / 51.57, Ex4 57.11 / 57.14): the gold `cfg.py` take-off formulas are the
+kg/m² of plan (the gold take-off), all on the final engine (this branch at 1d058f0: main 41fb2f7 with the span-moment fix, plus this branch). The gold figures differ from the sizer's verified runs by at most 0.09 kg/m² (Ex1
+32.38 / 32.40, Ex2 52.71 / 52.71, Ex3 51.50 / 51.57, Ex4 57.11 / 57.14): the gold `cfg.py` take-off formulas are the
 gold's own plate list, the sizer's is the October declared take-off corrected by its itemised plates. Against the
-October study figures (31.54 / 50.71 / 50.20 / 55.63) the golds are 0.84 to 1.98 kg/m² heavier: the gable wind and
+October study figures (31.54 / 50.71 / 50.20 / 55.63) the golds are 0.84 to 2.00 kg/m² heavier: the gable wind and
 corner columns sized for the wall wind (and, on IN_Ex1, the corner shear key that follows the heavier corner column
 under ruling O1). IN_Ex5 is the check of the new IN_Ex1 with 0.15 kN/m² PV: PARTIAL as before (the PV does not fit,
 see below).
@@ -131,6 +131,65 @@ What changed, per job (from → to):
   `calib_items`); a column must fit its base plate with 15 mm each side (sizer rule).
 - **Adopting a design:** spec keys `hold_joints` (joints held at given values) and `size_base_plates` (False keeps the
   plates), used to re-size only the gable columns of the study designs.
-- Tests: `tests/test_third_wave_peb.py`.
+- **Splice feedback** (bb295a9): the local model's splice demands are the last run's frozen moments; on the
+  continuous multi-span IN_Ex2 rafters a re-sized frame moves them by 20 to 30 % (R = 3 route: 356 kN-m predicted,
+  452 in the run), and a failed splice tightened every splice margin by 0.02 per run. A failed end-plate moment check
+  now tightens its own joint kind's margin by the overshoot, as the sway margin does. It did not run on the IN_Ex2
+  R = 3 attempt above (the change came out of it); the follow-up study runs with it.
+- **Study page footer:** says slab base plates and anchors are sized for each design (it said they kept the gold's).
+- Tests: `tests/test_third_wave_peb.py` (22).
 
-<!-- STUDY -->
+## IN_Ex5: the PV answer on the new IN_Ex1
+- `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection) on the new IN_Ex1: **capacity 0.00 kN/m²** at
+  H/240, at H/150 (the dado detailed to move independently) and on strength alone. The main frame column
+  (WI862X225X12X8 station) is at 0.996 without the PV and 1.005 with 0.01 kN/m²; at 0.15 kN/m² the job is PARTIAL
+  (worst strength 1.132, wind sway 1.198 of H/240, first transverse mode 0.88 Hz, so the 10.2 gust-factor wind
+  applies). October (the old IN_Ex1): 0.02 kN/m², limited by the sway once the frame drops below 1 Hz.
+- The report's PV answer and the installer note follow (0.00 kN/m²; "a lighter array or a smaller covered area does
+  not help: the shed as built has no spare capacity for PV").
+- `design/pv_sensitivity_static_wind.json` (an October sensitivity run with the static wind, not part of the current
+  check) is withdrawn from the job folder; **the lead removes it from the published gold**.
+- **Site flag (the hub's HR index, SITE's build):** the IN_Ex5 flag still reads as the October answer. Suggested
+  text: "The shed as built has no spare capacity for PV: its main frame column is at 0.996 without the array and
+  0.01 kN/m² takes it over 1.0, and with the PV mass the frame drops below 1 Hz and the gust-factor sway exceeds the
+  H/240 limit. Strengthened to carry 0.15 kN/m²: +2.86 kg/m² (6.44 t), largest ratio 0.997; see the report."
+
+## Re-based report files
+- **IN_Ex5 `strengthening_option.json`** (solar-ready, strengthen-only from the new IN_Ex1, the IN_Ex5 wind basis):
+  +6.44 t, **+2.86 kg/m²** (32.38 → 35.24), COMPLETE, largest check ratio 0.997 (a girt). Changes: main columns
+  TI375-975X225X12X8 → TI375-1000X250X12X8, haunches TI975-575X250X14X6 → TI1000-650X250X14X8, rafter bodies
+  WI575X190X10X5 → WI650X190X10X5, gable end rafter and wind column one step deeper, knee end plate 45 → 56 mm with
+  a 36 mm column flange plate, main shear keys 2 × 400 × 36, 300 deep, purlins LZ230X75X20X2 → LZ230X75X20X2.3.
+  October (from the old IN_Ex1): +2.34 kg/m² (5.25 t).
+- **IN_Ex4 `compliance_comparison.json`**: as designed = the published auto-sized SMRF (57.11 kg/m²); the SMRF
+  re-sized by the current sizer 56.46; the ordinary frame (OMRF R 3 / OCBF R 4, no IS 18168, the Zone IV ban set
+  aside for the comparison) auto-sized from it 50.68; **difference 5.78 kg/m² (11.4 % of the ordinary frame)**, 6.43
+  against the published design (October: 6.09, 12.3 %).
+- **IN_Ex2 `compliance_comparison.json`**: as designed = the published auto-sized SMRF (52.71 kg/m²); the SMRF
+  re-sized by the current sizer 51.37; the ordinary frame **not resolved**: in 8 full runs every lighter ordinary
+  frame failed (the lightest, 505 t against 535 t, on a rafter splice end plate at 1.20; others on the eave sway,
+  1.02 to 1.07, a frame column and the splices), so the row is the SMRF's frame sizes run as an ordinary frame with
+  ordinary braced frame braces (51.63, +0.26 heavier by those braces), and the file says the cost of compliance here
+  is below what the sizer resolves, not zero (as in October: +0.26 then too).
+- The files are written by the item-13 script of the second wave (adapted: the rows above; public wording, no
+  constant names in the change list). IN_Ex8 is the SECT agent's.
+
+## The lever study on the new golds (full ladder) — follow-up
+Run on the final engine with `--ladder full --control` (work folder in the PEB sandbox), in resumable chunks under
+the shared heavy slots. Done so far (kg/m² of plan; the strict row is the published design re-sized by the current
+sizer, which now also sizes base plates and anchors):
+
+| job | published | strict (re-sized) | R = 3 route | solar-ready |
+|---|---|---|---|---|
+| IN_Ex1 | 32.38 | 31.81 (4 full runs) | n/a (ordinary frames as briefed) | 35.24 (+2.86) |
+| IN_Ex2 | 52.71 | 51.37 (6) | 51.63, not resolved (8) | |
+| IN_Ex4 | 57.11 | 56.46 (3) | 50.68 (6) | |
+
+Still to run (owner order: after the merge, as a follow-up): the other levers alone and the cumulative steps on
+IN_Ex1, IN_Ex2 (including the H/150 + dado-top lever the new dado predictor is for) and IN_Ex4, the whole IN_Ex3
+ladder, a second IN_Ex2 R = 3 attempt with the splice feedback above, and `/home/claude/briefs/VIDEO6_NUMBERS.md`
+(the writer is ready; it states that the gold is now the strict design).
+
+## Tests
+Full suite on this branch (bb295a9, under heavy): **1,208 passed, 5 skipped, 0 failed** (main before the third wave:
+1,121 / 4 skipped).
