@@ -2457,7 +2457,7 @@ class Evaluator:
     def __init__(self, lm, spec, conn_prev, margins, x_gold):
         self.lm, self.spec, self.conn_prev, self.m, self.x_gold = lm, spec, conn_prev or {}, margins, x_gold
         self.counts = lm.res.get("counts") or {}
-        self.cache, self.conn_cache = {}, {}
+        self.cache, self.conn_cache, self.bp_cache = {}, {}, {}
         self.n_eval = 0
         # third wave: the constants that carry a base (their base plate follows them)
         self.base_cs = sorted({c for t in (getattr(lm, "base_info", None) or []
@@ -2543,9 +2543,14 @@ class Evaluator:
                     continue
                 spec_b = (conn_.get("column_base") or {}).get(bkeys.get(slot))
                 kd = (design.get(slot) or {}).get("key") if slot in design else (cp.get(slot) or {}).get("key")
-                pl = size_base_plate(lm.cfg, spec_b, entries, key_dims=kd if kd != "none_fits" else None,
-                                     margin=self.margin("conn:base_plate", self.margin("conn:base", 1.0)),
-                                     floor=(fl.get(slot) or {}).get("plate"))
+                mg_bp = self.margin("conn:base_plate", self.margin("conn:base", 1.0))
+                ck = (slot, tuple(e["sec"] for e in entries), tuple(kd) if isinstance(kd, (list, tuple)) else kd,
+                      mg_bp)
+                if ck not in self.bp_cache:       # the plate depends on the base sections and the key only
+                    self.bp_cache[ck] = size_base_plate(lm.cfg, spec_b, entries,
+                                                        key_dims=kd if kd != "none_fits" else None, margin=mg_bp,
+                                                        floor=(fl.get(slot) or {}).get("plate"))
+                pl = self.bp_cache[ck]
                 if pl is None:
                     # nothing lighter verified locally: keep the plate of the run (the full run judges it)
                     pl = dict(cp[slot]["plate"])
