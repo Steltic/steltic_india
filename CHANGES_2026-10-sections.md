@@ -1,0 +1,123 @@
+# steltic-india — 2026-10 third wave: Indian section families for IN_Ex7 … IN_Ex20 (agent SECT)
+
+Branch `fix/2026-10-third-sections`, based on main 44b74de. It also carries 2cb42ff (column in-span moment, the
+PEB agent's fix, cherry-picked on the lead's instruction). That fix is being corrected on the lead's branch, so the
+sizing of jobs with pinned or span-loaded wall columns is provisional until it reaches main.
+
+Scope (owner decisions of 2026-10-30):
+- re-size IN_Ex7 … IN_Ex20 and their units (Ex11 workshop, Ex12 unit B and unit C, Ex19 stem) to Indian section
+  families: IS 808 MB / WB / HB, MC, ISA and IS 1161 CHS by default, and E350 for heavy columns;
+- report before and after kg/m² for every job;
+- IN_Ex6 and the cold-formed jobs keep their sections.
+
+The golds stay code-strict under the existing rulings (D-T1, D-T2, D-T4, D-T5, D-T7, O1, H/240 with a brick dado,
+D8).
+
+## Brace families (owner confirmation, 2026-11-01)
+
+- **OCBF jobs (IN_Ex7, IN_Ex11 and the Ex11 workshop): IS 1161 CHS braces** (YSt 310, hot-finished seamless).
+- **SCBF and EBF jobs: IS 808 HB / WB / MB braces in IS 2062 E250 B0.** IS 1161 tubes cannot be used there:
+  - IS 800:2007 12.8.2.1 requires the braces of a special concentrically braced frame to be IS 2062 E250B steel;
+  - where IS 18168:2023 governs (Zones III–V), 5.2(b) admits other steels only with an elongation of at least 22 %,
+    and IS 1161 Table 2 gives 10–20 % (YSt 210 20 %, YSt 240 17 %, YSt 310 14 %, YSt 355 10 %);
+  - the engine already enforces this (`india_is800_s12.material_gate`).
+- The CHANGES tables and the reports state this basis.
+
+## P3 (HR side): tied combinations give the same label run to run
+
+- `design_pipeline._top_records` used to rebuild the per-element combination dict from a Python set, so its order
+  followed the hash seed.
+  - Fix: it now keeps the order of the combination list. On a tie, the first combination in that list governs.
+  - Proof: IN_Ex13 run with PYTHONHASHSEED 1 and 2 gives byte-identical `calc_package.json`, csv and md files and
+    `report.html`. Before the fix there were 86 differences.
+  - The printed tie labels can differ from the published golds; no ratio changes.
+- Test: `tests/test_third_wave_sections.py`, run in subprocesses with four hash seeds.
+
+## The general sizer (`steel_engine/hr_autosize.py`, new)
+
+- A job is sizable when its cfg.py declares these at the top level (the job uses `SECTIONS[...]` wherever it picks a
+  section):
+  - `SECTIONS` (member group → section label);
+  - `SIZING_GROUPS` (role, families, built-up fallback, notes);
+  - `GRADE_BY_SECTION`;
+  - `CONNECTIONS` (the declared connection geometry, a literal).
+- The sizer rewrites only those literals (AST spans, so the comments are kept).
+- **Order of preference** per group:
+  1. rolled E250 of the group's families (lightest first);
+  2. rolled E350 (columns);
+  3. a built-up welded box (columns) or welded plate I (beams, links), from IS 2062 plates. The golds' label
+     convention is kept: `BOX<D>X<B>X<t>`, `WI<D>X<bf>X<tf>X<tw>`.
+- **Loop:**
+  1. A probe maps each element to its group: one execution of the cfg with a clone label per group.
+  2. A full pipeline run without the report, in a child process with PYTHONHASHSEED 0. It captures the exact
+     member-check inputs of every element and the Section 12 model data.
+  3. Local sizing with the forces frozen. Every element must pass the IS 800 member checks
+     (`india_is800.member_check_is800`) within the group's margin. The group's own Section 12 rows (IS 18168
+     Table 2, brace slenderness and class, IS 18168 7.2 column KL/r, link rules) must also pass. A proportional
+     drift / sway / deflection predictor keeps the stiffness the last run needed.
+  4. The whole proposal goes through the engine's Section 12 checks with the frozen forces. Any group that a
+     member- or joint-level row fails (SCWB, for example) is stepped up.
+  5. The connections are re-designed for the new sections:
+     - fin plates (one or two bolt lines, then double fins, then a sand-blasted faying surface) and brace ends
+       (slotted CHS, or rolled I with CJP flange welds), checked with the engine's own capacity functions;
+     - cover-plate and CJP moment joints from the section;
+     - base plates and splices adapted from the previous design, then stepped up from the failing rows of the
+       verification run (plate, bearing, anchors, embedment, stiffeners; splice bolts and plates; panel-zone
+       doublers, cover plates).
+  6. A full verification run. A failure tightens the margin of the failing group or steps up the failing
+     connection.
+  7. The loop stops when a passing design no longer changes. The lightest passing design in the target families
+     is kept.
+- **Mass:** the engine's take-off of the modelled members (`design/takeoff.json`). Connections are not in the
+  kg/m², as in every hot-rolled gold.
+- **CLI:**
+  - `python steel_engine/hr_autosize.py size <job> --work <dir>` (resumable from `state.json`);
+  - `python steel_engine/hr_autosize.py write <job> --work <dir>`.
+
+## Migration of the gold cfgs (sandbox tool, not in the repo)
+
+- Every job cfg was moved to the sizable format by a token-level rewrite: label literals became `SECTIONS["group"]`,
+  and the hand-built `cfg["connections"]` became the `CONNECTIONS` literal taken from the gold run's
+  `design/cfg_snapshot.json`.
+- Before any sizing, each migrated cfg was re-run against the original gold cfg on this branch (`--no-report`,
+  PYTHONHASHSEED 0). Results:
+  - 17 of 18 calc packages are identical;
+  - IN_Ex7 differs only in the gantry girder's capped-flange properties: they are now computed from the IS 808
+    properties (Iy 1.0763e8, Zpy 9.858e5) instead of the gold's rounded hand values (1.08e8, 9.86e5), and the
+    gantry ratio moves by 2.7e-5.
+
+## Handoff P8
+
+- **IN_Ex7 eave struts.** They are sized as struts (role `strut`): axial force of the longitudinal load path plus
+  self weight, IS 800 Table 3 KL/r.
+- **IN_Ex18 wind limits.** The gold's limits are the IS 800:2007 Table 6 rows for other buildings, lateral, wind:
+  building with brittle cladding Height/500, inter-storey drift storey height/300 (corpus, IS 800 p. 31). The
+  podium office facade (glazing and masonry) is brittle cladding. The basis now prints with the wind limits
+  (`cfg['cladding_basis']`).
+- **IN_Ex20 wind limits: corrected.** The cfg declared no cladding class, so the engine applied the elastic-cladding
+  row, Height/300. An 18-storey office facade (glazed curtain wall and panels) is brittle cladding, so the limit is
+  now Height/500, with storey height/300 for the inter-storey drift. The basis is printed. The design status was
+  unchanged before re-sizing (wind top ratios 0.35 / 0.52).
+- **IN_Ex20 context and fire.** Two new boxes print after the framing box (`report_second_wave.context_html`):
+  - a "Practice context" box: an 18-storey office of this slenderness would usually have an RC core or frame; here
+    the steel SCBF is the only lateral system, to show the checks a slender braced tower needs;
+  - a "Fire resistance" box: the design is at ambient temperature. The fire resistance level is set under IS 800:2007
+    16.2 (as prescribed in IS 1641 / 1642 / 1643, or the building specifications or city ordinance; IS 1641–1643 and
+    the National Building Code are not in the corpus). The protection must give a period of structural adequacy at
+    least equal to it (16.1.1). Fire protection is not in the steel quantities.
+- **IN_Ex9 lean-to.** Not modelled as a part level: the engine has no part-level model. The IS 1893 Table 6 screens
+  read consecutive levels as storeys. The second-wave note stays, and the flags' requirements stay applied (RSA and
+  the 0.2 % drift limit), which is conservative.
+
+## Lead request (2026-11-01): raw dict in the IN_Ex17 report
+
+- The design-engineer assumptions table printed an across-wind value recorded per direction as
+  `{"X": 0.002, "Y": 0.002}`. `report_second_wave.value_words` now prints "0.002 (X) and 0.002 (Y)" (lists read
+  "a, b and c").
+- `report_public.leaks` has a new kind, `raw dict` (a quoted key followed by a colon). Page `<style>` and `<script>`
+  blocks are not scanned.
+- A scan of the 24 published reports finds exactly that one row (IN_Ex17).
+
+## Results
+
+(see the tables below; filled from the final runs)

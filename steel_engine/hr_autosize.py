@@ -498,6 +498,27 @@ def probe(job_dir, sections):
     return out, kinds
 
 
+def probe_secondary(job_dir, sections):
+    """cfg['secondary_members'] index -> group: the declared secondary members (lean-to beams, purlins, struts)
+    whose section is one of the sized groups, found by executing the cfg with the probe labels."""
+    S = _S()
+    plabs = {}
+    for k, (g, lab) in enumerate(sorted(sections.items())):
+        register(lab)
+        pl = "%s#P%d" % (lab, k)
+        S.CUSTOM[S.normalize_label(pl)] = dict(S.props(lab))
+        plabs[g] = pl
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod = exec_cfg(os.path.join(job_dir, "cfg.py"), {"SECTIONS": plabs})
+    back = {S.normalize_label(v): g for g, v in plabs.items()}
+    out = {}
+    for i, s_ in enumerate(mod.cfg.get("secondary_members") or []):
+        g = back.get(S.normalize_label(str(s_.get("section") or "")))
+        if g is not None:
+            out[i] = g
+    return out
+
+
 # =================================================================================================== worker
 def worker(run_dir):
     """Child process: one full pipeline run of run_dir/cfg.py (already rewritten); captures the member-check inputs
@@ -525,9 +546,15 @@ def worker(run_dir):
             _mc, _s12 = DP.member_checks_is800, S12.section12_checks
 
             def mc(cfg, elem):
-                cap["elems"][int(elem["member"]["tag"])] = {"member": copy.deepcopy(elem["member"]),
-                                                            "kind": elem["kind"],
-                                                            "records": DP._top_records(elem["records"])}
+                # every call is kept: the IS 1893 7.11.2 gravity-column check calls the member check again for the
+                # same element with its own (R x displacement) records, after the strength check
+                rec = {"member": copy.deepcopy(elem["member"]), "kind": elem["kind"],
+                       "records": DP._top_records(elem["records"])}
+                t_ = int(elem["member"]["tag"])
+                if t_ in cap["elems"]:
+                    cap["elems"][t_].setdefault("more", []).append(rec)
+                else:
+                    cap["elems"][t_] = rec
                 return _mc(cfg, elem)
 
             def s12(system, md, s12cfg):
@@ -648,19 +675,61 @@ class Local:
         self.cfg = cfg
         import static_model as SM
         self._cf = {t: SM.combo_forces_for_member_check(e["records"], e["kind"]) for t, e in self.elems.items()}
+        self._more = {t: [(x["member"], SM.combo_forces_for_member_check(x["records"], x["kind"]))
+                          for x in e.get("more") or []] for t, e in self.elems.items() if e.get("more")}
         self.by_group = {}
         self._dem = {}
         self._md_cache = {}
         self._t2 = {}
+        self.secondary = {}
         for t in sorted(self.elems):
             g = groups_of.get(t)
             if g is not None:
                 self.by_group.setdefault(g, []).append(t)
 
     def member_dc(self, t, label, grade):
+        """Strength and Table 3 ratios of element t with a candidate section: the governing of every member check the
+        run made for it (the strength check and, for a gravity column, the IS 1893 7.11.2 check)."""
+        st, t3, err = self._member_dc1(t, self.elems[t]["member"], self._cf[t], label, grade)
+        for mem, cf in self._more.get(t, ()):
+            if err:
+                break
+            st2, t32, err = self._member_dc1(t, mem, cf, label, grade)
+            st, t3 = max(st, st2), max(t3, t32)
+        return st, t3, err
+
+    def set_secondary(self, sec_map):
+        """sec_map: cfg['secondary_members'] index -> group (probe_secondary)."""
+        lst = self.cfg.get("secondary_members") or []
+        self.secondary = {}
+        for i, g in sorted(sec_map.items()):
+            if int(i) < len(lst):
+                self.secondary.setdefault(g, []).append(lst[int(i)])
+
+    def secondary_dc(self, s_, label, grade):
+        """The engine's own check of a declared secondary member (design_pipeline.secondary_member_checks /
+        secondary_strut_checks) with a candidate section: its governing D/C, None when it cannot be formed."""
+        import design_pipeline as DP
+        register(label)
+        s2 = dict(s_, section=label)
+        if grade:
+            s2["grade"] = grade
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                if str(s2.get("kind") or "").lower() == "strut":
+                    r = DP.secondary_strut_checks(self.cfg, s2)
+                else:
+                    r = DP.secondary_member_checks(self.cfg, s2, DP.secondary_member_demand(self.cfg, s2))
+        except Exception:
+            return None
+        if any(c.get("ok") is False for c in r.get("checks") or []):
+            return max(1.01, float(r.get("DC") or 0.0))
+        return r.get("DC")
+
+    def _member_dc1(self, t, member, cf, label, grade):
         import india_is800 as I8
         register(label)
-        e = self.elems[t]
+        e = {"member": member}
         m = dict(e["member"], section=label)
         if grade is not None or family_of(label) != "CHS":
             if grade is not None:
@@ -671,7 +740,7 @@ class Local:
             m["grade"] = self.cfg.get("tube_grade") or self.cfg.get("brace_grade") or m.get("grade")
             m["process"] = self.cfg.get("tube_process") or self.cfg.get("brace_process") or m.get("process")
         try:
-            r = I8.member_check_is800(m, self._cf[t], cfg=self.cfg)
+            r = I8.member_check_is800(m, cf, cfg=self.cfg)
         except Exception as ex:
             return 99.0, 99.0, "error %s" % ex
         if r.get("dc") is None:
@@ -687,6 +756,11 @@ class Local:
             if err or st > margin + 1e-9 or t3 > 1.0 + 1e-9:
                 return False, (st, t3)
             worst = (max(worst[0], st), max(worst[1], t3))
+        for s_ in self.secondary.get(g, ()):
+            dc = self.secondary_dc(s_, label, grade)
+            if dc is None or dc > margin + 1e-9:
+                return False, (dc if dc is not None else 99.0, worst[1])
+            worst = (max(worst[0], dc), worst[1])
         bad = self.self_rows(g, label, grade)
         if bad:
             return False, (worst[0], 99.0)
@@ -888,26 +962,29 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=()):
 
 
 def next_up(spec, current, lm=None, g=None, margin=None):
-    """The next candidate after `current` (label, grade) in the group's order that is heavier than it (or a later
-    tier) and passes the frozen member checks (when lm is given)."""
+    """The next candidate after `current` (label, grade) in the group's order of preference that is not weaker than
+    it (A, Ix, Zx; the same section in a higher grade counts) and passes the frozen member checks (when lm is
+    given).  Used to step a group up for a failing Section 12 row that the member checks cannot see (SCWB ...)."""
     cands = candidates(spec)
-    cur_m = mass_kg_m(current[0])
-    cur_tier = next((tr for (l, gr, tr) in cands if l == current[0] and gr == current[1]), None)
-    for lab, grade, tier in cands:
-        if (lab, grade) == tuple(current):
+    cur = (current[0], current[1])
+    idx = next((k for k, (l, gr, tr) in enumerate(cands) if (l, gr) == cur), None)
+    if idx is None:
+        idx = next((k for k, (l, gr, tr) in enumerate(cands) if l == cur[0]), -1)
+    cur_fy = 350.0 if "350" in str(cur[1] or "") else 250.0
+    for lab, grade, tier in cands[idx + 1:]:
+        if (lab, grade) == cur:
             continue
-        heavier = mass_kg_m(lab) > cur_m + 1e-9
-        later_tier = cur_tier is not None and tier > cur_tier and mass_kg_m(lab) >= cur_m * 0.999
-        if not (heavier or later_tier):
+        fy = 350.0 if "350" in str(grade or "") else 250.0
+        if lab == cur[0] and fy <= cur_fy:
             continue
-        if cur_tier is not None and tier < cur_tier:
+        if lab != cur[0] and not (_stronger(lab, cur[0]) and fy >= cur_fy - 1e-9 or
+                                  _stronger(lab, cur[0]) and mass_kg_m(lab) > mass_kg_m(cur[0])):
             continue
         if lm is not None:
             ok, _ = lm.group_ok(g, lab, grade, margin)
             if not ok:
                 continue
-        if _stronger(lab, current[0]):
-            return (lab, grade)
+        return (lab, grade)
     return None
 
 
@@ -1177,6 +1254,14 @@ def brace_end_chs_spec(sec, tg, Lw, *, grade_plate="E250", template=None):
             "detail": detail}
 
 
+def brace_system(system):
+    """The brace branch of a (possibly combined, 'SMRF+SCBF') system string, as section12_checks picks it: the first
+    OCBF / SCBF component (EBF braces are checked under 'EBF'); the system itself when it has no braced component."""
+    import india_is800_s12 as S12
+    comps = S12.system_components(system)
+    return next((c for c in comps if c in ("OCBF", "SCBF")), None) or ("EBF" if "EBF" in comps else system)
+
+
 def design_brace_end(lm, g, sec, grade, template=None, margin=0.95):
     """Lightest gusset (thinnest, then shortest weld length) for which the engine's brace connection checks
     (india_is800_s12.brace_connection_checks, the brace member rules' net-section row) pass for one brace group with
@@ -1184,6 +1269,7 @@ def design_brace_end(lm, g, sec, grade, template=None, margin=0.95):
     import india_is800_s12 as S12
     import india_connection_design as CD
     system, md, sc = lm.s12
+    system = brace_system(system)
     tags = lm.by_group.get(g) or []
     mems = [m for m in md.get("members") or [] if int(m.get("tag") or str(m["id"]).lstrip("e")) in tags]
     if not mems:
@@ -1277,6 +1363,51 @@ ANCHOR_D = (20, 24, 30, 36, 42, 48, 56, 64)
 ANCHOR_ANB = {20: 245.0, 24: 353.0, 30: 561.0, 36: 817.0, 42: 1120.0, 48: 1473.0, 56: 2030.0, 64: 2676.0}
 
 
+BASE_T_MM = (20.0, 25.0, 28.0, 32.0, 36.0, 40.0, 45.0, 50.0, 56.0, 63.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+             130.0, 140.0, 150.0)
+
+
+def _base_t_up(t, factor):
+    need = float(t) * factor
+    for v in BASE_T_MM:
+        if v >= need - 1e-9 and v > float(t) + 1e-9:
+            return v
+    return BASE_T_MM[-1]
+
+
+def ring_base(col, template, *, d=None, n=None, t=None, proj=None):
+    """A fixed column base with a perimeter ring of anchors (the IN_Ex8 detail) laid out for the column section:
+    plate B x L = column footprint + 2 x projection, n anchors on each face (corners shared, 4(n - 1) in all),
+    edge 1.7 d0 (IS 800 10.2.4.2 with the rough-edge factor), pitch >= 2.5 d (10.2.2); the embedment record,
+    concrete grade, plate grade and other declared items of the template are kept."""
+    sp = copy.deepcopy(template)
+    p = props(col)
+    an = dict(sp.get("anchors") or {})
+    d = int(d or an.get("d_mm") or 36)
+    d0 = d + (2 if d <= 24 else 3)
+    edge = float(math.ceil(1.7 * d0 / 5.0) * 5.0)
+    proj = float(proj or max(2.0 * edge + 20.0, 150.0))
+    B = float(math.ceil((float(p["bf"]) + 2.0 * proj) / 50.0) * 50.0)
+    L = float(math.ceil((float(p["d"]) + 2.0 * proj) / 50.0) * 50.0)
+    nmax = int((min(B, L) - 2.0 * edge) // (2.5 * d)) + 1
+    n = max(2, min(int(n or an.get("n_per_row") or 3), nmax))
+    pitch = (min(B, L) - 2.0 * edge) / (n - 1)
+    an.update({"n_total": 4 * n - 4, "n_tension": n, "d_mm": d, "Anb_mm2": ANCHOR_ANB.get(d, an.get("Anb_mm2")),
+               "f_mm": L / 2.0 - edge, "pitch_mm": round(pitch, 1), "edge_mm": edge, "n_per_row": n,
+               "f_y_mm": B / 2.0 - edge, "n_tension_y": n,
+               "note": "perimeter ring: %d anchors on each face (corners shared), %d in total" % (n, 4 * n - 4)})
+    an.pop("x_mm", None)
+    an.pop("y_mm", None)
+    sp["anchors"] = an
+    sp["B_mm"], sp["L_mm"] = B, L
+    sp["t_plate_mm"] = float(t or sp.get("t_plate_mm") or 50.0)
+    sp["fy_plate_MPa"] = plate_fy(sp["t_plate_mm"], sp.get("plate_grade") or "E250")
+    sp["fixed"] = True
+    sp["layout"] = "ring"
+    sp.pop("stiffeners", None)
+    return sp
+
+
 def adapt_base(template, old_col, new_col):
     """A column base for a new column section from the base of the old one: the plate keeps its projections beyond
     the column (B and L grow or shrink with the column, never below the old anchor layout's fit), the anchors and
@@ -1284,6 +1415,8 @@ def adapt_base(template, old_col, new_col):
     sp = copy.deepcopy(template)
     if old_col == new_col or not isinstance(sp, dict) or sp.get("type") == "embedded":
         return sp
+    if sp.get("fixed") and not sp.get("stiffeners") and isinstance(sp.get("anchors"), dict):
+        return ring_base(new_col, sp)
     po, pn = props(old_col), props(new_col)
     dB = float(pn["bf"]) - float(po["bf"])
     dL = float(pn["d"]) - float(po["d"])
@@ -1317,44 +1450,97 @@ def adapt_splice(template, old_col, new_col):
     return sp
 
 
-def bump_base(sp, failing):
-    """Step up a column base for its failing rows (names of the run's 'column base' rows)."""
+def _rows(failing):
+    """[(name, dc)] from row names or (name, dc, ok) tuples."""
+    out = []
+    for f in failing:
+        if isinstance(f, (list, tuple)):
+            out.append((str(f[0]), float(f[1]) if isinstance(f[1], (int, float)) else 1.1))
+        else:
+            out.append((str(f), 1.1))
+    return out
+
+
+def _dc_of(rows, pattern):
+    v = [dc for nm, dc in rows if re.search(pattern, nm)]
+    return max(v) if v else None
+
+
+def bump_base(sp, failing, col=None):
+    """Step up a column base for its failing rows (the run's 'column base' rows, with their ratios): plate t by
+    sqrt(ratio) (bending), plan by sqrt(ratio) (bearing), anchor area by the ratio (a bigger diameter, then more
+    anchors), embedment length by the ratio (bond), stiffeners one plate up."""
     sp = copy.deepcopy(sp)
-    names = " ".join(failing)
-    if re.search(r"plate_thickness", names):
-        sp["t_plate_mm"] = _plate_up(float(sp.get("t_plate_mm") or 20.0), 1.1)
-        if float(sp["t_plate_mm"]) > 63:
-            sp["t_plate_mm"] = float(math.ceil(float(sp["t_plate_mm"]) / 10.0) * 10.0)
+    rows = _rows(failing)
+    if sp.get("layout") == "ring" and col is not None:
+        an = sp.get("anchors") or {}
+        d, n, t = int(an.get("d_mm") or 36), int(an.get("n_per_row") or 3), float(sp.get("t_plate_mm") or 50.0)
+        d0 = d + 3
+        proj = (float(sp["L_mm"]) - float(props(col)["d"])) / 2.0
+        dc = _dc_of(rows, r"plate_thickness")
+        if dc:
+            t = _base_t_up(t, max(1.05, math.sqrt(dc) * 1.03))
+        dc = _dc_of(rows, r"bearing")
+        if dc:
+            proj = proj * max(1.1, math.sqrt(dc))
+        dc = _dc_of(rows, r"anchor_(tension|combined|shear)|geometry_anchor")
+        if dc:
+            nmax = int((min(float(sp["B_mm"]), float(sp["L_mm"])) - 2.0 * math.ceil(1.7 * d0 / 5.0) * 5.0) // (2.5 * d)) + 1
+            need_n = int(math.ceil(n * dc * 1.05))
+            if need_n <= nmax:
+                n = need_n
+            else:
+                up = [x for x in ANCHOR_D if x > d and x <= 64]
+                d = up[0] if up else d
+                if not up:
+                    proj += 50.0
+        emb_dc = _dc_of(rows, r"anchorage_embedment")
+        out = ring_base(col, sp, d=d, n=n, t=t, proj=proj)
+        emb = (out.get("anchors") or {}).get("embedment")
+        if emb_dc and isinstance(emb, dict) and emb.get("L_mm"):
+            emb["L_mm"] = float(math.ceil(float(emb["L_mm"]) * emb_dc * 1.05 / 50.0) * 50.0)
+        return out
+    dc = _dc_of(rows, r"plate_thickness")
+    if dc:
+        sp["t_plate_mm"] = _base_t_up(float(sp.get("t_plate_mm") or 20.0), max(1.05, math.sqrt(dc) * 1.03))
         sp["fy_plate_MPa"] = plate_fy(sp["t_plate_mm"], sp.get("plate_grade") or "E250")
-    if re.search(r"bearing|geometry_anchor_fit", names):
+    dc = _dc_of(rows, r"bearing|geometry_anchor_fit")
+    if dc:
+        f = max(1.1, math.sqrt(dc) * 1.03)
         for k in ("B_mm", "L_mm"):
             if k in sp:
-                sp[k] = float(math.ceil(float(sp[k]) * 1.1 / 50.0) * 50.0)
+                sp[k] = float(math.ceil(float(sp[k]) * f / 50.0) * 50.0)
     an = sp.get("anchors")
-    if isinstance(an, dict) and re.search(r"anchor_(tension|combined|shear)", names):
+    dc = _dc_of(rows, r"anchor_(tension|combined|shear)")
+    if isinstance(an, dict) and dc:
         d = int(an.get("d_mm") or 24)
-        up = [x for x in ANCHOR_D if x > d]
-        if up and up[0] <= 56:
+        need = ANCHOR_ANB.get(d, 353.0) * dc * 1.05
+        up = [x for x in ANCHOR_D if x > d and x <= 56 and ANCHOR_ANB[x] >= need]
+        if up:
             an["d_mm"] = up[0]
             an["Anb_mm2"] = ANCHOR_ANB[up[0]]
         else:
-            npr = int(an.get("n_per_row") or 2) + 1
-            an["n_per_row"] = npr
-            an["n_tension"] = int(an.get("n_tension") or 2) + 1
-            an["n_total"] = int(an.get("n_total") or 4) + 2
-    if isinstance(an, dict) and re.search(r"anchorage_embedment", names):
+            npr = int(an.get("n_per_row") or 2)
+            add = max(1, int(math.ceil(npr * (dc * 1.05 - 1.0))))
+            an["n_per_row"] = npr + add
+            an["n_tension"] = int(an.get("n_tension") or 2) + add
+            an["n_total"] = int(an.get("n_total") or 4) + 2 * add
+    dc = _dc_of(rows, r"anchorage_embedment")
+    if isinstance(an, dict) and dc:
         emb = an.get("embedment") or sp.get("embedment")
         if isinstance(emb, dict) and emb.get("L_mm"):
-            emb["L_mm"] = float(emb["L_mm"]) + 250.0
+            emb["L_mm"] = float(math.ceil(float(emb["L_mm"]) * dc * 1.05 / 50.0) * 50.0)
+        elif isinstance(emb, dict) and emb.get("capacity_N"):
+            pass                                  # an asserted capacity is not the sizer's to raise
     st = sp.get("stiffeners")
-    if isinstance(st, dict) and re.search(r"gusset", names):
+    if isinstance(st, dict) and _dc_of(rows, r"gusset"):
         st["t_mm"] = _plate_up(float(st.get("t_mm") or 12.0), 1.0001)
     return sp
 
 
 def bump_splice(sp, failing):
     sp = copy.deepcopy(sp)
-    names = " ".join(failing)
+    names = " ".join(nm for nm, _ in _rows(failing))
     if isinstance(sp.get("bolts"), dict) and re.search(r"bolts_10_3", names):
         sp["bolts"]["n_bolts"] = int(sp["bolts"].get("n_bolts") or 4) + 2
     pl = sp.get("plate")
@@ -1481,7 +1667,7 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None):
                 sp = adapt_base(tb, lab0, lab)
                 fb = (bumps.get("column_base") or {}).get(key) or (bumps.get("column_base") or {}).get("%s:%s" % (r, lab0))
                 if fb:
-                    sp = bump_base(sp, fb)
+                    sp = bump_base(sp, fb, col=lab)
                 out["column_base"][key] = sp
             ts = CD.spec_for(conn_cfg, "column_splice", lab0, r)
             if ts is not None:
@@ -1506,9 +1692,9 @@ def connection_bumps(ev, x, roles):
             for (nm, dc, ok) in c["fail"]:
                 nm = str(nm)
                 if nm.startswith("column base"):
-                    out["column_base"].setdefault(key, []).append(nm)
+                    out["column_base"].setdefault(key, []).append((nm, dc, ok))
                 elif nm.startswith("column splice"):
-                    out["column_splice"].setdefault(key, []).append(nm)
+                    out["column_splice"].setdefault(key, []).append((nm, dc, ok))
     return out
 
 
@@ -1661,9 +1847,12 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         if st.get("groups_of") is None:
             gmap, _kinds = probe(run_dir, {g: v[0] for g, v in x.items()})
             st["groups_of"] = {str(t): g for t, g in sorted(gmap.items())}
+        if st.get("sec_groups") is None:
+            st["sec_groups"] = {str(i): g for i, g in sorted(probe_secondary(run_dir, {g: v[0] for g, v in x.items()}).items())}
         groups_of = {int(t): g for t, g in st["groups_of"].items()}
         mod = exec_cfg(os.path.join(run_dir, "cfg.py"))
         lm = Local(run_dir, groups_of, specs, {g: v[0] for g, v in x.items()}, st["gbs"], mod.cfg)
+        lm.set_secondary({int(i): g for i, g in st["sec_groups"].items()})
         roles = roles_of_groups(lm)
         mass_est = sum(lm.group_length_mm(g) / 1000.0 * mass_kg_m(x[g][0]) for g in x)
         rec = {"it": it, "x": {g: list(v) for g, v in x.items()}, "passed": ev["passed"], "kg_m2": ev.get("kg_m2"),
@@ -1732,6 +1921,9 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         st["history"].append(rec)
         changed = _x_key(x1) != _x_key(x) or json.dumps(conns1, sort_keys=True, default=str) != \
             json.dumps(st["conns"], sort_keys=True, default=str)
+        seen = st.setdefault("seen", [])
+        cycle = _x_key(x1) in seen and _x_key(x1) != _x_key(x)
+        seen.append(_x_key(x))
         for g in sorted(x1):
             if tuple(x1[g]) != tuple(x[g]):
                 log_fn("    %-18s %-22s -> %-22s %s" % (g, "%s %s" % (x[g][0], x[g][1] or ""),
@@ -1742,6 +1934,12 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         st["it"] = it + 1
         _cleanup(work, keep={"it%02d" % it, "it%02d" % (it - 1), "it%02d" % (st["best"] or {}).get("it", -1)})
         save_state(work, st)
+        if cycle and st.get("best"):
+            log_fn("the proposal repeats an earlier design (a cycle of the frozen-force sizing): stop at it%02d, best "
+                   "it%02d" % (it, st["best"]["it"]))
+            st["converged"] = "cycle"
+            save_state(work, st)
+            break
         if not changed and ev["passed"]:
             log_fn("converged at it%02d" % it)
             st["converged"] = True

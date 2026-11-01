@@ -218,11 +218,11 @@ def test_cover_plate_joint_develops_the_factor_on_the_beam_plastic_moment():
 
 def test_base_adapter_keeps_projections_and_bumps_by_failing_row():
     AZ = _az()
-    tpl = {"B_mm": 600.0, "L_mm": 700.0, "t_plate_mm": 40.0, "fy_plate_MPa": 240.0, "fixed": True,
+    tpl = {"B_mm": 600.0, "L_mm": 700.0, "t_plate_mm": 40.0, "fy_plate_MPa": 240.0, "fixed": False,
            "anchors": {"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "8.8", "n_per_row": 2, "Anb_mm2": 353.0,
                        "embedment": {"method": "bond", "L_mm": 600.0}}}
     import sections as S
-    sp = AZ.adapt_base(tpl, "HB200", "HB300")
+    sp = AZ.adapt_base(tpl, "HB200", "HB300")             # a pinned base keeps its projections
     dB = S.props("HB300")["bf"] - S.props("HB200")["bf"]
     dL = S.props("HB300")["d"] - S.props("HB200")["d"]
     assert sp["B_mm"] >= 600.0 + dB - 1e-9 and sp["L_mm"] >= 700.0 + dL - 1e-9
@@ -231,8 +231,30 @@ def test_base_adapter_keeps_projections_and_bumps_by_failing_row():
     b = AZ.bump_base(tpl, ["column base (base-e1): plate_thickness", "column base (base-e1): anchor_tension_10_3_5",
                            "column base (base-e1): anchorage_embedment"])
     assert b["t_plate_mm"] > 40.0 and b["anchors"]["d_mm"] == 30 and b["anchors"]["Anb_mm2"] == 561.0
-    assert b["anchors"]["embedment"]["L_mm"] == 850.0
+    assert b["anchors"]["embedment"]["L_mm"] == 700.0           # 600 x 1.1 (default ratio) x 1.05, to 50 mm
+    b2 = AZ.bump_base(tpl, [("column base (base-e1): anchorage_embedment", 1.9, False)])
+    assert b2["anchors"]["embedment"]["L_mm"] == 1200.0          # 600 x 1.9 x 1.05 = 1197 -> 1200
     assert tpl["t_plate_mm"] == 40.0                                    # the template is not changed in place
+
+
+def test_fixed_base_on_a_new_column_becomes_a_perimeter_ring_and_steps_up_from_the_failing_rows():
+    AZ = _az()
+    import sections as S
+    tpl = {"B_mm": 1100.0, "L_mm": 1300.0, "t_plate_mm": 100.0, "fy_plate_MPa": 230.0, "fck_MPa": 30.0, "fixed": True,
+           "anchors": {"n_total": 16, "n_tension": 8, "d_mm": 48, "grade": "8.8", "f_mm": 460.0, "pitch_mm": 125.0,
+                       "edge_mm": 100.0, "n_per_row": 8, "Anb_mm2": 1473.0,
+                       "embedment": {"method": "bond", "L_mm": 1500.0}}}
+    sp = AZ.adapt_base(tpl, "NPB750X270X202.49", "BOX500X500X14")
+    an = sp["anchors"]
+    assert sp["layout"] == "ring" and sp["B_mm"] == sp["L_mm"] == 900.0
+    assert an["n_total"] == 4 * an["n_per_row"] - 4 and an["pitch_mm"] >= 2.5 * an["d_mm"] - 1e-9   # IS 800 10.2.2
+    assert an["edge_mm"] >= 1.7 * (an["d_mm"] + 3) - 1e-9                                             # IS 800 10.2.4.2
+    assert an["embedment"] == {"method": "bond", "L_mm": 1500.0} and sp["fck_MPa"] == 30.0
+    up = AZ.bump_base(sp, [("column base (base-e3): y:plate_thickness", 2.7, False),
+                           ("column base (base-e3): anchorage_embedment", 1.25, False)], col="BOX500X500X14")
+    assert up["t_plate_mm"] == 150.0                     # 100 x sqrt(2.7) x 1.03 = 169 -> the largest plate, 150
+    assert up["anchors"]["embedment"]["L_mm"] == 2000.0  # 1500 x 1.25 x 1.05 = 1969 -> 2000
+    assert S.props("BOX500X500X14")["d"] + 2 * 150.0 <= up["L_mm"]
 
 
 def test_splice_adapter_resizes_flange_plates_to_the_new_flange():
@@ -305,3 +327,35 @@ def test_public_text_scan_catches_a_raw_dict_and_ignores_page_style():
     ok = ("<style>h1{border-bottom:3px solid #2c5aa0} td{padding:4px}</style><script>window.MathJax={tex:{inlineMath:"
           "[['\\\\(','\\\\)']]}};</script><p>0.002 (X) and 0.002 (Y)</p>")
     assert P.leaks(ok, kinds=["raw dict"]) == []
+
+
+# ------------------------------------------------------------------------------------------------ sizer fixes 2026-11-01
+def test_brace_system_of_a_combined_system_is_the_braced_component():
+    AZ = _az()
+    assert AZ.brace_system("SMRF+SCBF") == "SCBF"       # section12_checks checks the braces under SCBF, not SMRF
+    assert AZ.brace_system("OMF+OCBF") == "OCBF"
+    assert AZ.brace_system("SCBF") == "SCBF"
+
+
+def test_local_member_ratio_governs_over_every_member_check_call_of_an_element(tmp_path):
+    """The IS 1893 7.11.2 gravity-column check calls the member check again for the same element: both calls are
+    kept, and the local ratio is the governing one (before, the second call replaced the strength check)."""
+    AZ = _az()
+    import pickle
+    mem = {"id": "e9", "tag": 9, "section": "HB200", "grade": "E250 B0", "role": "column", "L_mm": 6000.0,
+           "Kz": 1.0, "Ky": 1.0}
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+    strength = {"1.5DL+1.5WL": [-200e3] + [0.0] * (n - 1)}
+    small = {"7.11.2 1.0DL+1.0LL+R.EQ_X": [-50e3] + [0.0] * (n - 1)}
+    one = {"member": mem, "kind": "col", "records": small}
+    both = {"member": mem, "kind": "col", "records": small,
+            "more": [{"member": dict(mem, role_group="gravity_col"), "kind": "col", "records": strength}]}
+    out = []
+    for cap in (one, both):
+        d = tmp_path / ("r%d" % len(out))
+        d.mkdir()
+        pickle.dump({"elems": {9: cap}, "s12": None}, open(d / "capture.pkl", "wb"))
+        lm = AZ.Local(str(d), {9: "g"}, {"g": {"role": "column"}}, {"g": "HB200"}, {}, {})
+        out.append(lm.member_dc(9, "HB200", None)[0])
+    assert out[1] > out[0] * 2.0
