@@ -62,6 +62,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ENGINE_ROOT = os.path.dirname(HERE)
 STEEL = 7.85e-6                     # kg/mm3
 PY = sys.executable
+# third wave (P11): the interpreter of the CFS engine for the purlin / girt design (the study runner's --cfs-python);
+# None = this one.  On a PC where HR Steel and CFS Steel have their own environments, the CFS engine runs in its own.
+CFS_PY = None
+
+
+def cfs_python():
+    return CFS_PY or PY
 
 # commercial plate thicknesses (assumption: IS 1730 is not in the corpus; the golds' own thicknesses are added)
 PLATES_MM = (4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 25.0, 28.0, 32.0, 36.0, 40.0, 45.0, 50.0,
@@ -899,7 +906,8 @@ def secondary_candidates(family, cfs_root, gold_section, span_mm):
             "        continue\n"
             "    out.append([l, p.get('h'), p.get('t'), p.get('mass_kg_m')])\n"
             "print(json.dumps(out))\n" % (os.path.join(cfs_root, "steel_engine"), family))
-    r = subprocess.run([PY, "-I", "-c", code], capture_output=True, text=True, env=_child_env(), timeout=300)
+    r = subprocess.run([cfs_python(), "-I", "-c", code], capture_output=True, text=True, env=_child_env(),
+                       timeout=300)
     if r.returncode:
         raise RuntimeError("secondary_candidates: %s" % r.stderr[-2000:])
     rows = json.loads(r.stdout.strip().splitlines()[-1])
@@ -935,7 +943,7 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
         job.pop("write_final", None)
         jp = os.path.join(run_dir, "secondary_job.json")
         json.dump(job, open(jp, "w"), indent=1)
-        rc, el = run_child([PY, "-I", worker, jp], cwd=os.path.dirname(script), timeout=1800,
+        rc, el = run_child([cfs_python(), "-I", worker, jp], cwd=os.path.dirname(script), timeout=1800,
                            env={"STELTIC_CFS_ROOT": cfs_root}, log_path=os.path.join(run_dir, "secondary_worker.log"))
         if rc:
             raise RuntimeError("secondary worker failed (rc %d): see %s" % (rc, os.path.join(run_dir, "secondary_worker.log")))
@@ -977,7 +985,7 @@ def design_secondary(run_dir, spec, rules, *, cfs_root, Lr=None, free_flange_bra
     job["write_final"] = {"purlin": chosen["purlin"]["section"], "girt": chosen["girt"]["section"]}
     jp = os.path.join(run_dir, "secondary_job.json")
     json.dump(job, open(jp, "w"), indent=1)
-    rc, el = run_child([PY, "-I", worker, jp], cwd=os.path.dirname(script), timeout=1800,
+    rc, el = run_child([cfs_python(), "-I", worker, jp], cwd=os.path.dirname(script), timeout=1800,
                        env={"STELTIC_CFS_ROOT": cfs_root}, log_path=os.path.join(run_dir, "secondary_worker.log"))
     if rc:
         raise RuntimeError("secondary final write failed: see secondary_worker.log")
