@@ -33,14 +33,15 @@ TRUSS_RULINGS = [
              "the truss seat on the column)"),
     ("D-T10", "knee-braced truss portal (IS 800 12.10.2.1): the truss is pinned on the column cap and reaches the "
               "column only through the couple of the knee brace and the heel seat, so the maximum moment the beam can "
-              "deliver to the joint is the largest force the knee brace can deliver in either direction -- the larger "
-              "of its compression design strength and its tension strength on gross-section yield (Ag fy / gamma_m0) "
-              "-- times its lever arm about the heel; the knee is designed for 1.2 times that moment: each knee-brace "
-              "connection (bolts and gussets) for 1.2 times that force, the brace's own bolted end not weaker than its "
-              "gross-section yield, and the heel seat for the matching horizontal force with the 12.10.2.4 shear, so "
-              "the knee and heel connections are designed so that the brace yields (gross section) before they fail; "
-              "the truss joints use fully tensioned HSFG 8.8 bolts (12.4.1) and the welds to the column are "
-              "complete-penetration welds (12.4.2)"),
+              "deliver to the joint is the largest force the knee brace can deliver in either direction, taken as its "
+              "characteristic gross-section yield Ag fy (the basis of IS 800 12.7.3.1(a); its characteristic buckling "
+              "strength is lower), times its lever arm about the heel; the knee is designed for 1.2 times that moment: "
+              "each knee-brace connection (bolts and gussets) for 1.2 Ag fy, the gusset at the column face, its "
+              "complete-penetration weld, the column web at the knee and the heel cap-plate weld for the same couple; "
+              "the brace's own bolted end is not weaker than its gross-section yield (design values), so the knee and "
+              "heel connections are designed so that the brace yields (gross section) before they fail; the truss "
+              "joints use fully tensioned HSFG 8.8 bolts (12.4.1) and the welds to the column are complete-penetration "
+              "welds (12.4.2)"),
 ]
 
 
@@ -148,12 +149,22 @@ def _truss_head(cfg, pkg):
     s12 = ((pkg.get("capacity_design") or {}).get("section12") or {}).get("checks") or []
     # one row per knee check, the governing knee (review 2026-11: the D-T10 rows -- bolts, gussets, the brace yielding
     # first, the heel seat)
+    _KNEE_STRESS_ROWS = ("12.10.2.1_knee_gusset_cjp_weld", "12.10.2.4_heel_cap_weld",
+                         "12.10.2.1_knee_gusset_face_section")
     KNEE_ROWS = (("12.10.2.1_knee_brace_connection", "knee-brace end bolts, for 1.2 N_del"),
                  ("12.10.2.1_knee_gusset_whitmore_yield", "knee gusset, Whitmore yield, for 1.2 N_del"),
                  ("12.10.2.1_knee_gusset_block_shear", "knee gusset, block shear, for 1.2 N_del"),
-                 ("12.10.2.1_knee_gusset_buckling", "knee gusset, buckling, for 1.2 Pd"),
-                 ("12.10.2.1_knee_brace_yields_first", "knee brace: bolted end not weaker than gross yield"),
-                 ("12.10.2.4_heel_seat", "heel seat (12.10.2.4)"))
+                 ("12.10.2.1_knee_gusset_buckling", "knee gusset, buckling, for 1.2 x the characteristic buckling "
+                                                    "strength"),
+                 ("12.10.2.1_knee_gusset_face_section", "knee gusset at the column face (8.4.1 / 9.2.2 / 9.3.1.1)"),
+                 ("12.10.2.1_knee_gusset_cjp_weld", "knee gusset CJP weld to the column (10.5.7.1.2)"),
+                 ("12.10.2.1_column_web_bearing", "column web at the knee, local capacity (8.7.4)"),
+                 ("12.10.2.1_column_web_buckling", "column web at the knee, buckling (8.7.3.1)"),
+                 ("12.10.2.4_column_web_shear", "column web shear, knee to heel and column top (8.4.1)"),
+                 ("12.10.2.1_knee_brace_yields_first", "knee brace: bolted end not weaker than gross yield (design "
+                                                       "values)"),
+                 ("12.10.2.4_heel_seat", "heel seat bolts (12.10.2.4)"),
+                 ("12.10.2.4_heel_cap_weld", "heel cap-plate CJP weld to the column top (10.5.7.1.2)"))
     krow = []
     for cid, label in KNEE_ROWS:
         cs = [c for c in s12 if c.get("id") == cid]
@@ -162,24 +173,38 @@ def _truss_head(cfg, pkg):
         ev = [c for c in cs if isinstance(c.get("dc"), (int, float))]
         c = max(ev, key=lambda c_: c_["dc"]) if ev else cs[0]
         kn = c.get("knee") or {}
-        krow.append([label, c.get("member"), "%s / %s" % (_f((kn.get("Pd_N") or 0) / 1e3, 1),
-                                                         _f((kn.get("Tdg_N") or 0) / 1e3, 1)),
+        krow.append([label, c.get("member"), "%s / %s" % (_f((kn.get("Ty_N") or 0) / 1e3, 1),
+                                                         _f((kn.get("Pd_char_N") or 0) / 1e3, 1)),
                      _f((kn.get("N_del_N") or kn.get("N_d_N") or 0) / 1e3, 1), _f(kn.get("lever_arm_mm"), 0),
-                     _f((kn.get("M_del_Nmm") or 0) / 1e6, 1), _f((c.get("value") or 0) / 1e3, 1),
-                     _f((c.get("limit") or 0) / 1e3, 1), _f(c.get("dc"), 3), len(cs)])
+                     _f((kn.get("M_del_Nmm") or 0) / 1e6, 1),
+                     _f(c.get("value") if cid in _KNEE_STRESS_ROWS else (c.get("value") or 0) / 1e3, 1),
+                     _f(c.get("limit") if cid in _KNEE_STRESS_ROWS else (c.get("limit") or 0) / 1e3, 1),
+                     _f(c.get("dc"), 3), len(cs)])
     if krow:
+        kn0 = next(((c.get("knee") or {}) for c in s12 if str(c.get("id") or "").startswith("12.10.2.1_knee")), {})
+        mp_txt = ""
+        if kn0.get("column_Mp_Nmm") and kn0.get("M_del_Nmm"):
+            mp_txt = (" M_del is %.1f times the column's plastic moment (%.1f kN-m), so the rule is conservative for "
+                      "the knee; the demand is not capped." % (kn0["M_del_Nmm"] / kn0["column_Mp_Nmm"],
+                                                               kn0["column_Mp_Nmm"] / 1e6))
         out.append("<h3>Knees (IS 800 12.10.2.1 / 12.10.2.4, Steltic design ruling D-T10: knee-braced truss portal, "
                    "the knee designed for 1.2 times the moment the knee brace can deliver in either direction)</h3>")
-        out.append("<p>The force the knee brace can deliver, N_del, is the larger of its compression design strength "
-                   "Pd and its tension strength on gross-section yield Tdg = Ag fy / gamma_m0; M_del = N_del times the "
-                   "lever arm about the heel. Each knee-brace connection (bolts and gussets, at the column and at the "
-                   "bottom chord) is designed for 1.2 N_del, the gusset buckling for 1.2 Pd, the brace's own bolted end "
-                   "(net-section rupture and block shear) is not weaker than its gross-section yield, and the heel seat "
-                   "takes the matching horizontal force with the 12.10.2.4 shear. So the knee and heel connections are "
-                   "designed so that the brace yields (gross section) before they fail. One row per check, the "
-                   "governing knee shown.</p>")
-        out.append(_tab(["check", "governing knee", "knee brace Pd / Tdg (kN)", "N_del (kN)", "lever arm (mm)",
-                         "M_del (kN-m)", "demand (kN)", "capacity (kN)", "D/C", "knees"], krow))
+        out.append("<p>The force the knee brace can deliver, N_del, is taken as its characteristic gross-section yield "
+                   "Ag fy, the basis of IS 800 12.7.3.1(a) for brace connections (its characteristic buckling strength, "
+                   "Pd x &gamma;m0, is lower, so the tension direction governs); M_del = N_del times the lever arm about "
+                   "the heel.%s Each knee-brace connection (bolts and gussets, at the column and at the bottom chord) is "
+                   "designed for 1.2 N_del and the gusset buckling for 1.2 times the characteristic buckling strength; "
+                   "the gusset at the column face, its complete-penetration weld, the column web at the knee (local "
+                   "capacity, buckling and shear) and the heel cap-plate weld take the same couple. The brace's own "
+                   "bolted end (net-section rupture and block shear) is not weaker than its gross-section yield, both "
+                   "as design values (a ductility-order check, with no 1.2 margin: a single angle bolted through one "
+                   "leg cannot develop 1.2 times its yield at its end, because of shear lag, so the knee connection is "
+                   "designed for more than the brace can transmit). So the knee and heel connections are designed so "
+                   "that the brace yields (gross section) before they fail. One row per check, the governing knee "
+                   "shown; stresses in MPa where marked.</p>" % mp_txt)
+        out.append(_tab(["check", "governing knee", "knee brace Ag fy / Pd &gamma;m0 (kN)", "N_del (kN)",
+                         "lever arm (mm)", "M_del (kN-m)", "demand (kN or MPa)", "capacity (kN or MPa)", "D/C",
+                         "knees"], krow))
     return out
 
 

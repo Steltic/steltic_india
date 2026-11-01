@@ -1105,6 +1105,13 @@ def column_line(n1, n2, grid_lines=None):
 I8_GAMMA_M0 = 1.10                      # IS 800 Table 5 gamma_m0 (the knee records' gross-yield fallback)
 
 
+def I8_fy(p, grade="E250"):
+    """fy of a rolled section by its thickness band (IS 2062), for the column Mp the D-T10 note compares with."""
+    import india_is800 as _I8
+    t = max(float(p.get("tf") or 0.0), float(p.get("tw") or 0.0))
+    return float(_I8.is2062_properties(grade, t).get("fy_MPa") or 250.0)
+
+
 def _truss_knee_records(cfg, info0, reg, length, elem_results):
     """MSME (2026-10): the knee records declared by the custom_build (info['truss_knees'] = [{id, heel_node,
     knee_node, chord_node, brace_tag, truss, span_mm, trib_mm}]) with the node coordinates, the knee brace's design
@@ -1126,24 +1133,38 @@ def _truss_knee_records(cfg, info0, reg, length, elem_results):
         r["brace_role"] = "truss_%s" % (tinfo.get(t) or {}).get("group", "knee_brace")
         res_t = elem_results.get(t) or {}
         caps = res_t.get("capacities") or {}
-        # Steltic design ruling D-T10 (review 2026-11): the force the knee brace can deliver in EITHER direction --
-        # the larger of its compression design strength Pd and its tension strength on gross-section yield
-        # Tdg = Ag fy / gamma_m0 (6.2); the end rupture / block shear are connection limit states (checked to be not
-        # weaker than Tdg: the brace yields first), not a cap on the demand
+        # Steltic design ruling D-T10 -- owner ruling 2026-11-01 (1.2 x what the knee brace can deliver); lead reading
+        # 2026-11-01: N_del = Ag fy CHARACTERISTIC, per IS 800 12.7.3.1(a), max over tension and compression (the
+        # characteristic buckling strength Pd gamma_m0 <= Ag fy, so Ag fy governs); the design values Tdg / Tdn / Tdb
+        # are kept for the brace-yields-first ductility-order check (both sides design values)
         Pd = (caps.get("compression") or {}).get("Pd_N")
         ls = (caps.get("tension") or {}).get("limit_states") or {}
         fy_ = res_t.get("fy_MPa") or (res_t.get("material") or {}).get("fy_MPa")
         A_ = E.Ipack(r["brace_section"])[0]
         Tdg = ((ls.get("6.2 yield") or {}).get("T_N")
                or (A_ * float(fy_) / I8_GAMMA_M0 if fy_ else None))
-        r["Pd_N"], r["Tdg_N"] = Pd, Tdg
+        Ty = A_ * float(fy_) if fy_ else (Tdg * I8_GAMMA_M0 if Tdg else None)
+        Pc = Pd * I8_GAMMA_M0 if Pd else None
+        r["Pd_N"], r["Pd_char_N"], r["Ty_N"], r["Tdg_N"] = Pd, Pc, Ty, Tdg
         r["Tdn_N"] = (ls.get("6.3.3 rupture") or ls.get("6.3.1 rupture") or {}).get("T_N")
         r["Tdb_N"] = (ls.get("6.4 block shear") or {}).get("T_N")
-        vals = [v for v in (Pd, Tdg) if v]
+        vals = [v for v in (Pc, Ty) if v]
         r["member_capacity"] = max(vals) if vals else None
-        r["N_del_basis"] = ("N_del = max(Pd %s, Tdg = Ag fy / gamma_m0 %s) (D-T10)"
-                            % ("-" if Pd is None else "%.1f kN" % (Pd / 1e3),
-                               "-" if Tdg is None else "%.1f kN" % (Tdg / 1e3)))
+        r["N_del_basis"] = ("N_del = max(Ag fy %s, Pd gamma_m0 %s) characteristic (D-T10, IS 800 12.7.3.1(a) basis)"
+                            % ("-" if Ty is None else "%.1f kN" % (Ty / 1e3),
+                               "-" if Pc is None else "%.1f kN" % (Pc / 1e3)))
+        # the column at the knee (the piece from the knee station up to the heel) and its plastic moment Zp fy
+        kn_ = k_["knee_node"]
+        col_t = [tt for tt, v in reg.items() if v[0] == "col" and kn_ in (v[2], v[3])]
+        up = [tt for tt in col_t if reg[tt][2] == kn_] or col_t
+        if up:
+            csec = reg[up[0]][1]
+            r["column_section"] = csec
+            try:
+                pc_ = S.props(csec)
+                r["column_Mp_Nmm"] = float(pc_["Zx"]) * float(I8_fy(pc_))
+            except Exception:
+                r["column_Mp_Nmm"] = None
         sw = sum(SM.STEEL_UNIT_WEIGHT_N_PER_MM3 * E.Ipack(reg[tt][1])[0] * length[tt] for tt, v in tinfo.items()
                  if v.get("truss") == k_.get("truss") and tt in reg)
         span, trib = float(k_.get("span_mm") or 0.0), float(k_.get("trib_mm") or 0.0)

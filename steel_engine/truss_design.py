@@ -230,6 +230,25 @@ def stitch_bolt_check(sec, d_mm):
                     cite="interconnection bolts M%d >= %.0f mm for %.0f mm thick angles" % (int(d_mm), dmin, t))
 
 
+# review 2026-11: gusset buckling K by the support of the gusset edges (engineering practice, outside the corpus; the
+# engine's brace-gusset rule, india_connections.whitmore_buckling): 0.65 for a compact gusset held on two edges
+# (Thornton), 1.2 for a gusset held on one edge only, whose free end can sway (the knee gusset on the column, a
+# panel-point gusset below / above the chord with a free edge).  A declared K below the support's value is raised.
+GUSSET_K_BY_SUPPORT = {"two_edges": 0.65, "one_edge": 1.2}
+GUSSET_SUPPORT_TEXT = {"two_edges": "gusset held on two edges: K 0.65",
+                       "one_edge": "gusset held on one edge, free end can sway: K 1.2"}
+
+
+def gusset_K(sp):
+    """The gusset buckling K from the declared support ('gusset_support': 'one_edge' | 'two_edges') and / or K."""
+    sup = sp.get("gusset_support")
+    K = sp.get("gusset_K")
+    if sup in GUSSET_K_BY_SUPPORT:
+        k0 = GUSSET_K_BY_SUPPORT[sup]
+        return k0 if K is None else max(float(K), k0)
+    return None if K is None else float(K)
+
+
 def gusset_rows(sp, N_N, N_comp_N=0.0, *, label="gusset"):
     """Gusset checks at one member end for the force N_N (both directions) and, when the member can be in compression,
     N_comp_N: [(name, check)].  Whitmore yield (bw = 2 L tan30 from a single bolt line, yield on bw t_g, engineering
@@ -244,10 +263,14 @@ def gusset_rows(sp, N_N, N_comp_N=0.0, *, label="gusset"):
     n = int(sp["n_bolts"])
     fy_g, fu_g = _fy_fu(sp.get("gusset_grade") or "E250", tg)
     Lc = (n - 1) * float(sp["pitch_mm"])
-    wm = C.whitmore_section(t_gusset_mm=tg, fy_MPa=fy_g, w_start_mm=0.0, L_conn_mm=Lc, demand_N=N_N)
+    # review 2026-11: the Whitmore width is capped by the gusset's declared width across the bolt line (its outline)
+    wcap = sp.get("gusset_width_mm")
+    wm = C.whitmore_section(t_gusset_mm=tg, fy_MPa=fy_g, w_start_mm=0.0, L_conn_mm=Lc, demand_N=N_N,
+                            available_width_mm=float(wcap) if wcap else None)
     if wm.get("found"):
-        rows.append(("%s yield on the Whitmore width %.0f mm (engineering practice)" % (label, wm["whitmore_width_mm"]),
-                     dict(wm["check"])))
+        capped = bool(wcap) and wm["whitmore_width_mm"] < 2.0 * Lc * math.tan(math.radians(30.0)) - 1e-6
+        rows.append(("%s yield on the Whitmore width %.0f mm%s (engineering practice)"
+                     % (label, wm["whitmore_width_mm"], " (the gusset width)" if capped else ""), dict(wm["check"])))
     e_g, edge_g = sp.get("gusset_end_mm") or sp.get("end_mm"), sp.get("gusset_edge_mm")
     if edge_g is None:
         rows.append(("%s block shear (6.4.1)" % label, {"ok": None, "clause": "IS 800:2007 6.4.1",
@@ -264,19 +287,21 @@ def gusset_rows(sp, N_N, N_comp_N=0.0, *, label="gusset"):
                          "Tdb = %.1f kN" % (tg, float(e_g), Lc, float(edge_g), bs["Tdb_N"] / 1e3))
             rows.append(("%s block shear (6.4.1)" % label, c))
     if N_comp_N and N_comp_N > 0 and wm.get("found"):
-        K, Lf = sp.get("gusset_K"), sp.get("gusset_free_mm")
+        K, Lf = gusset_K(sp), sp.get("gusset_free_mm")
         if K is None or Lf is None:
             rows.append(("%s buckling on the Whitmore width" % label,
                          {"ok": None, "clause": "IS 800:2007 7.1.2",
-                          "reason": "gusset_K and gusset_free_mm (free length to the nearest supported edge) not "
-                                    "declared"}))
+                          "reason": "gusset_support (or gusset_K) and gusset_free_mm (free length to the nearest "
+                                    "supported edge) not declared"}))
         else:
             gb = C.whitmore_buckling(whitmore_width_mm=wm["whitmore_width_mm"], t_gusset_mm=tg, fy_MPa=fy_g,
                                      L_unbraced_mm=float(Lf), K=float(K), demand_N=N_comp_N)
             if gb.get("found") and gb.get("check"):
                 c = dict(gb["check"])
-                c["cite"] = ("gusset %.0f mm on the Whitmore width %.0f mm, K %.2f over %.0f mm, 7.1.2 class c "
+                c["cite"] = ("gusset %.0f mm on the Whitmore width %.0f mm, K %.2f over %.0f mm (%s), 7.1.2 class c "
                              "(engineering practice): Pd = %.1f kN" % (tg, wm["whitmore_width_mm"], float(K), float(Lf),
+                                                                       GUSSET_SUPPORT_TEXT.get(sp.get("gusset_support"),
+                                                                                               "declared K"),
                                                                        gb["Pd_N"] / 1e3))
                 rows.append(("%s buckling on the Whitmore width (compression)" % label, c))
     return rows
@@ -436,24 +461,141 @@ def knee_geometry(nodes, knee):
             "sin_v": abs(u[2])}
 
 
+D_T10_TEXT = ("Steltic design ruling D-T10 -- owner ruling 2026-11-01 (1.2 x what the knee brace can deliver); lead "
+              "reading 2026-11-01: N_del = Ag fy characteristic, per IS 800 12.7.3.1(a), max over tension and "
+              "compression")
+
+
+def _col_props(sec):
+    try:
+        p = S.props(sec)
+    except Exception:
+        return None
+    return p if p.get("tw") and p.get("d") and p.get("tf") else None
+
+
+def knee_load_path_rows(knee, cfg, F_N, geo, *, H_N, V_heel_N):
+    """Review 2026-11: the knee load path that D-T10's CJP welds imply, as checks (declared in
+    cfg['truss_connections']['knee_gusset'] = {face_length_mm (gusset weld along the column flange), t_mm, grade,
+    weld 'cjp', e_face_mm (offset of the brace line from the weld centroid)} and the heel cap plate
+    cfg['truss_connections']['heel']['cap_weld'] = 'cjp'):
+      * the knee gusset at the column face: shear (8.4.1) and axial + bending with the high-shear reduction (9.2.2,
+        9.3.1.1 linear) on the section L_face x t, under the brace force 1.2 N_del resolved along / normal to the face;
+      * its CJP weld to the column flange: butt weld = parent metal (10.5.7.1.2), fe = sqrt(fb^2 + 3 q^2) <= fy /
+        gamma_mw (shop);
+      * the column web at the knee under the normal component: 8.7.4 local capacity Fw = (b1 + n2) tw fyw / gamma_m0
+        (b1 = the weld length, n2 = 1:2.5 through the flange and root, both sides) and 8.7.3.1 web buckling (class c,
+        strut (b1 + d) tw, KL 0.7 d);
+      * the column web shear between the knee and the heel / at the column top, H = the couple's horizontal force
+        (8.4.1, Av = h tw);
+      * the heel cap plate CJP weld to the column top: the weld plane is the column section, fe = sqrt(sigma^2 +
+        3 tau^2) with tau = H / A, sigma = V / A (10.5.7.1.2)."""
+    import india_connections as _C
+    rows = []
+    kid = knee.get("id")
+    kg = ((cfg or {}).get("truss_connections") or {}).get("knee_gusset")
+    heel = ((cfg or {}).get("truss_connections") or {}).get("heel") or {}
+    pc = _col_props(knee.get("column_section"))
+    base = {"source": SRC, "member": kid}
+
+    def _na(rid, clause, why):
+        rows.append(dict(base, id=rid, value=None, limit=None, dc=None, ok=None, clause=clause, cite=why, reason=why))
+    th = math.radians(geo["angle_deg"])
+    N_face, V_face = F_N * math.cos(th), F_N * math.sin(th)          # normal to / along the column face
+    if not kg or not kg.get("face_length_mm") or not kg.get("t_mm"):
+        _na("12.10.2.1_knee_gusset_face_section", "IS 800:2007 8.4.1 / 9.2.2 / 9.3.1.1",
+            "knee gusset outline at the column face (truss_connections['knee_gusset']) not declared")
+    else:
+        Lf, t = float(kg["face_length_mm"]), float(kg["t_mm"])
+        fy, fu = _fy_fu(kg.get("grade") or "E250", t)
+        A = Lf * t
+        M = F_N * float(kg.get("e_face_mm") or 0.0)
+        Vd = A * fy / (math.sqrt(3.0) * I8.GAMMA_M0_DEFAULT)
+        Nd = A * fy / I8.GAMMA_M0_DEFAULT
+        Md = t * Lf ** 2 / 4.0 * fy / I8.GAMMA_M0_DEFAULT
+        beta = (2.0 * V_face / Vd - 1.0) ** 2 if V_face > 0.6 * Vd else 0.0
+        Mdv = Md * (1.0 - beta)
+        inter = N_face / Nd + (M / Mdv if Mdv > 0 else (float("inf") if M else 0.0))
+        dc = max(V_face / Vd, inter)
+        rows.append(dict(base, id="12.10.2.1_knee_gusset_face_section", value=dc, limit=1.0, dc=dc, ok=dc <= 1.0,
+                         clause="IS 800:2007 8.4.1 / 9.2.2 / 9.3.1.1",
+                         cite="knee gusset %.0f x %.0f mm at the column face: V %.1f / Vd %.1f kN; N %.1f / Nd %.1f kN "
+                              "+ M %.1f kN-m / Mdv %.1f kN-m (9.2.2 beta %.3f)" % (
+                                  Lf, t, V_face / 1e3, Vd / 1e3, N_face / 1e3, Nd / 1e3, M / 1e6, Mdv / 1e6, beta)))
+        if str(kg.get("weld") or "").lower() == "cjp":
+            fb, q = N_face / A + 6.0 * M / (t * Lf ** 2), V_face / A
+            fe = math.sqrt(fb ** 2 + 3.0 * q ** 2)
+            lim = fy / _C.GAMMA_MW_SHOP
+            rows.append(dict(base, id="12.10.2.1_knee_gusset_cjp_weld", value=fe, limit=lim, dc=fe / lim,
+                             ok=fe <= lim, clause="IS 800:2007 10.5.7.1.2 / 12.4.2",
+                             cite="CJP weld of the knee gusset to the column flange = parent metal (10.5.7.1.2): fe = "
+                                  "sqrt(fb^2 + 3 q^2) = %.1f MPa <= fy / gamma_mw = %.1f MPa" % (fe, lim)))
+        else:
+            _na("12.10.2.1_knee_gusset_cjp_weld", "IS 800:2007 12.4.2",
+                "knee gusset weld not declared as CJP (D-T10 / 12.4.2)")
+        if pc:
+            tw, tf, d = float(pc["tw"]), float(pc["tf"]), float(pc["d"])
+            fyc = _fy_fu("E250", max(tw, tf))[0]
+            n2 = 2.5 * (tf + float(pc.get("R1") or 0.0))
+            Fw = (Lf + 2.0 * n2) * tw * fyc / I8.GAMMA_M0_DEFAULT
+            rows.append(dict(base, id="12.10.2.1_column_web_bearing", value=N_face, limit=Fw, dc=N_face / Fw,
+                             ok=N_face <= Fw, clause="IS 800:2007 8.7.4",
+                             cite="column %s web at the knee: Fw = (b1 + n2) tw fyw / gamma_m0, b1 = %.0f mm (the weld), "
+                                  "n2 = 2.5 (tf + r) = %.0f mm each side: %.1f kN" % (knee.get("column_section"), Lf,
+                                                                                     n2, Fw / 1e3)))
+            bw, KL, r_ = Lf + d, 0.7 * d, tw / math.sqrt(12.0)
+            pdw = I8.design_compressive_strength(bw * tw, fyc, KL, r_, buckling_class="c")
+            if pdw.get("found"):
+                rows.append(dict(base, id="12.10.2.1_column_web_buckling", value=N_face, limit=pdw["Pd_N"],
+                                 dc=N_face / pdw["Pd_N"], ok=N_face <= pdw["Pd_N"], clause="IS 800:2007 8.7.3.1",
+                                 cite="column web strut (b1 + d) tw = %.0f x %.1f mm, KL = 0.7 d, curve c: %.1f kN"
+                                      % (bw, tw, pdw["Pd_N"] / 1e3)))
+    if pc:
+        tw, tf, d, A_c = float(pc["tw"]), float(pc["tf"]), float(pc["d"]), float(pc["A"])
+        fyc = _fy_fu("E250", max(tw, tf))[0]
+        Vd_c = d * tw * fyc / (math.sqrt(3.0) * I8.GAMMA_M0_DEFAULT)
+        rows.append(dict(base, id="12.10.2.4_column_web_shear", value=H_N, limit=Vd_c, dc=H_N / Vd_c, ok=H_N <= Vd_c,
+                         clause="IS 800:2007 8.4.1 / 12.10.2.4",
+                         cite="column %s between the knee and the heel (and at the column top): H = 1.2 N_del cos(theta) "
+                              "= %.1f kN <= Vd = h tw fy / (sqrt3 gamma_m0) = %.1f kN"
+                              % (knee.get("column_section"), H_N / 1e3, Vd_c / 1e3)))
+        if str(heel.get("cap_weld") or "").lower() == "cjp":
+            tau, sig = H_N / A_c, V_heel_N / A_c
+            fe = math.sqrt(sig ** 2 + 3.0 * tau ** 2)
+            lim = fyc / _C.GAMMA_MW_SHOP
+            rows.append(dict(base, id="12.10.2.4_heel_cap_weld", value=fe, limit=lim, dc=fe / lim, ok=fe <= lim,
+                             clause="IS 800:2007 10.5.7.1.2 / 12.4.2",
+                             cite="heel cap plate CJP-welded to the column top (weld plane = the column section, A = "
+                                  "%.0f mm2): tau = H / A, sigma = V / A, fe = %.1f MPa <= fy / gamma_mw = %.1f MPa"
+                                  % (A_c, fe, lim)))
+        else:
+            _na("12.10.2.4_heel_cap_weld", "IS 800:2007 12.4.2", "heel cap plate weld not declared as CJP")
+    else:
+        _na("12.10.2.4_column_web_shear", "IS 800:2007 8.4.1", "column section at the knee not available")
+    return rows
+
+
 def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
-    """IS 800 12.10.2.1 / 12.10.2.4 at a knee-braced truss portal (OMF), Steltic design ruling D-T10.  The truss is
-    pinned on the column cap and delivers moment to the column only through the couple of the knee brace and the heel
-    seat, so the 'maximum moment that can be delivered by the beam to the joint' (12.10.2.1) is the largest force the
-    knee brace can deliver, in either direction, times its lever arm e about the heel: N_del = max(Pd, Tdg) -- the
-    compression design strength (7.1.2 / 7.5) or the tension strength on gross-section yield Ag fy / gamma_m0 (6.2),
-    whichever is larger (review 2026-11: the knee brace works both ways under reversing wind; rupture and block shear
-    of the brace end are connection limit states and do not cap the demand) -- and M_del = N_del e.  The joint is
+    """IS 800 12.10.2.1 / 12.10.2.4 at a knee-braced truss portal (OMF), Steltic design ruling D-T10 (owner ruling
+    2026-11-01: 1.2 x what the knee brace can deliver; lead reading 2026-11-01: N_del = Ag fy characteristic, per
+    IS 800 12.7.3.1(a), max over tension and compression).  The truss is pinned on the column cap and delivers moment
+    to the column only through the couple of the knee brace and the heel seat, so the 'maximum moment that can be
+    delivered by the beam to the joint' (12.10.2.1) is the largest force the knee brace can deliver, in either
+    direction, times its lever arm e about the heel.  N_del is characteristic (no gamma; the engine's Section 12
+    convention, Mp = Zp fy for D-T7, and the 1.2 fy Ag of 12.7.3.1(a)): the larger of the gross yield Ag fy and the
+    characteristic buckling strength Pd gamma_m0 (<= Ag fy, so Ag fy governs).  M_del = N_del e.  The joint is
     designed for 1.2 M_del:
-      * each knee-brace end connection for 1.2 N_del: the bolt group, and the gusset (Whitmore yield, block shear;
-        gusset buckling for 1.2 Pd, the compression the brace can deliver);
+      * each knee-brace end connection for 1.2 N_del: the bolt group and the gussets (Whitmore yield, block shear);
+        gusset buckling for 1.2 x the characteristic buckling strength (the compression the brace can deliver);
       * the brace yields first: its bolted end (6.3.3 rupture, 6.4.1 block shear) is not weaker than its gross-section
-        yield Tdg;
-      * the heel seat for the horizontal couple force 1.2 N_del cos(theta) with the 12.10.2.4 shear, the 1.2DL + 0.5LL
-        end reaction plus 2 (1.2 M_del) / span.
-    So the knee and heel connections are designed so that the brace yields (gross section) before they fail.  The Mp
-    alternative of 12.10.2.1 (the smaller governs) is not used: a triangular truss has no plastic moment at the column
-    face.  member_capacity = N_del (knee['Pd_N'] / knee['Tdg_N'] give its parts)."""
+        yield -- a ductility-order check, both sides as DESIGN values (Tdg = Ag fy / gamma_m0 against Tdn / Tdb), no
+        1.2 margin on the angle's own end (a single angle bolted through one leg cannot develop 1.2 x its yield at
+        its end under 6.3.3 shear lag, so the knee connection is designed for more than the brace can transmit);
+      * the heel seat for the horizontal couple force 1.2 N_del cos(theta) with the 12.10.2.4 shear (1.2DL + 0.5LL end
+        reaction + 2 (1.2 M_del) / span), and the knee load path (knee_load_path_rows).
+    M_del is about twice the column's plastic moment, so the rule is conservative for the knee; the demand is not
+    capped (the 'whichever is less' Mp alternative of 12.10.2.1 is not used: a triangular truss has no plastic
+    moment at the column face).  member_capacity = N_del (characteristic)."""
     out = []
     kid = knee.get("id")
     sec = knee.get("brace_section")
@@ -464,17 +606,22 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
     base = {"clause": "IS 800:2007 12.10.2.1", "source": SRC, "member": kid}
     if not Nd:
         out.append(dict(base, id="12.10.2.1_knee_connection", value=None, limit=None, dc=None, ok=None,
-                        cite="knee brace design strength not available", reason="no member capacity"))
+                        cite="knee brace strength not available", reason="no member capacity"))
         return out
-    Pd, Tdg = knee.get("Pd_N"), knee.get("Tdg_N")
+    Pd, Pc, Ty, Tdg = knee.get("Pd_N"), knee.get("Pd_char_N"), knee.get("Ty_N"), knee.get("Tdg_N")
     M_del = Nd * geo["lever_arm_mm"]
     F = 1.2 * Nd
-    note = ("Steltic design ruling D-T10: the knee reaches the column through the knee-brace / heel couple; N_del = "
-            "max(Pd %s, Tdg %s) = %.1f kN (the larger force the knee brace %s can deliver, compression or gross-section "
-            "yield); M_del = N_del e = %.1f kN x %.0f mm = %.1f kN-m; each knee-brace connection for 1.2 N_del = %.1f kN; "
-            "the knee and heel connections are designed so that the brace yields (gross section) before they fail"
-            % ("-" if Pd is None else "%.1f" % (Pd / 1e3), "-" if Tdg is None else "%.1f" % (Tdg / 1e3), Nd / 1e3, sec,
-               Nd / 1e3, geo["lever_arm_mm"], M_del / 1e6, F / 1e3))
+    Mp_c = knee.get("column_Mp_Nmm")
+    note = ("%s: the knee reaches the column through the knee-brace / heel couple; N_del = max(Ag fy %s, characteristic "
+            "buckling Pd gamma_m0 %s) = %.1f kN; M_del = N_del e = %.1f kN x %.0f mm = %.1f kN-m%s; each knee-brace "
+            "connection for 1.2 N_del = %.1f kN; the knee and heel connections are designed so that the brace yields "
+            "(gross section) before they fail; a single angle bolted through one leg cannot develop 1.2 x its yield at "
+            "its end (shear lag), so the knee connection is designed for more than the brace can transmit"
+            % (D_T10_TEXT, "-" if Ty is None else "%.1f" % (Ty / 1e3), "-" if Pc is None else "%.1f" % (Pc / 1e3),
+               Nd / 1e3, Nd / 1e3, geo["lever_arm_mm"], M_del / 1e6,
+               (" = %.1f x the column's Mp (%.1f kN-m): conservative for the knee, not capped" % (M_del / Mp_c,
+                                                                                                    Mp_c / 1e6))
+               if Mp_c else "", F / 1e3))
     if not is_angle_section(sec):
         out.append(dict(base, id="12.10.2.1_knee_brace_connection", value=F, limit=None, dc=None, ok=None,
                         cite="knee brace %s is not an angle: its end connection is not covered by the angle-truss "
@@ -491,18 +638,19 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
             out.append(dict(base, id="12.10.2.1_knee_brace_connection", value=None, limit=None, dc=None, ok=None,
                             cite="knee brace bolt group not evaluated", reason=bg.get("reason")))
         # the gussets at both knee-brace ends (column side and bottom-chord side, the same declared detail)
-        for nm_, c_ in gusset_rows(sp_kb, F, 1.2 * Pd if Pd else 0.0, label="knee gusset"):
+        for nm_, c_ in gusset_rows(sp_kb, F, 1.2 * (Pc or 0.0), label="knee gusset"):
             rid = "12.10.2.1_knee_gusset_" + ("whitmore_yield" if "yield" in nm_ else
                                                "block_shear" if "block shear" in nm_ else "buckling")
             out.append(dict(base, id=rid, value=c_.get("value"), limit=c_.get("limit"), dc=c_.get("dc"),
                             ok=c_.get("ok"), cite=c_.get("cite") or c_.get("reason"),
                             **({"reason": c_.get("reason")} if c_.get("ok") is None else {})))
-        # the brace yields before its own bolted end fails (6.3.3 / 6.4.1 >= 6.2)
+        # the brace yields before its own bolted end fails (6.3.3 / 6.4.1 >= 6.2), both as design values
         Tend = [v for v in (knee.get("Tdn_N"), knee.get("Tdb_N")) if v]
         if Tdg and Tend:
             c = C._check(Tdg, min(Tend), clause="IS 800:2007 12.10.2.1 (D-T10) + 6.2 / 6.3.3 / 6.4.1",
-                         cite="knee brace %s: gross-section yield Tdg = %.1f kN <= its bolted end, min(rupture %s, "
-                              "block shear %s) = %.1f kN -- the brace yields first"
+                         cite="knee brace %s, design values: gross-section yield Tdg = Ag fy / gamma_m0 = %.1f kN <= its "
+                              "bolted end, min(rupture %s, block shear %s) = %.1f kN -- the brace yields first "
+                              "(ductility order; no 1.2 margin on the angle's own end)"
                               % (sec, Tdg / 1e3, "-" if not knee.get("Tdn_N") else "%.1f" % (knee["Tdn_N"] / 1e3),
                                  "-" if not knee.get("Tdb_N") else "%.1f" % (knee["Tdb_N"] / 1e3), min(Tend) / 1e3))
             out.append(dict(c, id="12.10.2.1_knee_brace_yields_first", member=kid, source=SRC))
@@ -535,6 +683,7 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
         else:
             out.append(dict(base, id="12.10.2.4_heel_seat", clause="IS 800:2007 12.10.2.4", value=None, limit=None,
                             dc=None, ok=None, cite="heel seat bolts not evaluated", reason=str(hb.get("required_inputs"))))
+        out += knee_load_path_rows(knee, cfg, F, geo, H_N=H, V_heel_N=V_g + V_M)
     else:
         out.append(dict(base, id="12.10.2.4_heel_seat", clause="IS 800:2007 12.10.2.4", value=None, limit=None,
                         dc=None, ok=None, cite="cfg['truss_connections']['heel'] or the truss span missing",
@@ -542,6 +691,9 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
     for c in out:
         c.setdefault("knee", {"lever_arm_mm": round(geo["lever_arm_mm"], 1), "angle_deg": round(geo["angle_deg"], 1),
                               "N_d_N": round(Nd, 1), "N_del_N": round(Nd, 1),
-                              "Pd_N": None if Pd is None else round(Pd, 1), "Tdg_N": None if Tdg is None else round(Tdg, 1),
-                              "M_del_Nmm": round(M_del, 0)})
+                              "Pd_N": None if Pd is None else round(Pd, 1),
+                              "Pd_char_N": None if Pc is None else round(Pc, 1),
+                              "Ty_N": None if Ty is None else round(Ty, 1),
+                              "Tdg_N": None if Tdg is None else round(Tdg, 1), "M_del_Nmm": round(M_del, 0),
+                              "column_Mp_Nmm": None if not Mp_c else round(Mp_c, 0)})
     return out
