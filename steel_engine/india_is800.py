@@ -2816,6 +2816,96 @@ def cm_factor(M_end1, M_end2, *, sway=False):
     return {"Cm": max(0.6 + 0.4 * psi, 0.4), "psi": psi, "cite": "IS 800:2007 Table 18: 0.6 + 0.4 psi >= 0.4"}
 
 
+# Span-moment fix (2026-11-01): Table 18 for a member that carries a uniform load along its span (a wall / gable wind
+# column under the member wind).  IS 800:2007 text, corpus documents/standards/IS_800_2007/markdown/IS_800_2007.md
+# (9.3.2.2, pdf p. 77):
+#   "Cmy, Cmz = equivalent uniform moment factor as per Table 18;"
+#   "My, Mz = maximum factored applied bending moments about y and z-axis of the member, respectively;"
+#   "CmLT = equivalent uniform moment factor for lateral torsional buckling as per Table 18 corresponding to the
+#    actual moment gradient between lateral supports against torsional deformation in the critical region under
+#    consideration."
+# Table 18 "Equivalent Uniform Moment Factor (Clause 9.3.2.2)" (pdf p. 78; the corpus text is an OCR of the table,
+# markdown/pages/page_078.md, e.g. "0,2 + ().8&2 0.4", "O.l- O.8a,20.4", "O.1(1-yr) +.8 a,> 0.4",
+# "0095 + 0.05 al,", "0.95 + 0.05 ah (1+2 @"), read as -- column (3) Uniform Loading, Cmy, Cmz, CmLT:
+#   end moments M and psi M only, -1 <= psi <= 1 ............................ 0.6 + 0.4 psi >= 0.4
+#   end moment Mh (the larger, psi Mh at the other end) and span moment Ms, Mh >= Ms, alpha_s = Ms / Mh:
+#     0 <= alpha_s <= 1, -1 <= psi <= 1 ...................................... 0.2 + 0.8 alpha_s >= 0.4
+#     -1 <= alpha_s < 0, 0 <= psi <= 1 ....................................... 0.1 - 0.8 alpha_s >= 0.4
+#     -1 <= alpha_s < 0, -1 <= psi < 0 ....................................... 0.1 (1 - psi) - 0.8 alpha_s >= 0.4
+#   span moment Ms larger than the end moment Mh, alpha_h = Mh / Ms:
+#     0 <= alpha_h <= 1, -1 <= psi <= 1 ...................................... 0.95 + 0.05 alpha_h
+#     -1 <= alpha_h < 0, 0 <= psi <= 1 ....................................... 0.95 + 0.05 alpha_h
+#     -1 <= alpha_h < 0, -1 <= psi < 0 ....................................... 0.95 + 0.05 alpha_h (1 + 2 psi)
+#   "For members with sway buckling mode, the equivalent uniform moment factor Cmy = Cmz = 0.9."
+#   "Cmy, Cmz, CmLT shall be obtained according to the bending moment diagram between the relevant braced points".
+# The OCR lost the bending-moment sketches, so where Ms is measured is read, not quoted: Ms is taken both as the
+# moment at mid-length and as the in-span extreme (when the extreme is inside the span) and the larger Cm of the two is
+# used (assumption, conservative).  The reading is consistent: with no span load Ms(mid) = Mh (1 + psi) / 2 and the
+# Mh >= Ms rows give back 0.6 + 0.4 psi exactly.
+TABLE18_CITE = "IS 800:2007 9.3.2.2 / Table 18 (uniform loading)"
+
+
+def span_moment_diagram(M_i, M_j, M_free):
+    """Bending-moment diagram of a member with end moments M_i, M_j (one sign convention along the member) and a
+    uniform span load whose free (simply supported) moment at mid-length is M_free:
+    M(t) = M_i (1 - t) + M_j t + 4 M_free t (1 - t), t = x / L.  Returns {M_mid, M_ext, t_ext}: the moment at
+    mid-length and the signed extreme inside the span with its position (None when the vertex is not inside)."""
+    a, b, f = float(M_i or 0.0), float(M_j or 0.0), float(M_free or 0.0)
+    out = {"M_mid": 0.5 * (a + b) + f, "M_ext": None, "t_ext": None}
+    if f == 0.0:
+        return out
+    t = 0.5 + (b - a) / (8.0 * f)
+    if 1e-6 < t < 1.0 - 1e-6:
+        out.update(M_ext=a * (1.0 - t) + b * t + 4.0 * f * t * (1.0 - t), t_ext=t)
+    return out
+
+
+def _table18_uniform(Mh, psi, Ms):
+    """Table 18 column (3) uniform loading for one reading of the span moment Ms -> (Cm, row text, alpha)."""
+    if abs(Ms) > abs(Mh):
+        ah = Mh / Ms + 0.0                      # + 0.0: no "-0.000" in the record
+        if ah < 0.0 and psi < 0.0:
+            return 0.95 + 0.05 * ah * (1.0 + 2.0 * psi), "Ms > Mh, -1 <= alpha_h < 0, -1 <= psi < 0: 0.95 + 0.05 alpha_h (1 + 2 psi)", ("alpha_h", ah)
+        return 0.95 + 0.05 * ah, "Ms > Mh, %s: 0.95 + 0.05 alpha_h" % ("0 <= alpha_h <= 1" if ah >= 0.0 else "-1 <= alpha_h < 0, 0 <= psi <= 1"), ("alpha_h", ah)
+    a_s = Ms / Mh + 0.0
+    if a_s >= 0.0:
+        return max(0.2 + 0.8 * a_s, 0.4), "Mh >= Ms, 0 <= alpha_s <= 1: 0.2 + 0.8 alpha_s >= 0.4", ("alpha_s", a_s)
+    if psi >= 0.0:
+        return max(0.1 - 0.8 * a_s, 0.4), "Mh >= Ms, -1 <= alpha_s < 0, 0 <= psi <= 1: 0.1 - 0.8 alpha_s >= 0.4", ("alpha_s", a_s)
+    return (max(0.1 * (1.0 - psi) - 0.8 * a_s, 0.4),
+            "Mh >= Ms, -1 <= alpha_s < 0, -1 <= psi < 0: 0.1 (1 - psi) - 0.8 alpha_s >= 0.4", ("alpha_s", a_s))
+
+
+def cm_factor_span_load(M_i, M_j, M_free, *, sway=False):
+    """IS 800 Table 18 (uniform loading rows, see TABLE18_CITE above) for a member with end moments M_i, M_j and a
+    uniform span load of free mid-length moment M_free (span_moment_diagram).  Returns {Cm (for Cmy / Cmz),
+    Cm_table18 (the Table 18 row value: CmLT is taken from it, never from the sway note), psi (None: C1 from the end
+    moments does not apply under a span load), psi_ends, Mh_Nmm, Ms_Nmm, M_span_Nmm (the in-span extreme or None),
+    row, alpha, cite}.  sway = the member has a sway buckling mode about this axis: the Table 18 note sets
+    Cm = 0.9 there; the larger of 0.9 and the row value is used (a row above 0.9 is kept: conservative)."""
+    a, b = float(M_i or 0.0), float(M_j or 0.0)
+    dg = span_moment_diagram(a, b, M_free)
+    Mh, Mo = (a, b) if abs(a) >= abs(b) else (b, a)
+    psi = (Mo / Mh if abs(Mh) > 1.0 else 0.0) + 0.0
+    best = None
+    for where, Ms in (("mid-length", dg["M_mid"]), ("in-span extreme", dg["M_ext"])):
+        if Ms is None:
+            continue
+        if abs(Mh) <= 1.0 and abs(Ms) <= 1.0:
+            cand = (1.0, "no moment: Cm = 1.0", None)
+        else:
+            cand = _table18_uniform(Mh, psi, Ms)
+        if best is None or cand[0] > best[0][0] + 1e-12:
+            best = (cand, where, Ms)
+    (cm, row, alpha), where, Ms = best
+    out = {"Cm_table18": cm, "Cm": max(cm, 0.9) if sway else cm, "psi": None, "psi_ends": psi, "Mh_Nmm": Mh,
+           "Ms_Nmm": Ms, "Ms_where": where, "M_span_Nmm": dg["M_ext"], "M_mid_Nmm": dg["M_mid"], "row": row,
+           "alpha": alpha and {alpha[0]: alpha[1]}, "cite": TABLE18_CITE}
+    if sway and cm < 0.9:
+        out["note"] = "sway buckling mode: Table 18 note Cm = 0.9 (row value %.3f)" % cm
+    return out
+
+
 def interaction_9_3(*, P_N=0.0, Mz_Nmm=0.0, My_Nmm=0.0, Nd_N=None, Pdz_N=None, Pdy_N=None, Mdz_Nmm=None,
                     Mdy_Nmm=None, Mdz_sec_Nmm=None, Mdy_sec_Nmm=None, lambda_z=None, lambda_y=None, lambda_LT=None,
                     Cmz=1.0, Cmy=1.0, CmLT=1.0, section_class="plastic", section_type="I", Ag_mm2=None,
@@ -2930,9 +3020,13 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     member = {id, section, grade (IS 2062 'E250'...; IS 1161 'YSt 240' for CHS), process (CHS), role
               ('column'|'beam'|'brace'), L_mm (element length), Kz, Ky (Table 11 / Annex D; default 1.0 with a
               flag), Lz_mm/Ly_mm (optional member lengths if different from L_mm), LLT_sag_mm, LLT_hog_mm (unbraced
-              compression-flange lengths for sagging / hogging), welded, support, sway (bool), fy_MPa (override)}
+              compression-flange lengths for sagging / hogging), welded, support, sway (bool), sway_span_load
+              (bool, default sway: the sway note under a span load), fy_MPa (override)}
     combo_forces = [{combo, P_N (+compression), Mz_i_Nmm, Mz_j_Nmm, My_i_Nmm, My_j_Nmm (bending-moment-diagram
-              values at the two ends, sagging +), Mz_mid_Nmm (optional span moment), Vy_N, Vz_N}]
+              values at the two ends, sagging +), Mz_mid_Nmm (optional span moment), My_mid_Nmm (optional minor-axis
+              span moment, third wave), Mz_free_Nmm / My_free_Nmm (optional: the free mid-length moment of a
+              uniform span load -- the diagram, both signs and the Table 18 uniform-loading Cm / CmLT follow from
+              it, cm_factor_span_load), Vy_N, Vz_N}]
     Returns {governing_combo, dc, ok, per_combo[...], capacities{...}, clause}.
     """
     import sections as _S
@@ -3006,16 +3100,51 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         Mzi, Mzj = float(cf.get("Mz_i_Nmm") or 0.0), float(cf.get("Mz_j_Nmm") or 0.0)
         Myi, Myj = float(cf.get("My_i_Nmm") or 0.0), float(cf.get("My_j_Nmm") or 0.0)
         Mzm = cf.get("Mz_mid_Nmm")
-        zs = [Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else [])
+        Mzf = float(cf.get("Mz_free_Nmm") or 0.0)
+        Myf = float(cf.get("My_free_Nmm") or 0.0)
+        Mym = cf.get("My_mid_Nmm")              # third wave (2026-10-30): optional minor-axis span moment
+        sway = bool(member.get("sway"))
+        sway_sl = bool(member.get("sway_span_load", sway))     # gravity columns: no sway mode (design_pipeline)
+        # span-moment fix (2026-11-01): a member with a uniform span load (Mz_free_Nmm / My_free_Nmm, the free
+        # mid-length moment; columns under the member wind) -- the moment diagram is rebuilt from the end moments and
+        # the free moment: its in-span extreme enters the check whatever its sign (9.3.2.2 "maximum factored applied
+        # bending moments ... of the member"; each sign with its own LLT below) and Cm comes from the Table 18
+        # uniform-loading rows (cm_factor_span_load), also where the end moments govern
+        if Mzf:
+            cmz = cm_factor_span_load(Mzi, Mzj, Mzf, sway=sway_sl)
+        elif Mzm is None:
+            cmz = cm_factor(Mzi, Mzj, sway=sway)
+        else:
+            cmz = {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
+        if Myf:
+            cmy = cm_factor_span_load(Myi, Myj, Myf, sway=sway_sl)
+        elif Mym is None:
+            cmy = cm_factor(Myi, Myj, sway=sway)
+        else:
+            cmy = {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
+        zs = ([Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else [])
+              + ([cmz["M_span_Nmm"]] if cmz.get("M_span_Nmm") is not None else []))
         Mz_sag = max([m for m in zs if m > 0] or [0.0])
         Mz_hog = -min([m for m in zs if m < 0] or [0.0])
-        My = max(abs(Myi), abs(Myj))
-        sway = bool(member.get("sway"))
-        cmz = cm_factor(Mzi, Mzj, sway=sway) if Mzm is None else {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
-        cmy = cm_factor(Myi, Myj, sway=sway)
+        My = max([abs(Myi), abs(Myj)] + ([abs(float(Mym))] if Mym is not None else [])
+                 + ([abs(cmy["M_span_Nmm"])] if cmy.get("M_span_Nmm") is not None else []))
+        # CmLT (9.3.2.2: "as per Table 18 corresponding to the actual moment gradient between lateral supports"): the
+        # Table 18 note on sway buckling covers Cmy / Cmz only, so under a span load CmLT is the row value of the
+        # major-axis diagram when the compression flange is unrestrained over the member (LLT >= L); with lateral
+        # supports inside the member the gradient between them is not resolved here and the Table 18 upper bound
+        # 1.0 is used (conservative).  Without a span load CmLT = Cmz as before.
+        cmlt_row = cmz.get("Cm_table18") if Mzf else None
         psi = cmz.get("psi")
         rec = {"combo": cf.get("combo"), "P_N": P, "Mz_sag_Nmm": Mz_sag, "Mz_hog_Nmm": Mz_hog, "My_Nmm": My,
                "Cmz": cmz["Cm"], "Cmy": cmy["Cm"]}
+        for ax_, c_ in (("z", cmz), ("y", cmy)):
+            if c_.get("row"):
+                rec["Cm%s_basis" % ax_] = "%s: %s%s%s" % (
+                    c_["cite"], c_["row"],
+                    "".join(" (%s = %.3f, Ms at %s)" % (k, v, c_.get("Ms_where")) for k, v in (c_.get("alpha") or {}).items()),
+                    "; " + c_["note"] if c_.get("note") else "")
+                if c_.get("M_span_Nmm") is not None:
+                    rec["M%s_span_Nmm" % ax_] = c_["M_span_Nmm"]
         checks = []
         signs = []
         if Mz_sag > 0 or Mz_hog <= 0:
@@ -3031,17 +3160,21 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             if not ltb.get("found"):
                 checks.append({"moment_sign": sign, "found": False, "ltb": ltb})
                 continue
+            if cmlt_row is None:
+                CmLT = cmz["Cm"]
+            else:
+                CmLT = cmlt_row if (LLT is not None and float(LLT) >= L - 1e-6) else 1.0
             ia = interaction_9_3(P_N=P, Mz_Nmm=Mz, My_Nmm=My, Nd_N=p["A"] * fy / GAMMA_M0_DEFAULT,
                                  Pdz_N=comp.get("Pdz_N"), Pdy_N=comp.get("Pdy_N"), Mdz_Nmm=ltb["Md_Nmm"],
                                  Mdy_Nmm=Md_y.get("Md_Nmm"), Mdz_sec_Nmm=Md_z_sec.get("Md_Nmm"),
                                  Mdy_sec_Nmm=Md_y.get("Md_Nmm"),
                                  lambda_z=(comp.get("axes", {}).get("z") or {}).get("lambda"),
                                  lambda_y=(comp.get("axes", {}).get("y") or comp.get("axes", {}).get("v") or {}).get("lambda"),
-                                 lambda_LT=ltb.get("lambda_LT"), Cmz=cmz["Cm"], Cmy=cmy["Cm"], CmLT=cmz["Cm"],
+                                 lambda_LT=ltb.get("lambda_LT"), Cmz=cmz["Cm"], Cmy=cmy["Cm"], CmLT=CmLT,
                                  section_class=sc0["section_class"], section_type="CHS" if p.get("section_type") == "CHS" else "I",
                                  Ag_mm2=p_gross["A"], Zec_mm3=p["Sx"], Td_N=Td.get("Td_N"))
             ia.update(moment_sign=sign, LLT_mm=LLT, Mdz_LTB_Nmm=ltb["Md_Nmm"], chi_LT=ltb.get("chi_LT"),
-                      lambda_LT=ltb.get("lambda_LT"))
+                      lambda_LT=ltb.get("lambda_LT"), CmLT=CmLT)
             checks.append(ia)
         V = max(abs(float(cf.get("Vy_N") or 0.0)), 0.0)
         if V and shz.get("Vd_N"):
