@@ -33,7 +33,7 @@ def test_grid_ijk_from_coords_for_link_pieces():
 
 
 def test_record_fields_carry_lateral_part():
-    assert SM.REC_FIELDS[-2:] == ("N_LAT", "V_LAT")
+    assert SM.REC_FIELDS[11:13] == ("N_LAT", "V_LAT")       # the column span fields follow them (third wave)
     cf = SM.combo_forces_for_member_check({"1.5DL+1.5EQ_X": (-1000.0,) + (0.0,) * 10 + (-400.0, 30.0)}, "col")[0]
     assert cf["P_N"] == 1000.0 and cf["P_LAT_N"] == 400.0 and cf["V_LAT_N"] == 30.0
     # old 11-field records read as zero lateral part
