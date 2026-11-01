@@ -200,7 +200,7 @@ A pushover will mainly show reserve, not a seismic demand check.
 
 ## Tests
 
-`tests/test_msme_truss_2026_10.py` (28 tests) checks every new path against hand calculations:
+`tests/test_msme_truss_2026_10.py` (29 tests) checks every new path against hand calculations:
 
 - double-angle properties;
 - Table 2 / 10;
@@ -224,5 +224,8 @@ A pushover will mainly show reserve, not a seismic demand check.
 - Appendix C without a log;
 - the take-off typical range.
 
-The brief-count tests now expect 21 India briefs. IN_Ex21 is not added to the UI example list (a lead decision). The
-contract (`contract/AGENT_START.md`) documents the new cfg keys.
+The brief-count tests now expect 21 India briefs. IN_Ex21 is offered in the UI example list (`frontend/index.html`,
+`steltic/main.py`, `/api/example/in21`) and listed in `test_buildings/README_INDIA.md`; the frontend contract test
+covers in1-in21. The contract (`contract/AGENT_START.md`) documents the new cfg keys. D-T10 is recorded with its
+meaning in the owner decisions of `docs/PEB_LIMITATIONS.md`, and the meaning printed with every "D-T10" in public text
+now names the HSFG 8.8 bolts and the complete-penetration welds at the column.
