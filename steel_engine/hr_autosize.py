@@ -1324,7 +1324,7 @@ def design_fin_plate(sec, V_N, template=None, *, V_service_N=None, margin=0.9):
     Vs = V_service_N if V_service_N is not None else V_N / 1.5
     trials = []
     for n_lines in (1, 2):
-        for d in (20, 24):
+        for d in (20, 24, 30):
             for n in range(2, 13):
                 if not fin_plate_fits(sec, n, d):
                     break
@@ -1333,7 +1333,7 @@ def design_fin_plate(sec, V_N, template=None, *, V_service_N=None, margin=0.9):
     for surface in [surf0] + (["sand_blasted"] if surf0 != "sand_blasted" else []):
         for plates in (1, 2):
             for _, n_lines, d, n in sorted(trials):
-                for t in (8.0, 10.0, 12.0, 14.0, 16.0, 20.0, 25.0):
+                for t in (8.0, 10.0, 12.0, 14.0, 16.0, 20.0, 25.0, 32.0, 40.0, 50.0):   # IN_Ex19 links: 2 x 50 mm
                     sp = fin_plate_spec(sec, n, d, t, dict(template or {}, slip_surface=surface), n_lines=n_lines)
                     if plates == 2:
                         sp = double_fin(sp, sec)
