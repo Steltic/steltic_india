@@ -678,6 +678,8 @@ def evaluate_run(run_dir, waivers=()):
     out["modes_mass"] = {d: float(md_["first3_mass_" + d.lower()]) for d in ("X", "Y")
                          if isinstance(md_.get("first3_mass_" + d.lower()), (int, float))}
     out["modes_fail"] = any(r.startswith("irregularity.modes") for r in blocking)
+    out["periods"] = {d: float(md_["T" + d.lower()]) for d in ("X", "Y") if isinstance(md_.get("T" + d.lower()), (int, float))}
+    out["dynamic_wind_fail"] = (pkg.get("gates") or {}).get("dynamic_wind") is False
     return out
 
 
@@ -725,6 +727,21 @@ def torsion_requirements(lm, ev, x, st):
                 if need > req.get(g, 0.0):
                     req[g] = round(need, 1)
                     log("    torsion %s (Delta_max / Delta_ave %.3f): %s keeps %s >= %.4g" % (d, r, g, kind, need))
+    if ev.get("dynamic_wind_fail"):
+        # IS 875-3 9.1(b): a first-mode frequency below 1 Hz calls for the 10.2 / 10.3 dynamic wind response, which
+        # the job does not declare: keep T <= 0.97 s in that direction (K ~ 1 / T^2) with the frames of that direction
+        for d, T in sorted((ev.get("periods") or {}).items()):
+            if T <= 1.0:
+                continue
+            f = min(max((T / 0.97) ** 2, 1.05), 1.6)
+            for g in torsion_groups(lm, "X" if d == "Y" else "Y"):
+                kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
+                if not kind:
+                    continue
+                need = stiffness(x[g][0], kind) * f
+                if need > req.get(g, 0.0):
+                    req[g] = round(need, 1)
+                    log("    period T%s %.3f s > 1 s (IS 875-3 9.1(b)): %s keeps %s >= %.4g" % (d.lower(), T, g, kind, need))
     if ev.get("modes_fail"):
         # IS 1893 Table 6(vii): the d-direction mass sits in rotation-dominant modes (translation coupled with
         # torsion): a stiffer torsional system for that direction separates them -- the same groups, 25 % up
