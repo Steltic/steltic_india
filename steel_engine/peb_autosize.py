@@ -2284,17 +2284,25 @@ def _base_geo(cfg, spec, sec, pl, key_dims=None):
     return geo
 
 
-def base_plate_ok(cfg, spec, entries, pl, key_dims=None, margin=1.0):
-    """Every governing case of every base of the slot passes base_plate_design_biaxial (evaluated, D/C <= margin)."""
+def base_plate_ok(cfg, spec, entries, pl, key_dims=None, margin=1.0, why=None):
+    """Every governing case of every base of the slot passes base_plate_design_biaxial (no failing row, D/C <= margin).
+    A row the engine does not evaluate for this base in the run either (e.g. no anchorage basis declared) does not
+    reject a candidate; the full run judges it.  why: a list that receives the first reason a candidate fails."""
     import india_connections as C
     for e in entries:
         geo = _base_geo(cfg, spec, e["sec"], pl, key_dims)
         for P, mz, my, v in e["cases"]:
             try:
                 r = C.base_plate_design_biaxial(P_N=P, Mz_Nmm=mz, My_Nmm=my, V_N=v, **geo)
-            except Exception:
+            except Exception as ex:
+                if why is not None:
+                    why.append("base_plate_design_biaxial failed: %s" % ex)
                 return False
-            if r.get("ok") is not True or r.get("dc") is None or float(r["dc"]) > margin + 1e-9:
+            bad = [k for k, c in (r.get("checks") or {}).items() if isinstance(c, dict) and c.get("ok") is False]
+            if bad or (r.get("dc") is not None and float(r["dc"]) > margin + 1e-9):
+                if why is not None:
+                    why.append("t %s d %s: %s (D/C %s)" % (pl.get("t"), pl.get("d"), ", ".join(bad[:3]) or "D/C",
+                                                         r.get("dc")))
                 return False
     return True
 
@@ -2323,6 +2331,10 @@ def size_base_plate(cfg, spec, entries, key_dims=None, margin=1.0, floor=None):
         if best is None or cand < best:
             best = cand
     if best is None:
+        why = []
+        if ts:
+            base_plate_ok(cfg, spec, entries, {"t": ts[-1], "d": ds[-1]}, key_dims, margin, why=why)
+        size_base_plate.last_why = why[0] if why else "no plate thickness at or above the floor"
         return None
     return {"t": best[0], "d": best[1] or None}
 
@@ -2535,8 +2547,9 @@ class Evaluator:
                                      margin=self.margin("conn:base_plate", self.margin("conn:base", 1.0)),
                                      floor=(fl.get(slot) or {}).get("plate"))
                 if pl is None:
-                    self.conn_cache[key] = (None, None, {"fail": slot + " plate"})
-                    return self.conn_cache[key]
+                    # nothing lighter verified locally: keep the plate of the run (the full run judges it)
+                    pl = dict(cp[slot]["plate"])
+                    info.setdefault(slot, {})["plate_kept"] = getattr(size_base_plate, "last_why", None)
                 d_ = design.setdefault(slot, {"key": cp[slot].get("key"), "fck": cp[slot].get("fck", 30.0),
                                               "b_max": cp[slot].get("b_max")})
                 d_["plate"] = pl
