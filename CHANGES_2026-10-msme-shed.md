@@ -1,10 +1,18 @@
 # steltic_india — 2026-10 third wave: angle-truss MSME shed (IN_Ex21)
 
-Branch `fix/2026-10-third-msme-shed` (from main `44b74de`, with the column span-moment fix `2cb42ff` cherry-picked from
-the PEB branch). This adds a new example: the typical small-industry shed of a south Indian industrial estate. It is
-designed by the engine as pin-jointed angle roof trusses on rolled MB columns, with knee braces (IN_Ex21, Hosur). It
-also adds the engine support the shed needs. Every earlier gold is unchanged: the new paths need a `double_angle`
-section, a `truss` element or a declared `cfg['truss_connections']`.
+Branch `fix/2026-10-third-msme-shed`, from main `44b74de`. The final column span-moment fix is merged in from
+`fix/2026-10-column-span-moment` (`28831f8`). The provisional cherry-pick `2cb42ff` was reverted first.
+
+This adds a new example: the typical small-industry shed of a south Indian industrial estate (IN_Ex21, Hosur). The
+engine designs it as pin-jointed angle roof trusses on rolled MB columns, with knee braces. The branch also adds the
+engine support the shed needs.
+
+The new paths leave every earlier gold unchanged:
+- they need a `double_angle` section, a `truss` element, a declared `cfg['truss_connections']` or
+  `cfg['tonnage_benchmark']`;
+- the column-line change acts only on a column piece that starts off the grid. A static check of all 22 gold models
+  found none;
+- Appendix C changes only without a tool-call log. Every earlier gold has one.
 
 ## The example (test_buildings/IN_Ex21_MSME_angle_truss_shed_Hosur.txt)
 
@@ -105,9 +113,94 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 - The truss joints use fully tensioned HSFG bolts (12.4.1). The welds to the column are CJP (12.4.2).
 - The Mp alternative of 12.10.2.1 is not used: a triangular truss has no plastic moment at the column face.
 
+## Gold run (IN_Ex21, 2026-11-01, on the merged span-moment fix)
+
+**Result:** design status COMPLETE, no open reasons, 30 s run.
+
+**Final sizes (IS 808 / IS 1161, E250 / YSt 310):**
+
+| Member | Section | Ratio | Governing |
+|---|---|---|---|
+| Main columns | MB300 | 0.73 | 9.3 interaction |
+| Gable posts | MB225 | 0.71 | slenderness |
+| Top chord | 2ISA70X70X6 on 8 mm gussets | 0.71 | — |
+| Bottom chord | 2ISA70X70X6 | 0.95 | 9.3, under 0.9DL + 1.5WL uplift |
+| Verticals up to 1.5 m | ISA60X60X6 | 0.71 | — |
+| Long verticals (1.875 m and 2.25 m) | ISA70X70X6 | 0.90 | Table 3 |
+| Diagonals | ISA70X70X6 | 0.96 | Table 3 KL/r 172.7 / 180 |
+| End diagonals | ISA80X80X8 | 0.68 | — |
+| Knee braces | ISA90X90X8 | 0.82 | 7.5.1.2 |
+| Wall X-bracing | CHS114.3X3.6 | 0.63 | — |
+| Eave struts | CHS114.3X3.6 | 0.85 | — |
+| Roof-girder diagonals | ISA90X90X8 | 0.97 | Table 3 (iii) 250 |
+| Roof-girder struts and bottom-chord ties | CHS76.1X3.6 | 0.94 | — |
+| Purlins | LZ200X60X20X1.6 with 2 sag-rod lines | 0.96 | IS 801, CFS engine |
+| Girts | LZ170X60X20X1.6 | 0.85 | IS 801, CFS engine |
+
+**Connections:**
+- All truss bolts are M16 8.8 HSFG: 3 per chord and knee-brace end, 3 per end diagonal, 2 elsewhere.
+- The highest connection ratio is 0.96 (the edge distance of the 60 mm vertical).
+- Knees, IS 800 12.10.2.1 under Steltic design ruling D-T10 (knee designed for 1.2 times the moment the knee brace can
+  deliver): 0.79.
+- Heel seats, 12.10.2.4: 0.31.
+- Fly braces have an M16 4.6 bolt: 0.32 (with M12 the check was not evaluated, because the corpus thread table has no
+  M12).
+
+**Serviceability:** wind sway across the span is 22.6 mm against H/240 = 27.1 mm (0.84; brick dado). Earthquake drift is
+0.20 of the 0.004 limit (Zone II; wind governs).
+
+**Steel:**
+- Total 19,740 kg on 648 m², which is **30.5 kg/m²** of plan:
+
+  | Group | kg/m² |
+  |---|---|
+  | Primary | 15.8 |
+  | Bracing | 5.65 |
+  | Secondary | 5.0 |
+  | Connections | 4.0 |
+
+- A published comparison of conventional hot-rolled steel sheds gives 27.7 kg/m² at 15 m span and 35.8 kg/m² at
+  20 m (N. Kumar and K. S. Grover, IJRASET, June 2022, Table 4). The 18 m shed sits inside that range. The report
+  prints the range with its source next to the take-off.
+
+**Outputs:**
+- STAAD export (`model.std`), as for the PEB jobs: the double angles as `TABLE D ISA70X70X6 SP 8.0`, webs and braces as
+  `MEMBER TRUSS`;
+- `design/bom.csv`, reactions and the anchor-bolt plan;
+- the viewer.
+
+**First-run fixes:**
+- The first run (PARTIAL, 67 reasons) found the two engine gaps fixed above (knee specs, gable-post line) and these
+  undersized members: knee brace ISA75 (1.52), end diagonal ISA65 (1.28), 60 mm long verticals (KL/r 191), bottom
+  chord 2ISA65 (1.11), gable post MB200 (1.05).
+- It also found an unevaluated fly-brace bolt and a slender ISA90X90X6 roof-girder diagonal.
+- Four size variants were then run in one slot (all COMPLETE). The lightest was kept.
+
+## Nonlinear run (stage 2): what the shed needs from the nonlinear engine
+
+The HR package carries everything the model needs:
+- the custom build with kind `truss` elements, `info['truss']` groups and `info['truss_knees']`;
+- the double-angle definitions in the cfg snapshot (`custom_sections`, type `double_angle`);
+- the truss connections and the restraint positions.
+
+The nonlinear engine was not changed here. It needs:
+1. kind `truss` treated like `brace` in its fibre model / package reader. Today it builds a Truss only for kind `brace`.
+2. The `double_angle` sections registered from the snapshot. HR `sections.register_custom_sections` does this once NL
+   runs on current HR main with this branch merged. NL also needs an angle fibre section (single and double angles), or
+   a truss material capped at the 7.5 compression strength.
+3. The knee braces as the frame's yielding / buckling members in the transverse direction. The truss seat stays pinned.
+   Check that the knee brace, not its connection, is the first to buckle or yield: the knee connections are designed
+   for 1.2 times the brace strength.
+4. The restraints for the member checks: purlins at every top-chord panel point, bottom-chord ties at 4.5 m, girts and
+   fly braces at 3.0 m and 4.75 m.
+
+Wind governs the design in Zone II. Across the span the earthquake base shear is 10.7 kN; the wind storey force is
+47.7 kN, and the member wind on walls and roof totals 100.8 kN horizontally.
+A pushover will mainly show reserve, not a seismic demand check.
+
 ## Tests
 
-`tests/test_msme_truss_2026_10.py` (27 tests) checks every new path against hand calculations:
+`tests/test_msme_truss_2026_10.py` (28 tests) checks every new path against hand calculations:
 
 - double-angle properties;
 - Table 2 / 10;
@@ -128,4 +221,8 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 - the report section with the public-text pass;
 - the Section 12 cfg carries the truss connections to the knee checks;
 - a column's line read from its grid end;
-- Appendix C without a log.
+- Appendix C without a log;
+- the take-off typical range.
+
+The brief-count tests now expect 21 India briefs. IN_Ex21 is not added to the UI example list (a lead decision). The
+contract (`contract/AGENT_START.md`) documents the new cfg keys.
