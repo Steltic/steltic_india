@@ -26,7 +26,19 @@ usage:
       --cfs-root /home/claude/gold_var/cfs_fw [--published-root /home/claude/gold_var/jobs_hr] \\
       [--variants strict,joint_deliverable,...] [--max-runs 8] [--resume] [--solar]
   python scripts/peb_lever_study.py --render --work <dir>       # re-write the CSV / HTML from study.json files
+  python scripts/peb_lever_study.py --list-variants --json --job <job> [--jobs-root <dir>] [--solar]
+                                                                # the contract: switches, variants, specs (no run)
 One heavy analysis at a time: every full run is one child process, run sequentially.
+
+Third wave (2026-10, handoff P11):
+  * a job with no hand-written spec in scripts/peb_lever_jobs.py gets one inferred from its own cfg.py
+    (scripts/peb_lever_infer.py; <jobs-root>/<job>/cfg.py), so a Hub project or an engineer's own PEB job needs no
+    spec; the spec used is written to <work>/<job>/job_spec.json and its source is in study.json;
+  * --list-variants [--json] prints the runner's contract (CONTRACT: its switches, the variants of each job for each
+    ladder with their code status, where each job's spec comes from) and runs nothing;
+  * --cfs-python runs the CFS engine (the purlin / girt design) in its own interpreter;
+  * --progress-json adds one machine-readable line per event ('@@peb-study {json}': plan, variant, resumed, row,
+    budget, job_done, done) to the human progress lines, so a caller need not parse them.
 """
 import argparse
 import copy
@@ -45,6 +57,7 @@ sys.path[:0] = [os.path.join(ROOT, "steel_engine"), HERE]
 import peb_autosize as A          # noqa: E402
 import peb_levers as PL           # noqa: E402
 from peb_lever_jobs import JOB_SPECS   # noqa: E402
+import peb_lever_infer as INF     # noqa: E402
 
 GROUPS = ("primary", "bracing", "crane", "canopy", "secondary", "connections")
 COLORS = {"primary": "#ff8a3d", "bracing": "#e6b65c", "crane": "#8fb996", "canopy": "#7aa6c2",
@@ -400,14 +413,19 @@ class _PersistentDict(dict):
 
 
 def run_job(job, a, solar=False):
-    spec = JOB_SPECS[job]
+    spec, spec_src, spec_notes = job_spec(job, a.jobs_root)
     job_dir = os.path.join(a.jobs_root, job)
     work = os.path.join(a.work, job)
     os.makedirs(work, exist_ok=True)
     study_p = os.path.join(work, "study.json")
     study = json.load(open(study_p)) if (a.resume and os.path.exists(study_p)) else {"job": job, "rows": {}}
     study.update(job=job, engine=os.path.join(ROOT, "steel_engine"), cfs_root=a.cfs_root,
-                 started=study.get("started") or time.strftime("%Y-%m-%d %H:%M"))
+                 started=study.get("started") or time.strftime("%Y-%m-%d %H:%M"), spec_source=spec_src,
+                 spec_notes=spec_notes)
+    if getattr(a, "cfs_python", None):
+        study["cfs_python"] = a.cfs_python
+    json.dump(dict(spec, _source=spec_src, _notes=spec_notes), open(os.path.join(work, "job_spec.json"), "w"),
+              indent=1, default=str)
     rows = study["rows"]
     # gold as published
     pub = os.path.join(a.published_root, job, "design", "calc_package.json")
@@ -424,6 +442,10 @@ def run_job(job, a, solar=False):
     study["ladder"] = ladder
     vlist = variants_for(spec, solar=solar, ladder=ladder, control=bool(getattr(a, "control", False)))
     want = set(a.variants.split(",")) if a.variants else None
+    plan = [n for n, kw, st, nt in vlist if kw is not None and not kw.get("alias")
+            and (not want or n in want or (n == "strict" and not rows.get("strict")))
+            and not (a.resume and (rows.get(n) or {}).get("done"))]
+    progress("plan", job=job, ladder=ladder, spec_source=spec_src, variants=plan, n=len(plan))
     strict = rows.get("strict")
     stopped = None
     for name, kw, status, note in vlist:
@@ -431,6 +453,7 @@ def run_job(job, a, solar=False):
             continue
         if a.resume and name in rows and rows[name].get("done"):
             log("== %s / %s: done (resume)" % (job, name))
+            progress("resumed", job=job, variant=name, label=label(name))
             continue
         if kw is None:
             rows[name] = {"name": name, "label": label(name), "status": "n/a", "note": note, "done": True}
@@ -448,6 +471,7 @@ def run_job(job, a, solar=False):
             # a resumable chunk: no new variant after --stop-after-min minutes (the run in hand is never cut)
             log("== %s: time budget of %s min reached before '%s'; re-run with --resume to continue"
                 % (job, a.stop_after_min, name))
+            progress("budget", job=job, before=name, minutes=a.stop_after_min)
             stopped = name
             break
         t0 = time.time()
@@ -505,6 +529,7 @@ def run_job(job, a, solar=False):
             args["waivers"] = tuple(list(BASE_WAIVERS) + ZONE_WAIVERS)
         if kw.get("rods"):
             args["waivers"] = tuple(list(args["waivers"]) + ROD_WAIVERS)
+        progress("variant", job=job, variant=name, label=label(name), status=status)
         res = A.autosize(vjob_dir, spec, rules, work, name=name, extra_overrides=extra_ov or None,
                          cfg_patch=patch or None, rods=rods, Lr=Lr, free_flange=free, **args)
         best = res.get("best")
@@ -544,6 +569,9 @@ def run_job(job, a, solar=False):
         study["rows"] = rows
         json.dump(study, open(study_p, "w"), indent=1, default=str)
         render_job(study, work)
+        progress("row", job=job, variant=name, label=label(name), status=status,
+                 kg_m2=(row.get("kg_m2") or {}).get("total"), error=row.get("error"),
+                 n_full_runs=row.get("n_full_runs"), elapsed_s=row.get("elapsed_s"))
     st = rows.get("strict") or {}
     for r in rows.values():
         if r.get("kg_m2") and st.get("kg_m2"):
@@ -557,6 +585,7 @@ def run_job(job, a, solar=False):
         study["finished"] = time.strftime("%Y-%m-%d %H:%M")
     json.dump(study, open(study_p, "w"), indent=1, default=str)
     render_job(study, work)
+    progress("job_done", job=job, stopped_before=stopped, finished=study.get("finished"))
     return study
 
 
@@ -845,6 +874,127 @@ def markdown_tables(studies):
     return "\n".join(out)
 
 
+# ------------------------------------------------------------------------------------------- third wave: the contract
+SPEC_HAND = "job spec (scripts/peb_lever_jobs.py)"
+SPEC_INFERRED = "inferred from the job's cfg.py (scripts/peb_lever_infer.py)"
+PROGRESS_PREFIX = "@@peb-study "
+PROGRESS_JSON = False
+CONTRACT_VERSION = 1
+
+
+def job_spec(job, jobs_root):
+    """(spec, source, notes) of a job: the hand-written spec of scripts/peb_lever_jobs.py when there is one, else the
+    spec inferred from <jobs_root>/<job>/cfg.py (peb_lever_infer.infer_spec; raises peb_lever_infer.InferError)."""
+    if job in JOB_SPECS:
+        return JOB_SPECS[job], SPEC_HAND, []
+    jd = os.path.join(jobs_root or "", job)
+    try:
+        key = (os.path.abspath(jd), os.path.getmtime(os.path.join(jd, "cfg.py")))
+    except OSError:
+        key = None
+    if key not in _SPEC_CACHE:
+        spec = INF.infer_spec(jd)
+        notes = list(spec.pop("_notes", []) or [])
+        spec.pop("_source", None)
+        spec["job"] = job
+        _SPEC_CACHE[key] = (spec, notes)
+    spec, notes = _SPEC_CACHE[key]
+    return copy.deepcopy(spec), SPEC_INFERRED, list(notes)
+
+
+_SPEC_CACHE = {}
+
+
+def solar_ok(job, spec):
+    """The solar-ready variant applies to IN_Ex1 (its spec carries the IN_Ex5 wind basis, spec['solar'])."""
+    return job.startswith("IN_Ex1_") and bool(spec.get("solar"))
+
+
+def code_status(status):
+    """How the outputs tag a status (_tag): 'not compliant', 'compliant', 'n/a' or 'reading' (a reading an owner
+    ruling rejected, the old unconservative treatment, a code conflict for the design engineer to decide)."""
+    s = str(status or "")
+    if "NOT" in s or "not compliant" in s:
+        return "not compliant"
+    if s == "n/a":
+        return "n/a"
+    if s.startswith(("compliant", "published", "strict", "permitted")):
+        return "compliant"
+    return "reading"
+
+
+def progress(event, **kw):
+    """One machine-readable progress line ('@@peb-study {json}') with --progress-json; nothing otherwise."""
+    if PROGRESS_JSON:
+        print(PROGRESS_PREFIX + json.dumps(dict(kw, event=event), default=str, sort_keys=True), flush=True)
+
+
+def contract(jobs, jobs_root, solar=True):
+    """The runner's contract for a caller (the Hub): what it offers and, per job, where the spec comes from and the
+    variants of each ladder with their code status.  Pure: nothing is sized (an inferred spec builds the job's model
+    once, no analysis)."""
+    out = {"contract": "peb_lever_study", "version": CONTRACT_VERSION,
+           "options": {"ladders": ["full", "short"], "stop_after_min": True, "resume": True, "control": True,
+                       "init_margins": True, "solar": True, "cfs_python": True, "spec_from_cfg": True,
+                       "progress_json": True, "max_runs_default": 8},
+           "progress": {"prefix": PROGRESS_PREFIX, "events": ["plan", "variant", "resumed", "row", "budget",
+                                                              "job_done", "done"]},
+           "variant_order": list(VARIANT_ORDER), "labels": {n: label(n) for n in VARIANT_ORDER},
+           "code_status": ["compliant", "reading", "not compliant", "n/a"],
+           "specs": sorted(JOB_SPECS), "jobs": {}}
+    for job in jobs:
+        try:
+            spec, src, notes = job_spec(job, jobs_root)
+        except INF.InferError as e:
+            out["jobs"][job] = {"name": job, "spec_source": None,
+                                "error": ["no job spec in scripts/peb_lever_jobs.py, and none could be inferred from "
+                                          "the job's cfg.py"] + e.reasons}
+            continue
+        except Exception as e:                             # noqa: BLE001 -- a job folder the runner cannot read
+            out["jobs"][job] = {"name": job, "spec_source": None, "error": ["%s: %s" % (type(e).__name__, e)]}
+            continue
+        sol = bool(solar) and solar_ok(job, spec)
+        by = {}
+        for lad in ("full", "short"):
+            by[lad] = [{"name": n, "label": label(n), "status": st, "compliance": code_status(st), "note": nt,
+                        "applies": kw is not None, "alias": (kw or {}).get("alias"),
+                        "start_from": (kw or {}).get("start_from"), "sized": kw is not None and not (kw or {}).get("alias")}
+                       for n, kw, st, nt in variants_for(spec, solar=sol, ladder=lad)]
+        sz = spec.get("seismic") or {}
+        out["jobs"][job] = {"name": job, "spec_source": src, "spec_notes": notes, "zone": sz.get("zone"),
+                            "I": sz.get("I"), "route": sz.get("route"), "dado_height_mm": spec.get("dado_height_mm"),
+                            "base": spec.get("base"), "solar": sol, "members": sorted(spec.get("members") or {}),
+                            "variants_by_ladder": by}
+    return out
+
+
+def _print_contract(c):
+    for job, j in c["jobs"].items():
+        log("%s -- %s" % (job, j.get("spec_source") or "no spec"))
+        for e in j.get("error") or []:
+            log("   ! %s" % e)
+        for n in j.get("spec_notes") or []:
+            log("   note: %s" % n)
+        for lad, rows in (j.get("variants_by_ladder") or {}).items():
+            log("   ladder %s:" % lad)
+            for r in rows:
+                log("     %-24s %-14s %s" % (r["name"], r["compliance"], r["label"]))
+
+
+def check_cfs_python(py, cfs_root):
+    """The CFS interpreter can import the CFS engine (one short child, before any sizing)."""
+    import subprocess
+    code = "import sys; sys.path.insert(0, %r); import india_cfs_members, is811_sections" % os.path.join(cfs_root,
+                                                                                                       "steel_engine")
+    try:
+        r = subprocess.run([py, "-I", "-c", code], capture_output=True, text=True, timeout=300)
+    except OSError as e:
+        raise SystemExit("--cfs-python %s cannot be run: %s" % (py, e))
+    if r.returncode:
+        raise SystemExit("--cfs-python %s cannot import the CFS engine in %s: %s"
+                         % (py, cfs_root, ((r.stderr or "").strip().splitlines() or ["?"])[-1]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", action="append", default=[])
@@ -867,14 +1017,37 @@ def main():
     ap.add_argument("--render", action="store_true")
     ap.add_argument("--stop-after-min", type=float, default=0.0,
                     help="start no new variant after this many minutes (a resumable chunk; continue with --resume)")
+    ap.add_argument("--list-variants", action="store_true",
+                    help="print the runner's contract (switches, each --job's spec source and variants per ladder) "
+                         "and exit: nothing is sized; a job without a hand-written spec has one inferred from "
+                         "<jobs-root>/<job>/cfg.py")
+    ap.add_argument("--json", action="store_true", help="with --list-variants: one JSON document")
+    ap.add_argument("--cfs-python", default="",
+                    help="the interpreter of the CFS engine for the purlin / girt design (default: this one)")
+    ap.add_argument("--progress-json", action="store_true",
+                    help="also print one '%s{json}' line per progress event" % PROGRESS_PREFIX)
     a = ap.parse_args()
+    global PROGRESS_JSON
+    PROGRESS_JSON = bool(a.progress_json)
+    if a.list_variants:
+        c = contract(a.job, a.jobs_root, solar=True)
+        if a.json:
+            print(json.dumps(c, default=str))
+        else:
+            _print_contract(c)
+        return
     os.makedirs(a.work, exist_ok=True)
+    if a.cfs_python and not a.render:
+        check_cfs_python(a.cfs_python, a.cfs_root)
+        A.CFS_PY = a.cfs_python
     if not a.render:
         for job in a.job:
             if budget_spent(a):
                 log("== %s: not started (time budget reached); re-run with --resume" % job)
+                progress("budget", job=job, before=None, minutes=a.stop_after_min)
                 continue
-            run_job(job, a, solar=a.solar and job.startswith("IN_Ex1_"))
+            spec, _src, _n = job_spec(job, a.jobs_root)
+            run_job(job, a, solar=a.solar and solar_ok(job, spec))
     studies = []
     for job in sorted(os.listdir(a.work)):
         p = os.path.join(a.work, job, "study.json")
@@ -890,6 +1063,7 @@ def main():
               open(os.path.join(a.work, "study_all.json"), "w"), indent=1, default=str)
     open(os.path.join(a.work, "study_tables.md"), "w").write(markdown_tables(studies))
     log("wrote %s" % os.path.join(a.work, "index.html"))
+    progress("done", work=a.work, jobs=a.job)
 
 
 if __name__ == "__main__":
