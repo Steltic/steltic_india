@@ -7,9 +7,10 @@ are kept to the members IS 800 Section 12 slenderness rules out for single angle
 ties) -- say why in the report.
 
 Site: Hosur, Krishnagiri district, Tamil Nadu (SIPCOT industrial complex). Seismic per IS 1893 (Part 1):2016 + Amd 1 +
-  Amd 2: Hosur is not in Annex E -- RETRIEVE the nearest listed town (Bangalore (Bengaluru), about 40 km) and state
-  that basis; Z from Table 3. Wind per IS 875 (Part 3):2015: Hosur is not in Annex A -- the nearest listed town
-  (Bengaluru), state the basis. Soil medium (Type II, design engineer's assumption pending the geotechnical report).
+  Amd 2: Hosur is not in Annex E (the corpus answers not tabulated) -- record the zone as the disclosed site proxy of
+  ruling R5 (zone_source 'site_proxy', proxy_town Bangalore (Bengaluru), distance_km 40, basis stated, VERIFY against
+  Fig. 1 at the site); Z from Table 3. Wind per IS 875 (Part 3):2015: Hosur is not in Annex A -- Vb as the ruling R5
+  site proxy of Bengaluru (Vb_source 'site_proxy', distance_km 40, basis stated, VERIFY against Fig. 1). Soil medium (Type II, design engineer's assumption pending the geotechnical report).
 Occupancy: light engineering / fabrication unit (no hazardous process) -> I = 1.0 (IS 1893 Table 8 (iii)).
 Lateral system: transverse -- knee-braced truss portals (the truss pinned on the column cap, a knee brace from each
   column to the bottom chord) as a steel ordinary moment resisting frame (OMRF, IS 800 12.10; IS 1893 Table 9 i)(c),
@@ -39,7 +40,7 @@ Geometry (metres; the engine works in N-mm):
 Loads (RETRIEVE -- do not invent): dead IS 875 (Part 1):2026 (sheeting, purlins, girts, bracing; the trusses and
   columns from the member areas); collateral (lights, cable trays) 0.15 kN/m2 on plan as the named roof dead-load
   component 'collateral' (owner value, the series value); imposed IS 875 (Part 2) Table 2 (ii), sloping roof over 10
-  degrees; wind IS 875 (Part 3):2015 -- Vb of the nearest listed town; terrain category for an industrial estate
+  degrees; wind IS 875 (Part 3):2015 -- Vb of the ruling R5 site proxy above; terrain category for an industrial estate
   (state it); k1, k3, k4 by clause; Ka (7.2.2, Table 4) on the frame tributary; wall Cpe Table 5; pitched-roof Cpe
   Table 6 at the real pitch (interpolated); Cpi per 7.3.2 for the openings. Member wind including roof uplift with
   0.9 DL. Seismic: equivalent static (7.6), seismic weight from the dead and collateral loads (7.3.2: no roof imposed

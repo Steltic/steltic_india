@@ -1,4 +1,4 @@
-"""D01 brief lint (HR-E-23, HR-A-12, L-14, brief defects B1-B24; rulings R2, R5, R6, R7, R10): the 20 India briefs in
+"""D01 brief lint (HR-E-23, HR-A-12, L-14, brief defects B1-B24; rulings R2, R5, R6, R7, R10): the India briefs in
 test_buildings/ cite steel IS 1893 Table 9 rows only, never a 'nearest listed city', state the importance factor (the
 area rule labelled as owner ruling D8), state k4 and the 6.3.4 class inside the cyclone belt, state the stored goods of
 warehouses, k1 for the hospital (Table 1 iv), the one-model / deck-stiffness wording of re-entrant plans, the snow zone
@@ -34,7 +34,7 @@ def _flat(t):
 
 
 def test_all_briefs_found():
-    assert len(BRIEFS) == 20, [p.name for p in BRIEFS]
+    assert len(BRIEFS) == 21, [p.name for p in BRIEFS]          # + IN_Ex21 (2026-10 MSME angle-truss shed)
 
 
 @pytest.mark.parametrize("p", BRIEFS, ids=IDS)

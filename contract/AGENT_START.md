@@ -408,6 +408,24 @@ Before `pipeline.design_and_report`:
     `study_allow_banned_system` = '<why>' (second wave, cost-of-compliance studies only): an ordinary frame in a
     zone where IS 1893 Table 9 Note 1 / IS 800 12.7.1.1 / 12.10.1.1 do not permit it runs past the preflight ban
     (the ERROR becomes a 'STUDY ONLY' warning); the design status keeps the ban, so the run is never COMPLETE.
+* **Angle roof trusses and knee-braced truss portals (2026-10 MSME shed, IN_Ex21, CHANGES_2026-10-msme-shed.md):**
+  - Sections: `custom_sections` type `double_angle` {angle (an IS 808 ISA), gap_mm (the gusset), connected_leg 'D' |
+    'B'} (label `2<ANGLE>`, `sections.double_angle_label`): two angles back to back, the in-plane axis normal to the
+    gusset.
+  - Members: `engine3d.add_truss(tag, n1, n2, sec, group=..., truss=...)` for pin-ended webs and knee braces (kind
+    'truss', axial only); `engine3d.register_truss_member(tag, group=..., truss=...)` for the chord beams. Roles are
+    `truss_<group>` (top_chord, bottom_chord, vertical, diagonal, knee_brace). The roof plane key `purlins_at_nodes`
+    True brings the roof area loads and the roof wind to the top chord as purlin reactions at its panel points.
+  - Knees: the custom_build returns `info['truss_knees']` = [{id, heel_node, knee_node, chord_node, brace_tag, truss,
+    span_mm, trib_mm}]; the knee lines are moment-frame lines; Section 12 (OMF) checks each knee for IS 800 12.10.2.1
+    / 12.10.2.4 on the knee brace's design strength (Steltic design ruling D-T10).
+  - Connections: `truss_connections` = {'<role>:<SECTION>' | '<role>' | 'default': {n_bolts, d_mm, grade, bolt_type
+    ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, gusset_t_mm, gusset_grade, edge, fixity, member_grade},
+    'heel': {n_bolts, d_mm, grade, d0_mm, pitch_mm, end_mm, t_plate_mm, fu_plate_MPa, nn, ns}} (most specific wins):
+    member end bolts (10.2 / 10.3 / 10.4.3), net-section and block-shear inputs (6.3.3 / 6.3.4 / 6.4.1), single-angle
+    end condition (7.5.1.2), double-angle interconnection (7.8), the knee and heel checks.
+  - Take-off: `tonnage_benchmark` = {lo_kg_m2, hi_kg_m2, basis, source} prints a sourced typical range for comparable
+    buildings next to the total (printed only with a source).
     Never set it in a design job.
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels

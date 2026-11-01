@@ -66,4 +66,5 @@ def test_frontend_lists_only_india_briefs():
     for i in range(1, 21):
         m = re.search(r'"in%d": "([^"]+)"' % i, main)
         assert m and (tb / m.group(1)).exists() and m.group(1).startswith("IN_Ex%d_" % i)
-    assert len(list(tb.glob("IN_Ex*_*.txt"))) == 20
+    # IN_Ex21 (2026-10 MSME angle-truss shed) is a brief and a gold, not yet offered in the UI (the lead decides)
+    assert len(list(tb.glob("IN_Ex*_*.txt"))) == 21
