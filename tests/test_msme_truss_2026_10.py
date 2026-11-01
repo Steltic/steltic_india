@@ -402,3 +402,18 @@ def test_activity_appendix_without_a_log_is_plain_text(monkeypatch):
     assert "Appendix C" in h and "No tool-call log was recorded" in h
     assert "activity_log" not in h and "new_activity_log" not in h and "MCP" not in h
     assert not PUB.leaks(PUB.public_html(h))
+
+
+def test_take_off_prints_the_sourced_typical_range():
+    import peb_report as PR
+    import report_public as PUB
+    bm = {"lo_kg_m2": 27.7, "hi_kg_m2": 35.8, "basis": "conventional hot-rolled sheds of 15 m and 20 m span",
+          "source": "Kumar and Grover, IJRASET 2022, Table 4"}
+    cfg = dict(_cfg_conn(), tonnage_benchmark=bm)
+    pkg = {"peb": {"tonnage": {"kg": {"primary": 15000.0}, "kg_per_m2": {"primary": 23.1, "total": 31.0},
+                               "total_kg": 20000.0, "plan_area_m2": 648.0, "basis": "take-off"}},
+           "members": [], "connections": []}
+    html_ = PR.section(cfg, pkg, "/nonexistent")
+    assert "27.7 to 35.8 kg/m2" in html_ and "IJRASET 2022" in html_ and "31.0 kg/m2 (within the range)" in html_
+    assert not PUB.leaks(PUB.public_html(html_))
+    assert "Typical steel" not in PR.section(_cfg_conn(), pkg, "/nonexistent")       # nothing without a source

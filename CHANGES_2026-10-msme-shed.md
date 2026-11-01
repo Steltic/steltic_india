@@ -72,7 +72,14 @@ section, a `truss` element or a declared `cfg['truss_connections']`.
   - Truss connection records.
   - The knee records (`info['truss_knees']`) go to Section 12 with the knee brace's design strength and the
     1.2DL + 0.5LL end reaction.
+  - `section12_cfg(cfg)`: the Section 12 cfg that `design_india` builds, now a function. It carries
+    `cfg['truss_connections']`. In the first IN_Ex21 run every knee was "not evaluated" without it.
+  - `column_line(n1, n2, grid)`: a column's grid line is read from its end on the grid. The upper piece of a gable
+    post runs from an off-grid truss node to the post top. Before, it decoded to a truss-node line (also a moment
+    line), so it was taken as a frame column and made a spurious beam-column joint at the bottom chord.
   - Secondary angle struts pass `angle_connection` / `tension_inputs` / `axial_only` through.
+- **`report.py`:** with no tool-call log, Appendix C now says so in plain words. Before, it printed the developer
+  note naming the missing log file and server call. Every earlier gold has a log, so their reports are unchanged.
 - **`india_is800_s12.py`:** in an OMF the knees of a knee-braced truss portal are the moment joints (12.10.2.1 /
   12.10.2.4). Without joints or knees the joint check is still not evaluated.
 - **`peb_checks.py`:** truss members are primary steel in the take-off.
@@ -100,7 +107,7 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 
 ## Tests
 
-`tests/test_msme_truss_2026_10.py` (24 tests) checks every new path against hand calculations:
+`tests/test_msme_truss_2026_10.py` (27 tests) checks every new path against hand calculations:
 
 - double-angle properties;
 - Table 2 / 10;
@@ -118,4 +125,7 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 - tonnage;
 - STAAD labels;
 - member inputs;
-- the report section with the public-text pass.
+- the report section with the public-text pass;
+- the Section 12 cfg carries the truss connections to the knee checks;
+- a column's line read from its grid end;
+- Appendix C without a log.

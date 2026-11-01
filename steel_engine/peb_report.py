@@ -256,6 +256,16 @@ def _common(cfg, pkg, root, peb, out, truss=False):
         out.append(_tab(["group", "kg", "kg/m2 of plan"], [[k, _f(v, 0), _f(kgm2.get(k), 2)] for k, v in kg.items()]
                         + [["TOTAL", _f(tn.get("total_kg"), 0), _f(kgm2.get("total"), 2)]]))
         out.append("<p>Plan area %s m2. %s</p>" % (_f(tn.get("plan_area_m2"), 0), _e(tn.get("basis"))))
+        # MSME (2026-10): a sourced typical range for comparable buildings (cfg['tonnage_benchmark'] = {lo_kg_m2,
+        # hi_kg_m2, basis, source}), printed next to this building's total
+        bm = cfg.get("tonnage_benchmark") or {}
+        if bm.get("lo_kg_m2") is not None and bm.get("hi_kg_m2") is not None and bm.get("source"):
+            tot = kgm2.get("total")
+            pos = ("" if tot is None else " This building: %s kg/m2 (%s the range)." % (
+                _f(tot, 1), "within" if bm["lo_kg_m2"] <= tot <= bm["hi_kg_m2"] else
+                "below" if tot < bm["lo_kg_m2"] else "above"))
+            out.append("<p>Typical steel for comparable buildings: %s to %s kg/m2 of plan, %s (%s).%s</p>" % (
+                _f(bm["lo_kg_m2"], 1), _f(bm["hi_kg_m2"], 1), _e(bm.get("basis") or ""), _e(bm["source"]), pos))
     # outputs
     po = peb.get("outputs") or {}
     if po:
