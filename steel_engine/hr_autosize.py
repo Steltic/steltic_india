@@ -1697,8 +1697,16 @@ def _bump_base(sp, failing, col=None):
         elif isinstance(emb, dict) and emb.get("capacity_N"):
             pass                                  # an asserted capacity is not the sizer's to raise
     st = sp.get("stiffeners")
-    if isinstance(st, dict) and _dc_of(rows, r"gusset"):
-        st["t_mm"] = _plate_up(float(st.get("t_mm") or 12.0), 1.0001)
+    dc = _dc_of(rows, r"gusset") if isinstance(st, dict) else None
+    if dc:
+        # gusset stresses and the CJP weld-to-plate stress scale with 1 / t (IS 2062 fy falls with t: one more step)
+        t0 = float(st.get("t_mm") or 12.0)
+        st["t_mm"] = _plate_up(max(t0 * dc * 1.05, t0 + 1.0), 1.0)
+        st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
+        if isinstance(st.get("note"), str):
+            st["note"] = re.sub(r"\b(\d+) x [0-9.]+ \(IS 2062 E250, fy [0-9.]+\)",
+                                lambda m_: "%s x %s (IS 2062 E250, fy %s)" % (m_.group(1), _fmt(st["t_mm"]), _fmt(st["fy_MPa"])),
+                                st["note"])
     return sp
 
 
@@ -1772,7 +1780,7 @@ def _group_conn_demand(ev, roles, label):
     return best
 
 
-def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, infeasible=None):
+def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, infeasible=None, cache=None):
     """CONNECTIONS for design x: every kind keyed by the new labels (bases / splices by '<role>:<label>').
     infeasible (a list): gets (group, demand, template) for every beam whose end shear connection cannot be designed
     in its section (no fin plate fits the V + N demand): the driver steps that beam group up."""
@@ -1841,20 +1849,27 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
             if r not in ("lateral_col", "gravity_col"):
                 continue
             key = "%s:%s" % (r, lab)
+            cb = (cache or {}).setdefault("column_base", {}) if cache is not None else {}
+            cs = (cache or {}).setdefault("column_splice", {}) if cache is not None else {}
             tb = CD.spec_for(conn_cfg, "column_base", lab0, r)
             if tb is not None:
-                sp = adapt_base(tb, lab0, lab)
+                # a column label that comes back gets the base designed (and stepped up) for it before
+                sp = copy.deepcopy(cb[key]) if (lab != lab0 and key in cb) else adapt_base(tb, lab0, lab)
                 fb = (bumps.get("column_base") or {}).get(key) or (bumps.get("column_base") or {}).get("%s:%s" % (r, lab0))
                 if fb:
                     sp = bump_base(sp, fb, col=lab)
                 out["column_base"][key] = sp
+                if cache is not None:
+                    cb[key] = copy.deepcopy(sp)
             ts = CD.spec_for(conn_cfg, "column_splice", lab0, r)
             if ts is not None:
-                sp = adapt_splice(ts, lab0, lab)
+                sp = copy.deepcopy(cs[key]) if (lab != lab0 and key in cs) else adapt_splice(ts, lab0, lab)
                 fs = (bumps.get("column_splice") or {}).get(key) or (bumps.get("column_splice") or {}).get("%s:%s" % (r, lab0))
                 if fs:
                     sp = bump_splice(sp, fs)
                 out["column_splice"][key] = sp
+                if cache is not None:
+                    cs[key] = copy.deepcopy(sp)
     return out
 
 
@@ -2146,8 +2161,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         for g_, b_ in bumps["beam_column"].items():
             log_fn("    joint step-up %s: %s" % (g_, b_))
         infeas = []
-        conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps, infeasible=infeas) \
-            if st["conns"] is not None else None
+        conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps, infeasible=infeas,
+                                    cache=st.setdefault("conn_cache", {})) if st["conns"] is not None else None
         if infeas:
             # a beam whose end shear connection (V + N) does not fit its section: the next section up in the group's
             # order that passes the frozen member checks and takes a fin plate for that demand
@@ -2166,7 +2181,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                     cur = nu
             gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
                                                                            if ":" not in k and k not in _labels_in_use(x)})
-            conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps)
+            conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps,
+                                        cache=st.setdefault("conn_cache", {}))
         rec["proposal"] = {g: list(v) for g, v in x1.items()}
         rec["notes"] = notes
         rec["stiffness"] = info
