@@ -1423,9 +1423,20 @@ def design_brace_end(lm, g, sec, grade, template=None, margin=0.95):
                 rows = S12.brace_connection_checks(system, m, conn, md, sc)
                 rows += [r for r in S12.brace_member_checks(system, m, md, sc) if r.get("id") == "brace_gross_yield_governs"] \
                     if S12.normalize_system(system) in ("OCBF", "SCBF") else []
+                # EBF: the connection force follows the link overstrength of the run, which moves with the link
+                # sections; the brace's own expected strength 1.1 Ry fy Ag (IS 18168 10.4.1a, the cap) is designed for
+                cap_ = None
+                if S12.normalize_system(system) == "EBF":
+                    dem_ = S12.brace_connection_force(system, m, md, conn=conn, cfg=sc)
+                    cap_ = next((v for k, v in (dem_.get("candidates") or {}).items() if "cap" in k), None)
                 for r in rows:
                     if r.get("ok") is False or (isinstance(r.get("dc"), (int, float)) and r["dc"] > margin and
                                                 r.get("id") != "brace_gross_yield_governs"):
+                        ok = False
+                        break
+                    if cap_ and r.get("id") in ("brace_conn_welds", "brace_conn_block_shear", "gusset_whitmore_yield",
+                                                "brace_conn_bolts", "brace_conn_net_rupture") and \
+                            isinstance(r.get("limit"), (int, float)) and float(r["limit"]) * margin < float(cap_):
                         ok = False
                         break
                 if not ok:
