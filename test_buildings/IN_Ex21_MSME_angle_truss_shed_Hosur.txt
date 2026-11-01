@@ -22,9 +22,11 @@ Geometry (metres; the engine works in N-mm):
   6.5 m; roof slope 1 in 4 (14.0 deg; rise 2.25 m, apex 8.75 m)
 - roof trusses: Pratt (N-type) angle trusses, 12 panels of 1.5 m on plan, purlins at every top-chord panel point;
   chords double angles back to back on 8 mm gussets (IS 800 7.5.2 / 7.5.3 / 7.8), webs single angles bolted through
-  one leg (IS 800 7.5.1.2), bolted site joints (property class 4.6 bolts, IS 800 10.3); the heel is a pinned seat on
-  the column cap
-- columns: ISMB (IS 808), strong axis across the span, pinned or fixed bases as the design needs (H/240 governs);
+  one leg (IS 800 7.5.1.2), bolted site joints with fully tensioned HSFG property class 8.8 bolts (the truss is part
+  of the knee-braced portal that resists the earthquake: IS 800 12.4.1, Steltic design ruling D-T10; bearing at
+  ultimate 10.3, slip at service 10.4.3); welds to the column complete-penetration (12.4.2); the heel is a pinned seat
+  on the column cap
+- columns: ISMB (IS 808:2021 MB), strong axis across the span, pinned or fixed bases as the design needs (H/240 governs);
   knee braces (angles) from each column 1.5 m below the eave to the first bottom-chord panel point
 - gables: the end trusses as the main trusses, gable posts (ISMB, strong axis along the building) at 6 m (y = 6 and
   12 m) from a pinned base to the top chord, carrying the gable wind to the roof bracing
@@ -50,10 +52,12 @@ Design: IS 800:2007 LSD.
   continuous chord, 9.3), webs and knee braces as pin-ended members (axial only): 7.1.2 with 7.2.4 / 7.5.1.2 /
   7.5.2.1 effective lengths, 6.2 / 6.3.3 / 6.3.4 / 6.4.1 with the declared bolted end connections, Table 3
   slenderness, 7.8 back-to-back interconnection.
-- Connections: bolts in shear and bearing (10.3), spacing and edge distances (10.2), the gusset yield on the Whitmore
-  width (engineering practice, stated); Section 12.10 at the knees: the truss delivers moment to the column only
-  through the knee-brace / heel couple -- design the knee connections for 1.2 times the moment that couple can
-  deliver (12.10.2.1) with the 12.10.2.4 shear.
+- Connections: bolts in shear and bearing (10.3), spacing and edge distances (10.2; state the cut of the angle ends),
+  the gussets (Whitmore yield, block shear, buckling: engineering practice, stated); Section 12.10 at the knees: the
+  truss delivers moment to the column only through the knee-brace / heel couple -- design the knee connections for 1.2
+  times the moment the knee brace can deliver in either direction (the larger of its compression strength and its
+  gross-section yield; Steltic design ruling D-T10, 12.10.2.1) with the 12.10.2.4 shear, so that the brace yields
+  before the knee and heel connections fail.
 - Serviceability: IS 800 Table 6 industrial building -- truss (rafter) supporting profiled metal sheeting, span/180;
   column lateral with masonry / brittle cladding (the brick dado), H/240. RETRIEVE both.
 - Bases: anchor bolts for uplift and the frame thrust; 12.12.2 base shear; foundations delegated with the interface

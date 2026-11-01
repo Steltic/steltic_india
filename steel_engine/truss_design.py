@@ -71,9 +71,23 @@ def _fy_fu(grade, t_mm):
     return m.get("fy_MPa"), m.get("fu_MPa")
 
 
+def is_angle_section(sec):
+    """True for a single IS 808 angle or a double angle (the sections the truss end-connection model covers)."""
+    try:
+        return S.props(sec).get("section_type") in ("angle", "double_angle")
+    except Exception:
+        return False
+
+
 def member_inputs(cfg, role, sec, L_mm=None):
     """(angle_connection, tension_inputs, record) for the IS 800 check of a truss member of `sec` with the declared end
-    connection; (None, None, {'error': ...}) when the spec is missing or incomplete."""
+    connection; (None, None, {'error': ...}) when the spec is missing or incomplete.  A section other than an angle or
+    a double angle (a CHS web or knee brace, review 2026-11) gets (None, None, {'general_member_check': True, ...}):
+    its member is checked by the general member check and its end connection is not covered here."""
+    if not is_angle_section(sec):
+        return None, None, {"general_member_check": True,
+                            "note": "%s is not an angle: general IS 800 member check; the truss end-connection model "
+                                    "covers angles only" % sec}
     sp = spec_for(cfg, role, sec)
     if not sp:
         return None, None, {"error": "cfg['truss_connections'] has no spec for %s (%s)" % (role, sec)}
@@ -84,11 +98,10 @@ def member_inputs(cfg, role, sec, L_mm=None):
     p = S.props(sec)
     ti, rec = I8.angle_end_connection_inputs(p, n_bolts=sp["n_bolts"], d0_mm=sp["d0_mm"], pitch_mm=sp["pitch_mm"],
                                              end_mm=sp["end_mm"], gauge_mm=sp["gauge_mm"])
-    ac = None
-    if p.get("section_type") == "angle":
-        ac = {"n_bolts": int(sp["n_bolts"]), "fixity": sp.get("fixity", "hinged")}
-        if L_mm:
-            ac["l_mm"] = float(L_mm)
+    # the bolts at each end: 7.5.1.2 (Table 12) for a single angle, the 7.5.2.1 / 7.5.2.2 condition for a double angle
+    ac = {"n_bolts": int(sp["n_bolts"]), "fixity": sp.get("fixity", "hinged")}
+    if L_mm:
+        ac["l_mm"] = float(L_mm)
     rec["spec_keys"] = sp.get("_keys")
     return ac, ti, rec
 
@@ -127,27 +140,45 @@ def bolt_group(sp, sec):
             "fy_gusset_MPa": fy_g, "t_angle_mm": t, "t_gusset_mm": tg}
 
 
+# 10.2.4.2: 1.7 d0 for sheared or hand-flame cut edges, 1.5 d0 for rolled, machine-flame cut, sawn and planed edges
+_CUT_15 = ("rolled", "machine", "sawn", "planed")
+
+
+def _k_edge(kind):
+    return 1.5 if str(kind or "").lower().startswith(_CUT_15) else 1.7
+
+
 def detailing_rows(sp, sec, *, compression, L_mm=None):
     """Bolt spacing / end / edge distances (10.2.2, 10.2.3.2, 10.2.4.2) and the >= 2 bolts of a double angle strut
-    (7.5.2.1) as check rows (value, limit, dc, ok)."""
+    (7.5.2.1) as check rows (value, limit, dc, ok).  Review 2026-11: the end distance uses the cut of the angle END
+    (spec 'end_cut': 'sheared' (default, 1.7 d0) | 'sawn' | 'machine_flame_cut' | 'planed' (1.5 d0)); the toe edge
+    is rolled (spec 'edge', default 'rolled', 1.5 d0); the 10.2.3.2 pitch limit uses the thinner of the angle and the
+    gusset."""
     p = S.props(sec)
     d, d0 = float(sp["d_mm"]), float(sp["d0_mm"])
     t = float(p.get("t_mm") or p.get("tw"))
+    tg = float(sp.get("gusset_t_mm") or 0.0)
+    t_thin = min(t, tg) if tg else t
     leg = float(p.get("leg_connected_mm") or p.get("d"))
-    k_edge = 1.7 if str(sp.get("edge") or "rolled").lower().startswith("shear") else 1.5
+    k_edge = _k_edge(sp.get("edge") or "rolled")
+    end_cut = sp.get("end_cut") or "sheared"
+    k_end = _k_edge(end_cut)
     rows = []
     n = int(sp["n_bolts"])
     if n >= 2:
         rows.append(("bolt pitch >= 2.5 d (10.2.2)", C._check(2.5 * d, float(sp["pitch_mm"]),
                      clause="IS 800:2007 10.2.2", cite="minimum spacing 2.5 d = %.0f mm, pitch %.0f mm"
                      % (2.5 * d, float(sp["pitch_mm"])))))
-        pmax = min((12.0 if compression else 16.0) * t, 200.0)
+        pmax = min((12.0 if compression else 16.0) * t_thin, 200.0)
         rows.append(("bolt pitch <= %s (10.2.3.2)" % ("12t / 200" if compression else "16t / 200"),
                      C._check(float(sp["pitch_mm"]), pmax, clause="IS 800:2007 10.2.3.2",
-                              cite="pitch %.0f <= %.0f mm in a %s member" % (float(sp["pitch_mm"]), pmax,
-                                                                             "compression" if compression else "tension"))))
-    rows.append(("end distance >= %.1f d0 (10.2.4.2)" % k_edge, C._check(k_edge * d0, float(sp["end_mm"]),
-                 clause="IS 800:2007 10.2.4.2", cite="end distance %.0f mm >= %.1f x %.0f" % (float(sp["end_mm"]), k_edge, d0))))
+                              cite="pitch %.0f <= %.0f mm in a %s member (t = %.0f mm, the thinner of the angle and "
+                                   "the gusset)" % (float(sp["pitch_mm"]), pmax,
+                                                    "compression" if compression else "tension", t_thin))))
+    rows.append(("end distance >= %.1f d0 (10.2.4.2, %s end)" % (k_end, str(end_cut).replace("_", " ")),
+                 C._check(k_end * d0, float(sp["end_mm"]), clause="IS 800:2007 10.2.4.2",
+                          cite="end distance %.0f mm >= %.1f x %.0f (%s angle end)"
+                               % (float(sp["end_mm"]), k_end, d0, str(end_cut).replace("_", " ")))))
     edge = leg - float(sp["gauge_mm"])
     rows.append(("edge distance (bolt line to the toe) >= %.1f d0 (10.2.4.2)" % k_edge,
                  C._check(k_edge * d0, edge, clause="IS 800:2007 10.2.4.2",
@@ -172,12 +203,14 @@ def stitch_record(sec, *, L_mm, KL_over_r_member=None, compression=True):
     L = float(L_mm)
     if compression:
         lim = min(40.0, 0.6 * float(KL_over_r_member)) if KL_over_r_member else 40.0
-        s_max = lim * r1
+        # review 2026-11: 10.2.5.5 -- tacking fasteners of a compression member in a line at <= 600 mm
+        s_max = min(lim * r1, 600.0)
         n_int = max(2, int(math.ceil(L / s_max)) - 1)
         s = L / (n_int + 1)
-        chk = C._check(s / r1, lim, clause="IS 800:2007 7.8.1 / 7.8.2",
-                       cite="component slenderness between connections s / r_min = %.0f / %.1f <= min(40, 0.6 x %.0f)"
-                            % (s, r1, KL_over_r_member or 0.0))
+        chk = C._check(s, s_max, clause="IS 800:2007 7.8.1 / 7.8.2 / 10.2.5.5",
+                       cite="interconnections at %.0f mm <= min(min(40, 0.6 x %.0f) x r_min %.1f = %.0f, 600) mm "
+                            "(component slenderness s / r_min = %.0f)"
+                            % (s, KL_over_r_member or 0.0, r1, lim * r1, s / r1))
     else:
         s_max = 1000.0
         n_int = max(0, int(math.ceil(L / s_max)) - 1)
@@ -185,6 +218,68 @@ def stitch_record(sec, *, L_mm, KL_over_r_member=None, compression=True):
         chk = C._check(s, s_max, clause="IS 800:2007 10.2.5.4",
                        cite="tension member: interconnections at %.0f mm <= 1000 mm" % s)
     return {"n_intermediate": n_int, "spacing_mm": round(s, 0), "r1_min_mm": r1, "check": chk}
+
+
+def stitch_bolt_check(sec, d_mm):
+    """IS 800 7.8.4: the bolts of the back-to-back connections not less than 16 mm diameter for members up to and
+    including 10 mm thick, 20 mm up to 16 mm, 22 mm over 16 mm."""
+    p = S.props(sec)
+    t = float(p.get("t_mm") or p.get("tw"))
+    dmin = 16.0 if t <= 10.0 else (20.0 if t <= 16.0 else 22.0)
+    return C._check(dmin, float(d_mm), clause="IS 800:2007 7.8.4",
+                    cite="interconnection bolts M%d >= %.0f mm for %.0f mm thick angles" % (int(d_mm), dmin, t))
+
+
+def gusset_rows(sp, N_N, N_comp_N=0.0, *, label="gusset"):
+    """Gusset checks at one member end for the force N_N (both directions) and, when the member can be in compression,
+    N_comp_N: [(name, check)].  Whitmore yield (bw = 2 L tan30 from a single bolt line, yield on bw t_g, engineering
+    practice); block shear of the gusset (IS 800 6.4.1, one bolt line: shear along the line over gusset_end_mm +
+    (n - 1) p, tension to the gusset edge gusset_edge_mm); gusset buckling on the Whitmore width (7.1.2 class c,
+    K gusset_K over gusset_free_mm -- the free length to the nearest supported edge; engineering practice, as for brace
+    gussets 12.7.3.4).  Missing declared inputs leave a row not evaluated."""
+    rows = []
+    tg = float(sp.get("gusset_t_mm") or 0.0)
+    if not tg:
+        return rows
+    n = int(sp["n_bolts"])
+    fy_g, fu_g = _fy_fu(sp.get("gusset_grade") or "E250", tg)
+    Lc = (n - 1) * float(sp["pitch_mm"])
+    wm = C.whitmore_section(t_gusset_mm=tg, fy_MPa=fy_g, w_start_mm=0.0, L_conn_mm=Lc, demand_N=N_N)
+    if wm.get("found"):
+        rows.append(("%s yield on the Whitmore width %.0f mm (engineering practice)" % (label, wm["whitmore_width_mm"]),
+                     dict(wm["check"])))
+    e_g, edge_g = sp.get("gusset_end_mm") or sp.get("end_mm"), sp.get("gusset_edge_mm")
+    if edge_g is None:
+        rows.append(("%s block shear (6.4.1)" % label, {"ok": None, "clause": "IS 800:2007 6.4.1",
+                                                         "reason": "gusset_edge_mm (bolt line to the gusset edge) not "
+                                                                   "declared"}))
+    else:
+        ar = C.block_shear_bolted_areas(t_mm=tg, n_rows=n, pitch_mm=float(sp["pitch_mm"]), end_mm=float(e_g),
+                                        d0_mm=float(sp["d0_mm"]), edge_mm=float(edge_g), n_lines=1, pattern="L")
+        bs = C.block_shear(Avg_mm2=ar["Avg_mm2"], Avn_mm2=ar["Avn_mm2"], Atg_mm2=ar["Atg_mm2"], Atn_mm2=ar["Atn_mm2"],
+                           fy_MPa=fy_g, fu_MPa=fu_g, demand_N=N_N)
+        if bs.get("found"):
+            c = dict(bs["check"])
+            c["cite"] = ("gusset %.0f mm: one bolt line, shear over %.0f + %.0f mm, tension to the edge %.0f mm: "
+                         "Tdb = %.1f kN" % (tg, float(e_g), Lc, float(edge_g), bs["Tdb_N"] / 1e3))
+            rows.append(("%s block shear (6.4.1)" % label, c))
+    if N_comp_N and N_comp_N > 0 and wm.get("found"):
+        K, Lf = sp.get("gusset_K"), sp.get("gusset_free_mm")
+        if K is None or Lf is None:
+            rows.append(("%s buckling on the Whitmore width" % label,
+                         {"ok": None, "clause": "IS 800:2007 7.1.2",
+                          "reason": "gusset_K and gusset_free_mm (free length to the nearest supported edge) not "
+                                    "declared"}))
+        else:
+            gb = C.whitmore_buckling(whitmore_width_mm=wm["whitmore_width_mm"], t_gusset_mm=tg, fy_MPa=fy_g,
+                                     L_unbraced_mm=float(Lf), K=float(K), demand_N=N_comp_N)
+            if gb.get("found") and gb.get("check"):
+                c = dict(gb["check"])
+                c["cite"] = ("gusset %.0f mm on the Whitmore width %.0f mm, K %.2f over %.0f mm, 7.1.2 class c "
+                             "(engineering practice): Pd = %.1f kN" % (tg, wm["whitmore_width_mm"], float(K), float(Lf),
+                                                                       gb["Pd_N"] / 1e3))
+                rows.append(("%s buckling on the Whitmore width (compression)" % label, c))
+    return rows
 
 
 def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, sls_force_N=None, sfrs=False):
@@ -210,6 +305,14 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
                               "ok": None, "found": False, "clause": "IS 800:2007 10.3",
                               "reason": "cfg['truss_connections'] not declared for %s (%s)" % (role, sec),
                               "source": SRC})
+        rec["DC"] = None
+        return rec
+    if not is_angle_section(sec):
+        # review 2026-11: the truss end-connection model covers angles; a CHS / plate-ended web is not checked here
+        rec["checks"].append({"name": "truss member end connection", "value": None, "limit": None, "dc": None,
+                              "ok": None, "found": False, "clause": "IS 800:2007 10.3",
+                              "reason": "%s is not an angle: the angle-truss connection model does not cover it (check "
+                                        "it as a brace end connection)" % sec, "source": SRC})
         rec["DC"] = None
         return rec
     chord = is_chord_role(role)
@@ -259,16 +362,13 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
         rec["checks"].append(_row("12.4.1 bolt type (truss of the knee-braced portal)", g_, gate=True))
     for nm, c in detailing_rows(sp, sec, compression=N_c > 0, L_mm=None):
         rec["checks"].append(_row(nm, c, gate=False))
-    if not chord and sp.get("gusset_t_mm"):
-        n = int(sp["n_bolts"])
-        p = S.props(sec)
-        fy_g = bg.get("fy_gusset_MPa") or _fy_fu(sp.get("gusset_grade") or "E250", sp["gusset_t_mm"])[0]
-        wm = C.whitmore_section(t_gusset_mm=float(sp["gusset_t_mm"]), fy_MPa=fy_g,
-                                w_start_mm=0.0, L_conn_mm=(n - 1) * float(sp["pitch_mm"]), demand_N=N)
-        if wm.get("found"):
-            wch = dict(wm["check"])
-            rec["checks"].append(_row("gusset yield on the Whitmore width %.0f mm (engineering practice)"
-                                      % wm["whitmore_width_mm"], wch))
+    if sp.get("gusset_t_mm"):
+        # review 2026-11: the gusset for the member force -- for a chord the FULL chord force (the heel and apex
+        # gussets, where the chord ends; conservative at the panel points it passes through): Whitmore yield, block
+        # shear of the gusset (one bolt line, 6.4.1) and, in compression, gusset buckling on the Whitmore width
+        tag_ = " (full chord force: heel / apex gusset)" if chord else ""
+        for nm_, c_ in gusset_rows(sp, N, N_c):
+            rec["checks"].append(_row(nm_ + tag_, c_))
     if S.props(sec).get("section_type") == "double_angle":
         t0 = tags[0]
         res = elem_results.get(t0) or {}
@@ -280,6 +380,9 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
                                       % (st["n_intermediate"], st["spacing_mm"]), st["check"]))
             rec["notes"].append("double angle interconnected by %d packed bolted connections at %.0f mm (7.8 / 10.2.5)"
                                 % (st["n_intermediate"], st["spacing_mm"]))
+            d_st = float(sp.get("stitch_bolt_d_mm") or sp["d_mm"])
+            rec["checks"].append(_row("back-to-back interconnection bolts M%d (7.8.4)" % int(d_st),
+                                      stitch_bolt_check(sec, d_st)))
     rec["bolt_group"] = bg
     strength = [c for c in rec["checks"] if isinstance(c.get("dc"), (int, float))]
     gov = max(strength, key=lambda c: c["dc"]) if strength else None
@@ -311,44 +414,79 @@ def knee_geometry(nodes, knee):
 
 
 def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
-    """IS 800 12.10.2.1 / 12.10.2.4 at a knee-braced truss portal (OMF).  The truss is pinned on the column cap and
-    delivers moment to the column only through the couple of the knee brace and the heel seat, so the 'maximum moment
-    that can be delivered by the beam to the joint' (12.10.2.1) is the design strength of the knee brace member,
-    N_d = min(Pd, Td), times its lever arm e about the heel: M_del = N_d e.  The joint's connections are checked for
-    1.2 M_del (each knee-brace end connection for 1.2 N_d, the force of that couple) and the heel seat for the
-    horizontal couple force 1.2 N_d cos(theta) with the 12.10.2.4 shear: the 1.2DL + 0.5LL end reaction plus the
-    shear of the design moment, 2 (1.2 M_del) / span.  The Mp alternative of 12.10.2.1 (the smaller governs) is not
-    used: a triangular truss has no plastic moment at the column face (zero depth at the heel) -- the knee-brace route
-    is the one that can be evaluated (stated in the record)."""
+    """IS 800 12.10.2.1 / 12.10.2.4 at a knee-braced truss portal (OMF), Steltic design ruling D-T10.  The truss is
+    pinned on the column cap and delivers moment to the column only through the couple of the knee brace and the heel
+    seat, so the 'maximum moment that can be delivered by the beam to the joint' (12.10.2.1) is the largest force the
+    knee brace can deliver, in either direction, times its lever arm e about the heel: N_del = max(Pd, Tdg) -- the
+    compression design strength (7.1.2 / 7.5) or the tension strength on gross-section yield Ag fy / gamma_m0 (6.2),
+    whichever is larger (review 2026-11: the knee brace works both ways under reversing wind; rupture and block shear
+    of the brace end are connection limit states and do not cap the demand) -- and M_del = N_del e.  The joint is
+    designed for 1.2 M_del:
+      * each knee-brace end connection for 1.2 N_del: the bolt group, and the gusset (Whitmore yield, block shear;
+        gusset buckling for 1.2 Pd, the compression the brace can deliver);
+      * the brace yields first: its bolted end (6.3.3 rupture, 6.4.1 block shear) is not weaker than its gross-section
+        yield Tdg;
+      * the heel seat for the horizontal couple force 1.2 N_del cos(theta) with the 12.10.2.4 shear, the 1.2DL + 0.5LL
+        end reaction plus 2 (1.2 M_del) / span.
+    So the knee and heel connections are designed so that the brace yields (gross section) before they fail.  The Mp
+    alternative of 12.10.2.1 (the smaller governs) is not used: a triangular truss has no plastic moment at the column
+    face.  member_capacity = N_del (knee['Pd_N'] / knee['Tdg_N'] give its parts)."""
     out = []
     kid = knee.get("id")
-    sp_kb = spec_for(cfg, knee.get("brace_role") or "truss_knee_brace", knee.get("brace_section"))
+    sec = knee.get("brace_section")
+    sp_kb = spec_for(cfg, knee.get("brace_role") or "truss_knee_brace", sec)
     sp_heel = ((cfg or {}).get("truss_connections") or {}).get("heel")
     geo = knee_geometry(nodes, knee)
     Nd = member_capacity
+    base = {"clause": "IS 800:2007 12.10.2.1", "source": SRC, "member": kid}
     if not Nd:
-        out.append({"id": "12.10.2.1_knee_connection", "member": kid, "value": None, "limit": None, "dc": None,
-                    "ok": None, "clause": "IS 800:2007 12.10.2.1", "source": SRC,
-                    "cite": "knee brace design strength not available", "reason": "no member capacity"})
+        out.append(dict(base, id="12.10.2.1_knee_connection", value=None, limit=None, dc=None, ok=None,
+                        cite="knee brace design strength not available", reason="no member capacity"))
         return out
+    Pd, Tdg = knee.get("Pd_N"), knee.get("Tdg_N")
     M_del = Nd * geo["lever_arm_mm"]
     F = 1.2 * Nd
-    base = {"clause": "IS 800:2007 12.10.2.1", "source": SRC, "member": kid}
-    note = ("knee-braced truss portal: moment reaches the column through the knee-brace / heel couple; M_del = N_d e = "
-            "%.1f kN x %.0f mm = %.1f kN-m (N_d = min(Pd, Td) of the knee brace %s); 1.2 M_del -> 1.2 N_d = %.1f kN "
-            "in each knee-brace connection" % (Nd / 1e3, geo["lever_arm_mm"], M_del / 1e6, knee.get("brace_section"),
-                                               F / 1e3))
-    if sp_kb:
-        bg = bolt_group(sp_kb, knee["brace_section"])
+    note = ("Steltic design ruling D-T10: the knee reaches the column through the knee-brace / heel couple; N_del = "
+            "max(Pd %s, Tdg %s) = %.1f kN (the larger force the knee brace %s can deliver, compression or gross-section "
+            "yield); M_del = N_del e = %.1f kN x %.0f mm = %.1f kN-m; each knee-brace connection for 1.2 N_del = %.1f kN; "
+            "the knee and heel connections are designed so that the brace yields (gross section) before they fail"
+            % ("-" if Pd is None else "%.1f" % (Pd / 1e3), "-" if Tdg is None else "%.1f" % (Tdg / 1e3), Nd / 1e3, sec,
+               Nd / 1e3, geo["lever_arm_mm"], M_del / 1e6, F / 1e3))
+    if not is_angle_section(sec):
+        out.append(dict(base, id="12.10.2.1_knee_brace_connection", value=F, limit=None, dc=None, ok=None,
+                        cite="knee brace %s is not an angle: its end connection is not covered by the angle-truss "
+                             "model" % sec, reason="non-angle knee brace", note=note))
+    elif sp_kb:
+        bg = bolt_group(sp_kb, sec)
         if bg.get("found"):
             c = C._check(F, bg["capacity_N"], clause="IS 800:2007 12.10.2.1 + 10.3.2",
-                         cite="knee-brace end bolts %d M%d %s: %.1f kN >= 1.2 N_d = %.1f kN"
+                         cite="knee-brace end bolts %d M%d %s: %.1f kN >= 1.2 N_del = %.1f kN"
                               % (int(sp_kb["n_bolts"]), int(sp_kb["d_mm"]), sp_kb.get("grade", "4.6"),
                                  bg["capacity_N"] / 1e3, F / 1e3))
             out.append(dict(c, id="12.10.2.1_knee_brace_connection", member=kid, note=note, source=SRC))
         else:
             out.append(dict(base, id="12.10.2.1_knee_brace_connection", value=None, limit=None, dc=None, ok=None,
                             cite="knee brace bolt group not evaluated", reason=bg.get("reason")))
+        # the gussets at both knee-brace ends (column side and bottom-chord side, the same declared detail)
+        for nm_, c_ in gusset_rows(sp_kb, F, 1.2 * Pd if Pd else 0.0, label="knee gusset"):
+            rid = "12.10.2.1_knee_gusset_" + ("whitmore_yield" if "yield" in nm_ else
+                                               "block_shear" if "block shear" in nm_ else "buckling")
+            out.append(dict(base, id=rid, value=c_.get("value"), limit=c_.get("limit"), dc=c_.get("dc"),
+                            ok=c_.get("ok"), cite=c_.get("cite") or c_.get("reason"),
+                            **({"reason": c_.get("reason")} if c_.get("ok") is None else {})))
+        # the brace yields before its own bolted end fails (6.3.3 / 6.4.1 >= 6.2)
+        Tend = [v for v in (knee.get("Tdn_N"), knee.get("Tdb_N")) if v]
+        if Tdg and Tend:
+            c = C._check(Tdg, min(Tend), clause="IS 800:2007 12.10.2.1 (D-T10) + 6.2 / 6.3.3 / 6.4.1",
+                         cite="knee brace %s: gross-section yield Tdg = %.1f kN <= its bolted end, min(rupture %s, "
+                              "block shear %s) = %.1f kN -- the brace yields first"
+                              % (sec, Tdg / 1e3, "-" if not knee.get("Tdn_N") else "%.1f" % (knee["Tdn_N"] / 1e3),
+                                 "-" if not knee.get("Tdb_N") else "%.1f" % (knee["Tdb_N"] / 1e3), min(Tend) / 1e3))
+            out.append(dict(c, id="12.10.2.1_knee_brace_yields_first", member=kid, source=SRC))
+        else:
+            out.append(dict(base, id="12.10.2.1_knee_brace_yields_first", value=Tdg, limit=None, dc=None, ok=None,
+                            cite="brace end rupture / block shear of the knee brace not available",
+                            reason="tension limit states missing"))
     else:
         out.append(dict(base, id="12.10.2.1_knee_brace_connection", value=None, limit=None, dc=None, ok=None,
                         cite="cfg['truss_connections'] knee-brace spec missing", reason="not declared"))
@@ -365,7 +503,7 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
         R = math.hypot(H, V_g + V_M)
         if hb.get("found"):
             c = C._check(R, hb["capacity_N"], clause="IS 800:2007 12.10.2.1 / 12.10.2.4 + 10.3.2",
-                         cite="heel seat bolts %d M%d %s: resultant of H = 1.2 N_d cos(theta) = %.1f kN and V = "
+                         cite="heel seat bolts %d M%d %s: resultant of H = 1.2 N_del cos(theta) = %.1f kN and V = "
                               "1.2DL + 0.5LL %.1f kN + 2 x 1.2 M_del / span %.1f kN -> %.1f kN <= %.1f kN"
                               % (int(sp_heel["n_bolts"]), int(sp_heel["d_mm"]), sp_heel.get("grade", "4.6"), H / 1e3,
                                  V_g / 1e3, V_M / 1e3, R / 1e3, hb["capacity_N"] / 1e3))
@@ -380,5 +518,7 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
                         reason="not declared"))
     for c in out:
         c.setdefault("knee", {"lever_arm_mm": round(geo["lever_arm_mm"], 1), "angle_deg": round(geo["angle_deg"], 1),
-                              "N_d_N": round(Nd, 1), "M_del_Nmm": round(M_del, 0)})
+                              "N_d_N": round(Nd, 1), "N_del_N": round(Nd, 1),
+                              "Pd_N": None if Pd is None else round(Pd, 1), "Tdg_N": None if Tdg is None else round(Tdg, 1),
+                              "M_del_Nmm": round(M_del, 0)})
     return out

@@ -456,13 +456,26 @@ def register_double_angle(name, angle, gap_mm, *, connected_leg="D", source=None
               "component": normalize_label(angle), "gap_mm": g, "connected_leg": leg, "leg_connected_mm": Dc,
               "leg_outstanding_mm": Bo, "t_mm": t, "A1_mm2": A1, "c_back_mm": c_back,
               "r1_min_mm": float(p1.get("r_min") or p1.get("rv")), "rv1_mm": float(p1.get("rv") or p1["r_min"])}
-    CUSTOM[normalize_label(name)] = props_
+    key = normalize_label(name)
+    old = CUSTOM.get(key)
+    if old and old.get("section_type") == "double_angle" and (old.get("component"), old.get("gap_mm"),
+                                                             old.get("connected_leg")) != (props_["component"], g, leg):
+        # review 2026-11: two pairs under one name (e.g. the same angle on different gussets) must not overwrite
+        raise ValueError("double angle %r is already registered as %s on a %g mm gusset (leg %s); use "
+                         "double_angle_label(angle, gap_mm) for distinct names"
+                         % (name, old.get("component"), old.get("gap_mm"), old.get("connected_leg")))
+    CUSTOM[key] = props_
     return props_
 
 
 def double_angle_label(angle, gap_mm=None):
-    """'2' + the IS 808 angle label (the gap is part of the registered spec, not the label): 2ISA65X65X6."""
-    return "2" + normalize_label(angle)
+    """'2' + the IS 808 angle label, with the gusset gap when given: 2ISA65X65X6-G8 (two ISA65X65X6 on an 8 mm gusset).
+    Review 2026-11: the gap is part of the label, so two pairs of the same angle on different gussets get different
+    names; without gap_mm the old form 2ISA65X65X6."""
+    lab = "2" + normalize_label(angle)
+    if gap_mm is None:
+        return lab
+    return "%s-G%g" % (lab, float(gap_mm))
 
 
 def register_custom_sections(cfg):

@@ -410,7 +410,7 @@ Before `pipeline.design_and_report`:
     (the ERROR becomes a 'STUDY ONLY' warning); the design status keeps the ban, so the run is never COMPLETE.
 * **Angle roof trusses and knee-braced truss portals (2026-10 MSME shed, IN_Ex21, CHANGES_2026-10-msme-shed.md):**
   - Sections: `custom_sections` type `double_angle` {angle (an IS 808 ISA), gap_mm (the gusset), connected_leg 'D' |
-    'B'} (label `2<ANGLE>`, `sections.double_angle_label`): two angles back to back, the in-plane axis normal to the
+    'B'} (label `2<ANGLE>-G<gap>`, `sections.double_angle_label(angle, gap_mm)`): two angles back to back, the in-plane axis normal to the
     gusset.
   - Members: `engine3d.add_truss(tag, n1, n2, sec, group=..., truss=...)` for pin-ended webs and knee braces (kind
     'truss', axial only); `engine3d.register_truss_member(tag, group=..., truss=...)` for the chord beams. Roles are
@@ -418,14 +418,22 @@ Before `pipeline.design_and_report`:
     True brings the roof area loads and the roof wind to the top chord as purlin reactions at its panel points.
   - Knees: the custom_build returns `info['truss_knees']` = [{id, heel_node, knee_node, chord_node, brace_tag, truss,
     span_mm, trib_mm}]; the knee lines are moment-frame lines; Section 12 (OMF) checks each knee for IS 800 12.10.2.1
-    / 12.10.2.4 on the knee brace's design strength (Steltic design ruling D-T10, owner 2026-11-01: the knee designed
-    for 1.2 times the moment the knee brace can deliver, with HSFG 8.8 bolts and complete-penetration welds at the
-    column; see docs/PEB_LIMITATIONS.md).
+    / 12.10.2.4 (Steltic design ruling D-T10, owner 2026-11-01: the knee designed for 1.2 times the moment the knee
+    brace can deliver in either direction, N_del = max(Pd, Ag fy / gamma_m0), the brace's bolted end not weaker than
+    its gross-section yield, so the brace yields before the knee and heel connections fail; HSFG 8.8 bolts and
+    complete-penetration welds at the column; see docs/PEB_LIMITATIONS.md).
   - Connections: `truss_connections` = {'<role>:<SECTION>' | '<role>' | 'default': {n_bolts, d_mm, grade, bolt_type
-    ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, gusset_t_mm, gusset_grade, edge, fixity, member_grade},
+    ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, end_cut ('sheared' default, 1.7 d0 | 'sawn' |
+    'machine_flame_cut' | 'planed', 1.5 d0; 10.2.4.2), edge (the toe, 'rolled'), gusset_t_mm, gusset_grade,
+    gusset_end_mm, gusset_edge_mm (bolt line to the gusset edge: gusset block shear), gusset_K and gusset_free_mm
+    (gusset buckling on the Whitmore width), stitch_bolt_d_mm (7.8.4), fixity, member_grade},
     'heel': {n_bolts, d_mm, grade, d0_mm, pitch_mm, end_mm, t_plate_mm, fu_plate_MPa, nn, ns}} (most specific wins):
     member end bolts (10.2 / 10.3 / 10.4.3), net-section and block-shear inputs (6.3.3 / 6.3.4 / 6.4.1), single-angle
-    end condition (7.5.1.2), double-angle interconnection (7.8), the knee and heel checks.
+    end condition (7.5.1.2), double-angle conditions (7.5.2.1 >= 2 bolts and K bounds, else 7.5.2.2) and
+    interconnection (7.8, 10.2.5.5 <= 600 mm), the gussets (Whitmore yield, block shear, buckling; for a chord the full
+    chord force), the knee and heel checks. Angles only: a non-angle truss member takes the general member check and
+    its end connection is not covered. Double-angle labels carry the gusset: `double_angle_label(angle, gap_mm)` ->
+    `2ISA70X70X6-G8`.
   - Take-off: `tonnage_benchmark` = {lo_kg_m2, hi_kg_m2, basis, source} prints a sourced typical range for comparable
     buildings next to the total (printed only with a source).
     Never set it in a design job.

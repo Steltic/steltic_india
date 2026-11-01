@@ -724,8 +724,8 @@ def _member_input_record(cfg, t, kind, sec, n1, n2, length, role):
         if ac is not None:
             m["angle_connection"] = ac
         m["truss_connection"] = trec
-        if kind == "truss":
-            m["axial_only"] = True
+        if kind == "truss" and _TD.is_angle_section(sec):
+            m["axial_only"] = True                  # a non-angle truss member: the general member check (review 2026-11)
         if _TD.is_chord_role(role):
             m["truss_chord"] = True
     return m
@@ -1077,6 +1077,9 @@ def column_line(n1, n2, grid_lines=None):
     return ln2 if ln2 in grid_lines else ln1
 
 
+I8_GAMMA_M0 = 1.10                      # IS 800 Table 5 gamma_m0 (the knee records' gross-yield fallback)
+
+
 def _truss_knee_records(cfg, info0, reg, length, elem_results):
     """MSME (2026-10): the knee records declared by the custom_build (info['truss_knees'] = [{id, heel_node,
     knee_node, chord_node, brace_tag, truss, span_mm, trib_mm}]) with the node coordinates, the knee brace's design
@@ -1096,9 +1099,26 @@ def _truss_knee_records(cfg, info0, reg, length, elem_results):
         t = k_["brace_tag"]
         r["brace_section"] = reg[t][1]
         r["brace_role"] = "truss_%s" % (tinfo.get(t) or {}).get("group", "knee_brace")
-        caps = (elem_results.get(t) or {}).get("capacities") or {}
-        vals = [v for v in ((caps.get("compression") or {}).get("Pd_N"), (caps.get("tension") or {}).get("Td_N")) if v]
-        r["member_capacity"] = min(vals) if vals else None
+        res_t = elem_results.get(t) or {}
+        caps = res_t.get("capacities") or {}
+        # Steltic design ruling D-T10 (review 2026-11): the force the knee brace can deliver in EITHER direction --
+        # the larger of its compression design strength Pd and its tension strength on gross-section yield
+        # Tdg = Ag fy / gamma_m0 (6.2); the end rupture / block shear are connection limit states (checked to be not
+        # weaker than Tdg: the brace yields first), not a cap on the demand
+        Pd = (caps.get("compression") or {}).get("Pd_N")
+        ls = (caps.get("tension") or {}).get("limit_states") or {}
+        fy_ = res_t.get("fy_MPa") or (res_t.get("material") or {}).get("fy_MPa")
+        A_ = E.Ipack(r["brace_section"])[0]
+        Tdg = ((ls.get("6.2 yield") or {}).get("T_N")
+               or (A_ * float(fy_) / I8_GAMMA_M0 if fy_ else None))
+        r["Pd_N"], r["Tdg_N"] = Pd, Tdg
+        r["Tdn_N"] = (ls.get("6.3.3 rupture") or ls.get("6.3.1 rupture") or {}).get("T_N")
+        r["Tdb_N"] = (ls.get("6.4 block shear") or {}).get("T_N")
+        vals = [v for v in (Pd, Tdg) if v]
+        r["member_capacity"] = max(vals) if vals else None
+        r["N_del_basis"] = ("N_del = max(Pd %s, Tdg = Ag fy / gamma_m0 %s) (D-T10)"
+                            % ("-" if Pd is None else "%.1f kN" % (Pd / 1e3),
+                               "-" if Tdg is None else "%.1f kN" % (Tdg / 1e3)))
         sw = sum(SM.STEEL_UNIT_WEIGHT_N_PER_MM3 * E.Ipack(reg[tt][1])[0] * length[tt] for tt, v in tinfo.items()
                  if v.get("truss") == k_.get("truss") and tt in reg)
         span, trib = float(k_.get("span_mm") or 0.0), float(k_.get("trib_mm") or 0.0)

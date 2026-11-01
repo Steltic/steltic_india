@@ -201,7 +201,8 @@ def test_compact_angle_section_uses_conservative_linear_9_3_1_1():
 # ------------------------------------------------------------------------------------------------ truss_design
 def _cfg_conn():
     sp = {"n_bolts": 3, "d_mm": 16, "grade": "8.8", "bolt_type": "HSFG", "slip_surface": "clean_mill_scale",
-          "d0_mm": 18.0, "pitch_mm": 50.0, "end_mm": 30.0, "gauge_mm": 35.0, "gusset_t_mm": 8.0, "edge": "rolled"}
+          "d0_mm": 18.0, "pitch_mm": 50.0, "end_mm": 30.0, "gauge_mm": 35.0, "gusset_t_mm": 8.0, "edge": "rolled",
+          "end_cut": "sawn", "gusset_end_mm": 35.0, "gusset_edge_mm": 40.0, "gusset_K": 0.65, "gusset_free_mm": 150.0}
     return {"truss_connections": {"default": dict(sp, n_bolts=2), "truss_diagonal:ISA65X65X6": sp,
                                   "heel": {"n_bolts": 4, "d_mm": 20, "grade": "8.8", "d0_mm": 22.0, "pitch_mm": 60.0,
                                            "end_mm": 40.0, "t_plate_mm": 10.0, "fu_plate_MPa": 410.0}}}
@@ -219,6 +220,7 @@ def test_spec_for_most_specific_wins():
 def test_bolt_group_double_shear_by_hand(da65):
     import india_connections as C
     sp = dict(_cfg_conn()["truss_connections"]["truss_diagonal:ISA65X65X6"])
+    sp.pop("gusset_end_mm")                       # the gusset end distance defaults to the member end distance
     bg = TD.bolt_group(sp, "2ISA65X65X6")
     one = C.bolt_capacity_is800(16, "8.8", nn=2, ns=0, t_mm=8.0, fu_plate_MPa=410.0, e_mm=30.0, p_mm=50.0,
                                 d0_mm=18.0, lj_mm=100.0)
@@ -377,8 +379,9 @@ def test_section12_cfg_carries_the_truss_connections_to_the_knee_checks():
     assert "truss_connections" not in DP.section12_cfg({"zone": "II"})
     nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
     knee = {"id": "K0-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": "ISA65X65X6",
-            "brace_role": "truss_diagonal", "span_mm": 18000.0, "V_gravity_N": 40e3}
-    rows = TD.knee_checks(knee, {}, s12, nodes=nodes, member_capacity=80e3)
+            "brace_role": "truss_diagonal", "span_mm": 18000.0, "V_gravity_N": 40e3, "Pd_N": 80e3, "Tdg_N": 169.1e3,
+            "Tdn_N": 180e3, "Tdb_N": 175e3}
+    rows = TD.knee_checks(knee, {}, s12, nodes=nodes, member_capacity=169.1e3)
     assert rows and all(r["dc"] is not None for r in rows)
     bare = TD.knee_checks(knee, {}, DP.section12_cfg({"zone": "II"}), nodes=nodes, member_capacity=80e3)
     assert all(r["dc"] is None for r in bare)
@@ -430,3 +433,191 @@ def test_d_t10_recorded_with_its_meaning_in_the_rulings_register():
     assert len(row) == 1
     for must in ("12.10.2.1", "1.2 times", "knee brace", "HSFG 8.8", "complete-penetration", "2026-11-01"):
         assert must in row[0], must
+
+
+# ------------------------------------------------------------------------------------------------ review 2026-11
+def test_d_t10_knee_uses_the_force_the_brace_delivers_in_either_direction():
+    """HIGH finding: the knee brace works both ways under reversing wind.  N_del = max(Pd, Tdg = Ag fy / gamma_m0);
+    every knee-brace connection takes 1.2 N_del, the gusset buckling 1.2 Pd, the heel the matching horizontal force;
+    the brace's bolted end must not be weaker than its gross yield (the brace yields first)."""
+    sec = "ISA90X90X8"
+    A = S.props(sec)["A"]
+    Pd, Tdg = 114.7e3, A * 250.0 / GM0
+    assert Tdg == pytest.approx(315.9e3, rel=1e-3) and Tdg > Pd          # tension governs the deliverable force
+    sp = {"n_bolts": 8, "d_mm": 16, "grade": "8.8", "bolt_type": "HSFG", "d0_mm": 18.0, "pitch_mm": 50.0,
+          "end_mm": 35.0, "gauge_mm": 50.0, "gusset_t_mm": 8.0, "edge": "rolled", "end_cut": "sheared",
+          "gusset_end_mm": 35.0, "gusset_edge_mm": 40.0, "gusset_K": 0.65, "gusset_free_mm": 150.0}
+    cfg = {"truss_connections": {"truss_knee_brace:%s" % sec: sp, "heel": _cfg_conn()["truss_connections"]["heel"]}}
+    nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
+    knee = {"id": "K1-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": sec,
+            "brace_role": "truss_knee_brace", "span_mm": 18000.0, "V_gravity_N": 40e3, "Pd_N": Pd, "Tdg_N": Tdg,
+            "Tdn_N": 348.8e3, "Tdb_N": 413.6e3}
+    Nd = max(Pd, Tdg)
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=Nd)}
+    assert rows["12.10.2.1_knee_brace_connection"]["value"] == pytest.approx(1.2 * Tdg)         # not 1.2 min(Pd, Td)
+    assert rows["12.10.2.1_knee_gusset_whitmore_yield"]["value"] == pytest.approx(1.2 * Tdg)
+    assert rows["12.10.2.1_knee_gusset_block_shear"]["value"] == pytest.approx(1.2 * Tdg)
+    assert rows["12.10.2.1_knee_gusset_buckling"]["value"] == pytest.approx(1.2 * Pd)           # compression only
+    yf = rows["12.10.2.1_knee_brace_yields_first"]
+    assert yf["value"] == pytest.approx(Tdg) and yf["limit"] == pytest.approx(348.8e3) and yf["ok"]
+    e = 1500.0 / math.sqrt(2.0)
+    R = math.hypot(1.2 * Tdg / math.sqrt(2.0), 40e3 + 2 * 1.2 * Tdg * e / 18000.0)
+    assert rows["12.10.2.4_heel_seat"]["value"] == pytest.approx(R)
+    assert all(r["ok"] for r in rows.values()), {k: r.get("dc") for k, r in rows.items()}
+    # a weak bolted end (rupture below gross yield) is flagged: the brace would not yield first
+    weak = dict(knee, Tdn_N=0.9 * Tdg)
+    w = {r["id"]: r for r in TD.knee_checks(weak, {}, cfg, nodes=nodes, member_capacity=Nd)}
+    assert w["12.10.2.1_knee_brace_yields_first"]["ok"] is False
+    # 3 bolts (the first gold) cannot develop 1.2 Tdg
+    few = {"truss_connections": dict(cfg["truss_connections"], **{"truss_knee_brace:%s" % sec: dict(sp, n_bolts=3)})}
+    f = {r["id"]: r for r in TD.knee_checks(knee, {}, few, nodes=nodes, member_capacity=Nd)}
+    assert f["12.10.2.1_knee_brace_connection"]["dc"] > 1.0
+
+
+def test_member_wind_combinations_count_as_wind_in_table3():
+    """Member-wind labels (WM0+, WM90-R, ...) are wind combinations: compression that arises only in them is Table 3
+    row (iii) 250, in both the axial check and the general member check; row (i) names a gravity combination."""
+    for lab in ("1.5DL+1.5WM0+", "0.9DL+1.5WM90-R", "1.2DL+1.2LL+1.2WM0-", "1.2DL+1.2LL-1.2W_X", "1.5DL+1.5EQ_Y"):
+        assert I8.is_lateral_combo(lab), lab
+    for lab in ("1.5DL+1.5LL", "1.5DL+1.5LL+N_X", "1.2DL+1.2LL+0.5S"):
+        assert not I8.is_lateral_combo(lab), lab
+    m = {"id": "d", "section": "ISA70X70X6", "grade": "E250", "L_mm": 2401.0, "Kz": 1.0, "Ky": 1.0,
+         "role": "truss_diagonal", "angle_connection": {"n_bolts": 2, "fixity": "hinged"},
+         "tension_inputs": {"member": "angle", "Anc_mm2": 300.0, "Ago_mm2": 400.0, "w_mm": 70.0, "t_mm": 6.0,
+                            "bs_mm": 104.0, "Lc_mm": 50.0,
+                            "block": {"Avg_mm2": 510.0, "Avn_mm2": 348.0, "Atg_mm2": 180.0, "Atn_mm2": 126.0}}}
+    rec = lambda c, P: {"combo": c, "P_N": P}
+    wind_only = I8.axial_member_check_is800(m, [rec("1.5DL+1.5LL", -20e3), rec("0.9DL+1.5WM0-R", 25e3),
+                                                rec("1.5DL+0.3", 0.3)])           # 0.3 N of noise is not compression
+    assert wind_only["table3_slenderness"]["limit"] == 250
+    grav = I8.axial_member_check_is800(m, [rec("1.5DL+1.5LL", 5e3), rec("0.9DL+1.5WM0-R", 25e3)])
+    t3 = grav["table3_slenderness"]
+    assert t3["limit"] == 180 and t3["governing_combo"] == "1.5DL+1.5LL"          # row (i) names the gravity case
+    beam = {"id": "s", "section": "CHS114.3X3.6", "grade": "YSt 310", "process": "ERW", "role": "beam", "L_mm": 6000.0,
+            "Kz": 1.0, "Ky": 1.0, "LLT_sag_mm": 6000.0, "LLT_hog_mm": 6000.0, "beam_axial_negligible_ratio": 0.0}
+    z = dict(Mz_i_Nmm=0.0, Mz_j_Nmm=0.0, Mz_mid_Nmm=0.0, My_i_Nmm=0.0, My_j_Nmm=0.0, Vy_N=0.0, Vz_N=0.0)
+    r = I8.member_check_is800(dict(beam, role="column"), [dict(z, combo="1.5DL+1.5WM90-", P_N=20e3),
+                                                          dict(z, combo="1.5DL+1.5LL", P_N=0.3)])
+    assert r["table3_slenderness"]["limit"] == 250
+
+
+def test_non_angle_truss_member_takes_the_general_member_check():
+    """A CHS knee brace / web with a declared spec does not crash: the general member check, no angle inputs, and the
+    end connection reported as not covered."""
+    import design_pipeline as DP
+    cfg = dict(_cfg_conn(), steel_grade="E250", K_factors={"truss_knee_brace": {"Kz": 1.0, "Ky": 1.0}})
+    ac, ti, rec = TD.member_inputs(cfg, "truss_knee_brace", "CHS76.1X3.6", 2121.0)
+    assert ac is None and ti is None and rec.get("general_member_check")
+    m = DP._member_input_record(cfg, 9, "truss", "CHS76.1X3.6", 1, 2, 2121.0, "truss_knee_brace")
+    assert "axial_only" not in m
+    envt = {9: {"comp": 50e3, "tens": 40e3}}
+    cr = TD.end_connection_record(cfg, "truss_knee_brace", "CHS76.1X3.6", [9], envt, {}, {9: 2121.0})
+    assert cr["DC"] is None and cr["checks"][0]["ok"] is None
+    nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
+    knee = {"id": "K0-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": "CHS76.1X3.6",
+            "brace_role": "truss_knee_brace", "span_mm": 18000.0, "V_gravity_N": 40e3}
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=90e3)}
+    assert rows["12.10.2.1_knee_brace_connection"]["ok"] is None
+
+
+def test_brief_asks_for_hsfg_8_8_truss_bolts():
+    from pathlib import Path
+    t = (Path(ROOT) / "test_buildings" / "IN_Ex21_MSME_angle_truss_shed_Hosur.txt").read_text(encoding="utf-8")
+    flat = " ".join(t.split())
+    assert "HSFG property class 8.8" in flat and "12.4.1" in flat and "D-T10" in flat
+    assert "4.6 bolts" not in flat
+
+
+def test_double_angle_7_5_2_1_conditions():
+    """>= 2 bolts at each end for 7.5.2.1 (one bolt: 7.5.2.2 -> 7.5.1, each angle through one leg); KL in the gusset
+    plane >= 0.7 L, normal to it = L."""
+    S.register_double_angle("2ISA65X65X6", "ISA65X65X6", 8.0)
+    base = {"id": "w", "section": "2ISA65X65X6", "grade": "E250", "L_mm": 2000.0, "role": "truss_diagonal",
+            "tension_inputs": {"T_N": 1e6}}
+    f = [{"combo": "1.5DL+1.5LL", "P_N": 10e3}]
+    r = I8.axial_member_check_is800(dict(base, Kz=0.5, Ky=0.5, angle_connection={"n_bolts": 2, "fixity": "hinged"}), f)
+    c = r["capacities"]["compression"]
+    assert c["rule"] == "7.5.2.1" and "raised" in c["note"]
+    ref = I8.compression_capacity(S.props("2ISA65X65X6"), 250.0, KLz_mm=0.7 * 2000.0, KLy_mm=2000.0)
+    assert c["Pd_N"] == pytest.approx(ref["Pd_N"])
+    one = I8.axial_member_check_is800(dict(base, Kz=1.0, Ky=1.0, angle_connection={"n_bolts": 1, "fixity": "hinged"}), f)
+    c1 = one["capacities"]["compression"]
+    sa = I8.single_angle_7_5_1_2("ISA65X65X6", 250.0, 2000.0, n_bolts=1, fixity="hinged")
+    assert c1["rule"] == "7.5.2.2" and c1["Pd_N"] == pytest.approx(2.0 * sa["Pd_N"])
+    none = I8.axial_member_check_is800(dict(base, Kz=1.0, Ky=1.0), f)
+    assert none["ok"] is None and "7.5.2.1" in none["reason"]
+
+
+def test_stitches_600_mm_and_7_8_4_bolt_size():
+    S.register_double_angle("2ISA100X100X10", "ISA100X100X10", 10.0)
+    st = TD.stitch_record("2ISA100X100X10", L_mm=3000.0, KL_over_r_member=120.0, compression=True)
+    assert st["spacing_mm"] <= 600.0                       # 10.2.5.5 (40 r1 alone would give about 780 mm)
+    assert TD.stitch_bolt_check("2ISA100X100X10", 16)["ok"] is True          # t 10 mm: >= 16 mm
+    S.register_double_angle("2ISA100X100X12", "ISA100X100X12", 10.0)
+    assert TD.stitch_bolt_check("2ISA100X100X12", 16)["ok"] is False         # t 12 mm: >= 20 mm
+    assert TD.stitch_bolt_check("2ISA100X100X12", 20)["ok"] is True
+
+
+def test_gusset_block_shear_buckling_and_cut_end_by_hand():
+    sp = dict(_cfg_conn()["truss_connections"]["truss_diagonal:ISA65X65X6"])
+    rows = dict(TD.gusset_rows(sp, 100e3, 60e3))
+    bs = rows["gusset block shear (6.4.1)"]
+    Ls, t, d0, edge = 35.0 + 100.0, 8.0, 18.0, 40.0
+    Avg, Avn, Atg, Atn = Ls * t, (Ls - 2.5 * d0) * t, edge * t, (edge - 0.5 * d0) * t
+    fy, fu = 250.0, 410.0
+    Tdb = min(Avg * fy / (math.sqrt(3) * GM0) + 0.9 * Atn * fu / GM1, 0.9 * Avn * fu / (math.sqrt(3) * GM1) + Atg * fy / GM0)
+    assert bs["limit"] == pytest.approx(Tdb)
+    gb = rows["gusset buckling on the Whitmore width (compression)"]
+    bw = 2 * 100.0 * math.tan(math.radians(30))
+    assert gb["value"] == pytest.approx(60e3) and gb["limit"] == pytest.approx(
+        bw * t * _fcd(fy, 0.65 * 150.0 / (t / math.sqrt(12.0))))
+    # undeclared gusset geometry -> not evaluated, never assumed
+    bare = dict(TD.gusset_rows({k: v for k, v in sp.items() if not k.startswith(("gusset_edge", "gusset_K",
+                                                                                 "gusset_free"))}, 100e3, 60e3))
+    assert bare["gusset block shear (6.4.1)"]["ok"] is None
+    assert bare["gusset buckling on the Whitmore width"]["ok"] is None
+    # sheared angle ends need 1.7 d0 (30.6 mm for M16): 30 mm fails, sawn ends 1.5 d0 pass
+    she = dict(TD.detailing_rows(dict(sp, end_cut="sheared"), "ISA65X65X6", compression=True))
+    saw = dict(TD.detailing_rows(sp, "ISA65X65X6", compression=True))
+    assert any(r["ok"] is False for k, r in she.items() if k.startswith("end distance"))
+    assert all(r["ok"] for k, r in saw.items() if k.startswith("end distance"))
+
+
+def test_chord_connection_checks_the_gusset_for_the_full_chord_force():
+    """The heel / apex gusset takes the full chord force (review 2026-11): the chord record carries the gusset rows."""
+    S.register_double_angle("2ISA70X70X6-G8", "ISA70X70X6", 8.0)
+    cfg = {"truss_connections": {"truss_top_chord": dict(_cfg_conn()["truss_connections"]["truss_diagonal:ISA65X65X6"],
+                                                         n_bolts=4, gauge_mm=40.0)}}
+    envt = {1: {"comp": 166e3, "tens": 80e3}}
+    cr = TD.end_connection_record(cfg, "truss_top_chord", "2ISA70X70X6-G8", [1], envt, {}, {1: 1546.0})
+    names = [c["name"] for c in cr["checks"]]
+    assert any("Whitmore" in n and "full chord force" in n for n in names)
+    assert any("block shear" in n and "full chord force" in n for n in names)
+    wm = [c for c in cr["checks"] if "Whitmore" in c["name"] and "yield" in c["name"]][0]
+    assert wm["value"] == pytest.approx(166e3)
+    assert any(n.startswith("back-to-back interconnection bolts M16 (7.8.4)") for n in names)
+
+
+def test_single_angle_bending_uses_the_9_3_1_1_linear_form():
+    """member_check_is800 passes section_type 'angle' for a single angle (review 2026-11, a behaviour change outside
+    the new truss paths): 9.3.1 then uses the conservative linear form of 9.3.1.1, not the 9.3.1.2 reduced moments
+    (those are for I / H, box and tube sections).  No earlier gold has an angle in this check."""
+    kw = dict(P_N=20e3, Mz_Nmm=1.0e6, My_Nmm=0.2e6, Nd_N=300e3, Pdz_N=250e3, Pdy_N=200e3, Mdz_Nmm=4.0e6, Mdy_Nmm=2.0e6,
+              lambda_z=0.5, lambda_y=0.6, lambda_LT=0.3, section_class="compact")
+    ang = I8.interaction_9_3(section_type="angle", **kw)
+    i_h = I8.interaction_9_3(section_type="I", **kw)
+    lin = 20e3 / 300e3 + 1.0e6 / 4.0e6 + 0.2e6 / 2.0e6
+    assert ang["section_9_3_1"]["dc"] == pytest.approx(lin) and "9.3.1.1" in ang["section_9_3_1"]["method"]
+    assert i_h["section_9_3_1"]["dc"] < lin                       # the I / H form would have been unconservative
+    import inspect
+    assert '"angle", "double_angle")' in inspect.getsource(I8.member_check_is800)    # the check passes the type
+
+
+def test_double_angle_label_carries_the_gusset_and_guards_overwrites():
+    assert S.double_angle_label("ISA70X70X6", 8.0) == "2ISA70X70X6-G8"
+    assert S.double_angle_label("ISA70X70X6") == "2ISA70X70X6"
+    S.register_double_angle("2ISA75X75X6-G10", "ISA75X75X6", 10.0)
+    with pytest.raises(ValueError):
+        S.register_double_angle("2ISA75X75X6-G10", "ISA75X75X6", 8.0)
+    import peb_outputs as PO
+    assert S.props("2ISA75X75X6-G10")["gap_mm"] == 10.0 and PO.staad_label("2ISA75X75X6-G10") == "2ISA75X75X6-G10"

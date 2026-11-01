@@ -35,8 +35,9 @@ owner decisions recorded in [`docs/PEB_TAPERED_SCOPE.md`](../docs/PEB_TAPERED_SC
 [`CHANGES_2026-10-peb.md`](../CHANGES_2026-10-peb.md) (D-T1 … D-T7). They are served by the API (`/api/example/in1` …
 `in5`) and offered in the UI pickers. IN_Ex21 (added 2026-11, after the renumbering) is the angle-truss MSME shed of a
 south Indian industrial estate: pin-jointed angle trusses with knee braces (Steltic design ruling D-T10: the knee
-designed for 1.2 times the moment the knee brace can deliver, with HSFG 8.8 bolts and complete-penetration welds at
-the column), served as `/api/example/in21` (`CHANGES_2026-10-msme-shed.md`). Each brief still tells the agent to stop with design_status 'blocked' on an
+designed for 1.2 times the moment the knee brace can deliver in either direction, so that the brace yields before the
+knee and heel connections fail, with HSFG 8.8 bolts and complete-penetration welds at the column), served as
+`/api/example/in21` (`CHANGES_2026-10-msme-shed.md`). Each brief still tells the agent to stop with design_status 'blocked' on an
 engine without tapered sections.
 
 The shipped US-basis briefs and the retired EXAMPLE memos live under `usa_reference/` and are not loaded.

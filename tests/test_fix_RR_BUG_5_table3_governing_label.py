@@ -38,10 +38,13 @@ def test_table3_governs_record_names_it():
     # the interaction is small and stays reported as the interaction
     assert r["interaction_dc"] < 0.3 < t3["dc"]
     assert r["interaction_governing_combo"] == "1.2DL+1.2LL+1.2EQ_X"
-    # the governing check is Table 3, with its own value / limit / combination (largest compression)
+    # the governing check is Table 3, with its own value / limit / combination.  Review 2026-11 (MSME): row (i)
+    # names the largest compression of a combination WITHOUT wind or earthquake -- the gravity compression that puts
+    # the member on row (i) -- not the larger earthquake compression (which printed "(i) compression from DL + LL
+    # (combination ...EQ...)")
     assert r["governing_check"] == "IS 800 Table 3 slenderness"
     assert r["dc"] == pytest.approx(t3["dc"]) and r["value"] == pytest.approx(t3["value"]) and r["limit"] == 180
-    assert r["governing_combo"] == t3["governing_combo"] == "1.2DL+1.2LL+1.2EQ_X"
+    assert r["governing_combo"] == t3["governing_combo"] == "1.5DL+1.5LL"
     assert "Table 3" in r["cite"] and "9.3 interaction" in r["cite"]
     json.dumps(r, allow_nan=False, default=str)
 
@@ -50,7 +53,7 @@ def test_table3_governs_record_names_it():
     t3r = [x for x in rows if x["name"].startswith("IS 800 Table 3")][0]
     assert i93["value"] == pytest.approx(r["interaction_dc"]) and i93["dc"] == pytest.approx(r["interaction_dc"])
     assert "governing" not in i93["name"] and i93["governing"] is False
-    assert t3r["governing"] is True and "governing" in t3r["name"] and "1.2DL+1.2LL+1.2EQ_X" in t3r["name"]
+    assert t3r["governing"] is True and "governing" in t3r["name"] and "1.5DL+1.5LL" in t3r["name"]
     assert max(x["dc"] for x in rows) == pytest.approx(r["dc"])
     # the governing-combination record kept for the report is the 9.3 interaction's
     g = DP._governing_result(r)
