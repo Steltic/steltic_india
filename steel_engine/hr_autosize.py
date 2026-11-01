@@ -1002,7 +1002,7 @@ def stiffness(label, kind):
     return float(p["Ix"])
 
 
-def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None):
+def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None, conn_req=None):
     """Lightest candidate per group under the frozen forces.  x: {group: (label, grade)}; stiff_req: {group:
     minimum stiffness (I or A)}.  Returns the new x and a per-group note."""
     new, notes = {}, {}
@@ -1032,6 +1032,8 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None)
             if need and kind and stiffness(lab, kind) < need - 1e-6:
                 continue
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
+            if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
+                ok = False                    # the beam-end connection (V + N) of an earlier run does not fit
             if ok:
                 chosen = (lab, grade)
                 notes[g] = "%s %s tier %d: strength %.3f slender %.3f" % (lab, grade or "", tier, worst[0], worst[1])
@@ -1764,8 +1766,10 @@ def _group_conn_demand(ev, roles, label):
     return best
 
 
-def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None):
-    """CONNECTIONS for design x: every kind keyed by the new labels (bases / splices by '<role>:<label>')."""
+def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, infeasible=None):
+    """CONNECTIONS for design x: every kind keyed by the new labels (bases / splices by '<role>:<label>').
+    infeasible (a list): gets (group, demand, template) for every beam whose end shear connection cannot be designed
+    in its section (no fin plate fits the V + N demand): the driver steps that beam group up."""
     bumps = bumps or {}
     used = _labels_in_use(x)
     out = {}
@@ -1794,6 +1798,8 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None):
                 sp = design_fin_plate(lab, Vd, tpl)
                 if sp is not None:
                     out["beam_shear"][lab] = sp
+                elif infeasible is not None:
+                    infeasible.append((g, Vd, tpl))
         # moment joints
         tplj = CD.spec_for(conn_cfg, "beam_column", lab0, "beam")
         if tplj and (lab != lab0 or g in bumps.get("beam_column", {})):
@@ -2053,7 +2059,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         if lat_fail and ev["passed"] is False:
             for g in req:
                 st.setdefault("stiff_boost", {})[g] = round(float(st["stiff_boost"].get(g, 1.0)) * 1.05, 3)
-        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed, barred=st.get("barred"))
+        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed, barred=st.get("barred"),
+                                conn_req=st.get("conn_req"))
         for k in range(8):
             rows = s12_local(lm, x1)
             bumped = set()
@@ -2083,8 +2090,28 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         bumps["beam_column"].update(joint_bumps(lm, ev, x, st["conns"]))
         for g_, b_ in bumps["beam_column"].items():
             log_fn("    joint step-up %s: %s" % (g_, b_))
-        conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps) \
+        infeas = []
+        conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps, infeasible=infeas) \
             if st["conns"] is not None else None
+        if infeas:
+            # a beam whose end shear connection (V + N) does not fit its section: the next section up in the group's
+            # order that passes the frozen member checks and takes a fin plate for that demand
+            for g, Vd, tpl in infeas:
+                prev = (st.setdefault("conn_req", {}).get(g) or [0.0, None])[0]
+                st["conn_req"][g] = [max(float(Vd), float(prev)), tpl]      # kept: size_groups honours it from now on
+                cur = x1[g]
+                for _ in range(80):
+                    nu = next_up(specs[g], cur, lm, g, st["margins"].get(g, specs[g].get("margin", 0.95)))
+                    if not nu:
+                        break
+                    if design_fin_plate(nu[0], Vd, tpl) is not None:
+                        log_fn("    %s: no fin plate fits %s for %.0f kN -> %s" % (g, x1[g][0], Vd / 1e3, nu[0]))
+                        x1[g] = nu
+                        break
+                    cur = nu
+            gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
+                                                                           if ":" not in k and k not in _labels_in_use(x)})
+            conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps)
         rec["proposal"] = {g: list(v) for g, v in x1.items()}
         rec["notes"] = notes
         rec["stiffness"] = info
