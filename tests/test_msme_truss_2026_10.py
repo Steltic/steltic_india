@@ -345,6 +345,9 @@ def test_truss_report_section_rulings_and_public_text():
     rows = PR.rulings_applied(cfg)
     assert [r[0] for r in rows] == ["D-T4", "D-T5", "D-T6", "D-T10"]
     assert PUB.ruling_meaning("D-T10").startswith("knee-braced truss portal")
+    assert "HSFG 8.8" in PUB.ruling_meaning("D-T10") and "complete-penetration welds" in PUB.ruling_meaning("D-T10")
+    bare = PUB.public_html("<p>The knees follow D-T10.</p>")
+    assert "Steltic design ruling D-T10 (knee-braced truss portal" in bare and "HSFG 8.8 bolts" in bare
     pkg = {"peb": {"tonnage": {"kg": {"primary": 1000.0}, "kg_per_m2": {"primary": 2.0, "total": 2.0},
                                "total_kg": 1000.0, "plan_area_m2": 500.0, "basis": "take-off"}},
            "members": [{"inputs": {"role": "truss_top_chord", "section": "2ISA65X65X6", "n_elements": 84,
@@ -417,3 +420,13 @@ def test_take_off_prints_the_sourced_typical_range():
     assert "27.7 to 35.8 kg/m2" in html_ and "IJRASET 2022" in html_ and "31.0 kg/m2 (within the range)" in html_
     assert not PUB.leaks(PUB.public_html(html_))
     assert "Typical steel" not in PR.section(_cfg_conn(), pkg, "/nonexistent")       # nothing without a source
+
+
+def test_d_t10_recorded_with_its_meaning_in_the_rulings_register():
+    """D-T10 is listed with the other owner decisions (docs/PEB_LIMITATIONS.md) with its full meaning."""
+    from pathlib import Path
+    doc = (Path(ROOT) / "docs" / "PEB_LIMITATIONS.md").read_text(encoding="utf-8")
+    row = [ln for ln in doc.splitlines() if ln.startswith("| D-T10")]
+    assert len(row) == 1
+    for must in ("12.10.2.1", "1.2 times", "knee brace", "HSFG 8.8", "complete-penetration", "2026-11-01"):
+        assert must in row[0], must

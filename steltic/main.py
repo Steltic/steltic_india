@@ -195,6 +195,7 @@ EXAMPLE_BRIEFS = {
     "in18": "IN_Ex18_SMF_podium_11levels_Kochi.txt",
     "in19": "IN_Ex19_EBF_12levels_Tplan_Guwahati.txt",
     "in20": "IN_Ex20_SCBF_18levels_slender_Noida.txt",
+    "in21": "IN_Ex21_MSME_angle_truss_shed_Hosur.txt",          # 2026-11: the angle-truss MSME shed
     # USA reference briefs (not offered in the UI; kept for regression runs)
     "ex1": "usa_reference/Ex1_SCBF_5levels.txt",
     "ex2": "usa_reference/Ex2_SMF_9levels.txt",

@@ -1,6 +1,6 @@
 # Example briefs — steltic_india
 
-The 20 India briefs below are the design basis (IS 800 / IS 875 / IS 1893 / IS 18168 systems per SYSTEM_TABLE). They
+The 21 India briefs below are the design basis (IS 800 / IS 875 / IS 1893 / IS 18168 systems per SYSTEM_TABLE). They
 are numbered so that **the most common building types come first**: what Indian steel engineers design most often —
 the pre-engineered (PEB) shed and warehouse — then the other single-storey industrial buildings, then braced and
 moment-frame buildings by height. The numbering changed on 2026-10; the old-to-new map is
@@ -28,11 +28,15 @@ moment-frame buildings by height. The numbering changed on 2026-10; the old-to-n
 | 18 | `IN_Ex18_SMF_podium_11levels_Kochi.txt` | 11-storey SMF office with an open podium storey (Zone III) | runs today |
 | 19 | `IN_Ex19_EBF_12levels_Tplan_Guwahati.txt` | 12-storey EBF residential, two units (Zone V) | runs today |
 | 20 | `IN_Ex20_SCBF_18levels_slender_Noida.txt` | 18-storey slender SCBF office tower (Zone IV) | runs today |
+| 21 | `IN_Ex21_MSME_angle_truss_shed_Hosur.txt` | Typical MSME shed: 18 m pin-jointed angle roof trusses with knee braces on ISMB columns, CFS purlins, brick dado (Zone II) | runs (angle-truss support, Steltic design ruling D-T10) |
 
 **PEB release (2026-10):** IN_Ex1 … IN_Ex5 use welded plate I-sections, web-tapered members, flange braces and the
 owner decisions recorded in [`docs/PEB_TAPERED_SCOPE.md`](../docs/PEB_TAPERED_SCOPE.md) and
 [`CHANGES_2026-10-peb.md`](../CHANGES_2026-10-peb.md) (D-T1 … D-T7). They are served by the API (`/api/example/in1` …
-`in5`) and offered in the UI pickers. Each brief still tells the agent to stop with design_status 'blocked' on an
+`in5`) and offered in the UI pickers. IN_Ex21 (added 2026-11, after the renumbering) is the angle-truss MSME shed of a
+south Indian industrial estate: pin-jointed angle trusses with knee braces (Steltic design ruling D-T10: the knee
+designed for 1.2 times the moment the knee brace can deliver, with HSFG 8.8 bolts and complete-penetration welds at
+the column), served as `/api/example/in21` (`CHANGES_2026-10-msme-shed.md`). Each brief still tells the agent to stop with design_status 'blocked' on an
 engine without tapered sections.
 
 The shipped US-basis briefs and the retired EXAMPLE memos live under `usa_reference/` and are not loaded.

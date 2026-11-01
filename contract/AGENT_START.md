@@ -418,7 +418,9 @@ Before `pipeline.design_and_report`:
     True brings the roof area loads and the roof wind to the top chord as purlin reactions at its panel points.
   - Knees: the custom_build returns `info['truss_knees']` = [{id, heel_node, knee_node, chord_node, brace_tag, truss,
     span_mm, trib_mm}]; the knee lines are moment-frame lines; Section 12 (OMF) checks each knee for IS 800 12.10.2.1
-    / 12.10.2.4 on the knee brace's design strength (Steltic design ruling D-T10).
+    / 12.10.2.4 on the knee brace's design strength (Steltic design ruling D-T10, owner 2026-11-01: the knee designed
+    for 1.2 times the moment the knee brace can deliver, with HSFG 8.8 bolts and complete-penetration welds at the
+    column; see docs/PEB_LIMITATIONS.md).
   - Connections: `truss_connections` = {'<role>:<SECTION>' | '<role>' | 'default': {n_bolts, d_mm, grade, bolt_type
     ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, gusset_t_mm, gusset_grade, edge, fixity, member_grade},
     'heel': {n_bolts, d_mm, grade, d0_mm, pitch_mm, end_mm, t_plate_mm, fu_plate_MPa, nn, ns}} (most specific wins):

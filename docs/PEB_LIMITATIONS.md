@@ -75,6 +75,7 @@ section 8). The gold solutions IN_Ex1 … IN_Ex5 state the job-level consequence
 | D-T6 scope of IS 800 12.4.2 | Complete-penetration welds for connection welds only; flange-to-web welds are fillets |
 | D-T7 Mp at a tapered joint face | 1.2 Mp of the section at the joint face, at the knees and the apex, in either sign. Rafter splices take the factored moment of both signs (x 1.80 under IS 18168 6.5) |
 | D-T8 IS 18168 wording in IN_Ex9 | Not part of this release (IN_Ex9 results are unchanged) |
+| D-T10 knee-braced truss portal (owner, 2026-11-01; the angle-truss MSME shed IN_Ex21) | IS 800 12.10.2.1: the truss is pinned on the column cap and reaches the column only through the knee brace and the heel seat, so the moment it can deliver to the joint is the knee brace's design strength min(Pd, Td) times its lever arm about the heel. The knee is designed for 1.2 times that moment: each knee-brace connection for 1.2 times the brace strength, the heel seat for the matching horizontal force with the 12.10.2.4 shear. Fully tensioned HSFG 8.8 bolts in the truss joints (12.4.1) and complete-penetration welds to the column (12.4.2). The 1.2 Mp alternative is not used: a triangular truss has no plastic moment at the column face |
 | O1 (existing ruling) | 1.2 Vd of the column section on every SFRS base, both axes. On pinned PEB bases this sizes the shear keys (IN_Ex1: 1,543 kN against 98 kN from the analysis) |
 
 ## Open owner decision

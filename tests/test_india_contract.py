@@ -56,15 +56,14 @@ def test_frontend_lists_only_india_briefs():
     sel = html[i0:html.index("</select>", i0)]
     vals = re.findall(r'<option value="([^"]*)"', sel)
     # 2026-10 renumbering: most common building types first; the PEB sheds in1-in5 are offered with the PEB release
-    # (docs/PEB_TAPERED_SCOPE.md); the engine serves in1-in20
-    assert [v for v in vals if v] == ["in%d" % i for i in range(1, 21)]
+    # (docs/PEB_TAPERED_SCOPE.md); the engine serves in1-in21 (in21: the 2026-11 angle-truss MSME shed)
+    assert [v for v in vals if v] == ["in%d" % i for i in range(1, 22)]
     assert not re.search(r"\bpsf\b|\bmph\b|\bSDC\b", html)
     tb = ROOT / "test_buildings"
     assert not list(tb.glob("Ex*.txt"))
     assert len(list((tb / "usa_reference").glob("Ex*.txt"))) >= 35
     main = (ROOT / "steltic" / "main.py").read_text(encoding="utf-8")
-    for i in range(1, 21):
+    for i in range(1, 22):
         m = re.search(r'"in%d": "([^"]+)"' % i, main)
         assert m and (tb / m.group(1)).exists() and m.group(1).startswith("IN_Ex%d_" % i)
-    # IN_Ex21 (2026-10 MSME angle-truss shed) is a brief and a gold, not yet offered in the UI (the lead decides)
     assert len(list(tb.glob("IN_Ex*_*.txt"))) == 21
