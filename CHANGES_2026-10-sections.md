@@ -97,6 +97,21 @@ D8).
   keep at least their stiffness × (ratio − 1) / (1.164 − 1) from then on, since ratio − 1 grows with K_d / K_θ.
   This was found on IN_Ex9: lighter portal frames raised the ratio under Y loading from 1.14 to 1.24, and the
   torsional mode became the second mode.
+- **Brace fallback.** SCBF and EBF braces (IS 808 families, E250 B0) fall back to a compact welded I made from
+  IS 2062 E250 B0 plates when no rolled section passes. On IN_Ex10 (17.8 m X-braces), the rolled sections with
+  enough radius of gyration fail the IS 18168 Table 2 brace flange limit, and the compact ones fail KL/r. CHS
+  (OCBF) braces have no built-up fallback.
+- **Connections that drive a member size.**
+  - A beam whose end shear connection (V + N resultant of a collector) does not fit its section is stepped up. The
+    demand is kept for later passes (IN_Ex14, IN_Ex20).
+  - Beam groups that share a label get the connection of the largest demand (IN_Ex18).
+  - Moment-joint web plates are designed for the IS 800 12.11.2.2 joint shear (1.2DL + 0.5LL + 2 × 1.2 Mp / L') of
+    the new beam, and are stepped up from failing rows (IN_Ex16).
+- **A label that fails Table 3 slenderness in its own full run** is barred for its group. The limit depends on
+  whether the member carries compression, which the frozen forces cannot show. On the IN_Ex12 gym, a roof beam
+  picks up axial force only in its own run.
+- **Unused groups.** Groups that no member of the model takes (IN_Ex11 corner and perimeter columns: every corner
+  column is braced) are left out of the eligibility test and marked `unused` in `SIZING_GROUPS`.
 - **Preflight** (`preflight.chs_brace_grade_declared`): CHS braces are declared by either the
   (`brace_grade`, `brace_process`) or the (`tube_grade`, `tube_process`) pair. The member grade lookup takes the tube
   pair first. IN_Ex11 keeps `brace_grade` for rolled braces and declares YSt 310 / HFS as the tube pair.
