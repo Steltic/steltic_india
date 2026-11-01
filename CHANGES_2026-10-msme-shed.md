@@ -7,12 +7,25 @@ This adds a new example: the typical small-industry shed of a south Indian indus
 engine designs it as pin-jointed angle roof trusses on rolled MB columns, with knee braces. The branch also adds the
 engine support the shed needs.
 
-The new paths leave every earlier gold unchanged:
+Most new paths leave earlier golds unchanged:
 - they need a `double_angle` section, a `truss` element, a declared `cfg['truss_connections']` or
   `cfg['tonnage_benchmark']`;
 - the column-line change acts only on a column piece that starts off the grid. A static check of all 22 gold models
   found none;
 - Appendix C changes only without a tool-call log. Every earlier gold has one.
+
+Three changes are not gated, and the first two DO change earlier golds (intended; the lead's final gold run shows
+them):
+- **IS 800 Table 3 row choice (review 2026-11).** The member-wind combinations (`WM0+`, `WM90-R`, ...) now count as
+  wind combinations, in the general member check and in the axial check. Before, only `EQ`, `W_`, `WL` and `EL` did.
+  A member whose compression arises only in member-wind combinations moves from row (i) 180 to row (iii) 250, so
+  IN_Ex1, IN_Ex2 and IN_Ex8 members (e.g. the IN_Ex2 roof rows) become less conservative.
+- **Row (i) label.** An axial force below 1 N (analysis noise) is no longer compression, and row (i) now names the
+  largest compression of a combination without wind or earthquake (it printed "(i) compression from DL + LL" with a
+  wind or earthquake combination). This changes labels, not ratios.
+- **Single angles in 9.3.** `member_check_is800` passes `section_type = 'angle'` for a single angle, so 9.3.1 uses the
+  conservative linear form of 9.3.1.1 instead of the 9.3.1.2 I / H reduced moments (a compact angle went from 0.06 to
+  0.35 in the review's example). No earlier gold has an angle in this check; fly braces use their own path.
 
 ## The example (test_buildings/IN_Ex21_MSME_angle_truss_shed_Hosur.txt)
 
@@ -42,19 +55,23 @@ The new paths leave every earlier gold unchanged:
   - The in-plane axis (normal to the gusset) has I = 2 I1, with no parallel-axis term.
   - The out-of-plane axis has I = 2 (I1' + A1 (c + g/2)²).
   - The elastic modulus is taken at the toe. Zp = 2 Zp1 and 2 A1 (c + g/2).
-  - The connected leg is chosen with `connected_leg`. `double_angle_label`.
+  - The connected leg is chosen with `connected_leg`. `double_angle_label(angle, gap_mm)` gives `2ISA70X70X6-G8` (the
+    gusset is in the label), and registering a name again with another angle, gusset or leg is refused.
 - **`india_is800.py`:**
   - Double angles: classified by the component angle (Table 2 'double angles with the components separated' and the
     'angle, compression due to bending' rows); Table 10 class c; shear area of the two legs.
   - LTB of a double angle bent in the truss plane: IS 800 8.2.2(a) (minor axis, no LTB) when Ix ≤ Iy, otherwise not
     evaluated.
-  - Angle sections in combined axial force and bending use the conservative linear form of 9.3.1.1.
+  - Angle sections in combined axial force and bending use the conservative linear form of 9.3.1.1 (single angles
+    included: see above).
   - `axial_member_check_is800`: pin-ended truss members, axial force only.
     - Compression: 7.1.2, with a single angle by the 7.5.1.2 equivalent slenderness (Table 12) and a double angle by
-      7.5.2.1.
+      7.5.2.1. 7.5.2.1 needs >= 2 bolts in line at each end and bounds its effective lengths (in the gusset plane
+      0.7 - 0.85 L, normal to it L: a smaller K is raised); with one bolt 7.5.2.2 sends the strut to 7.5.1 (each angle
+      through one leg). Undeclared bolts leave it not evaluated.
     - Tension: 6.2 / 6.3.3 / 6.3.4 / 6.4.1 from the declared end connection. Missing inputs leave the check not
       evaluated.
-    - Table 3 rows: (i) 180, (iii) 250, (vi) 400.
+    - Table 3 rows: (i) 180, (iii) 250, (vi) 400, with the member-wind rule above (`is_lateral_combo`).
   - `member_check_is800` passes `angle_connection` to the compression check and gives truss chords the Table 3 rows of
     a member carrying axial load.
   - `angle_end_connection_inputs`: the 6.3.3 / 6.4.1 areas of one bolt line in the connected leg.
@@ -69,10 +86,18 @@ The new paths leave every earlier gold unchanged:
   - Connection specs (`cfg['truss_connections']`).
   - Bolt groups in shear and bearing: a double angle in double shear, bearing on the gusset or on the two legs.
   - HSFG slip at service (10.4.3) and the 12.4.1 gate when the truss is part of the lateral system.
-  - Detailing: 10.2.2 / 10.2.3.2 / 10.2.4.2, and at least 2 bolts for a double-angle strut (7.5.2.1).
-  - Back-to-back interconnection (7.8.1 / 7.8.2; 10.2.5.4).
-  - Gusset yield on the Whitmore width (engineering practice, stated).
-  - The knee checks of IS 800 12.10.2.1 / 12.10.2.4.
+  - Detailing: 10.2.2 / 10.2.3.2 (on the thinner of the angle and the gusset) / 10.2.4.2, and at least 2 bolts for a
+    double-angle strut (7.5.2.1). The end distance follows the cut of the angle end (`end_cut`: sheared 1.7 d0 by
+    default; sawn, machine-flame cut or planed 1.5 d0); the toe edge is rolled.
+  - Back-to-back interconnection (7.8.1 / 7.8.2; 10.2.5.5 at most 600 mm in a compression member; 10.2.5.4 at most
+    1000 mm in tension) and the 7.8.4 bolt size (16 / 20 / 22 mm by thickness).
+  - Gussets (engineering practice, stated): yield on the Whitmore width, block shear (6.4.1, one bolt line, to the
+    declared gusset edge) and buckling on the Whitmore width (7.1.2 class c, declared K and free length). For a chord
+    the full chord force is used: the heel and apex gussets, where the chord ends. Missing gusset geometry leaves the
+    row not evaluated.
+  - The knee checks of IS 800 12.10.2.1 / 12.10.2.4 (D-T10, below).
+  - Angles only: a CHS or other non-angle truss member takes the general member check, and its end connection is
+    reported as not covered (it crashed before).
 - **`design_pipeline.py`:**
   - Truss roles `truss_<group>`, which are not part of the brace / SFRS-brace logic.
   - Knee-braced column lines count as lateral lines.
@@ -104,12 +129,18 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 
 - The truss is pinned on the column cap. It reaches the column only through the couple of the knee brace and the heel
   seat.
-- So the maximum moment the beam can deliver to the joint is the knee brace's design strength N_d = min(Pd, Td) times
-  its lever arm about the heel.
-- The knee connections are designed for 1.2 times that moment:
-  - each knee-brace connection for 1.2 N_d;
+- So the maximum moment the beam can deliver to the joint is the largest force the knee brace can deliver in EITHER
+  direction (the wind reverses), N_del = max(Pd, Tdg): its compression design strength, or its tension strength on
+  gross-section yield Tdg = Ag fy / γm0. Rupture and block shear of the brace end are connection limit states and do
+  not cap it. M_del = N_del times the lever arm about the heel.
+- The knee is designed for 1.2 times that moment:
+  - each knee-brace connection, the bolts and the gussets at both ends, for 1.2 N_del; gusset buckling for 1.2 Pd;
+  - the brace's own bolted end (6.3.3 rupture, 6.4.1 block shear) not weaker than Tdg;
   - the heel seat for the horizontal force of the couple, with the 12.10.2.4 shear (1.2DL + 0.5LL plus
     2 × 1.2 M_del / span).
+- So the knee and heel connections are designed so that the brace yields (gross section) before they fail.
+- The first implementation used min(Pd, Td), the weaker direction. The 2026-11 review found that and it was
+  corrected: the owner's ruling is "1.2 × the moment the knee brace can deliver".
 - The truss joints use fully tensioned HSFG bolts (12.4.1). The welds to the column are CJP (12.4.2).
 - The Mp alternative of 12.10.2.1 is not used: a triangular truss has no plastic moment at the column face.
 

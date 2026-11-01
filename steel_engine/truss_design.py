@@ -381,8 +381,9 @@ def end_connection_record(cfg, role, sec, tags, envt, elem_results, length, *, s
             rec["notes"].append("double angle interconnected by %d packed bolted connections at %.0f mm (7.8 / 10.2.5)"
                                 % (st["n_intermediate"], st["spacing_mm"]))
             d_st = float(sp.get("stitch_bolt_d_mm") or sp["d_mm"])
-            rec["checks"].append(_row("back-to-back interconnection bolts M%d (7.8.4)" % int(d_st),
-                                      stitch_bolt_check(sec, d_st)))
+            # a minimum-size rule, not a strength ratio: a gate (pass / fail), kept out of the connection D/C
+            sb = dict(stitch_bolt_check(sec, d_st), dc=None)
+            rec["checks"].append(_row("back-to-back interconnection bolts M%d (7.8.4)" % int(d_st), sb, gate=True))
     rec["bolt_group"] = bg
     strength = [c for c in rec["checks"] if isinstance(c.get("dc"), (int, float))]
     gov = max(strength, key=lambda c: c["dc"]) if strength else None

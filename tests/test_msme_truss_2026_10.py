@@ -595,7 +595,9 @@ def test_chord_connection_checks_the_gusset_for_the_full_chord_force():
     assert any("block shear" in n and "full chord force" in n for n in names)
     wm = [c for c in cr["checks"] if "Whitmore" in c["name"] and "yield" in c["name"]][0]
     assert wm["value"] == pytest.approx(166e3)
-    assert any(n.startswith("back-to-back interconnection bolts M16 (7.8.4)") for n in names)
+    sb = [c for c in cr["checks"] if c["name"].startswith("back-to-back interconnection bolts M16 (7.8.4)")][0]
+    assert sb["gate"] is True and sb["ok"] is True and sb["dc"] is None        # a size rule, not a ratio
+    assert cr["governing_check"] != sb["name"]
 
 
 def test_single_angle_bending_uses_the_9_3_1_1_linear_form():
