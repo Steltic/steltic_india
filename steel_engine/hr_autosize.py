@@ -1978,11 +1978,21 @@ def bump_splice(sp, failing):
         sp["bolts"]["n_bolts"] = int(sp["bolts"].get("n_bolts") or 4) + 2
     pl = sp.get("plate")
     if isinstance(pl, dict) and re.search(r"plate_yield|plate_weld", names):
+        # the flange plate's area by the row ratio (a thicker plate, to 63 mm); past 63 mm inner plates are added
+        # on the inside of the flange (double shear, the IN_Ex14 detail): the area grows at the same thickness
+        dc = max([d for n, d in _rows(failing) if re.search(r"plate_yield|plate_weld", n)] + [1.05])
         t0 = float(pl.get("t_mm") or 12.0)
-        t1 = _plate_up(t0, 1.0001)
-        pl["A_mm2"] = round(float(pl.get("A_mm2") or 0.0) * t1 / t0, 1)
-        pl["t_mm"] = t1
-        pl["fy_MPa"] = plate_fy(t1)
+        A0 = float(pl.get("A_mm2") or 0.0)
+        need = A0 * dc * 1.03 * (plate_fy(t0) / plate_fy(min(t0 * dc * 1.03, 63.0)))
+        if t0 < 63.0 - 1e-9:
+            t1 = min(_plate_up(max(t0 * dc * 1.03, t0 + 1.0), 1.0), 63.0)
+            pl["A_mm2"] = round(A0 * t1 / t0, 1)
+            pl["t_mm"] = t1
+        if float(pl["A_mm2"]) < need - 1e-6:
+            pl["A_mm2"] = round(need, 1)
+            pl["inner_plates"] = True
+            pl["note"] = "outer + inner flange plates (double shear)"
+        pl["fy_MPa"] = plate_fy(pl["t_mm"])
     wp = sp.get("web_plate")
     if isinstance(wp, dict) and re.search(r"web_plate|sumMp", names):
         t0 = float(wp.get("t_mm") or 10.0)
