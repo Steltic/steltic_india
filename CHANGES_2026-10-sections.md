@@ -8,7 +8,9 @@ both signs, end-moment-only connection demands, 17-field records). The provision
 - 56909e3 (PR #31 MSME shed, PR #32 engine-check fix);
 - e45a65d (PR #33: the consistency fix, and each group's strength line printed from its worst-strength element; no
   design result moves);
-- 8cc56ec (PR #34: the consistency advisory guards, ponding by span and slope; no design result moves). Every job was sized, and every sized design verified, against the merged
+- 8cc56ec (PR #34: the consistency advisory guards, ponding by span and slope; no design result moves).
+
+Every job was sized, and every sized design verified, against the merged
 checks.
 
 Two passes (coordinator, 2026-11-06):
