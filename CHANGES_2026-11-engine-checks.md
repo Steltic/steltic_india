@@ -21,7 +21,8 @@ Four follow-ups are plain commits on top of the round-1 head 711cc38:
 - **Re-check 2** (`briefs/ENG_REVIEW.md`, at 10b3ae6): R2-1 (no earthquake record is never a silent pass), R2-2 (the
   facade step by shared height), R2-3 (cite 7.3), R2-4 (a WARN for an unmatched hand-built pattern), R2-5 (docs).
 
-The code is final at bca766e.
+The code is final at bca766e. Two statements below were corrected after the merge, marked in place: IN_Ex6's
+patterns against Table 5 (R2-4) and the IN_Ex21 chord's worst strength ratio (`CHANGES_2026-11-engine-checks-2.md`).
 - The full gold A/B ran on 0482f9a.
 - 4e051ce changes only the IS 18168 Ca (and the sizer's copy of it). Its own A/B covers every gold with an IS 18168
   Table 2 column row.
@@ -550,7 +551,10 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
 - **R2-3:** the local-coefficient sentence is IS 875-3 7.3 (the general text of Pressure Coefficients), not 7.3.1,
   in `SIDE_WALL_CITE`, the generator's record and this file. 7.3.1 stays for F = (Cpe − Cpi) A pd.
 - **R2-4:** a hand-built pattern whose own windward / leeward Cpe are more than 0.05 from both Table 5 wind angles gets
-  a WARN in its side-wall record and in `member_wind_wall_scan.warnings`. IN_Ex6's patterns match.
+  a WARN in its side-wall record and in `member_wind_wall_scan.warnings`. Correction (re-check 3, R3-1): at this
+  head only half of IN_Ex6's 16 patterns match. Its reversed winds (WMXR± and WMYR±, each with its +R sign variant)
+  exchange the windward and leeward fields, so they drew a false WARN, 8 in all. The chosen angle and Cpe were right.
+  The comparison now also takes the pair exchanged, and all 16 match (`CHANGES_2026-11-engine-checks-2.md`).
 - **R2-5:** the IN_Ex7 row in the gold table now gives the governing record's forces (element 1: P 3.5 kN, Mz 320.7
   kN·m, My 217.0 kN·m).
 - **Status check at bca766e.** None of the 30 gold statuses changes:
@@ -798,8 +802,16 @@ Reading it (the moves of rounds 1–2, up to 8b2ffbf; follow-up 3's are above):
     the long-wall pressure over an 18 m strip, 22 kN of wall load that is not there (member-wind totals below).
   - That load reached the frames' knee-braced trusses through the roof. Interior truss e134, the bottom chord next
     to the eave at X = 12 m, carried 82.5 kN of compression under 1.5DL+1.5WM0−R on main and 62.9 kN on the branch.
-  - Its 9.3 ratio (0.950 on main, 0.956 at round 1) came from that compression. Without the artefact, the chord's worst strength ratio is 0.19
-    (element e44), and its Table 3 ratio 0.782 governs.
+  - Its 9.3 ratio (0.950 on main, 0.956 at round 1) came from that compression. Without the artefact, the chord's
+    worst strength ratio is 0.734.
+    - e190 and e134 (1.5 m panels) carry 62.85 kN of wind-uplift compression, under 0.9DL+1.5W_Y and
+      0.9DL−1.5W_Y.
+    - The chord's Table 3 ratio, 0.782 at e44, governs its D/C.
+    - Correction (engine checks 2, G-1): this bullet said 0.19 at e44. That is e44's own strength ratio, which the
+      package printed because e44 governs the group by Table 3.
+    - The re-sized gold (2ISA65X65X6 chord, `gold/jobs_hr/IN_Ex21_MSME_angle_truss_shed_Hosur`) is at 0.874 at e190,
+      also under the wind-uplift compression of 0.9DL+1.5W_Y. There the strength ratio governs, so its package already
+      showed it.
   - The diagonal ISA80 (0.686 → 0.583), the vertical (0.708 → 0.685) and the knee brace (0.826 → 0.798) fall for the
     same reason. The governing case moves from WM0 to W_Y.
   - The IN_Ex21 owner should know that the truss has margin now; the worst member is still the Table 3 diagonal,
