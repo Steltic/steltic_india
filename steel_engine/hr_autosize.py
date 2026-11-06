@@ -1197,8 +1197,10 @@ def monotone_columns(x, specs, log_fn=log, lm=None, margins=None, barred=None):
     for base, gs in sorted(column_stacks(specs).items()):
         for k in range(len(gs) - 2, -1, -1):
             lo, up = gs[k], gs[k + 1]
-            Iup = stiffness(x[up][0], "I")
-            if Iup <= stiffness(x[lo][0], "I") * 1.0001:
+            # the group's own stiffness measure: Ix for moment-frame columns, A for braced-frame columns (stiff 'A')
+            kind = specs[lo].get("stiff", STIFF_BY_ROLE.get("column")) or "I"
+            Iup = stiffness(x[up][0], kind)
+            if Iup <= stiffness(x[lo][0], kind) * 1.0001:
                 continue
             new = None
             if lm is not None:
