@@ -6,6 +6,33 @@ dado, D8) as the published golds of IN_Ex1 … IN_Ex4; IN_Ex5 (rooftop PV on IN_
 everything derived from them is re-based. The job folders (`cfg.py`, `secondary/secondary_is801.py`, IN_Ex5
 `pv_check.py`) live in the gold area, not in this repo; this file records what changed in them.
 
+## Independent review (2026-11-06, briefs/PEB_REVIEW.md): status
+
+The review found no dropped or weakened check, hand checks agreeing with the engine to 0.01 %, IN_Ex2 reproducing
+byte for byte and the IN_Ex5 numbers consistent, but three engine blockers that decide golds sized to 0.99-1.00:
+**A** member checks rank combinations by magnitude, not sign (IN_Ex2 canopy root 1.211); **B** the Table 2 web class
+uses P = 1 N (IN_Ex3 column about 1.07, IN_Ex2 wind column about 1.05, IN_Ex1 main column about 1.03); **C** joint
+plates of 16-20 mm keep fy 250 / 350 (IN_Ex3 knee stiffeners 1.024). A and B, and `plate_fy` in the sizer, are fixed
+by the engine agent on its own branch; **the golds below are therefore not final**: they are re-sized and re-run on
+the fixed engine once it is on main, and the tables, the IN_Ex5 PV answer, the strengthening option and the IN_Ex2 /
+IN_Ex4 comparisons are re-based then.
+
+Done on this branch meanwhile (no sizing runs):
+- **C in the gold cfgs:** every plate, stiffener and key yield stress of IN_Ex1-Ex4 (`bolted_end_plate`, the base
+  plate and fin plate helpers, the knee shear plates and panel stiffeners, the shear keys) now comes from one
+  function, the engine's IS 2062 (Part 1):2025 Table 3 band function (`india_is800.fy_is2062`, behind a one-line alias
+  in each cfg). Executing the cfgs before and after (no analysis) changes exactly: IN_Ex1 knee flange stiffeners
+  20 mm and gable splice plates 20 mm, IN_Ex3 knee flange stiffeners 18 mm and gable splice plates 20 mm, IN_Ex4
+  rafter and gable splice plates 20 mm, all 250 → 240 MPa, and IN_Ex2's 60 mm fixed-base plate 240 → 230 MPa (a case
+  the review did not list: that helper had no band above 40 mm).
+- The biaxial base keeps the minor-axis plate outline row (review item 4) and the sizer's no-plate reason is per call
+  (item 7); tests added.
+- Wording: "worst member ratio" where the member maximum is quoted, with the worst connection, Section 12 and purlin /
+  girt ratios beside it (SOLUTION.md blocks, the table below: IN_Ex3's knee is at 1.000); the IN_Ex5 block gives the
+  package's 59 reasons (15 was the stored, truncated list); the study design runs (strengthening option, the
+  comparisons' re-sized rows) say "every check passes ... engine status partial only for the missing grounding
+  record" instead of COMPLETE.
+
 ## The new golds
 
 How they were made: the October study's strict design of each job (`/home/claude/gold_var/study/<job>/strict/`)
@@ -21,13 +48,13 @@ web thickness set to the real 16 mm web (the sizer had kept 17), the IN_Ex3 knee
 (the sizer had kept M30). The purlins / girts the study chose are written into `secondary/secondary_is801.py`. Gold
 runs: secondary design (CFS engine, main dcda6c2) then the harness, `PYTHONHASHSEED=0`.
 
-| job | kg/m² old → new | worst strength ratio old → new (governing, new) | wind sway Y / limit old → new | storey drift / limit old → new | status old → new |
-|---|---|---|---|---|---|
-| Ex1 | 34.55 → **32.38** (-2.17) | 0.961 → 0.996 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.939 → 0.973 | 0.266 → 0.272 | COMPLETE → COMPLETE |
-| Ex2 | 56.17 → **52.71** (-3.46) | 0.930 → 1.000 (roof-WI408X190X12X5, IS 800 9.3 interaction / member resistance) | 0.891 → 0.936 | 0.390 → 0.402 | COMPLETE → COMPLETE |
-| Ex3 | 56.97 → **51.50** (-5.47) | 0.849 → 0.994 (lateral_col-WI475X220X16X5, IS 800 9.3 interaction / member resistance) | 0.412 → 0.662 | 0.086 → 0.129 | COMPLETE → COMPLETE |
-| Ex4 | 63.78 → **57.11** (-6.67) | 0.890 → 0.994 (gravity_col-WI475X190X12X4, IS 800 9.3 interaction / member resistance) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
-| Ex5 | 34.55 → **32.38** (-2.17) | 1.102 → 1.132 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 1.155 → 1.198 | 0.363 → 0.373 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
+| job | kg/m² old → new | worst member ratio old → new (member, new) | worst connection ratio old → new (joint, new) | wind sway Y / limit old → new | storey drift / limit old → new | status old → new |
+|---|---|---|---|---|---|---|
+| Ex1 | 34.55 → **32.38** (-2.17) | 0.961 → 0.996 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 0.991 (conn-roof-WI950X250X14X6) | 0.939 → 0.973 | 0.266 → 0.272 | COMPLETE → COMPLETE |
+| Ex2 | 56.17 → **52.71** (-3.46) | 0.930 → 1.000 (roof-WI408X190X12X5, IS 800 9.3 interaction / member resistance) | 0.974 → 0.994 (conn-lateral_col-WI725X230X22X14) | 0.891 → 0.936 | 0.390 → 0.402 | COMPLETE → COMPLETE |
+| Ex3 | 56.97 → **51.50** (-5.47) | 0.849 → 0.994 (lateral_col-WI475X220X16X5, IS 800 9.3 interaction / member resistance) | 0.948 → 1.000 (conn-peb-knee-WI475X220X16X5-WI675X225X12X6) | 0.412 → 0.662 | 0.086 → 0.129 | COMPLETE → COMPLETE |
+| Ex4 | 63.78 → **57.11** (-6.67) | 0.890 → 0.994 (gravity_col-WI475X190X12X4, IS 800 9.3 interaction / member resistance) | 0.984 → 0.984 (conn-brace-WPB180X180X51.22) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
+| Ex5 | 34.55 → **32.38** (-2.17) | 1.102 → 1.132 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 1.091 (conn-peb-splice-190702) | 1.155 → 1.198 | 0.363 → 0.373 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
 
 kg/m² of plan (the gold take-off), all on the final engine (this branch at 1d058f0: main 41fb2f7 with the span-moment fix, plus this branch). The gold figures differ from the sizer's verified runs by at most 0.09 kg/m² (Ex1
 32.38 / 32.40, Ex2 52.71 / 52.71, Ex3 51.50 / 51.57, Ex4 57.11 / 57.14): the gold `cfg.py` take-off formulas are the
@@ -143,7 +170,7 @@ What changed, per job (from → to):
 - `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection) on the new IN_Ex1: **capacity 0.00 kN/m²** at
   H/240, at H/150 (the dado detailed to move independently) and on strength alone. The main frame column
   (WI862X225X12X8 station) is at 0.996 without the PV and 1.005 with 0.01 kN/m²; at 0.15 kN/m² the job is PARTIAL
-  (worst strength 1.132, wind sway 1.198 of H/240, first transverse mode 0.88 Hz, so the 10.2 gust-factor wind
+  (worst member ratio 1.132, wind sway 1.198 of H/240, first transverse mode 0.88 Hz, so the 10.2 gust-factor wind
   applies). October (the old IN_Ex1): 0.02 kN/m², limited by the sway once the frame drops below 1 Hz.
 - The report's PV answer and the installer note follow (0.00 kN/m²; "a lighter array or a smaller covered area does
   not help: the shed as built has no spare capacity for PV").
@@ -156,7 +183,7 @@ What changed, per job (from → to):
 
 ## Re-based report files
 - **IN_Ex5 `strengthening_option.json`** (solar-ready, strengthen-only from the new IN_Ex1, the IN_Ex5 wind basis):
-  +6.44 t, **+2.86 kg/m²** (32.38 → 35.24), COMPLETE, largest check ratio 0.997 (a girt). Changes: main columns
+  +6.44 t, **+2.86 kg/m²** (32.38 → 35.24); every check passes in its design run, largest check ratio 0.997 (a girt). The design run builds no report, so the engine's own status for it is partial, only for the missing grounding record (the file now says so instead of COMPLETE). Changes: main columns
   TI375-975X225X12X8 → TI375-1000X250X12X8, haunches TI975-575X250X14X6 → TI1000-650X250X14X8, rafter bodies
   WI575X190X10X5 → WI650X190X10X5, gable end rafter and wind column one step deeper, knee end plate 45 → 56 mm with
   a 36 mm column flange plate, main shear keys 2 × 400 × 36, 300 deep, purlins LZ230X75X20X2 → LZ230X75X20X2.3.
