@@ -1632,9 +1632,18 @@ def _base_stiffeners(st, sp, col):
     25 mm thick and 0.4 x the plate's projection beyond the column high (at least 300 mm); a declared set is
     stepped one plate up instead."""
     if isinstance(st, dict) and st:
+        # the plate still fails between the gussets: one more gusset on each face (shorter plate spans), up to 6
         st = dict(st)
-        st["t_mm"] = _plate_up(float(st.get("t_mm") or 20.0), 1.0001)
+        n = int(st.get("n_per_side") or 2)
+        if n < 6:
+            st["n_per_side"] = n + 1
+            st["n_per_side_y"] = int(st.get("n_per_side_y") or n) + 1
+        else:
+            st["t_mm"] = min(_plate_up(float(st.get("t_mm") or 20.0), 1.0001), 63.0)
         st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
+        if isinstance(st.get("note"), str):
+            st["note"] = re.sub(r"^\d+ gussets", "%d gussets" % (2 * (int(st["n_per_side"]) + int(st.get("n_per_side_y") or st["n_per_side"]))),
+                                st["note"])
         return st
     proj = 200.0
     try:
