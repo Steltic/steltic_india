@@ -2315,11 +2315,12 @@ def base_plate_ok(cfg, spec, entries, pl, key_dims=None, margin=1.0, why=None):
     return True
 
 
-def size_base_plate(cfg, spec, entries, key_dims=None, margin=1.0, floor=None):
+def size_base_plate(cfg, spec, entries, key_dims=None, margin=1.0, floor=None, why=None):
     """Lightest slab base of a slot: the thinnest plate (IS 2062 plate thicknesses from 12 mm) that passes with some
     anchor diameter (M20 ... M36), then the smallest such anchor; the plan size and the anchor layout stay as
     declared (they follow the column outline and the anchor pitch / edge rules).  floor = {'t', 'd'}: strengthen
-    only.  Returns {'t', 'd'} or None."""
+    only.  Returns {'t', 'd'} or None; with None, why (a list) receives the reason the thickest plate failed (review
+    2026-11-06: per call, not module state, so a cached result names its own slot)."""
     fl = floor or {}
     ts = [t for t in BASE_PLATE_T_MM if t >= float(fl.get("t") or 0.0)]
     a0 = spec.get("anchors") if isinstance(spec.get("anchors"), dict) else {}
@@ -2339,10 +2340,11 @@ def size_base_plate(cfg, spec, entries, key_dims=None, margin=1.0, floor=None):
         if best is None or cand < best:
             best = cand
     if best is None:
-        why = []
+        w = []
         if ts:
-            base_plate_ok(cfg, spec, entries, {"t": ts[-1], "d": ds[-1]}, key_dims, margin, why=why)
-        size_base_plate.last_why = why[0] if why else "no plate thickness at or above the floor"
+            base_plate_ok(cfg, spec, entries, {"t": ts[-1], "d": ds[-1]}, key_dims, margin, why=w)
+        if why is not None:
+            why.append(w[0] if w else "no plate thickness at or above the floor")
         return None
     return {"t": best[0], "d": best[1] or None}
 
@@ -2555,14 +2557,16 @@ class Evaluator:
                 ck = (slot, tuple(e["sec"] for e in entries), tuple(kd) if isinstance(kd, (list, tuple)) else kd,
                       mg_bp)
                 if ck not in self.bp_cache:       # the plate depends on the base sections and the key only
-                    self.bp_cache[ck] = size_base_plate(lm.cfg, spec_b, entries,
-                                                        key_dims=kd if kd != "none_fits" else None, margin=mg_bp,
-                                                        floor=(fl.get(slot) or {}).get("plate"))
-                pl = self.bp_cache[ck]
+                    w_ = []
+                    self.bp_cache[ck] = (size_base_plate(lm.cfg, spec_b, entries,
+                                                         key_dims=kd if kd != "none_fits" else None, margin=mg_bp,
+                                                         floor=(fl.get(slot) or {}).get("plate"), why=w_),
+                                         w_[0] if w_ else None)
+                pl, why_ = self.bp_cache[ck]
                 if pl is None:
                     # nothing lighter verified locally: keep the plate of the run (the full run judges it)
                     pl = dict(cp[slot]["plate"])
-                    info.setdefault(slot, {})["plate_kept"] = getattr(size_base_plate, "last_why", None)
+                    info.setdefault(slot, {})["plate_kept"] = why_
                 d_ = design.setdefault(slot, {"key": cp[slot].get("key"), "fck": cp[slot].get("fck", 30.0),
                                               "b_max": cp[slot].get("b_max")})
                 d_["plate"] = pl

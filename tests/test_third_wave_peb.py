@@ -197,6 +197,25 @@ def test_base_plate_inside_the_column_outline_is_a_geometry_failure_not_a_crash(
     assert "geometry_plate_outline" not in r2["checks"]
 
 
+def test_biaxial_base_keeps_the_minor_axis_outline_row():
+    """Review 2026-11-06: about the minor axis the plate must also extend beyond 0.95 bf; with B < 0.95 bf (but
+    >= 0.8 bf, so the major-axis outline passes) the minor-axis call has no projection and a zero compression-side
+    moment, so its outline row must stay in the biaxial result as a failing check (it used to be dropped)."""
+    import india_connections as C
+    kw = dict(B_mm=300.0, L_mm=600.0, t_plate_mm=25.0, fy_plate_MPa=240.0, fck_MPa=30.0, col_d_mm=450.0,
+              col_bf_mm=330.0, col_tf_mm=12.0,
+              anchors={"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "8.8", "f_mm": 200.0, "pitch_mm": 160.0,
+                       "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0, "f_y_mm": 100.0, "n_tension_y": 2,
+                       "embedment": {"method": "bond", "tau_bd_MPa": 1.5, "bar": "plain", "L_mm": 900.0,
+                                     "source": "test input", "cite": "IS 456:2000 26.2.1.1"}})
+    r = C.base_plate_design_biaxial(P_N=100e3, Mz_Nmm=20e6, My_Nmm=5e6, V_N=10e3, **kw)
+    assert "geometry_plate_outline" not in r["checks"]                 # 600 >= 0.95 x 450, 300 >= 0.8 x 330
+    assert r["checks"]["y:geometry_plate_outline"]["ok"] is False      # 300 < 0.95 x 330
+    assert r["ok"] is False
+    r2 = C.base_plate_design_biaxial(P_N=100e3, Mz_Nmm=20e6, My_Nmm=5e6, V_N=10e3, **dict(kw, B_mm=350.0))
+    assert "y:geometry_plate_outline" not in r2["checks"]
+
+
 # ------------------------------------------------------------------------------ the PEB sizer (handoff P12)
 def _lm_stub(members, chains, x, spec, res=None):
     import peb_autosize as A
@@ -328,6 +347,24 @@ def test_base_plate_sizing_picks_the_thinnest_passing_plate():
     # the plate and anchor values are applied with their IS 2062 fy and IS 4000 stress area
     sp = A.apply_plate(dict(spec, anchors=dict(spec["anchors"])), {"t": 16.0, "d": 30})
     assert sp["t_plate_mm"] == 16.0 and sp["fy_plate_MPa"] == 250.0 and sp["anchors"]["Anb_mm2"] == 561.0
+
+
+def test_base_plate_failure_reason_belongs_to_its_own_call():
+    """Review 2026-11-06: the reason a slot has no passing plate is returned per call (the module attribute it used
+    to be named the last slot sized, so a cached result could carry another slot's reason)."""
+    import peb_autosize as A
+    import peb_build as PB
+    PB.ensure("WI412X225X12X8")
+    cfg = {"plate_grade": "E250", "steel_grade": "E350"}
+    spec = _slab_spec()
+    over = [{"el": 1, "sec": "WI412X225X12X8", "cases": [(250e3, 0.0, 0.0, 5e6)]}]       # a base shear no anchors take
+    why = []
+    assert A.size_base_plate(cfg, spec, over, why=why) is None
+    assert len(why) == 1 and why[0].startswith("t ")
+    w2 = []
+    assert A.size_base_plate(cfg, spec, over, floor={"t": 999.0}, why=w2) is None
+    assert w2 == ["no plate thickness at or above the floor"]
+    assert not hasattr(A.size_base_plate, "last_why")
 
 
 def test_base_plate_is_a_design_variable_and_itemised():

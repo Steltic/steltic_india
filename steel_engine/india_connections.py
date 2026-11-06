@@ -1379,7 +1379,10 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
         ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
                                col_tf_mm=col_tf_mm, anchors=ay, **common_y)
         for k, v in ry["checks"].items():
-            if k.startswith(("geometry_", "shear_path", "shear_key", "anchor_shear", "anchorage_embedment")):
+            # the minor-axis outline row stays (review 2026-11-06): with B < 0.95 bf the plate has no projection
+            # about y, the y-call's compression-side moment is zero, and only this row says the plate is too narrow
+            if k.startswith(("geometry_", "shear_path", "shear_key", "anchor_shear", "anchorage_embedment")) \
+                    and k != "geometry_plate_outline":
                 continue
             out["checks"]["y:" + k] = v
         out["bearing_y"] = ry.get("bearing")
