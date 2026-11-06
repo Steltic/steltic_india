@@ -2197,13 +2197,49 @@ CITE_3_7_2D = ("IS 800:2007 3.7.2(d): slender (Class 4) cross-section -- effecti
 # as the section is semi-compact or better"; 3.7.2(d) "deducting width of the compression plate element in excess of
 # the semi-compact section limit".  (The ruling's "7.3.2.1" is clause 7.3.2 of the corpus text, which has no 7.3.2.1.)
 PD_BASIS_3_7_2D = (
-    "Engineering basis (lead ruling 2026-11-06): Pd in the 9.3.2.2 interaction is the member's design strength under "
-    "axial compression alone (9.3.2.2 'design strength under axial compression'; 7.1.2 Pd = Ae fcd).  For a slender "
-    "section its effective area Ae (7.3.2, as modified in 3.7.2 Class 4) deducts each element's width in excess of its "
-    "Table 2 semi-compact limit under axial compression: the web to the 'axial compression' row 42 eps tw (3.7.2(d)); "
-    "the same Ae gives Nd = Ae fy / gamma_m0 (9.3.1).  The 'generally' web rows with the combination's r1 / r2 decide "
-    "the class of the combination and the bending resistance Md (Ze_eff with the web kept to 126 eps / (1 + 2 r2) tw); "
-    "a section semi-compact or better by those rows keeps the gross area for Pd (7.3.2).")
+    "Lead ruling 1 (2026-11-06): Pd in 7.1.2 / 9.3.2.2 is the design strength under axial compression alone (9.3.2.2 "
+    "'Pdy, Pdz = design strength under axial compression'; 7.1.2 Pd = Ae fcd, Ae as defined in 7.3.2).  For I and box "
+    "sections Pd is always taken from the Table 2 class under axial compression alone: a web (or box plate) with "
+    "d/t > 42 eps is slender there and Pd uses the 3.7.2(d) effective area with the 42 eps web (7.3.2 as modified in "
+    "3.7.2 Class 4) -- one Pd per member and design length, whatever the combination's moments.  Nd (9.3.1), Md, Mdy "
+    "and the LTB resistance stay on the combination's class (the 'generally' web rows with its r1 / r2 when it has "
+    "major-axis bending; Ze_eff with the web kept to 126 eps / (1 + 2 r2) tw for a slender combination).")
+# Steltic ruling D-T11 (lead ruling 2, 2026-11-06): the web class under axial compression with minor-axis bending only.
+# Corpus IS_800_2007.md 3.7.1 (OCR order scrambled): "... each element of a cross-section subjected to compression due
+# to axial force, moment or shear"; Table 2 web rows: "axial compression ... 42e", "generally ... r1, r2" (WEB_ROWS_CITE).
+D_T11_NEGLIGIBLE_MZ = 0.05
+D_T11_CITE = (
+    "Steltic ruling D-T11 (2026-11-06), IS 800 3.7.1 / Table 2: each element is classified by the stress it carries "
+    "(3.7.1 'each element of a cross-section subjected to compression due to axial force, moment or shear').  With "
+    "axial compression and no meaningful major-axis moment (|Mz| <= 0.05 Mdz, Mdz the section's 8.2.1.2 design "
+    "bending strength about z without axial force -- the H34 negligibility basis) the web lies on the neutral axis of "
+    "My and carries the uniform N / A: it is classified on the 'axial compression' row (42 eps) whatever My.  Table 2 "
+    "has no biaxial row; this follows the element's stress state and matches the common practice of classifying the "
+    "web as in compression for N plus minor-axis bending.  The 'generally' rows with r1 / r2 apply only with "
+    "major-axis bending.")
+
+
+def mdz_without_axial_force(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEFAULT):
+    """D-T11: the section's design bending strength about z without axial force, 8.2.1.2 with its N = 0 Table 2 class
+    (plastic / compact: Zp fy / gamma_m0 <= 1.2 Ze fy / gamma_m0; semi-compact, and slender taken as the gross elastic
+    modulus -- the larger value, so the 0.05 Mdz threshold errs on the strict side: Ze fy / gamma_m0)."""
+    p = _props(sec)
+    cls = section_class_table2(p, fy_MPa, welded=welded).get("section_class")
+    Ze, Zp = float(p["Sx"]), float(p.get("Zx") or p["Sx"])
+    if cls in ("plastic", "compact"):
+        return min(Zp, 1.2 * Ze) * float(fy_MPa) / gamma_m0
+    return Ze * float(fy_MPa) / gamma_m0
+
+
+def d_t11_axial_row(P_N, Mz_abs_Nmm, sec, fy_MPa, *, welded=False, Mdz_Nmm=None):
+    """Steltic ruling D-T11 (D_T11_CITE): True when the web is classified on Table 2's 'axial compression' row --
+    the record carries axial compression (P above the Table 3 compression tolerance p_comp_tol) and no meaningful
+    major-axis moment (|Mz| <= 0.05 Mdz), whatever its minor-axis moment."""
+    p = _props(sec)
+    if float(P_N or 0.0) <= p_comp_tol(p.get("A"), fy_MPa):
+        return False
+    Mdz = Mdz_Nmm if Mdz_Nmm is not None else mdz_without_axial_force(p, fy_MPa, welded=welded)
+    return abs(float(Mz_abs_Nmm or 0.0)) <= D_T11_NEGLIGIBLE_MZ * Mdz
 
 
 def effective_section_3_7_2d(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEFAULT, web_dt_limit=None):
@@ -2284,6 +2320,23 @@ def effective_section_3_7_2d(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEF
                         else " with the combination's axial force, 126 eps / (1 + 2 r2)")}
 
 
+def effective_area_box_axial(sec, fy_MPa):
+    """IS 800 3.7.2(d) effective AREA of a welded box in axial compression (lead ruling 1, 2026-11-06: Pd from the class
+    under axial compression alone): each web (d = D - 2 tf) and each flange between the webs (b = B - 2 tw) keeps its
+    Table 2 semi-compact width for axial compression, 42 eps t; the excess is deducted.  Radii of gyration stay those
+    of the gross section (the deducted strips are at the middle of each plate)."""
+    p = _props(sec)
+    eps = math.sqrt(250.0 / float(fy_MPa))
+    D, B, tw, tf = float(p["d"]), float(p["bf"]), float(p["tw"]), float(p["tf"])
+    d, b = D - 2.0 * tf, B - 2.0 * tw
+    d_e, b_e = min(d, 42.0 * eps * tw), min(b, 42.0 * eps * tf)
+    A_gross = float(p["A"])
+    A_eff = A_gross - 2.0 * (d - d_e) * tw - 2.0 * (b - b_e) * tf
+    return {"found": True, "cite": CITE_3_7_2D, "section_type": "box", "eps": eps, "web_d_mm": d, "web_d_eff_mm": d_e,
+            "flange_b_mm": b, "flange_b_eff_mm": b_e, "A_gross_mm2": A_gross, "A_eff_mm2": A_eff,
+            "web_dt_limit_axial_eps": 42.0, "Pd_basis": PD_BASIS_3_7_2D}
+
+
 def effective_props_3_7_2d(sec, fy_MPa, *, welded=False, web_dt_limit=None):
     """A copy of the section record with the 3.7.2(d) effective properties in place (A = A_eff, Sx = Zx = Ze_eff,
     Sy = Zy = Ze_eff_minor) and '_eff_3_7_2d' = the effective-section record; None when not applicable.
@@ -2328,13 +2381,15 @@ _ORDER = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
 # (HR-INTEGRATE decision above).  A row whose denominator is zero or negative (r1 <= -1, or r2 <= -1/2: tension large
 # enough that the formula's limit grows without bound) sets no limit for that class -- the web is not a compression
 # element there (engine reading; the formulas tend to no limit as the denominator tends to zero).  The 'axial
-# compression' row is used when the combination carries axial compression and no bending moment about either axis (a
-# compression member: the class then decides only the area of 7.3.2); with any bending the 'generally' rows ('in
-# general': the rows that take the axial force through r1 and r2); with no axial force the mid-depth row.  Its 'Not
+# compression' row is used when the combination carries axial compression and no meaningful major-axis moment
+# (Steltic ruling D-T11, D_T11_CITE: |Mz| <= 0.05 Mdz, whatever My -- the web lies on the neutral axis of My and
+# carries the uniform N / A), and for Pd always (lead ruling 1, PD_BASIS_3_7_2D); with major-axis bending the
+# 'generally' rows (the rows that take the axial force through r1 and r2); with no axial force the mid-depth row.  Its 'Not
 # applicable' plastic and compact cells are read as: the web sets no plastic / compact requirement there (it is
 # semi-compact or better up to 42e and slender beyond; the flanges classify the section).
 WEB_ROWS_CITE = ("IS 800:2007 Table 2 web of an I, H or box section (mid-depth / generally with r1, r2 of Note 5 / "
-                 "axial compression); r1 = (N/(d tw))/(fy/gamma_m0), r2 = (N/A)/(fy/gamma_m0), N compression +")
+                 "axial compression); r1 = (N/(d tw))/(fy/gamma_m0), r2 = (N/A)/(fy/gamma_m0), N compression +; the "
+                 "'axial compression' row with no meaningful major-axis moment (Steltic ruling D-T11)")
 
 
 def _table2_web(d, tw, n_webs, A_mm2, P_N, fy_MPa, eps, gamma_m0, axial_only):
@@ -2903,11 +2958,21 @@ def compression_capacity(sec, fy_MPa, *, KLz_mm, KLy_mm, process=None, welded=Fa
     st = p.get("section_type")
     welded = _welded_I(p, welded)
     if section_class is None:
-        sc = section_class_table2(p, fy_MPa, P_N=1.0, welded=welded, loading="axial")
+        # lead ruling 1 (2026-11-06): Pd is the design strength under axial compression ALONE -- an I or box web is
+        # classified on Table 2's 'axial compression' row (42 eps); CHS / angles take their own axial rows (loading)
+        sc = section_class_table2(p, fy_MPa, P_N=1.0, welded=welded, loading="axial",
+                                  axial_only=st in ("I", "box"))
     else:
         sc = {"section_class": section_class}
     out = {"cite": "IS 800:2007 7.1.2 / 7.1.2.1, Table 10 class, Table 7 alpha", "section_class_axial": sc.get("section_class")}
-    if sc.get("section_class") == "slender" and p.get("_eff_3_7_2d"):
+    if sc.get("section_class") == "slender" and st == "box" and not p.get("_eff_3_7_2d"):
+        # 3.7.2(d) for a welded box in axial compression: each web and flange plate keeps its 42 eps semi-compact
+        # width (Table 2 'axial compression' rows), the excess deducted -- Pd = Ae fcd (7.1.2, 7.3.2)
+        eb = effective_area_box_axial(p, fy_MPa)
+        p = dict(p, A=eb["A_eff_mm2"], _eff_3_7_2d=eb, _A_gross=eb["A_gross_mm2"])
+        out["effective_section"] = eb
+        out["note"] = "slender box in axial compression: Pd = Ae fcd with the IS 800 3.7.2(d) effective area (7.3.2)"
+    elif sc.get("section_class") == "slender" and p.get("_eff_3_7_2d"):
         # PEB (2026-10): the effective section of IS 800 3.7.2(d) is already in p (A = effective area): Pd = Ae fcd
         out["effective_section"] = p["_eff_3_7_2d"]
         out["note"] = "slender cross-section: Pd = Ae fcd with the IS 800 3.7.2(d) effective area (7.3.2)"
@@ -3153,7 +3218,8 @@ def peb_buckling_section(comp, p, bsec, fy, KLz, KLy, *, process=None, welded=Tr
     segment's own section over KLy (the restraint spacing).  comp = compression_capacity of the local section."""
     pb = _props(bsec)
     if pb.get("section_type") == "I":
-        scb = section_class_table2(pb, fy, P_N=1.0, welded=_welded_I(pb, welded), loading="axial")
+        # lead ruling 1: the buckling section's Pd from its class under axial compression alone (42 eps web row)
+        scb = section_class_table2(pb, fy, P_N=1.0, welded=_welded_I(pb, welded), loading="axial", axial_only=True)
         if scb.get("section_class") == "slender":
             pb = effective_props_3_7_2d(pb, fy, welded=_welded_I(pb, welded)) or pb
     cb = compression_capacity(pb, fy, KLz_mm=KLz, KLy_mm=KLy, process=process, welded=_welded_I(pb, welded))
@@ -3300,10 +3366,25 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     # Engine checks fix B (2026-11): IS 800 Table 2 classifies the cross-section under the forces it carries, so the
     # class -- and the capacities that follow it (plastic / compact: Zp and 9.3.1.1; semi-compact: Ze and 9.3.1.3;
     # slender: the 3.7.2(d) effective section designed as semi-compact) -- is found PER COMBINATION with that
-    # combination's axial force N (section_class_table2: the 'generally' web rows with r1, r2 of Note 5, the
-    # 'axial compression' row when the combination has no major-axis moment, the mid-depth row when N = 0).  Before
-    # this the web was classified with N = 0 (and P = 1 N for the axial terms), so a column web between the r1 / r2
-    # limits and the mid-depth ones was checked as compact or semi-compact when it is semi-compact or slender.
+    # combination's axial force N (section_class_table2: the 'generally' web rows with r1, r2 of Note 5 with
+    # major-axis bending, the 'axial compression' row with compression and no meaningful major-axis moment -- Steltic
+    # ruling D-T11, D_T11_CITE -- the mid-depth row when N = 0).  Before this the web was classified with N = 0 (and
+    # P = 1 N for the axial terms), so a column web between the r1 / r2 limits and the mid-depth ones was checked as
+    # compact or semi-compact when it is semi-compact or slender.  Pd is the exception (lead ruling 1,
+    # PD_BASIS_3_7_2D): for I and box sections it comes from the class under axial compression alone, once per member.
+    st_g = p_gross.get("section_type")
+    pd_axial_alone = st_g in ("I", "box")
+    comp_ax = p_ax = None
+    if pd_axial_alone:
+        comp_ax = compression_capacity(p_gross, fy, KLz_mm=KLz, KLy_mm=KLy, process=member.get("process"),
+                                       welded=welded)
+        p_ax = p_gross
+        if comp_ax.get("effective_section"):
+            p_ax = (effective_props_3_7_2d(p_gross, fy, welded=welded) if st_g == "I" else
+                    dict(p_gross, A=comp_ax["effective_section"]["A_eff_mm2"])) or p_gross
+        if bsec and comp_ax.get("found"):
+            comp_ax = peb_buckling_section(comp_ax, p_ax, bsec, fy, KLz, KLy, process=member.get("process"),
+                                           welded=welded)
     caps_by_key = {}
     flags_once = set()
 
@@ -3333,28 +3414,36 @@ def member_check_is800(member, combo_forces, *, cfg=None):
                 pp = pe
                 scu = dict(sc, section_class="semi-compact", gross_class="slender",
                            note="slender (Table 2); designed with the IS 800 3.7.2(d) effective section as semi-compact")
-        # I / box / channel: the class of the combination; CHS and angles keep their own 'axial compression' rows
-        # (compression_capacity classifies them with loading 'axial', as before)
-        comp_ = compression_capacity(pp, fy, KLz_mm=KLz, KLy_mm=KLy, process=member.get("process"), welded=welded,
-                                     section_class=(None if p_gross.get("section_type") in ("CHS", "angle", "double_angle")
-                                                    else cls), angle_connection=member.get("angle_connection"))
-        if bsec and comp_.get("found"):
-            comp_ = peb_buckling_section(comp_, pp, bsec, fy, KLz, KLy, process=member.get("process"), welded=welded)
+        # Pd: I / box from the class under axial compression alone (lead ruling 1: comp_ax, one per member); channel:
+        # the class of the combination; CHS and angles keep their own 'axial compression' rows (loading 'axial')
+        if pd_axial_alone:
+            comp_ = comp_ax
+        else:
+            comp_ = compression_capacity(pp, fy, KLz_mm=KLz, KLy_mm=KLy, process=member.get("process"), welded=welded,
+                                         section_class=(None if st_g in ("CHS", "angle", "double_angle") else cls),
+                                         angle_connection=member.get("angle_connection"))
+            if bsec and comp_.get("found"):
+                comp_ = peb_buckling_section(comp_, pp, bsec, fy, KLz, KLy, process=member.get("process"),
+                                             welded=welded)
         c = {"p": pp, "sc": scu, "eff": eff_, "comp": comp_, "ltb": {},
              "Md_y": design_moment_8_2_1(pp["Zy"], pp["Sy"], fy, scu["section_class"], support=support),
              "Md_z_sec": design_moment_8_2_1(pp["Zx"], pp["Sx"], fy, scu["section_class"], support=support)}
         caps_by_key[key] = c
         return c
 
-    def _classify(P, bending):
-        sc = section_class_table2(p_gross, fy, P_N=P, welded=welded, axial_only=(P > 0.0 and not bending))
+    def _classify(P, axial_row):
+        sc = section_class_table2(p_gross, fy, P_N=P, welded=welded, axial_only=axial_row)
         web = next((e for e in sc.get("elements") or [] if e.get("web_row")), None)
         if web is not None and web.get("no_limit"):
             sc = dict(sc, web_no_limit=web["no_limit"])
         return sc
 
-    sc0 = _classify(0.0, True)                  # no axial force: the mid-depth web row (Table 3, record default)
+    sc0 = _classify(0.0, False)                 # no axial force: the mid-depth web row (Table 3, record default)
     caps0 = _caps(sc0)
+    # D-T11: 'no meaningful major-axis moment' = |Mz| <= 0.05 Mdz, Mdz the section's design bending strength about z
+    # without axial force (8.2.1.2, the N = 0 class); 'axial compression' = P above the Table 3 compression tolerance
+    Mdz0 = mdz_without_axial_force(p_gross, fy, welded=welded)
+    Mz_negl = D_T11_NEGLIGIBLE_MZ * Mdz0
     shz = shear_capacity(p_gross, fy, axis="z", welded=welded)
     shy = shear_capacity(p_gross, fy, axis="y", welded=welded)
 
@@ -3404,7 +3493,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             cmy = cm_factor(Myi, Myj, sway=sway)
         else:
             cmy = {"Cm": 0.9 if sway else 1.0, "note": "span load: Cm=1.0 unless Table 18 row chosen"}
-        zs = ([Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else [])
+        Mzh = cf.get("Mz_mid_hog_Nmm")          # review finding 4 (2026-11-06): a beam's in-span hogging extreme
+        zs = ([Mzi, Mzj] + ([float(Mzm)] if Mzm is not None else []) + ([float(Mzh)] if Mzh is not None else [])
               + ([cmz["M_span_Nmm"]] if cmz.get("M_span_Nmm") is not None else []))
         Mz_sag = max([m for m in zs if m > 0] or [0.0])
         Mz_hog = -min([m for m in zs if m < 0] or [0.0])
@@ -3417,9 +3507,10 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         # 1.0 is used (conservative).  Without a span load CmLT = Cmz as before.
         cmlt_row = cmz.get("Cm_table18") if Mzf else None
         psi = cmz.get("psi")
-        # fix B: the Table 2 class with this combination's N ('axial compression' row when it has no major-axis
-        # moment about either axis: |M| <= 1 N-m at every check point is taken as none)
-        sc_c = _classify(P, max(Mz_sag, Mz_hog, My) > 1.0e3)
+        # fix B: the Table 2 class with this combination's N; D-T11: the 'axial compression' row when it carries
+        # compression and no meaningful major-axis moment (|Mz| <= 0.05 Mdz), whatever My
+        axial_row = d_t11_axial_row(P, max(Mz_sag, Mz_hog), p_gross, fy, welded=welded, Mdz_Nmm=Mdz0)
+        sc_c = _classify(P, axial_row)
         caps = _caps(sc_c)
         caps_of[cf.get("combo")] = caps
         p_c, comp_c = caps["p"], caps["comp"]
@@ -3427,6 +3518,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
                "Cmz": cmz["Cm"], "Cmy": cmy["Cm"], "section_class": caps["sc"]["section_class"],
                "table2": {k: sc_c.get(k) for k in ("section_class", "web_row", "web_class", "web_d_tw", "web_limits",
                                                     "r1", "r2", "governing_element") if sc_c.get(k) is not None}}
+        if axial_row and (My > 1.0e3 or max(Mz_sag, Mz_hog) > 1.0e3):
+            rec["table2"]["web_row_basis"] = "D-T11: axial compression, |Mz| <= 0.05 Mdz (%.1f kN-m)" % (Mz_negl / 1e6)
         if caps["eff"] is not None:
             rec["effective_section_3_7_2d"] = {k: caps["eff"].get(k) for k in (
                 "A_eff_mm2", "Ze_eff_mm3", "web_d_eff_axial_mm", "web_d_eff_bending_mm", "web_dt_limit_bending_eps",
@@ -3492,6 +3585,16 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     res["capacities"] = {"compression": cg["comp"], "shear_z": shz, "shear_y": shy, "Mdy": cg["Md_y"],
                          "Mdz_section": cg["Md_z_sec"], "section_class": cg["sc"], "tension": Td,
                          "section_class_without_axial_force": caps0["sc"]}
+    res["web_class_basis"] = D_T11_CITE
+    if pd_axial_alone:
+        res["Pd_basis"] = PD_BASIS_3_7_2D
+        if comp_ax.get("effective_section"):
+            e_ax = comp_ax["effective_section"]
+            res["Pd_effective_section"] = {k: e_ax.get(k) for k in ("A_gross_mm2", "A_eff_mm2", "web_d_eff_axial_mm",
+                                                                    "web_d_eff_mm", "flange_b_eff_mm", "eps")
+                                           if e_ax.get(k) is not None}
+            _flag("Pd from the class under axial compression alone (lead ruling 1): slender there, Pd = Ae fcd with "
+                  "A_eff %.0f of %.0f mm2 (3.7.2(d), the 42 eps web)" % (e_ax["A_eff_mm2"], e_ax["A_gross_mm2"]))
     ncls = {}
     for r in per:
         k_ = (r.get("table2") or {}).get("section_class") or r.get("section_class")
@@ -3502,7 +3605,6 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     if effs:
         e_ = cg["eff"] if cg["eff"] is not None else effs[0]["eff"]
         res["effective_section_3_7_2d"] = e_
-        res["Pd_basis"] = PD_BASIS_3_7_2D
         res["flags"].append("slender section: IS 800 3.7.2(d) effective section (A_eff %.0f mm2, Ze_eff %.0f mm3)%s"
                             % (e_["A_eff_mm2"], e_["Ze_eff_mm3"],
                                "" if ncls.get("slender", 0) == len(per) else

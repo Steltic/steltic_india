@@ -815,7 +815,7 @@ def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
             # the station carries its END forces only: the span moment of either axis (and a span load's free
             # moment) belongs to the element check above (span-moment fix, 2026-11-01: My_mid / *_free cleared too)
             cfe.append(dict(c, Mz_i_Nmm=m_, Mz_j_Nmm=m_, My_i_Nmm=my_, My_j_Nmm=my_, Mz_mid_Nmm=None,
-                            My_mid_Nmm=None, Mz_free_Nmm=None, My_free_Nmm=None))
+                            My_mid_Nmm=None, Mz_free_Nmm=None, My_free_Nmm=None, Mz_mid_hog_Nmm=None))
         m2 = dict(mem, section=sec_e, id="%s@%s" % (mem.get("id"), end))
         try:
             r_ = I8.member_check_is800(m2, cfe, cfg=cfg)

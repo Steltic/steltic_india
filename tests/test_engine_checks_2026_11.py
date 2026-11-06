@@ -193,11 +193,12 @@ def test_B_axial_compression_row_without_bending():
     assert r2["web_class"] == "plastic" and r2["section_class"] == "plastic"           # not downgraded
 
 
-def test_B_axial_row_only_without_any_bending_in_the_member_check():
-    """The 'axial compression' row decides a combination with axial compression and no bending (a compression member:
-    only the 7.3.2 area follows); with a minor-axis moment only, the 'generally' rows with r1 / r2 (the web is not
-    classified as if the member were a pure strut, so the minor-axis capacity is not cut to the elastic one by a web
-    carrying a small uniform stress)."""
+def test_B_axial_row_with_no_meaningful_major_axis_moment_in_the_member_check():
+    """Steltic ruling D-T11 (lead ruling 2, 2026-11-06; it replaces this branch's first reading, 'generally' rows with
+    a minor-axis moment): a combination with axial compression and no meaningful major-axis moment takes the 'axial
+    compression' row whatever My -- the web lies on the neutral axis of My and carries the uniform N / A.  IN_Ex3
+    corner column section: d/tw = 44 > 42 eps (E350), so the N + My combination is slender (the first cut's
+    0.911 -> 1.179 on that gold)."""
     import india_is800 as I8
     lab = _wi(200, 190, 12, 4)                                # IN_Ex3 corner column: d/tw = 44 > 42 eps (E350)
     mem = {"id": "c", "section": lab, "grade": "E350", "role": "column", "L_mm": 3000.0, "Kz": 1.0, "Ky": 1.0,
@@ -206,7 +207,8 @@ def test_B_axial_row_only_without_any_bending_in_the_member_check():
                                                                    "My_j_Nmm": 5e6}])
     by = {p["combo"]: p for p in r["per_combo"]}
     assert by["N"]["table2"]["web_row"] == "axial compression" and by["N"]["table2"]["section_class"] == "slender"
-    assert by["NMy"]["table2"]["web_row"].startswith("generally") and by["NMy"]["section_class"] != "semi-compact"
+    assert by["NMy"]["table2"]["web_row"] == "axial compression" and by["NMy"]["table2"]["section_class"] == "slender"
+    assert by["NMy"]["table2"]["web_row_basis"].startswith("D-T11")
 
 
 def test_B_member_check_classifies_each_combination_and_capacity_follows():

@@ -1335,12 +1335,31 @@ class LocalModel:
                     if r.get("ok") is False:
                         out = (False, "IS 18168 Table 2 (%s %s)" % (comp, r.get("value")))
                         break
-                    sc = I8.section_class_table2(p, fy, welded=True)["section_class"]
+                    # review finding 7 (2026-11-06): the 12.11.3.1 screen classifies with each record's N, as the full
+                    # run's Section 12 gate (india_is800_s12.table2_class_by_combination, Steltic ruling D-T11)
+                    sc = self._class_with_N(c, p, fy)
                     if sc not in ("plastic", "compact"):
                         out = (False, "IS 800 12.11.3.1 %s not compact" % s_)
                         break
         self._t2_cache[key] = out
         return out
+
+    def _class_with_N(self, c, p, fy):
+        """The least favourable IS 800 Table 2 class of section p over the force records of constituent c (N tension +
+        in the records; the web row by Steltic ruling D-T11: 'axial compression' with |Mz| <= 0.05 Mdz)."""
+        import india_is800 as I8
+        order = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
+        Mdz0 = I8.mdz_without_axial_force(p, fy, welded=True)
+        worst = None
+        for mid in self.mem_of_const.get(c) or []:
+            for t in self.el_of_mem[mid]:
+                for r in (self.envt.get(t, {}).get("records") or {}).values():
+                    P = -float(r[0])
+                    ax = I8.d_t11_axial_row(P, abs(float(r[1])), p, fy, welded=True, Mdz_Nmm=Mdz0)
+                    cls = I8.section_class_table2(p, fy, P_N=P, welded=True, axial_only=ax)["section_class"]
+                    if order.get(cls, 0) > order.get(worst, 0):
+                        worst = cls
+        return worst or I8.section_class_table2(p, fy, welded=True)["section_class"]
 
     def _Ca(self, c, sec, fy):
         import sections as S

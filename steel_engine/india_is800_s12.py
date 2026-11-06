@@ -234,15 +234,15 @@ def _brace_compression(model_data, m, families=None):
 
 
 _N_DEPENDENT_TYPES = ("I", "box")          # Table 2 web rows that take the axial force (r1 / r2, axial compression)
-_BENDING_KEYS = ("Mz_i_Nmm", "Mz_j_Nmm", "My_i_Nmm", "My_j_Nmm", "Mz_mid_Nmm", "My_mid_Nmm", "Mz_free_Nmm",
-                 "My_free_Nmm")
+_MZ_KEYS = ("Mz_i_Nmm", "Mz_j_Nmm", "Mz_mid_Nmm", "Mz_free_Nmm", "Mz_mid_hog_Nmm")      # major-axis moments
 
 
 def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading="bending"):
     """Engine checks (2026-11, fix B applied to the Section 12 class gates): the IS 800 Table 2 class of a member
     with the axial force of EACH of its force records (india_is800.section_class_table2: the 'generally' web rows with
-    r1 / r2 of Note 5, the 'axial compression' row for a record with compression and no bending, the mid-depth row with
-    no axial force), as india_is800.member_check_is800 does.  The least favourable class governs (Note 4 / 3.7.2:
+    r1 / r2 of Note 5 with major-axis bending, the 'axial compression' row for a record with compression and no
+    meaningful major-axis moment -- |Mz| <= 0.05 Mdz, whatever My, Steltic ruling D-T11 -- the mid-depth row with no
+    axial force), as india_is800.member_check_is800 does.  The least favourable class governs (Note 4 / 3.7.2:
     the section must meet the class under every combination it carries); the governing record is the one with that
     class and the largest compression.  families: restrict the records (e.g. ('table4',) for a brace).  Sections whose
     Table 2 rows do not take the axial force (CHS, angles, channels) are classified once, as before.
@@ -258,11 +258,13 @@ def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading=
                                     "no force records: classified without axial force (mid-depth web row)"),
                     "n_records": len(fs)}
     by, worst = {}, None
+    Mdz0 = I8.mdz_without_axial_force(p, fy, welded=welded)
     for f in fs:
         P = float(f.get("P_N") or 0.0)
-        bending = any(abs(float(f.get(k) or 0.0)) > 1.0e3 for k in _BENDING_KEYS)
+        # Steltic ruling D-T11: the 'axial compression' web row with compression and |Mz| <= 0.05 Mdz, whatever My
+        Mz = max(abs(float(f.get(k) or 0.0)) for k in _MZ_KEYS)
         sc = I8.section_class_table2(p, fy, P_N=P, welded=welded, loading=loading,
-                                     axial_only=(P > 0.0 and not bending))
+                                     axial_only=I8.d_t11_axial_row(P, Mz, p, fy, welded=welded, Mdz_Nmm=Mdz0))
         cls = sc.get("section_class")
         by[cls] = by.get(cls, 0) + 1
         key = (I8._ORDER.get(cls, 0), P)
@@ -271,7 +273,8 @@ def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading=
     sc, f = worst[1], worst[2]
     sc0 = I8.section_class_table2(p, fy, welded=welded, loading=loading)
     rec = {"class_basis": "IS 800 Table 2 with the axial force of each force record (engine checks 2026-11, as the "
-                          "member check); least favourable class governs",
+                          "member check; the web row by Steltic ruling D-T11); least favourable class governs",
+           "web_class_basis": I8.D_T11_CITE,
            "governing_combo": f.get("combo"), "governing_family": f.get("family") or "table4",
            "governing_P_N": float(f.get("P_N") or 0.0), "web_row": sc.get("web_row"), "r1": sc.get("r1"),
            "r2": sc.get("r2"), "web_d_tw": sc.get("web_d_tw"), "web_limits": sc.get("web_limits"),
