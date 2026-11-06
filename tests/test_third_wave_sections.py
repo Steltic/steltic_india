@@ -553,3 +553,32 @@ def test_ebf_link_takes_the_least_overstrength_within_the_mass_span():
     assert AZ.mass_kg_m(got[0]) <= 1.3 * AZ.mass_kg_m(first[0]) + 1e-9
     assert AZ.link_vp(got[0]) < 0.97 * AZ.link_vp(first[0]) and note
     assert AZ.props(got[0])["Zx"] >= zreq and AZ.family_of(got[0]) in ("MB", "WB", "HB")
+
+
+def test_local_prediction_uses_a_short_list_of_combinations_for_long_records(tmp_path):
+    """With every combination checked by the engine, an element with more than SHORT_CF_FROM combinations is predicted
+    on a short list (the largest ratios at its current section, and the largest of each force); the governing
+    combination of a candidate is still on it."""
+    AZ = _az()
+    import pickle
+    import india_is800 as I8
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+    mem = {"id": "e9", "tag": 9, "section": "HB200", "grade": "E250 B0", "role": "column", "L_mm": 6000.0,
+           "Kz": 1.0, "Ky": 1.0}
+
+    def c(i, P, M):
+        return {"combo": "c%d" % i, "P_N": P, "Mz_i_Nmm": M, "Mz_j_Nmm": -M, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0,
+                "Vy_N": 0.0, "Vz_N": 0.0}
+    cf = [c(i, -20e3 - 100.0 * i, 1e6) for i in range(70)] + [c(70, -300e3, 20e6)]
+    d = tmp_path / "cap"
+    d.mkdir()
+    pickle.dump({"elems": {9: {"member": mem, "kind": "col", "records": {"c1": [-50e3] + [0.0] * (n - 1)}}},
+                 "s12": None, "calls": {9: [{"member": mem, "cf": cf}]}}, open(d / "capture.pkl", "wb"))
+    lm = AZ.Local(str(d), {9: "g"}, {"g": {"role": "column"}}, {"g": "HB200"}, {}, {})
+    short = lm._short_cf(9, 0, mem, cf)
+    assert len(cf) > AZ.SHORT_CF_FROM and len(short) < len(cf) and short[-1]["combo"] == "c70"
+    for lab in ("HB200", "HB250"):
+        AZ.register(lab)
+        full = I8.member_check_is800(dict(mem, section=lab), cf, cfg=lm.cfg)
+        assert abs(lm.member_dc(9, lab, None)[0] - full.get("interaction_dc", full["dc"])) < 1e-9

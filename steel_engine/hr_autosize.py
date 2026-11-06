@@ -290,6 +290,9 @@ def built_up_catalogue(kind, *, min_depth=None, max_depth=None, square=True):
 _CAND_CACHE = {}
 
 
+SHORT_CF_FROM, SHORT_CF = 48, 24      # Local._short_cf: elements with more combinations are predicted on a short list
+
+
 def candidates(spec, current=None):
     """[(label, grade, tier)] for a group, in the order of preference: rolled E250 (families in order, each family
     lightest first; merged by mass), then rolled E350 (columns), then the built-up fallback (box or welded I, each
@@ -874,8 +877,8 @@ class Local:
         calls = self._calls.get(t)
         if calls:
             st = t3 = 0.0
-            for mem, cf in calls:
-                st2, t32, err = self._member_dc1(t, mem, cf, label, grade)
+            for i, (mem, cf) in enumerate(calls):
+                st2, t32, err = self._member_dc1(t, mem, self._short_cf(t, i, mem, cf), label, grade)
                 if err:
                     return st2, t32, err
                 st, t3 = max(st, st2), max(t3, t32)
@@ -887,6 +890,34 @@ class Local:
             st2, t32, err = self._member_dc1(t, mem, cf, label, grade)
             st, t3 = max(st, st2), max(t3, t32)
         return st, t3, err
+
+    def _short_cf(self, t, i, mem, cf):
+        """The combinations a candidate section is checked with (the local prediction only; the full run checks every
+        one).  Since the engine checks every combination with both signs (2026-11), a tall job's element carries 100+
+        of them, and each candidate of each group re-checks them all.  An element with more than SHORT_CF_FROM keeps,
+        in the run's order: the SHORT_CF combinations with the largest ratio at its current section, and for each
+        force the two largest in magnitude.  Computed once per element and run."""
+        if len(cf) <= SHORT_CF_FROM:
+            return cf
+        cache = self.__dict__.setdefault("_short_cache", {})
+        key = (t, i)
+        if key in cache:
+            return cache[key]
+        import india_is800 as I8
+        scores = []
+        for k, c in enumerate(cf):
+            try:
+                r = I8.member_check_is800(mem, [c], cfg=self.cfg)
+                d = float(r.get("interaction_dc", r.get("dc")) or 0.0)
+            except Exception:
+                d = 99.0
+            scores.append((d, -k))
+        keep = {-k for _, k in sorted(scores, reverse=True)[:SHORT_CF]}
+        for f in sorted({f for c in cf for f, v in c.items() if isinstance(v, (int, float))}):
+            keep |= set(sorted(range(len(cf)), key=lambda k: -abs(float(cf[k].get(f) or 0.0)))[:2])
+        out = [c for k, c in enumerate(cf) if k in keep]
+        cache[key] = out
+        return out
 
     def set_secondary(self, sec_map):
         """sec_map: cfg['secondary_members'] index -> group (probe_secondary)."""
