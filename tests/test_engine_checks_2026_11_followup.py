@@ -482,13 +482,14 @@ def test_DT11_section12_gate_and_sizer_screen_use_the_same_rule():
     class _Stub:                                            # the sizer's record access, two records of one element
         mem_of_const = {"c": ["m"]}
         el_of_mem = {"m": [1]}
-        envt = {1: {"records": {"w": (-5.0e4, 0.0) + (0.0,) * 15, "e": (-5.0e4, 2.0e8) + (0.0,) * 15}}}
+        # w: N 400 kN, no Mz (semi-compact on the 'generally' rows, r2 0.24; slender on D-T11's axial row)
+        envt = {1: {"records": {"w": (-4.0e5, 0.0) + (0.0,) * 15, "e": (-5.0e4, 2.0e8) + (0.0,) * 15}}}
         pkg = {"load_combinations": [{"label": "w", "lateral_kind": "W"}, {"label": "e", "lateral_kind": "EQ"}]}
         _eq_labels = PA.LocalModel._eq_labels
-    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "compact"
+    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "compact"          # w is not judged
     _Stub.pkg = {"load_combinations": [{"label": "w", "lateral_kind": "EQ"}, {"label": "e", "lateral_kind": "EQ"}]}
     _Stub._eq_lab = None
-    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "compact"    # generally rows, both
+    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "semi-compact"     # w judged, hinge state
 
 
 # ====================================================================================================== review findings
