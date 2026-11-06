@@ -1167,17 +1167,28 @@ def column_stacks(specs):
     return {b: [g for _, g in sorted(v)] for b, v in st.items() if len(v) > 1}
 
 
-def monotone_columns(x, specs, log_fn=log):
+def monotone_columns(x, specs, log_fn=log, lm=None, margins=None, barred=None):
     """IS 1893 Table 6(i) soft storey (K_i < K_i+1): a lateral column group is never less stiff (Ix) than the same
-    columns in the storeys above it -- where the sizing made it so, it takes the upper group's section and grade."""
+    columns in the storeys above it.  Where the sizing made it so, the lower group is sized again with the upper
+    group's Ix as its minimum stiffness (lightest passing candidate, frozen forces); without a local model, or when
+    nothing passes, it takes the upper group's section and grade."""
     x = dict(x)
     for base, gs in sorted(column_stacks(specs).items()):
         for k in range(len(gs) - 2, -1, -1):
             lo, up = gs[k], gs[k + 1]
-            if stiffness(x[up][0], "I") > stiffness(x[lo][0], "I") * 1.0001:
-                log_fn("    stack %s: %s %s is stiffer than %s %s below it -> %s takes it"
-                       % (base, up, x[up][0], lo, x[lo][0], lo))
-                x[lo] = x[up]
+            Iup = stiffness(x[up][0], "I")
+            if Iup <= stiffness(x[lo][0], "I") * 1.0001:
+                continue
+            new = None
+            if lm is not None:
+                xx, notes = size_groups(lm, x, margins or {}, {lo: Iup}, log_fn=lambda *a: None,
+                                        fixed=[g for g in x if g != lo], barred=barred)
+                if "no candidate" not in str(notes.get(lo, "")):
+                    new = xx[lo]
+            new = new or x[up]
+            log_fn("    stack %s: %s %s is stiffer than %s %s below it -> %s %s"
+                   % (base, up, x[up][0], lo, x[lo][0], lo, "%s %s" % (new[0], new[1] or "")))
+            x[lo] = tuple(new)
     return x
 
 
@@ -2383,7 +2394,7 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         for g in sorted(lm.specs):
             if lm.specs[g].get("same_as"):
                 x1[g] = x1[lm.specs[g]["same_as"]]
-        x1 = monotone_columns(x1, specs, log_fn=log_fn)
+        x1 = monotone_columns(x1, specs, log_fn=log_fn, lm=lm, margins=st["margins"], barred=st.get("barred"))
         gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
                                                                        if ":" not in k and k not in _labels_in_use(x)})
         bumps = connection_bumps(ev, x, roles)
