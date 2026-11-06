@@ -130,13 +130,19 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
             rec[name].append(a); return real[name](*a)
         return f
     for k in rec: setattr(ops, k, mk(k))
+    _rel_saved = dict(getattr(eng, "_COL_REL", {}))     # pinned column ends of THIS build (engine3d.add_column)
     try:
         _cb = cfg.get("custom_build")
         if _cb is None:                                  # X02: the parametric builder with cfg['roof_planes']
             from example_build import example_build as _cb
+        if hasattr(eng, "_COL_REL"):
+            eng._COL_REL.clear()
         info = _cb(cfg, transf)
+        col_rel = dict(info.get("col_rel") or getattr(eng, "_COL_REL", {}) or {})
     finally:
         for k in rec: setattr(ops, k, real[k])
+        if hasattr(eng, "_COL_REL"):
+            eng._COL_REL.clear(); eng._COL_REL.update(_rel_saved)
 
     ops.wipe(); ops.model("basic", "-ndm", 3, "-ndf", 6)
     coord = {}
@@ -207,7 +213,9 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
                                                   "i": i, "j": j, "k": k, "axis": "col",
                                                   "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None),
                                                   # element length (column_span_moments; span-moment fix 2026-11-01)
-                                                  "L": math.dist(coord[a[2]], coord[a[3]])})
+                                                  "L": math.dist(coord[a[2]], coord[a[3]]),
+                                                  # pinned end(s) of the column piece ('I' / 'J' / 'both'; PEB)
+                                                  "rel": col_rel.get(a[1])})
             elif kind == "brace":
                 braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3]})
     for a in rec["rigidDiaphragm"]:
@@ -1246,6 +1254,8 @@ def member_wind_loads(cfg, model, pat, f):
             cols.append((c, c1, c2, 0.5 * (c1[ax] + c2[ax]), round(0.5 * (c1[oth] + c2[oth]), 3),
                          min(c1[2], c2[2]), max(c1[2], c2[2])))
         if cols and all(c.get("transf") in (1, 2) for (c, *_r) in cols):
+            posts = _wind_post_columns(cols)
+            ws_ = ((cfg.get("load_plan") or {}).get("wind_summary") or {})
             for (c, c1, c2, xa, yo, z0, z1) in cols:
                 zm = 0.5 * (z0 + z1)
                 same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
@@ -1257,6 +1267,17 @@ def member_wind_loads(cfg, model, pat, f):
                     if abs(xa - upwind_first) > 1e-6:
                         continue
                     F = f * float(q) * wtrib / 1000.0 * fs      # N/mm along +axis
+                    post = posts.get(c["tag"])
+                    if post is not None:
+                        # engine checks (2026-11): a wind post (a wall column pinned at its top) is a beam-type
+                        # element spanning base to roof -- IS 875-3 7.2.2.1 (b) Ka from its OWN tributary area
+                        # (span x spacing), not the frame's (7.2.2.1 (a)) that the pattern pressure carries
+                        kf = wind_post_ka_factor(ws_, wtrib * post["H_mm"] / 1.0e6)
+                        if kf.get("applied"):
+                            F *= kf["factor"]
+                        model.setdefault("wind_post_Ka", {})[(post["line"], pat.get("name"))] = dict(
+                            kf, column_line=post["line"], pattern=pat.get("name"), tributary_width_mm=round(wtrib, 1),
+                            span_mm=round(post["H_mm"], 1))
                     # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
                     if c["transf"] == 2:
                         Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
@@ -1286,6 +1307,60 @@ def member_wind_loads(cfg, model, pat, f):
                         ops.load(n, *v)
                         tot["wall_N"] += Ftot
     return tot
+
+
+WIND_POST_KA_CITE = ("IS 875 (Part 3):2015 7.2.2.1 (b): 'For beam type elements, purlins, etc, the tributary area shall be "
+                     "taken as effective span multiplied by spacing' (a wind post: column height x tributary width); "
+                     "7.2.2.1 (a) frames: frame spacing x panel dimension; Table 4 Ka; 7.2 pd = Kd Ka Kc pz >= 0.7 pz")
+
+
+def _wind_post_columns(cols):
+    """{column piece tag: {line, H_mm}} of the wind posts among the wall columns of member_wind_loads: column lines
+    (pieces at one plan position) whose TOP piece is pinned ('J' / 'both' release: a gable wind column, a pinned
+    gravity column in a wall) -- they span base to roof as beam-type elements.  H_mm = the line's height."""
+    lines = {}
+    for (c, c1, c2, xa, yo, z0, z1) in cols:
+        lines.setdefault((round(xa, 3), yo), []).append((c, z0, z1))
+    out = {}
+    for ln, pcs in lines.items():
+        top = max(pcs, key=lambda r: r[2])
+        if top[0].get("rel") not in ("J", "both"):
+            continue
+        H = max(r[2] for r in pcs) - min(r[1] for r in pcs)
+        for (c, z0, z1) in pcs:
+            out[c["tag"]] = {"line": "%s,%s" % ln, "H_mm": H}
+    return out
+
+
+def wind_post_ka_factor(ws, A_m2):
+    """Factor on a member-wind wall pressure for a wind post of tributary area A_m2 (engine checks, 2026-11): the
+    pattern pressures carry pd at the frame's Ka (wind_summary Ka_basis 'frame_tributary', 7.2.2.1 (a)); a wind post
+    takes Ka of its own area (7.2.2.1 (b)): factor = max(Kd Ka(A) Kc pz, 0.7 pz) / max(Kd Ka_frame Kc pz, 0.7 pz).
+    Not applied (factor 1, the reason recorded) unless the wind summary states Kd, Kc, pz, Ka with the frame basis and
+    its pd follows them (within 0.5 %)."""
+    import india_wind_tables as WT
+    out = {"applied": False, "factor": 1.0, "A_m2": round(float(A_m2), 3), "cite": WIND_POST_KA_CITE}
+    try:
+        Kd, Kc, pz, Ka_f = (float(ws[k]) for k in ("Kd", "Kc", "pz_kNm2", "Ka"))
+    except (KeyError, TypeError, ValueError):
+        out["reason"] = "wind_summary without Kd, Kc, pz_kNm2 and Ka: the pattern pressure is kept"
+        return out
+    if ws.get("Ka_basis") != "frame_tributary":
+        out["reason"] = "wind_summary Ka_basis is not 'frame_tributary': the pattern pressure is kept"
+        return out
+    pd_f = max(Kd * Ka_f * Kc * pz, 0.7 * pz)
+    if ws.get("pd_kNm2") is not None and abs(float(ws["pd_kNm2"]) - pd_f) > 0.005 * pd_f:
+        out["reason"] = ("wind_summary pd_kNm2 %.4f does not follow max(Kd Ka Kc pz, 0.7 pz) = %.4f: the pattern "
+                         "pressure is kept" % (float(ws["pd_kNm2"]), pd_f))
+        return out
+    ka = WT.ka_for_area_m2(float(A_m2)).get("Ka")
+    if ka is None:
+        out["reason"] = "Table 4 Ka not resolved"
+        return out
+    pd_c = max(Kd * ka * Kc * pz, 0.7 * pz)
+    out.update(applied=True, factor=pd_c / pd_f, Ka_post=ka, Ka_frame=Ka_f, pd_post_kNm2=round(pd_c, 4),
+               pd_frame_kNm2=round(pd_f, 4), Ka_frame_area_m2=ws.get("Ka_area_m2"))
+    return out
 
 
 def _plane_member_wind(b, pat, f, ax, split, wside, pw, pl_):
@@ -1853,6 +1928,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     ops.load(int(nd), *v)
                 if mw:
                     member_wind_loads(cfg, model, mw, float(m.get("fWM") or 0.0))
+                    info.setdefault("wind_post_Ka", {}).update(model.get("wind_post_Ka") or {})
                 ops.analyze(1)
                 R1 = _responses(model)
                 ops.remove("loadPattern", ptag)
@@ -1894,6 +1970,8 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     if r_ and fs in recs:
                         rec = list(recs[fs]); rec[0] = rec[0] - r_ * N_LL[col["tag"]]; recs[fs] = tuple(rec)
             per_case[c[0]] = recs
+    if info.get("wind_post_Ka"):                    # JSON-friendly: one record per (column line, pattern)
+        info["wind_post_Ka"] = [info["wind_post_Ka"][k] for k in sorted(info["wind_post_Ka"], key=str)]
     return per_case, kinds or {}, info
 
 

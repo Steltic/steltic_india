@@ -234,11 +234,13 @@ def run_child(args, cwd, timeout, env=None, log_path=None):
 
 # =================================================================================================== connections
 def plate_fy(t, grade):
-    """IS 2062 Table 3 yield stress by thickness, as the golds' helpers use it (E250: 250 / 240 / 230; E350: 350 /
-    330 / 320 for t <= 20 / <= 40 / > 40 mm)."""
-    if str(grade).upper().startswith("E350"):
-        return 350.0 if t <= 20 else 330.0 if t <= 40 else 320.0
-    return 250.0 if t <= 20 else 240.0 if t <= 40 else 230.0
+    """IS 2062 (Part 1):2025 Table 3 yield stress of a plate of thickness t (engine checks fix C, 2026-11): the
+    engine's one band function india_is800.fy_is2062 (<= 16 / > 16-40 / > 40-100 / > 100 mm; E250 250 / 240 / 230 /
+    210, E350 350 / 330 / 320 / 290).  Until 2026-11 this helper copied the golds' old helpers, 250 / 350 MPa up to
+    20 mm, and wrote fy 250 into the cfgs the full runs judge for 16-20 mm E250 plates (review PEB_REVIEW.md C).
+    grade None: E250."""
+    import india_is800 as I8
+    return float(I8.fy_is2062(grade or "E250", float(t)))
 
 
 def ep_dict(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_grade="E250", ext=60.0, weld=8.0,
@@ -956,8 +958,10 @@ def _eps(fy):
 def fy_of(sec, grade):
     import india_is800 as I8
     import sections as S
-    m = I8.material_for_section(S.props(sec), grade)
-    return float(m.get("fy_MPa") or 250.0)
+    p = S.props(sec)
+    m = I8.material_for_section(p, grade)
+    # fix C: no grade -> the E250 band of the governing thickness (was 250 MPa whatever the thickness)
+    return float(m.get("fy_MPa") or I8.fy_is2062("E250", I8.governing_thickness_mm(p) or 1.0))
 
 
 class LocalModel:
@@ -1301,8 +1305,8 @@ class LocalModel:
             bf, tf, tw = d[-3], d[-2], d[-1]
             Ds = d[:2] if k == "tapered" else d[:1]
             grade = self.cfg.get("steel_grade") or "E350"
-            fyf = 350.0 if str(grade).startswith("E350") and tf <= 20 else (330.0 if str(grade).startswith("E350") and tf <= 40 else (320.0 if str(grade).startswith("E350") else 250.0))
-            fyw = 350.0 if str(grade).startswith("E350") and tw <= 20 else (330.0 if str(grade).startswith("E350") else 250.0)
+            # fix C: the IS 2062 Table 3 band of each plate (was 350 up to 20 mm, 250 for any other grade)
+            fyf, fyw = I8.fy_is2062(grade, tf), I8.fy_is2062(grade, tw)
             if tw < float(fab.get("tw_min", 4.0)) - 1e-9:
                 out = (False, "web below the minimum")
             elif tf < tw:
@@ -1597,16 +1601,19 @@ def knee_rows(lm, cfg_c, dem, kspec, kp):
     ds = kp.get("diagonal_stiffener") or {}
     theta = math.atan2(pb["d"], pc["d"])
     A_d = float(ds.get("n", 2)) * float(ds.get("b_mm", 0.0)) * float(ds.get("t_mm", 0.0))
-    V_d = A_d * float(ds.get("fy_MPa", 250.0)) / 1.10 * math.cos(theta)
+    V_d = A_d * float(PC._stiffener_fy(ds, cfg_c, "knee diagonal stiffener")) / 1.10 * math.cos(theta)
     dbl = float(kp.get("doubler_t_mm") or 0.0)
-    V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * 250.0 / (math.sqrt(3.0) * 1.10)
+    fy_dbl = float(PC._stiffener_fy(kp, cfg_c, "knee web doubler", t_key="doubler_t_mm", fy_key="doubler_fy_MPa",
+                                    grade_key="doubler_grade"))
+    V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * fy_dbl / (math.sqrt(3.0) * 1.10)
     rows = [("knee panel shear", Vp, Vweb + V_d + V_dbl)]
     fs_ = kp.get("flange_stiffener") or {}
     A_f = float(fs_.get("n", 2)) * float(fs_.get("b_mm", 0.0)) * float(fs_.get("t_mm", 0.0))
     t_cfl = float(kspec.get("column_flange_t_mm") or pc["tf"])
     tw_c = float(pc["tw"]) + dbl
     b_web = pb["tf"] + 5.0 * (t_cfl + float(kp.get("weld_mm", 6.0)))
-    cap_f = (A_f * float(fs_.get("fy_MPa", 250.0)) + tw_c * b_web * fyc) / 1.10
+    cap_f = (A_f * float(PC._stiffener_fy(fs_, cfg_c, "knee flange stiffener"))
+             + (float(pc["tw"]) * fyc + dbl * fy_dbl) * b_web) / 1.10           # fix C: as peb_checks.knee_records
     rows.append(("knee column stiffeners", max(Mk, Mconn) / lever, cap_f))
     if kep.get("rows"):
         sym = bool(kspec.get("symmetric"))

@@ -721,23 +721,27 @@ def _member_moment(e, q):
     return max(float(e.get(q) or 0.0), float(e.get(q + "_span") or 0.0))
 
 
-def _top_records(recs, k=12):
-    """The governing combinations of one member (largest |N|, |Mmaj|, |Mmin|, |V|) -- concurrent tuples -- plus EVERY
-    combination in which a column carries a span load (span-moment fix, 2026-11-01): the span moment of the member
-    wind does not depend on the gravity factors, so ranking by |span| alone can drop the combination whose concurrent
-    axial force governs the 9.3.2.2 interaction (1.2DL+1.2LL+1.2WM against 1.5DL+1.5WM).  The check is cheap; the
-    member-wind combinations of a column are kept whole instead of ranked."""
-    if len(recs) <= k:
-        return recs
-    import static_model as SM
-    keep = set()
-    for idx in range(4):
-        keep |= set(sorted(recs, key=lambda l: -abs(recs[l][idx]))[: max(3, k // 4)])
-    span_idx = [SM.REC_FIELDS.index(f) for f in ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")]
-    keep |= {l for l, r in recs.items() if any(len(r) > i and r[i] for i in span_idx)}
-    comp = sorted(recs, key=lambda l: recs[l][0])[:3]        # most compressive
-    keep |= set(comp)
-    return {l: recs[l] for l in keep}
+def member_check_records(recs):
+    """The combinations a member check sees: EVERY combination of the member, in the order of the records (engine
+    checks fix A, 2026-11).
+
+    Until 2026-11 the member checks saw a ranked subset (the top 3 by |N|, |Mmaj|, |Mmin| and |V|, the 3 most
+    compressive and the span-load combinations).  The ranking ignored the SIGN of the moment, and the sign decides
+    which flange is in compression and so which LTB length applies (LLT_sag_mm: the flange held by the purlins or the
+    deck; LLT_hog_mm: the flange held by the fly braces; india_is800.member_check_is800 checks each sign of each
+    combination with its own length).  On IN_Ex2 the canopy root was checked for 1.5DL+1.5LL at -235 kN-m hogging
+    while 1.2DL+1.2LL+1.2WM0 at -285 kN-m hogging was dropped (the |Mmaj| slots went to three sagging uplift cases):
+    1.000 reported, 1.211 with every combination (review PEB_REVIEW.md A).  The same ranking could drop the
+    combination whose coincident N changes the Table 2 web class (fix B) or whose free span moment of the other sign
+    governs.  Every combination is kept instead: the per-combination check is arithmetic (about 3 s of an 80 s run on
+    IN_Ex19, 1,308 elements x 141 combinations), so no subset has to be proved complete.  The order is the order of
+    the records (the combination order of the run), so ties resolve the same way on every run."""
+    return dict(recs)
+
+
+def _top_records(recs, k=None):
+    """Kept for older callers: the member-check records are every combination now (member_check_records)."""
+    return member_check_records(recs)
 
 
 def member_checks_is800(cfg, elem):
@@ -749,7 +753,7 @@ def member_checks_is800(cfg, elem):
         return {"found": False, "ok": None, "dc": None,
                 "reason": "india_is800.member_check_is800 unavailable (HR-MEMBERS integration pending): %s" % ex}
     import static_model as SM
-    cf = SM.combo_forces_for_member_check(_top_records(elem["records"]), elem["kind"])
+    cf = SM.combo_forces_for_member_check(member_check_records(elem["records"]), elem["kind"])
     try:
         return f(elem["member"], cf, cfg=cfg)
     except Exception as ex:
@@ -764,7 +768,7 @@ def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
     span moments), station i, station j}; the three are listed under 'stations'."""
     import static_model as SM
     import india_is800 as I8
-    cf = SM.combo_forces_for_member_check(_top_records(recs), kind)
+    cf = SM.combo_forces_for_member_check(member_check_records(recs), kind)
     out = [("element (mid-depth section)", mem["section"], res_el)]
     for end, sec_e in (("i", stations[0]), ("j", stations[1])):
         cfe = []
@@ -1268,6 +1272,9 @@ def design_india(name, cfg, outdir):
            "note": "Demands from the India analysis (IS 800 Table 4 / IS 1893 combinations); member checks "
                    "from india_is800.member_check_is800 per combination with concurrent forces.",
            "members": [], "connections": []}
+    if (sinfo or {}).get("wind_post_Ka"):
+        # engine checks (2026-11): the IS 875-3 7.2.2.1 (b) Ka of each wind post (gable wind column), per pattern
+        pkg["wind_post_Ka"] = sinfo["wind_post_Ka"]
     elem_results = {}
     # PEB-LEVERS: the switches of cfg['peb_rules'] used by the member checks (peb_levers): the moment-gradient C1 map
     # (ltb_c1 'gradient'), tension-rod braces (bracing 'tension_rods') and the element-input dump of peb_autosize

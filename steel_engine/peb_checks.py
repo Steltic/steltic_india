@@ -47,7 +47,19 @@ def _fy_plate(sec, cfg):
     p = S.props(sec)
     g = (cfg or {}).get("steel_grade")
     m = I8.material_for_section(p, g)
-    return m.get("fy_MPa") or 250.0
+    # engine checks fix C (2026-11): no grade declared -> the IS 2062 Table 3 E250 band of the section's governing
+    # thickness (was 250 MPa whatever the thickness)
+    return m.get("fy_MPa") or I8.fy_is2062("E250", I8.governing_thickness_mm(p) or 1.0)
+
+
+def _stiffener_fy(sp, cfg, what, t_key="t_mm", fy_key="fy_MPa", grade_key="grade"):
+    """fy of a declared stiffener / doubler plate (engine checks fix C, 2026-11): the declared fy capped at the
+    IS 2062:2025 Table 3 band of its grade for its thickness, or the band value when no fy is declared
+    (india_connections.plate_fy_band; grade: its own, else cfg['plate_grade'], else E250)."""
+    import india_connections as C
+    sp = sp or {}
+    return C.plate_fy_band(sp.get(t_key), sp.get(grade_key) or (cfg or {}).get("plate_grade"), fy_MPa=sp.get(fy_key),
+                           job_grade=(cfg or {}).get("steel_grade"), what=what)[0]
 
 
 def _mp(sec, cfg):
@@ -363,7 +375,8 @@ def flange_brace_records(cfg, peb, reg, envt):
             ang = math.radians(float(spec.get("angle_deg", 45.0)))
             Lb = float(spec["L_mm"])
             P = F_point / math.cos(ang)
-            fy = float(spec.get("fy_MPa") or 250.0)
+            # fix C: the angle's own IS 2062 band (its leg thickness), the declared fy capped at it
+            fy = float(_stiffener_fy(dict(spec, t_mm=S.props(sec).get("tw")), cfg, "fly brace %s" % sec))
             r7 = I8.single_angle_7_5_1_2(sec, fy, Lb, n_bolts=int(spec.get("n_bolts", 1)),
                                          fixity=spec.get("fixity", "hinged"))
             rows.append(_row("fly brace %s (single angle, one leg, %d bolt(s)) in compression" % (
@@ -737,10 +750,12 @@ def knee_records(cfg, peb, joints, reg, envt, system=None, s12_cfg=None):
         ds = spec.get("diagonal_stiffener") or {}
         theta = math.atan2(pb["d"], pc["d"])
         A_d = float(ds.get("n", 2)) * float(ds.get("b_mm", 0.0)) * float(ds.get("t_mm", 0.0))
-        fy_d = float(ds.get("fy_MPa", 250.0))
+        fy_d = float(_stiffener_fy(ds, cfg, "knee diagonal stiffener"))           # fix C: IS 2062 band of t
         V_d = A_d * fy_d / 1.10 * math.cos(theta)
         dbl = float(spec.get("doubler_t_mm") or 0.0)
-        V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * 250.0 / (math.sqrt(3.0) * 1.10)
+        fy_dbl = float(_stiffener_fy(spec, cfg, "knee web doubler", t_key="doubler_t_mm", fy_key="doubler_fy_MPa",
+                                     grade_key="doubler_grade"))
+        V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * fy_dbl / (math.sqrt(3.0) * 1.10)
         rows = [_row("knee panel shear (column web, stiffened field + diagonal stiffener%s)" % (" + doubler" if dbl else ""),
                      Vp, Vweb + V_d + V_dbl, clause="IS 800:2007 8.4 / 8.4.2.2(a); 8.7 (stiffeners)",
                      cite="Vp = M/(d_b - t_fb) - V_col = %.0f kN (M %.1f kN-m, %s; the factored knee moment: IS 800 "
@@ -752,20 +767,22 @@ def knee_records(cfg, peb, joints, reg, envt, system=None, s12_cfg=None):
         # (the stiffeners are part of the joint that develops Mconn), not only the analysis moment
         fs_ = spec.get("flange_stiffener") or {}
         A_f = float(fs_.get("n", 2)) * float(fs_.get("b_mm", 0.0)) * float(fs_.get("t_mm", 0.0))
-        fy_f = float(fs_.get("fy_MPa", 250.0))
+        fy_f = float(_stiffener_fy(fs_, cfg, "knee flange stiffener"))            # fix C: IS 2062 band of t
         t_cfl = float(kspec.get("column_flange_t_mm") or pc["tf"])
         tw_c = float(pc["tw"]) + dbl
         b_web = pb["tf"] + 5.0 * (t_cfl + float(spec.get("weld_mm", 6.0)))
-        cap_f = (A_f * fy_f + tw_c * b_web * fyc) / 1.10
+        # fix C: the doubler's share at the doubler plate's own fy (was the column fy for the whole thickness)
+        cap_f = (A_f * fy_f + (float(pc["tw"]) * fyc + dbl * fy_dbl) * b_web) / 1.10
         M_st = max(Mk, Mconn)
         F_st = M_st / lever
         rows.append(_row("column stiffeners at the rafter flange levels (flange force)", F_st, cap_f,
                          clause="IS 800:2007 8.7.4 / 8.7.1" + ("; " + dem_clause if Mconn > Mk else ""),
                          cite="F = M/(d_b - t_fb) = %.0f kN (M %.1f kN-m: %s); stiffener pair %.0f mm2 x %.0f + the "
                               "column web over the bearing length b = t_fb + 5 (t_fc + s) = %.0f with thickness t = "
-                              "%.1f%s, x %.0f (/1.10)"
+                              "%.1f%s, x %.0f%s (/1.10)"
                               % (F_st / 1e3, M_st / 1e6, dem_basis if Mconn > Mk else "the factored knee moment, %s"
-                                 % lab_k, A_f, fy_f, b_web, tw_c, " (incl. the doubler)" if dbl else "", fyc)))
+                                 % lab_k, A_f, fy_f, b_web, tw_c, " (incl. the doubler)" if dbl else "", fyc,
+                                 " (doubler %.0f mm x %.0f)" % (dbl, fy_dbl) if dbl else "")))
         if not ds:
             rows.append(_row("diagonal stiffener declared", None, None, clause="IS 800:2007 8.7", cite="knee panel",
                              ok=None, reason="cfg['connections']['knee_panel'] not declared"))

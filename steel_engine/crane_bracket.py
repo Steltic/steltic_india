@@ -66,7 +66,13 @@ def bracket_record(cfg):
     sec = br["section"]
     p = S.props(sec)
     d, bf, tf, tw = p["d"], p["bf"], p["tf"], p["tw"]
-    fy = float(br.get("fy_MPa") or 250.0)
+    # engine checks fix C (2026-11): fy from the one IS 2062:2025 Table 3 band (india_is800.fy_is2062): the bracket
+    # plates at the band of their governing thickness max(tf, tw) (a declared fy capped at it; none declared: the
+    # bracket grade, else cfg['plate_grade'], else E250 -- the old default of 250 MPa)
+    import india_connections as C
+    import india_is800 as I8
+    fy = float(C.plate_fy_band(I8.governing_thickness_mm(p), br.get("grade") or cfg.get("plate_grade"),
+                               fy_MPa=br.get("fy_MPa"), job_grade=cfg.get("steel_grade"), what="crane bracket")[0])
     e = float(br["projection_mm"])
     h = float(br.get("rail_height_mm") or 0.0)
     Wd = float(br.get("dead_N") or 0.0)
@@ -101,8 +107,14 @@ def bracket_record(cfg):
     pc = S.props(col) if col else None
     st = br.get("column_stiffeners") or {}
     A_st = float(st.get("b_mm") or 0.0) * float(st.get("t_mm") or 0.0) * int(st.get("n") or 0)
-    fy_st = float(st.get("fy_MPa") or 250.0)
-    fyc = float(br.get("column_fy_MPa") or 350.0)
+    fy_st = float(C.plate_fy_band(st.get("t_mm"), st.get("grade") or cfg.get("plate_grade"), fy_MPa=st.get("fy_MPa"),
+                                  job_grade=cfg.get("steel_grade"), what="crane bracket column stiffener")[0])
+    # fix C: the column section's own material (grade_by_section, else the job grade, else E350 -- the old default
+    # of 350 MPa) at the IS 2062 band of its governing thickness; a declared column_fy_MPa is capped at it
+    gc_ = ((cfg.get("grade_by_section") or {}).get(col) or cfg.get("steel_grade") or "E350") if col else None
+    fyc_m = I8.material_for_section(pc, gc_).get("fy_MPa") if pc else None
+    fyc_m = float(fyc_m or I8.fy_is2062("E350", 1.0))
+    fyc = min(float(br["column_fy_MPa"]), fyc_m) if br.get("column_fy_MPa") is not None else fyc_m
 
     rows = []
     worst = {}
