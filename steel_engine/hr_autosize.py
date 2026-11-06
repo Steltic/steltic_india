@@ -2388,7 +2388,12 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         if lat_fail and ev["passed"] is False:
             for g in req:
                 st.setdefault("stiff_boost", {})[g] = round(float(st["stiff_boost"].get(g, 1.0)) * 1.05, 3)
-        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=fixed, barred=st.get("barred"),
+        # EBF: the links are sized in the first two passes and then held (only their own Section 12 link rows step
+        # them up): every brace and column force follows the link overstrength 1.1 Ry Vp / V, so links that keep
+        # moving keep the braces and columns from converging (IN_Ex15 / IN_Ex19)
+        links = [g for g, sp in specs.items() if sp.get("role") == "link"]
+        hold = list(fixed) + (links if links and it >= 2 else [])
+        x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=hold, barred=st.get("barred"),
                                 conn_req=st.get("conn_req"))
         # Section 12 rows the full run failed although the frozen forces passed them: that group's rows get a margin
         mem_tag_ = {m["id"]: int(m.get("tag") or str(m["id"]).lstrip("e")) for m in (lm.s12[1].get("members") or [])} \
