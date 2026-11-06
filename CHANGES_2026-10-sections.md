@@ -3,9 +3,12 @@
 Branch `fix/2026-10-third-sections`, based on main 44b74de. On the lead's instruction it merges
 `fix/2026-10-column-span-moment` (28831f8: IS 800 Table 18 uniform-loading Cm / CmLT for columns with a span load,
 both signs, end-moment-only connection demands, 17-field records). The provisional cherry-pick of the first cut
-(2cb42ff) was reverted first. It then merges origin/main three times: c4bf49b (PR #29 span fix, PR #30), 56909e3
-(PR #31 MSME shed, PR #32 engine-check fix) and e45a65d (PR #33: the consistency fix and each group's strength line
-printed from its worst-strength element; no design result moves). Every job was sized, and every sized design verified, against the merged
+(2cb42ff) was reverted first. It then merges origin/main four times:
+- c4bf49b (PR #29 span fix, PR #30);
+- 56909e3 (PR #31 MSME shed, PR #32 engine-check fix);
+- e45a65d (PR #33: the consistency fix, and each group's strength line printed from its worst-strength element; no
+  design result moves);
+- 8cc56ec (PR #34: the consistency advisory guards, ponding by span and slope; no design result moves). Every job was sized, and every sized design verified, against the merged
 checks.
 
 Two passes (coordinator, 2026-11-06):
@@ -266,8 +269,8 @@ D8).
 
 ## Results
 
-Final pass on main 56909e3 (PR #31 MSME, PR #32 engine-check fix); the final runs and reports on main e45a65d
-(PR #33). Every job was run on the SECT gold copies
+Final pass on main 56909e3 (PR #31 MSME, PR #32 engine-check fix); the final runs and reports on main 8cc56ec
+(PR #34). Every job was run on the SECT gold copies
 (`/home/claude/wt/SECT/gold/jobs_hr`) with PYTHONHASHSEED 0, and its report built. "Old" is the published gold as
 published (`/home/claude/gold/jobs_hr`). kg/m² is the engine's take-off of the analysis members per m² of floor;
 connections are not included.
@@ -338,4 +341,4 @@ difference of 13.71 kg/m² (+32.8 %). Wind governs the shed.
 **Reports.** The leak scan (`report_public.leaks`) finds nothing in the 19 SECT reports (IN_Ex6–Ex20 and the four
 units). The published set has one hit, the IN_Ex17 raw dict, which is fixed here.
 
-**HR suite** (this branch, merged main e45a65d): (pending the last run).
+**HR suite** (this branch, merged main 8cc56ec): (pending the last run).
