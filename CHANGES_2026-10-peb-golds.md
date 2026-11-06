@@ -13,11 +13,10 @@ byte for byte and the IN_Ex5 numbers consistent, but three engine blockers that 
 **A** member checks rank combinations by magnitude, not sign (IN_Ex2 canopy root 1.211); **B** the Table 2 web class
 uses P = 1 N (IN_Ex3 column about 1.07, IN_Ex2 wind column about 1.05, IN_Ex1 main column about 1.03); **C** joint
 plates of 16-20 mm keep fy 250 / 350 (IN_Ex3 knee stiffeners 1.024). A and B, and `plate_fy` in the sizer, are fixed
-by the engine agent on its own branch; **the golds below are therefore not final**: they are re-sized and re-run on
-the fixed engine once it is on main, and the tables, the IN_Ex5 PV answer, the strengthening option and the IN_Ex2 /
-IN_Ex4 comparisons are re-based then.
+by the engine agent and are on main (56909e3); the golds were re-verified on it and only what failed was re-sized
+(next section), and the IN_Ex5 PV answer, the strengthening option and the IN_Ex2 / IN_Ex4 comparisons re-based.
 
-Done on this branch meanwhile (no sizing runs):
+Done on this branch before the engine fixes landed (no sizing runs):
 - **C in the gold cfgs:** every plate, stiffener and key yield stress of IN_Ex1-Ex4 (`bolted_end_plate`, the base
   plate and fin plate helpers, the knee shear plates and panel stiffeners, the shear keys) now comes from one
   function, the engine's IS 2062 (Part 1):2025 Table 3 band function (`india_is800.fy_is2062`, behind a one-line alias
@@ -32,6 +31,61 @@ Done on this branch meanwhile (no sizing runs):
   package's 59 reasons (15 was the stored, truncated list); the study design runs (strengthening option, the
   comparisons' re-sized rows) say "every check passes ... engine status partial only for the missing grounding
   record" instead of COMPLETE.
+
+## Engine-check pass (main 56909e3, 2026-11-06): re-verified, and only what failed re-sized
+
+Main 56909e3 (the engine-check fixes A–C with rulings R1 and D-T11, side walls, a wind post's own Ka, gates on the
+earthquake records, the panel-zone doubler at its own fy, member wind) is merged here (0103e60). Owner ruling for
+this pass: run IN_Ex1–Ex4 on the merged engine and re-size **only what fails**, everything else held (the sizer with
+the failing member constants and joint slots free, `hold_joints` for the rest); no full strict re-size. The gold
+cfgs also changed on this branch before the runs:
+- every plate, stiffener and key fy from the engine's IS 2062 band function (`fy_is2062`, review blocker C);
+- the end-plate helper's web strip: the member web at its band, and a web doubler at its own (E250) band,
+  thickness-weighted, as the engine takes the knee strip (the sizer's `ep_dict` the same);
+- IN_Ex2 / IN_Ex5: the side walls take the same 10.2 gust ratio as the windward and leeward walls in each pattern;
+- knee and panel doublers left at E250 (no `doubler_grade` declared: nothing in the golds says E350).
+
+Tags (the fix behind each move): **A** every combination with both moment signs; **B** Table 2 web class with the
+combination's N; **R1** Pd from the axial-only class (42ε effective area above it); **D-T11** the 42ε / axial row
+with compression and |Mz| ≤ 0.05 Mdz; **C** IS 2062 bands (here: the web doublers of the knees at E250, and plates of
+16–20 mm at 240); **SW** the side walls on the corner columns and posts; **Ka** a wind post's own Ka; **G**, **PZ**,
+**MW** moved no PEB row. "Before" is the gold of cdfc027 (the review's state); "fixed engine" is the same cfg run on
+0103e60; "final" is the re-sized gold. The pre-fix packages and the attribution script are in the PEB sandbox
+(`scratch/prefix`, `scratch/attribution.py`).
+
+| job | item | before | fixed engine | tags | re-sized (from → to) | final |
+|---|---|---|---|---|---|---|
+| Ex1 | corner columns | 0.911 | **1.133** | SW (in-span moment +6 %), R1 | G_COL WI200X160X12X4 → WI350X160X12X10 | 0.992 |
+| Ex1 | main columns (WI862 station) | 0.996 | **1.063** | B, R1 | COL_T TI375-975X225X12X8 → TI325-975X240X12X8 | 0.978 |
+| Ex1 | gable rafter as roof-girder chord | 0.960 | **1.023** | B / R1 (strut) | G_RAF WI250X140X8X4 → WI275X140X8X4 | 0.997 |
+| Ex1 | knee end plate and its 12.10.2.1 rows | 0.991 | **1.091** | C (8 mm web doubler at E250; 20 mm stiffeners at 240) | end plate 280 × 45, 20 M30 → 280 × 36 with two outer rows, 24 M30; column flange plate 32 → 28 mm; flange stiffeners 20 → 25 mm | 0.974 (knee), 0.925 (12.10.2.1) |
+| Ex1 | main shear key (O1, 1.2 Vd of the new column) | — | — | follows the column | 2 × 400 × 28, 250 deep → 2 × 400 × 32, 300 deep | — |
+| Ex2 | corner posts | 0.990 | **1.392** | SW with the gust ratio on the side walls (+51 % loads), R1 | G_COL WI225X280X18X4 → WI300X300X20X4 | 0.996 |
+| Ex2 | canopy beam root | 0.9995 | **1.211** | A (1.2DL+1.2LL+1.2WM0+, hogging, was not checked) | CAN_T TI450-200X190X12X5 → TI625-200X190X12X4; root end plate 220 × 32 → 220 × 18 | 0.983 (member), 0.978 (root plate) |
+| Ex2 | gable wind columns | 0.993 | **1.052** | B, R1 | W_COL WI400X220X20X4 → WI450X210X20X4 | 0.996 |
+| Ex2 | gable rafter as roof-girder chord | 0.984 | **1.031** | B / R1 (strut) | G_RAF WI250X220X12X4 → WI200X225X12X4 | 0.995 |
+| Ex2 | knee (column stiffeners at the rafter flanges) | 0.973 | **1.076** | C (16 mm column-web doubler at E250) | flange stiffeners 14 → 20 mm | 0.985 (knee) |
+| Ex3 | corner posts | 0.911 | **1.178** | SW (+7 %), B / D-T11 (compact → semi-compact), R1 | G_COL WI200X190X12X4 → WI200X200X14X4 | 0.925 |
+| Ex3 | columns | 0.994 | **1.083** | B (compact → semi-compact), R1 | COL WI475X220X16X5 → WI550X220X16X5 | 0.956 |
+| Ex3 | knee (column stiffeners at the rafter flanges) | 1.000 | **1.096** | C (6 mm doubler at E250, 18 mm stiffeners at 240) | flange stiffeners 18 → 22 mm | 0.999 (now the column-flange T-stub row of the deeper column) |
+| Ex3 | rafter haunch and splice (moved by the deeper column) | 0.995 / 0.942 | — | follows the column | RAF_T TI675-375X225X12X6 → TI700-375X230X12X6; rafter splice 240 × 14, 12 M20 → 240 × 20, 8 M20 | 0.971 (haunch), 0.954 (splice) |
+| Ex4 | corner posts | 0.970 | **1.242** | SW (+6 %), B / D-T11 (plastic → semi-compact), R1 | G_COL WI200X220X16X4 → WI200X225X16X5 | 0.985 |
+| Ex4 | knee (column stiffeners at the rafter flanges) | 0.973 | **1.083** | C (16 mm column-web doubler at E250) | flange stiffeners 12 → 18 mm | 0.981 |
+
+Ka moved the gable wind columns by −2 to +1 % (none failed). No Section 12 row of the PEB golds failed on the
+fixed engine (G, PZ). The IN_Ex1 and IN_Ex2 gable rafters as roof-girder chords failed in the secondary-member
+list, which my first free list missed: their runs were repeated with G_RAF free. The first IN_Ex3 attempt held the
+haunch and the rafter splice and could not pass (the deeper column draws more moment into the haunch), so both
+were freed.
+
+**Final kg/m² (gold take-off, all COMPLETE):**
+
+| job | cdfc027 (review) | final | change |
+|---|---|---|---|
+| Ex1 | 32.38 | **33.11** | +0.73 |
+| Ex2 | 52.71 | **52.77** | +0.06 |
+| Ex3 | 51.50 | **52.25** | +0.75 |
+| Ex4 | 57.11 | **57.26** | +0.15 |
 
 ## The new golds
 
@@ -50,13 +104,13 @@ runs: secondary design (CFS engine, main dcda6c2) then the harness, `PYTHONHASHS
 
 | job | kg/m² old → new | worst member ratio old → new (member, new) | worst connection ratio old → new (joint, new) | wind sway Y / limit old → new | storey drift / limit old → new | status old → new |
 |---|---|---|---|---|---|---|
-| Ex1 | 34.55 → **32.38** (-2.17) | 0.961 → 0.996 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 0.991 (conn-roof-WI950X250X14X6) | 0.939 → 0.973 | 0.266 → 0.272 | COMPLETE → COMPLETE |
-| Ex2 | 56.17 → **52.71** (-3.46) | 0.930 → 1.000 (roof-WI408X190X12X5, IS 800 9.3 interaction / member resistance) | 0.974 → 0.994 (conn-lateral_col-WI725X230X22X14) | 0.891 → 0.936 | 0.390 → 0.402 | COMPLETE → COMPLETE |
-| Ex3 | 56.97 → **51.50** (-5.47) | 0.849 → 0.994 (lateral_col-WI475X220X16X5, IS 800 9.3 interaction / member resistance) | 0.948 → 1.000 (conn-peb-knee-WI475X220X16X5-WI675X225X12X6) | 0.412 → 0.662 | 0.086 → 0.129 | COMPLETE → COMPLETE |
-| Ex4 | 63.78 → **57.11** (-6.67) | 0.890 → 0.994 (gravity_col-WI475X190X12X4, IS 800 9.3 interaction / member resistance) | 0.984 → 0.984 (conn-brace-WPB180X180X51.22) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
-| Ex5 | 34.55 → **32.38** (-2.17) | 1.102 → 1.132 (lateral_col-WI862X225X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 1.091 (conn-peb-splice-190702) | 1.155 → 1.198 | 0.363 → 0.373 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
+| Ex1 | 34.55 → **33.11** (-1.44) | 0.961 → 0.992 (lateral_col-WI350X160X12X10, IS 800 9.3 interaction / member resistance) | 0.969 → 0.983 (conn-lateral_col-WI350X160X12X10) | 0.939 → 0.979 | 0.266 → 0.276 | COMPLETE → COMPLETE |
+| Ex2 | 56.17 → **52.77** (-3.40) | 0.930 → 0.996 (gravity_col-WI300X300X20X4, IS 800 9.3 interaction / member resistance) | 0.974 → 0.994 (conn-lateral_col-WI725X230X22X14) | 0.891 → 0.937 | 0.390 → 0.402 | COMPLETE → COMPLETE |
+| Ex3 | 56.97 → **52.25** (-4.72) | 0.849 → 0.992 (gravity_col-WI350X180X8X4, IS 800 9.3 interaction / member resistance) | 0.948 → 0.999 (conn-peb-knee-WI550X220X16X5-WI700X230X12X6) | 0.412 → 0.527 | 0.086 → 0.104 | COMPLETE → COMPLETE |
+| Ex4 | 63.78 → **57.26** (-6.52) | 0.890 → 0.993 (roof-WI569X250X18X16, IS 800 9.3 interaction / member resistance) | 0.984 → 0.984 (conn-brace-WPB180X180X51.22) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
+| Ex5 | 34.55 → **33.11** (-1.44) | 1.102 → 1.127 (lateral_col-WI934X240X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 1.085 (conn-peb-splice-190702) | 1.155 → 1.206 | 0.363 → 0.377 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
 
-kg/m² of plan (the gold take-off), all on the final engine (this branch at 1d058f0: main 41fb2f7 with the span-moment fix, plus this branch). The gold figures differ from the sizer's verified runs by at most 0.09 kg/m² (Ex1
+Old: the October golds as published; new: the final golds (adopted 2026-10-30, re-sized where the engine-check fixes made them fail, section above), on the final engine (this branch: main 56909e3 plus this branch). kg/m² of plan (the gold take-off). At adoption (before the engine-check pass) the gold figures differed from the sizer's verified runs by at most 0.09 kg/m² (Ex1
 32.38 / 32.40, Ex2 52.71 / 52.71, Ex3 51.50 / 51.57, Ex4 57.11 / 57.14): the gold `cfg.py` take-off formulas are the
 gold's own plate list, the sizer's is the October declared take-off corrected by its itemised plates. Against the
 October study figures (31.54 / 50.71 / 50.20 / 55.63) the golds are 0.84 to 2.00 kg/m² heavier: the gable wind and
@@ -164,30 +218,41 @@ What changed, per job (from → to):
   now tightens its own joint kind's margin by the overshoot, as the sway margin does. It did not run on the IN_Ex2
   R = 3 attempt above (the change came out of it); the follow-up study runs with it.
 - **Study page footer:** says slab base plates and anchors are sized for each design (it said they kept the gold's).
+- **End-plate web strip** (9aeb226): a web doubler at its own IS 2062 band (E250 unless declared), thickness-weighted
+  with the member web at the member's band, in `ep_dict` as in the gold cfg helper (the two keep the same arithmetic).
+- **Local combinations** (a35e1b4): after engine fix A the full run checks every combination, which made each local
+  evaluation about 8 times slower; the local model (proposals only) keeps a sign-aware subset -- the largest and
+  smallest of every signed record field, the largest shears and a combined N / Mmaj / Mmin proxy for each moment
+  sign -- and a miss is caught by the full run and fed back through the margins.
 - Tests: `tests/test_third_wave_peb.py` (22).
 
-## IN_Ex5: the PV answer on the new IN_Ex1
-- `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection) on the new IN_Ex1: **capacity 0.00 kN/m²** at
-  H/240, at H/150 (the dado detailed to move independently) and on strength alone. The main frame column
-  (WI862X225X12X8 station) is at 0.996 without the PV and 1.005 with 0.01 kN/m²; at 0.15 kN/m² the job is PARTIAL
-  (worst member ratio 1.132, wind sway 1.198 of H/240, first transverse mode 0.88 Hz, so the 10.2 gust-factor wind
-  applies). October (the old IN_Ex1): 0.02 kN/m², limited by the sway once the frame drops below 1 Hz.
+## IN_Ex5: the PV answer on the new IN_Ex1 (final engine, re-sized IN_Ex1)
+- `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection): **capacity 0.00 kN/m²** at H/240, at H/150 (the
+  dado detailed to move independently) and on strength alone. The largest ratio is 0.997 without the PV (the gable
+  rafter acting as roof-girder chord) and 1.001 with 0.01 kN/m² (the same chord); from 0.03 kN/m² the frame is below
+  1 Hz and the gust-factor sway fails H/240; at 0.15 kN/m² the job is PARTIAL (57 reasons; worst member ratio 1.127,
+  the main column; wind sway 1.206 of H/240). October (the old IN_Ex1): 0.02 kN/m², limited by the sway once the
+  frame drops below 1 Hz. The side walls are now loaded, with the same 10.2 gust ratio as the other walls.
 - The report's PV answer and the installer note follow (0.00 kN/m²; "a lighter array or a smaller covered area does
   not help: the shed as built has no spare capacity for PV").
 - `design/pv_sensitivity_static_wind.json` (an October sensitivity run with the static wind, not part of the current
   check) is withdrawn from the job folder; **the lead removes it from the published gold**.
 - **Site flag (the hub's HR index, SITE's build):** the IN_Ex5 flag still reads as the October answer. Suggested
-  text: "The shed as built has no spare capacity for PV: its main frame column is at 0.996 without the array and
-  0.01 kN/m² takes it over 1.0, and with the PV mass the frame drops below 1 Hz and the gust-factor sway exceeds the
-  H/240 limit. Strengthened to carry 0.15 kN/m²: +2.86 kg/m² (6.44 t), largest ratio 0.997; see the report."
+  text: "The shed as built has no spare capacity for PV: it is designed close to its limits (largest ratio 0.997
+  without the array, over 1.0 with 0.01 kN/m²), and with the PV mass the frame drops below 1 Hz and the gust-factor
+  sway exceeds the H/240 limit. Strengthened to carry 0.15 kN/m²: +2.88 kg/m² (6.48 t), largest ratio 0.999; see the
+  report."
 
 ## Re-based report files
-- **IN_Ex5 `strengthening_option.json`** (solar-ready, strengthen-only from the new IN_Ex1, the IN_Ex5 wind basis):
-  +6.44 t, **+2.86 kg/m²** (32.38 → 35.24); every check passes in its design run, largest check ratio 0.997 (a girt). The design run builds no report, so the engine's own status for it is partial, only for the missing grounding record (the file now says so instead of COMPLETE). Changes: main columns
-  TI375-975X225X12X8 → TI375-1000X250X12X8, haunches TI975-575X250X14X6 → TI1000-650X250X14X8, rafter bodies
-  WI575X190X10X5 → WI650X190X10X5, gable end rafter and wind column one step deeper, knee end plate 45 → 56 mm with
-  a 36 mm column flange plate, main shear keys 2 × 400 × 36, 300 deep, purlins LZ230X75X20X2 → LZ230X75X20X2.3.
-  October (from the old IN_Ex1): +2.34 kg/m² (5.25 t).
+- **IN_Ex5 `strengthening_option.json`** (solar-ready, strengthen-only from the final IN_Ex1, the IN_Ex5 wind basis):
+  +6.48 t, **+2.88 kg/m²** (33.11 → 35.99); every check passes in its design run, largest check ratio 0.999 (the
+  12.10.2.1 knee connection moment). The design run builds no report, so the engine's own status for it is partial,
+  only for the missing grounding record (the file says so instead of COMPLETE). Changes: main columns
+  TI325-975X240X12X8 → TI350-975X270X12X8, corner columns WI350X160X12X10 → WI350X160X12X12, gable end rafter
+  WI275X140X8X4 → WI275X150X8X4, rafter bodies WI575X190X10X5 → WI625X220X10X5, haunches TI975-575X250X14X6 →
+  TI975-625X250X14X8, main shear keys 2 × 400 × 36, 300 deep, knee column flange plate 28 → 32 mm and flange
+  stiffeners 25 → 28 mm, apex end plates 36 → 40 mm, purlins LZ230X75X20X2 → LZ230X75X20X2.3. October (from the old
+  IN_Ex1): +2.34 kg/m² (5.25 t).
 - **IN_Ex4 `compliance_comparison.json`**: as designed = the published auto-sized SMRF (57.11 kg/m²); the SMRF
   re-sized by the current sizer 56.46; the ordinary frame (OMRF R 3 / OCBF R 4, no IS 18168, the Zone IV ban set
   aside for the comparison) auto-sized from it 50.68; **difference 5.78 kg/m² (11.4 % of the ordinary frame)**, 6.43
