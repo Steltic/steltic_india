@@ -766,6 +766,20 @@ def torsion_requirements(lm, ev, x, st):
                 if need > req.get(g, 0.0):
                     req[g] = round(need, 1)
                     log("    soft storey %d (%s, K / K above %.2f): %s keeps %s >= %.4g" % (i + 1, d, ratio, g, kind, need))
+    kl = [r for r in ev.get("s12_fail") or [] if "7_2_column_KL_r" in str(r.get("id")) and
+          isinstance(r.get("dc"), (int, float)) and r["dc"] > 1.0]
+    if kl:
+        # IS 18168 7.2 column KL/r with K from the beam / column stiffness ratio (IS 800 Annex D, e.g. the IN_Ex12 gym):
+        # the column's own step-up raises its stiffness share and K with it, so the moment-frame beams are stiffened
+        st["kl_fail"] = int(st.get("kl_fail") or 0) + 1
+        f = min(max(max(r["dc"] for r in kl) ** 2, 1.1), 1.6)
+        for g, sp in sorted(lm.specs.items()):
+            if sp.get("role") in ("beam", "link") and sp.get("lateral") and lm.by_group.get(g):
+                need = stiffness(x[g][0], "I") * f
+                if need > req.get(g, 0.0):
+                    req[g] = round(need, 1)
+                    log("    IS 18168 7.2 column KL/r %.2f: %s keeps I >= %.4g (K follows the beam stiffness)"
+                        % (max(r["dc"] for r in kl), g, need))
     if ev.get("modes_fail"):
         # IS 1893 Table 6(vii): the d-direction mass sits in rotation-dominant modes (translation coupled with
         # torsion): a stiffer torsional system for that direction separates them -- the same groups, 25 % up
@@ -2260,6 +2274,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
             rows = s12_local(lm, x1, margins=st.get("s12_margin"))
             bumped = set()
             for row, g in rows:
+                if "7_2_column_KL_r" in str(row.get("id")) and int(st.get("kl_fail") or 0) < 3:
+                    continue          # answered through the beams first (torsion_requirements), see above
                 gs = [g] if g else []
                 if re.search(r"SCWB|column_strength|8_2", str(row.get("id"))) or g is None:
                     gs += scwb_columns(lm, row)
