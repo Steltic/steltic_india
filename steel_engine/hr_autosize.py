@@ -2400,8 +2400,10 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         links = [g for g, sp in specs.items() if sp.get("role") == "link"]
         failing_labels = {m.get("section") for m in (ev.get("members") or {}).values()
                           if (m.get("strength") or 0.0) > 1.0 + 1e-9 or (m.get("slender") or 0.0) > 1.0 + 1e-9}
-        # a held link group whose own members fail in the run (the beam outside the link) is sized again
-        hold = list(fixed) + ([g for g in links if x[g][0] not in failing_labels] if links and it >= 2 else [])
+        # a held link group whose own members fail in the run (the beam outside the link), or whose end connection
+        # the last pass found too small (conn_req), is sized again
+        hold = list(fixed) + ([g for g in links if x[g][0] not in failing_labels and
+                               g not in (st.get("conn_req") or {})] if links and it >= 2 else [])
         x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=hold, barred=st.get("barred"),
                                 conn_req=st.get("conn_req"))
         # Section 12 rows the full run failed although the frozen forces passed them: that group's rows get a margin
@@ -2453,10 +2455,9 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
             # a beam whose end shear connection (V + N) does not fit its section: the next section up in the group's
             # order that passes the frozen member checks and takes a fin plate for that demand
             for g, Vd, tpl in infeas:
-                if specs[g].get("role") == "link":
-                    log_fn("    %s: no fin plate fits %s for %.0f kN -- an EBF link is not made larger for its end "
-                           "connection (overstrength); the template connection is kept" % (g, x1[g][0], Vd / 1e3))
-                    continue
+                # an EBF link too is stepped up for its end connection (the smallest that takes it): without it the
+                # design cannot pass; its stiffness is not asked for (stiffness_requirements), which kept the link
+                # overstrength low enough in the IN_Ex15 / IN_Ex19 first passes
                 prev = (st.setdefault("conn_req", {}).get(g) or [0.0, None])[0]
                 st["conn_req"][g] = [max(float(Vd), float(prev)), tpl]      # kept: size_groups honours it from now on
                 cur = x1[g]
