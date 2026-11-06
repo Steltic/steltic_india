@@ -1481,11 +1481,19 @@ def design_india(name, cfg, outdir):
         pkg["wind_post_Ka_note"] = sinfo["wind_post_note"]
     if (sinfo or {}).get("member_wind_wall"):
         # engine checks (2026-11): the member-wind wall scan per pattern -- column pieces under the roof (not on a wall)
-        # and pieces above an eave split that keep their own wall's tributary width (static_model.WALL_SCAN_BASIS)
+        # and pieces above an eave split that keep their own wall's tributary width (static_model.WALL_SCAN_BASIS);
+        # side walls (lead ruling, open point 1): the Table 5 surface and Cpe of every loaded member, the side-wall
+        # pressure record and the envelope residuals (every wall area reaches a member)
         _mww = sinfo["member_wind_wall"]
+        import static_model as _SMw
         pkg["member_wind_wall_scan"] = {
             "basis": next((v.get("basis") for v in _mww.values() if v.get("basis")), None),
-            "patterns": {str(k): {"sheltered": v.get("sheltered") or [], "own_wall_width": v.get("own_wall_width") or []}
+            "side_wall_basis": _SMw.SIDE_WALL_CITE, "envelope_residual_basis": _SMw.ENVELOPE_RESIDUAL_BASIS,
+            "patterns": {str(k): {"sheltered": v.get("sheltered") or [], "own_wall_width": v.get("own_wall_width") or [],
+                                  "side_walls": v.get("side_walls"), "side_sheltered": v.get("side_sheltered") or [],
+                                  "side_own_wall_width": v.get("side_own_wall_width") or [],
+                                  "envelope_residual": v.get("envelope_residual") or [],
+                                  "members": v.get("members") or []}
                          for k, v in sorted(_mww.items(), key=lambda kv: str(kv[0]))}}
     elem_results = {}
     # PEB-LEVERS: the switches of cfg['peb_rules'] used by the member checks (peb_levers): the moment-gradient C1 map
