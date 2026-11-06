@@ -843,7 +843,20 @@ def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
             gov = (nm, sec_e, r_)
     res = dict(gov[2])
     res["stations"] = [{"where": nm, "section": sec_e, "dc": r_.get("dc"), "governing_check": r_.get("governing_check"),
-                        "governing_combo": r_.get("governing_combo")} for nm, sec_e, r_ in out]
+                        "governing_combo": r_.get("governing_combo"), "interaction_dc": r_.get("interaction_dc")}
+                       for nm, sec_e, r_ in out]
+    # engine checks 2 (IN_Ex21's bottom chord): the station with the largest strength ratio, which need not be the
+    # one that governs the element's D/C (a Table 3 ratio can govern there) -- element_strength reads it
+    sw = None
+    for nm, sec_e, r_ in out:
+        s_ = r_.get("interaction_dc")
+        if r_.get("found") and isinstance(s_, (int, float)) and (sw is None or s_ > sw["interaction_dc"] + 1e-12):
+            sw = {"where": nm, "section": sec_e, "interaction_dc": float(s_),
+                  "interaction_governing_combo": r_.get("interaction_governing_combo"),
+                  "interaction_cite": r_.get("interaction_cite"), "clause": r_.get("clause"),
+                  "axial_only": r_.get("axial_only")}
+    if sw is not None:
+        res["strength_worst"] = sw
     res["station_governs"] = gov[0]
     res["flags"] = list(res.get("flags") or []) + ["PEB station checks (D-T1): governing %s" % gov[0]]
     return res
@@ -902,6 +915,85 @@ def group_table3_row(rows, tags, elem_results, t_gov):
                 "clause": t3.get("clause"), "cite": t3.get("cite"), "source": "india_is800.member_check_is800",
                 "governing": False, "combo": gc3, "element": t})
     return out
+
+
+STRENGTH_ROW = ("IS 800 9.3 interaction / member resistance", "IS 800 axial resistance")
+
+
+def element_strength(res):
+    """Engine checks 2 (the IN_Ex21 bottom chord): the largest IS 800 strength ratio of one element result -- the 9.3
+    interaction / member resistance, 7 / 6 axial for a pin-ended member, the value _check_rows puts on the strength row
+    -- over its PEB stations when it has them.  {dc, combo, clause, cite, axial_only, where}; None when the element is
+    not evaluated.  The Table 3 slenderness ratio is not strength."""
+    r_ = res or {}
+    if not r_.get("found") or r_.get("dc") is None:
+        return None
+    sw = r_.get("strength_worst")
+    if isinstance(sw, dict) and isinstance(sw.get("interaction_dc"), (int, float)):
+        return {"dc": float(sw["interaction_dc"]), "combo": sw.get("interaction_governing_combo"),
+                "clause": sw.get("clause"), "cite": sw.get("interaction_cite") or sw.get("clause"),
+                "axial_only": sw.get("axial_only"), "where": sw.get("where")}
+    d = r_.get("interaction_dc", r_.get("dc"))
+    if not isinstance(d, (int, float)):
+        return None
+    return {"dc": float(d), "combo": r_.get("interaction_governing_combo", r_.get("governing_combo")),
+            "clause": r_.get("clause"), "cite": r_.get("interaction_cite") or r_.get("cite") or r_.get("clause"),
+            "axial_only": r_.get("axial_only"), "where": r_.get("station_governs")}
+
+
+def group_worst_elements(tags, elem_results):
+    """Engine checks 2: a member group's worst strength element and its worst Table 3 element, each with its own
+    combination, ratio and clause -- {'strength_worst': {...} or None, 'table3_worst': {...} or None}.  The group D/C
+    is the larger of the two ratios (each element's D/C is the larger of its own)."""
+    st = t3 = None
+    for t in tags:
+        r_ = elem_results.get(t) or {}
+        s = element_strength(r_)
+        if s is not None and (st is None or s["dc"] > st["dc"] + 1e-12):
+            st = dict(s, element=t)
+        x = r_.get("table3_slenderness")
+        if isinstance(x, dict) and isinstance(x.get("dc"), (int, float)) and (t3 is None or x["dc"] > t3["dc"] + 1e-12):
+            t3 = {"element": t, "dc": x["dc"], "value": x.get("value"), "limit": x.get("limit"),
+                  "combo": x.get("governing_combo"), "clause": x.get("clause"), "cite": x.get("cite")}
+    rec = lambda d: None if d is None else {
+        "element": "e%s" % d["element"], "dc": round(float(d["dc"]), 4), "combination": d.get("combo"),
+        "clause": d.get("clause"), "cite": d.get("cite"),
+        **({"where": d["where"]} if d.get("where") else {}),
+        **({"value": d.get("value"), "limit": d.get("limit")} if "limit" in d else {})}
+    return {"strength_worst": rec(st), "table3_worst": rec(t3), "_strength": st}
+
+
+def group_strength_row(rows, worst):
+    """Engine checks 2 (IN_Ex21: the bottom chord's strength line was the strength ratio of e44, the element whose
+    Table 3 ratio governs the group, well below the chord elements that carry the wind-uplift compression): the
+    strength line of a member GROUP shows the element (and PEB station) with the largest strength ratio, with its own
+    combination and clause.  Kept when the governing element's line is already the largest; the group D/C is
+    unchanged (it is the larger of the group's worst strength and worst Table 3 ratios)."""
+    st = (worst or {}).get("_strength")
+    i = next((k for k, r in enumerate(rows) if str(r.get("name") or "").startswith(STRENGTH_ROW)), None)
+    if st is None or i is None or not isinstance(rows[i].get("dc"), (int, float)) or \
+            rows[i]["dc"] >= st["dc"] - 1e-12:
+        return rows
+    what = ("IS 800 axial resistance (6 tension / 7 compression, pin-ended member)" if st.get("axial_only")
+            else "IS 800 9.3 interaction / member resistance")
+    at = st.get("where")
+    at = (", %s" % at) if at and str(at).startswith("station") else ""
+    out = list(rows)
+    out[i] = {"name": "%s (element e%s%s, combination %s; the largest in the group)" % (what, st["element"], at,
+                                                                                       st.get("combo")),
+              "value": st["dc"], "limit": 1.0, "dc": st["dc"], "ok": bool(st["dc"] <= 1.0), "clause": st.get("clause"),
+              "cite": st.get("cite"), "source": "india_is800.member_check_is800", "governing": False,
+              "combo": st.get("combo"), "element": st["element"]}
+    return out
+
+
+def group_check_rows(res, tags, elem_results, t_gov):
+    """The check lines of a member GROUP whose D/C is governed by element t_gov (result res): the strength line from
+    the group's worst strength element (group_strength_row), the Table 3 line from its worst Table 3 element
+    (group_table3_row).  Returns (rows, group_worst_elements record)."""
+    rows = group_table3_row(_check_rows(res), tags, elem_results, t_gov)
+    wst = group_worst_elements(tags, elem_results)
+    return group_strength_row(rows, wst), wst
 
 
 def sfrs_beam_tags(reg, info0):
@@ -1515,6 +1607,9 @@ def design_india(name, cfg, outdir):
                                   "side_own_wall_width": v.get("side_own_wall_width") or [],
                                   "stepped_facade": v.get("stepped_facade") or [],
                                   "side_stepped_facade": v.get("side_stepped_facade") or [],
+                                  # review R3-3: pieces whose wall strip is split by height (no node at a step)
+                                  "height_bands": v.get("height_bands") or [],
+                                  "side_height_bands": v.get("side_height_bands") or [],
                                   "envelope_residual": v.get("envelope_residual") or [],
                                   "members": v.get("members") or []}
                          for k, v in sorted(_mww.items(), key=lambda kv: str(kv[0]))}}
@@ -1568,9 +1663,12 @@ def design_india(name, cfg, outdir):
         gsp = {q: max(float(envt[t].get(q + "_span") or 0.0) for t in tags) for q in ("Mz", "My")}
         if gsp["Mz"] or gsp["My"]:              # span-moment fix: the in-span extremes, shown apart
             inp.update(Mz_span_Nmm=round(gsp["Mz"], 1), My_span_Nmm=round(gsp["My"], 1))
-        rows = group_table3_row(_check_rows(res), tags, elem_results, t0)
+        # engine checks 2: the strength line from the group's worst strength element, which need not be the element
+        # that governs the D/C, the Table 3 line from its worst Table 3 element; both recorded apart
+        rows, wst = group_check_rows(res, tags, elem_results, t0)
         dc = res.get("dc")
         pkg["members"].append({"id": "%s-%s" % (role, sec), "inputs": inp, "checks": rows,
+                               "strength_worst": wst["strength_worst"], "table3_worst": wst["table3_worst"],
                                "limit_state": "IS 800:2007 7-9 (member_check_is800)", "cited": res.get("clause"),
                                "capacity": res.get("capacities") and {k: (v if not isinstance(v, dict) else
                                                                           {kk: vv for kk, vv in v.items() if isinstance(vv, (int, float, str, bool))})
