@@ -108,9 +108,13 @@ D8).
   - brace ends are designed under the braced part of a combined system (`SMRF+SCBF` → SCBF), as
     `section12_checks` checks them;
   - since the engine checks every combination with both signs (fix A), an element of a tall job carries 100+
-    combinations. An element with more than 48 is predicted on a short list: the 24 with the largest ratios at its
-    current section, plus the two largest of each force. The list is computed once per run, and the full run still
-    checks every combination. On IN_Ex19 the local step had grown past 40 minutes a pass.
+    combinations. An element with more than 48 is predicted on a short list:
+    - the 24 with the largest linear stress index |P|/A + |Mz|/Zz + |My|/Zy at its current section;
+    - plus the two largest of each force, of each sign.
+
+    The list is computed once per run, and the full run still checks every combination. On IN_Ex19, the local step
+    had grown past 40 minutes a pass with 93–141 combinations per element. On 60 IN_Ex19 elements the short list gives
+    the same ratio as the full one.
 - **Groups without frame elements** are sized from their own checks: the IN_Ex7 gantry girder
   (`design_pipeline.gantry_girder_checks`, with its MC cap) and groups used only by declared secondary members.
   No IS 808 MB / WB section passes the IN_Ex7 gantry (WB600 × 145 kg/m: vertical deflection 1.40 of the Table 6
