@@ -2648,7 +2648,12 @@ def write_best(job_dir, work, dst=None):
     if "GRADE_BY_SECTION" in lit:
         vals["GRADE_BY_SECTION"] = b["gbs"]
     if "CONNECTIONS" in lit and b.get("conns") is not None:
-        vals["CONNECTIONS"] = b["conns"]
+        conns = copy.deepcopy(b["conns"])
+        for sp in (conns.get("beam_column") or {}).values():
+            # a panel-zone doubler states its grade: the one the verified run checked it at (none declared -> E250)
+            if isinstance(sp, dict) and float(sp.get("doubler_t_mm") or 0.0) > 0.0 and not sp.get("doubler_grade"):
+                sp["doubler_grade"] = "E250 B0"
+        vals["CONNECTIONS"] = conns
     out = rewrite_source(src, vals)
     open(dst or path, "w", encoding="utf-8").write(out)
     return b

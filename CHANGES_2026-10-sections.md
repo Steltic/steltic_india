@@ -116,7 +116,8 @@ D8).
   - Panel-zone doublers declare their grade (`doubler_grade`; the engine checks a doubler at its own grade, E250
     when none is declared). The grade is E350 B0 when every column that the label's beams frame into is E350, since
     the doubler is the same plate as the column web it is welded to. Otherwise it is E250 B0. The doubler thickness
-    is stepped up from the engine's own panel-zone rows (IN_Ex12, IN_Ex16, IN_Ex18; IN_Ex9 has no E350 column).
+    is stepped up from the engine's own panel-zone rows. A design written to a cfg states every doubler's grade:
+    a design kept from an earlier pass gets E250 B0, the grade its verified run checked it at.
 - **A label that fails Table 3 slenderness in its own full run** is barred for its group. The limit depends on
   whether the member carries compression, which the frozen forces cannot show. On the IN_Ex12 gym, a roof beam
   picks up axial force only in its own run.
