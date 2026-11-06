@@ -109,8 +109,10 @@ them):
     the full chord force is used: the heel and apex gussets, where the chord ends. Missing gusset geometry leaves the
     row not evaluated.
   - The knee checks of IS 800 12.10.2.1 / 12.10.2.4 (D-T10, below), with the knee load path:
-    `truss_connections['knee_gusset']` = {face_length_mm, t_mm, grade, weld 'cjp', e_face_mm} and
-    `truss_connections['heel']['cap_weld']` = 'cjp'.
+    `truss_connections['knee_gusset']` = {face_length_mm, projection_mm, t_mm, grade, weld 'cjp',
+    angle_clearance_mm, edge_cut} and `truss_connections['heel']['cap_weld']` = 'cjp'. The eccentricity of the
+    brace's line of force from the weld centroid is derived from that outline and the knee-brace bolt line
+    (`knee_gusset_layout`); a declared `e_face_mm` is used only for a brace that is not an angle.
   - Gusset width: `gusset_width_mm` (the declared outline across the bolt line) caps the Whitmore width (the
     `available_width_mm` of `whitmore_section`, wired now). Gusset buckling K by the edge support, `gusset_support`:
     'two_edges' 0.65, 'one_edge' 1.2 (a lower declared K is raised; engineering practice, the engine's brace-gusset
