@@ -1,8 +1,8 @@
 # steltic-india — 2026-11 engine checks 2 (re-check 3 and the group strength line)
 
 Branch `fix/2026-11-engine-checks-2`, from main 56909e3 (PR #32, `CHANGES_2026-11-engine-checks.md`). It covers the
-three low items of re-check 3 in `briefs/ENG_REVIEW.md`, and one item that the MSME re-size of IN_Ex21 found. Gold cfgs
-are not edited.
+three low items of re-check 3 in `briefs/ENG_REVIEW.md`, one item that the MSME re-size of IN_Ex21 found (G-1), and a
+consistency regression found on the way (C-1). Gold cfgs are not edited.
 
 ## R3-1. The side-wall check takes the pattern's fields exchanged as well
 
@@ -99,9 +99,53 @@ are not edited.
 - **Correction.** `CHANGES_2026-11-engine-checks.md` gave the IN_Ex21 chord's worst strength ratio as 0.19 at e44.
   That bullet now gives the true worst element and ratio (A/B below).
 
+## C-1. The consistency rules read the records they mean, not the whole package text
+
+- **Problem.** bca766e (PR #32) added `stepped_facade` to every member-wind package.
+  - `consistency._india_design_basis_issues` and its US twin `_design_basis_issues` cleared a `drift_exempt_stories`
+    declaration when the word "step" appeared anywhere in `json.dumps(pkg)`. So that rule could no longer fire in
+    any job with member wind.
+  - The same rules cleared a flexible or semi-rigid diaphragm on "tributary" or "semi-rigid" anywhere. Every
+    member-wind package has "tributary" in the wall scan's basis and a wind post's `tributary_width_mm`. And the
+    7.6.4 record echoes the declared "semi-rigid".
+- **Other whole-text searches of the same kind**, all in `consistency.py`:
+  - `_consultancy_issues` (both paths): ponding, composite floors, the seismic joint and snow drift. Each found its
+    word in a stub label ("camber" in the composite worksheet), a note ("scope"), a cite, or every storey-drift row
+    ("drift").
+  - The US path's capacity-design guards (`_system_checks_issues`, `_transfer_issues`, `_nonparallel_issues`): every
+    key and string of `capacity_design` (and the connections' text).
+- **Fix.** Each rule reads the records it means:
+  - **Drift-exempt storeys:** a DESIGNED step / split-level transfer. This is a connection with a D/C or check rows,
+    or a computed capacity-design check, labelled step, offset, split-level or inter-diaphragm (as words: a crane
+    "stepped column" is not one).
+  - **Flexible / semi-rigid diaphragm:** the recorded distribution. That is the 7.6.4 record's tributary line shears,
+    its rigid-vs-tributary comparison or flexible run, a Table 5(ii) flexible-diaphragm run (engine or EOR) in
+    `seismic_analysis`, or the collectors' flexible levels.
+  - **Ponding:** the IS 875 (Part 4) 4.4 screen (`pkg['ponding']`), or a designed ponding check.
+  - **Composite:** the worksheet's slots. The shear connectors and the construction stage must be found or not
+    required. Otherwise honest found:false stubs or a recorded `composite_scope` clear it, as does a designed stud /
+    camber / wet-stage check.
+  - **Seismic joint:** the 7.11.3 separation record (`cfg['adjacent_units']`), or a designed connection / check
+    labelled as the joint (seismic joint, pounding, joint width, separation).
+  - **Snow drift at a step:** the snow summary's drift record (`load_plan.snow_summary.drift`), or a designed
+    snow-drift check.
+  - **US capacity-design guards:** the labels of computed check records (and their numeric field names).
+  - `_cd_blob` (the text of `capacity_design`) is no longer used and is removed.
+- **Golds.** No gold declares `drift_exempt_stories`, a semi-rigid diaphragm, snow at a stepped roof or a multi-wing
+  plan. IN_Ex10 (flexible) has its 7.6.4 line shears. None of these rules feeds the design status: the status reads
+  only the script-grep, literal-D/C, RAG-evidence and retrieval rules.
+  - `consistency.check` on all 30 gold packages gives the same issues with the old and the new `consistency.py`
+    (`gold/tools/consistency_c3.py`; `gold/results/consistency_c3.json` at 471aa79, `consistency_c4.json` at
+    c5026f0).
+  - All 30 golds re-run at 471aa79 (eng10): every digest is identical to eng9's (`gold/results/compare_c3.json`).
+    c5026f0 changes only the two guards (seismic joint, snow drift) that no gold triggers.
+- **Tests.** Four tests (C1) in `tests/test_engine_checks_2026_11_checks2.py`. Mutation checks (`wt/ENG/tools/mutate5.py`,
+  `logs/mutation7.txt`): 11 of 11 caught. Each mutation puts one whole-text search back, or loosens what counts
+  as designed.
+
 ## Tests and mutation checks
 
-`tests/test_engine_checks_2026_11_checks2.py`, 11 tests:
+`tests/test_engine_checks_2026_11_checks2.py`, 11 tests for R3-1 to G-1 (and the 4 C1 tests above):
 
 | Item | Tests |
 |---|---|
@@ -164,6 +208,9 @@ banded.
 
 ## Suite
 
-Full HR suite under heavy at e15cbde: **1,345 passed, 5 skipped** in 7 min 05 s (`wt/ENG/logs/suite_c2b.txt`). The
-first run, at 0484520, had one failure: the existing test above, before it followed G-1 (`logs/suite_c2.txt`,
-1,344 passed). That is main's 1,334 plus the 11 new tests.
+Full HR suite under heavy at the head c5026f0: **1,349 passed, 5 skipped** in 8 min 14 s
+(`wt/ENG/logs/suite_c4.txt`). That is main's 1,334 plus the 15 new tests.
+- At e15cbde: 1,345 passed (`logs/suite_c2b.txt`).
+- At 0484520: one failure, the existing span-moment test above before it followed G-1 (`logs/suite_c2.txt`).
+- At 471aa79: one failure, the contract lint (`test_fix_D05`): two guards read undocumented cfg keys
+  (`seismic_joint`, `snow_drift`). c5026f0 drops them (`logs/suite_c3.txt`).
