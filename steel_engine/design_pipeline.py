@@ -1173,6 +1173,13 @@ def _truss_knee_records(cfg, info0, reg, length, elem_results):
         r["N_del_basis"] = ("N_del = max(Ag fy %s, Pd gamma_m0 %s) characteristic (D-T10, IS 800 12.7.3.1(a) basis)"
                             % ("-" if Ty is None else "%.1f kN" % (Ty / 1e3),
                                "-" if Pc is None else "%.1f kN" % (Pc / 1e3)))
+        # re-check 2: the members at the knee-brace node on the bottom chord (the vertical and the chord)
+        cn_ = k_["chord_node"]
+        at_cn = [tt for tt, v in reg.items() if cn_ in (v[2], v[3])]
+        vt = [tt for tt in at_cn if (tinfo.get(tt) or {}).get("group") == "vertical"]
+        ch = [tt for tt in at_cn if (tinfo.get(tt) or {}).get("group") == "bottom_chord"]
+        r["vertical_section"] = reg[vt[0]][1] if vt else None
+        r["chord_section"] = reg[ch[0]][1] if ch else None
         # the column at the knee (the piece from the knee station up to the heel) and its plastic moment Zp fy
         kn_ = k_["knee_node"]
         col_t = [tt for tt, v in reg.items() if v[0] == "col" and kn_ in (v[2], v[3])]

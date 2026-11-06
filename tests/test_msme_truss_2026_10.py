@@ -448,7 +448,8 @@ def _knee_case(n_bolts=8):
           "gusset_width_mm": 300.0}
     heel = dict(_cfg_conn()["truss_connections"]["heel"], cap_weld="cjp")
     cfg = {"truss_connections": {"truss_knee_brace:%s" % sec: sp, "heel": heel,
-                                 "knee_gusset": {"face_length_mm": 480.0, "t_mm": 8.0, "weld": "cjp", "e_face_mm": 0.0}}}
+                                 "knee_gusset": {"face_length_mm": 660.0, "projection_mm": 400.0, "t_mm": 8.0,
+                                                 "weld": "cjp", "angle_clearance_mm": 15.0}}}
     nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
     pc = S.props("MB300")
     knee = {"id": "K1-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": sec,
@@ -476,19 +477,22 @@ def test_d_t10_knee_on_the_characteristic_force_the_brace_delivers():
     assert "K 1.20" in rows["12.10.2.1_knee_gusset_buckling"]["cite"]                       # one edge held
     yf = rows["12.10.2.1_knee_brace_yields_first"]
     assert yf["value"] == pytest.approx(A * 250.0 / GM0) and yf["limit"] == pytest.approx(348.8e3)   # design values
-    # knee load path by hand: the gusset at the column face (480 x 8), the brace at 45 deg
+    # knee load path by hand: the gusset at the column face (660 x 8, long enough to centre its weld on the brace's
+    # line of force: e = 0, derived from the outline), the brace at 45 deg
+    assert rows["12.10.2.1_knee_gusset_layout"]["ok"] is True
+    assert rows["12.10.2.1_knee_gusset_layout"]["layout"]["e_face_mm"] == pytest.approx(0.0, abs=1e-6)
     N_f = V_f = F / math.sqrt(2.0)
-    Ag = 480.0 * 8.0
+    Ag = 660.0 * 8.0
     Vd = Ag * 250.0 / (math.sqrt(3.0) * GM0)
     beta = (2 * V_f / Vd - 1) ** 2 if V_f > 0.6 * Vd else 0.0
     assert rows["12.10.2.1_knee_gusset_face_section"]["dc"] == pytest.approx(max(V_f / Vd, N_f / (Ag * 250.0 / GM0)))
     fe = math.sqrt((N_f / Ag) ** 2 + 3 * (V_f / Ag) ** 2)
     assert rows["12.10.2.1_knee_gusset_cjp_weld"]["value"] == pytest.approx(fe)
-    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["limit"] == pytest.approx(250.0 / 1.25)
+    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["limit"] == pytest.approx(250.0 / GM0)       # parent metal
     pc = S.props("MB300")
     n2 = 2.5 * (pc["tf"] + pc.get("R1", 0.0))
     fyc = I8.is2062_properties("E250", max(pc["tw"], pc["tf"]))["fy_MPa"]
-    assert rows["12.10.2.1_column_web_bearing"]["limit"] == pytest.approx((480.0 + 2 * n2) * pc["tw"] * fyc / GM0)
+    assert rows["12.10.2.1_column_web_bearing"]["limit"] == pytest.approx((660.0 + 2 * n2) * pc["tw"] * fyc / GM0)
     H = F / math.sqrt(2.0)
     assert rows["12.10.2.4_column_web_shear"]["value"] == pytest.approx(H)
     assert rows["12.10.2.4_column_web_shear"]["limit"] == pytest.approx(pc["d"] * pc["tw"] * fyc / (math.sqrt(3) * GM0))
@@ -793,3 +797,81 @@ def test_table3_compression_noise_floor_is_relative_to_the_squash_load():
     assert I8.member_check_is800(m, cf)["table3_slenderness"]["limit"] == 250
     real = dict(m, t3_gravity_compression_N=16.3e3, t3_gravity_combo="1.5DL+1.5LL")
     assert I8.member_check_is800(real, cf)["table3_slenderness"]["limit"] == 180
+
+
+def test_knee_gusset_eccentricity_derived_from_the_outline():
+    """Re-check 2: the brace's line of force through the knee work point cannot pass through the weld centroid of a
+    480 mm knee gusset holding the 8-bolt line: e is derived (about 55 mm, the reviewer's 54), the weld takes its
+    moment, and a 660 mm face centres it.  The CJP weld is checked as parent metal (10.5.7.1.2) with fe against
+    fy / gamma_m0 (10.5.10.2.2)."""
+    sec, A, Pd, sp, cfg, nodes, knee = _knee_case()
+    short = dict(cfg["truss_connections"]["knee_gusset"], face_length_mm=480.0)
+    lay = TD.knee_gusset_layout(short, sp, sec, S.props("MB300")["d"], 45.0)
+    assert lay["fits"] and 50.0 < lay["e_face_mm"] < 60.0 and 600.0 < lay["face_length_min_e0_mm"] < 660.0
+    c480 = {"truss_connections": dict(cfg["truss_connections"], knee_gusset=short)}
+    Ty = A * 250.0
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, c480, nodes=nodes, member_capacity=Ty)}
+    F = 1.2 * Ty
+    M = F * lay["e_face_mm"]
+    Ag, t, L = 480.0 * 8.0, 8.0, 480.0
+    fb, q = F / math.sqrt(2) / Ag + 6 * M / (t * L ** 2), F / math.sqrt(2) / Ag
+    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["value"] == pytest.approx(math.sqrt(fb ** 2 + 3 * q ** 2))
+    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["dc"] > 0.85                        # the 480 mm gusset is tight
+    ok = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=Ty)}
+    assert ok["12.10.2.1_knee_gusset_cjp_weld"]["dc"] < 0.65                           # 660 mm: e = 0, margin
+    assert "10.5.7.1.2" in ok["12.10.2.1_knee_gusset_cjp_weld"]["clause"]
+
+
+def test_knee_chord_node_gusset_bolts_and_short_vertical():
+    """Re-check 2: the bottom-chord end of the knee load path -- the node gusset holds both bolt lines (600 x 400 does
+    not; 580 x 620, offset towards the column, does), the gusset-to-chord bolts take the horizontal component of
+    1.2 N_del, the gusset section along the chord, and the short vertical's ductility-order record."""
+    S.register_double_angle("2ISA70X70X6-G8", "ISA70X70X6", 8.0)
+    sec, A, Pd, sp, cfg, nodes, knee = _knee_case()
+    spv = {"n_bolts": 3, "d_mm": 16, "grade": "8.8", "d0_mm": 18.0, "pitch_mm": 50.0, "end_mm": 35.0, "gauge_mm": 32.0,
+           "gusset_t_mm": 8.0, "edge": "rolled"}
+    gn = {"toward_column_mm": 420.0, "toward_midspan_mm": 160.0, "above_mm": 240.0, "below_mm": 380.0, "t_mm": 8.0,
+          "gusset_grade": "E250", "chord_heel": "bottom", "angle_clearance_mm": 15.0, "n_bolts": 6, "d_mm": 16,
+          "grade": "8.8", "d0_mm": 18.0, "pitch_mm": 50.0, "end_mm": 35.0, "gauge_mm": 40.0}
+    cfg = {"truss_connections": dict(cfg["truss_connections"], **{"truss_vertical:ISA60X60X6": spv,
+                                                                  "knee_chord_node": gn})}
+    knee = dict(knee, vertical_section="ISA60X60X6", chord_section="2ISA70X70X6-G8")
+    Ty = A * 250.0
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=Ty)}
+    assert rows["12.10.2.1_knee_chord_gusset_layout"]["ok"] is True
+    small = dict(gn, toward_column_mm=300.0, toward_midspan_mm=300.0, above_mm=200.0, below_mm=200.0)
+    lay = TD.chord_node_layout(small, sp, sec, spv, "ISA60X60X6", "2ISA70X70X6-G8", 45.0, sp_chord=small)
+    assert lay["fits"] is False                                          # the 600 x 400 outline cannot hold them
+    H = 1.2 * Ty / math.sqrt(2.0)
+    cb = rows["12.10.2.1_knee_chord_bolts"]
+    assert cb["value"] == pytest.approx(H) and cb["ok"] and "double shear" in cb["cite"]
+    gs = rows["12.10.2.1_knee_chord_gusset_section"]
+    A_ = 580.0 * 8.0
+    assert gs["dc"] == pytest.approx(max(H / (A_ * 250 / (math.sqrt(3) * GM0)), H / (A_ * 250 / GM0)))
+    sv = rows["12.10.2.1_short_vertical_order"]
+    assert sv["advisory"] and sv["dc"] is None and sv["value"] == pytest.approx(Ty / math.sqrt(2.0))
+    assert sv["limit"] < sv["value"] and "yields before the brace could deliver it" in sv["cite"]
+
+
+def test_table3_small_real_gravity_compression_stays_on_row_i():
+    """Re-check 2 (the reviewer's case): an ISA50X50X6 web at L/r 306 with 130 N under 1.5DL+1.5LL (below the 0.1 %
+    Ag fy floor, 142 N) is a member carrying compression from dead and imposed load: row (i), and it fails.  Row (vi)
+    needs no compression above 1 N; the relative floor only chooses between rows (i) and (iii)."""
+    p = S.props("ISA50X50X6")
+    rmin = p.get("r_min") or p.get("rv")
+    L = 306.0 * rmin
+    m = {"id": "w", "section": "ISA50X50X6", "grade": "E250", "L_mm": L, "Kz": 1.0, "Ky": 1.0, "role": "truss_vertical",
+         "angle_connection": {"n_bolts": 2, "fixity": "hinged"},
+         "tension_inputs": {"member": "angle", "Anc_mm2": 150.0, "Ago_mm2": 270.0, "w_mm": 50.0, "t_mm": 6.0,
+                            "bs_mm": 72.0, "Lc_mm": 50.0,
+                            "block": {"Avg_mm2": 480.0, "Avn_mm2": 318.0, "Atg_mm2": 132.0, "Atn_mm2": 78.0}}}
+    assert 130.0 < I8.p_comp_tol(p["A"], 250.0)                              # below the relative floor
+    r = I8.axial_member_check_is800(m, [{"combo": "1.5DL+1.5LL", "P_N": 130.0}, {"combo": "0.9DL+1.5WM0-", "P_N": -5e3}])
+    t3 = r["table3_slenderness"]
+    assert t3["limit"] == 180 and t3["dc"] == pytest.approx(306.0 / 180.0, rel=2e-3) and r["ok"] is False
+    # no compression above 1 N at all: row (vi)
+    r6 = I8.axial_member_check_is800(m, [{"combo": "1.5DL+1.5LL", "P_N": 0.5}, {"combo": "0.9DL+1.5WM0-", "P_N": -5e3}])
+    assert r6["table3_slenderness"]["limit"] == 400
+    # wind compression larger than a small gravity compression below the floor: row (iii)
+    r3 = I8.axial_member_check_is800(m, [{"combo": "1.5DL+1.5LL", "P_N": 130.0}, {"combo": "0.9DL+1.5WM0-", "P_N": 5e3}])
+    assert r3["table3_slenderness"]["limit"] == 250

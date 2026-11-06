@@ -21,7 +21,14 @@ them):
     response-spectrum or vertical-earthquake terms), registered by `design_india`; the label text is only a fallback
     (now also `WM*`). Member-wind combinations (`WM0+`, `WM90-R`, IN_Ex6's `WMX+` / `WMY+`) count as wind. Before,
     only labels with `EQ`, `W_`, `WL` or `EL` did.
-  - An axial force below 1 N (analysis noise) is no longer compression.
+  - An axial force below 1 N is no longer compression, and row (vi) ("always under tension") needs no record above
+    that absolute 1 N.
+  - Rows (i) / (iii): a member goes to row (iii) when its wind / earthquake compression exceeds its gravity
+    compression and the gravity compression is below 0.1 % of the squash load Ag fy (an engineering basis, stated in
+    the record). The floor covers analysis noise (at most 75 N seen in IN_Ex1–9) AND small real compression up to
+    0.1 % Ag fy (the IN_Ex19 WPB300 braces carry 1.2–1.4 kN from frame action, an IN_Ex9 brace 553 N). A member whose
+    only compression is a small gravity force stays on row (i): the floor never sends a member to row (vi) (the
+    reviewer's case, an ISA50X50X6 web at L/r 306 with 130 N under 1.5DL+1.5LL, stays on row (i) and fails).
   - The row reads the member's gravity compression over ALL its records. The member check itself only receives the
     top-ranked records (largest |N|, |M|, |V|), which can drop the gravity combinations; with member wind counted as
     wind that put the IN_Ex7 crane columns on row (iii) until this was added.
@@ -155,15 +162,28 @@ Knee-braced truss portal, IS 800 12.10.2.1:
   - each knee-brace connection (the bolts and the gussets at both ends, the Whitmore width capped by the declared
     gusset outline) for 1.2 N_del; gusset buckling for 1.2 × the characteristic buckling strength;
   - the knee load path that the CJP welds imply: the gusset at the column face (8.4.1 / 9.2.2 / 9.3.1.1), its CJP
-    weld (10.5.7.1.2), the column web at the knee (8.7.4 local capacity, 8.7.3.1 buckling), the column web shear
-    between the knee and the heel (8.4.1) and the heel cap-plate CJP weld;
+    weld, the column web at the knee (8.7.4 local capacity, 8.7.3.1 buckling), the column web shear between the knee
+    and the heel (8.4.1) and the heel cap-plate CJP weld;
+  - the CJP welds as parent metal: "Butt welds shall be treated as parent metal with a thickness equal to the throat
+    thickness, and the stresses shall not exceed those permitted in the parent metal" (IS 800 10.5.7.1.2; 10.5.7.1.1
+    is the fillet-weld clause), fe = sqrt(fb² + 3q²) against the parent metal's fy / γm0 (10.5.10.2.2, fbr = 0);
+  - the moment on the knee-gusset weld from the eccentricity of the brace's line of force from the weld centroid,
+    derived from the gusset's declared outline and the bolt line (`knee_gusset_layout`), not a hand value: 55 mm for a
+    480 mm gusset, 0 for the 660 mm gusset of the gold;
+  - the bottom-chord end: the node gusset holds the knee brace's and the vertical's bolt lines and the chord bolts
+    (`chord_node_layout`; 600 × 400 could not), the gusset-to-chord bolts take the horizontal component of 1.2 N_del,
+    and the gusset section along the chord;
   - the heel seat for the horizontal force of the couple, with the 12.10.2.4 shear (1.2DL + 0.5LL plus
     2 × 1.2 M_del / span).
 - The brace-yields-first check is a ductility-order check on design values on both sides (Tdg = Ag fy / γm0 against
   the end rupture / block shear), with no 1.2 margin on the angle's own end. A single angle bolted through one leg
   cannot develop 1.2 × its yield at its end (6.3.3 shear lag: Tdn tends to about 1.2 Tdg only as the connection
   length tends to infinity), so the knee connection is designed for more than the brace can transmit.
-- So the knee and heel connections are designed so that the brace yields (gross section) before they fail.
+- So the knee and heel connections checked are designed so that the brace yields (gross section) before they fail.
+  The short vertical at the knee-brace node is not part of that order: at the brace's yield its vertical component
+  (245.7 kN) exceeds the ISA60X60X6 vertical's Ag fy (173 kN) and its 3 end bolts (about 153 kN), so the vertical or
+  its bolts yield before the brace could deliver it. IS 800 12.10 asks no member hierarchy of an ordinary moment frame;
+  the report records it as a ductility-order note, not a check.
 - M_del is about twice the column's plastic moment (368.6 kN-m against 163 kN-m for MB300), so the rule is
   conservative for the knee: the column hinges first. The demand is not capped.
 - The truss joints use fully tensioned HSFG 8.8 bolts (12.4.1). The welds to the column are CJP (12.4.2).
@@ -290,6 +310,14 @@ span-moment fix, not yet re-run in the golds); this branch changes no status.
 - IN_Ex6's `WMX` / `WMY` member-wind combinations are now classified as wind, but no group moves.
 - IN_Ex7's crane columns stay on row (i). The first branch run had put them on row (iii); that was fixed by reading
   every record, not only the top-ranked subset.
+- **IN_Ex10–20 were checked by a static scan only** (their saved combination forces, the old and the new rule per
+  element), not re-run. Element-level row moves appear only in braces: 4 in the IN_Ex11 workshop unit, 4 in IN_Ex19
+  and 4 in its stem unit (gravity compression 0.9–2.3 kN against 28–747 kN of lateral compression, all to row (iii)).
+  Their Section 12 slenderness limits govern those braces, so no group-level change is expected. The lead's final gold
+  run after the engine fix covers them.
+- The re-check 2 rule (row (iii) needs the wind compression to exceed the gravity compression; row (vi) only without
+  any compression above 1 N) does not change the IN_Ex1–9 moves above: in each, the wind compression is 15–139 kN
+  against a gravity compression of at most 75 N.
 
 ## Nonlinear run (stage 2): what the shed needs from the nonlinear engine
 

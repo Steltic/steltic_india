@@ -3046,9 +3046,11 @@ def peb_buckling_section(comp, p, bsec, fy, KLz, KLy, *, process=None, welded=Tr
 # review 2026-11 (MSME): IS 800 Table 3 row choice -- which combinations are wind / earthquake combinations, and the
 # axial force below which a member is not 'in compression' (analysis noise, e.g. 0.3 N in an eave strut)
 P_COMP_TOL_N = 1.0
-# ... and relative to the member: an axial force below 0.1 % of the squash load Ag fy is analysis noise for the row
-# choice (engineering basis, stated in the record: 2.2 N of 'gravity compression' in an IN_Ex4 CHS168 roof strut,
-# squash load 717 kN, is not a member carrying compressive loads from dead and imposed load)
+# ... and relative to the member, for the choice between rows (i) and (iii) only: a gravity compression below 0.1 % of
+# the squash load Ag fy, in a member whose wind / earthquake compression is larger, does not make it a member carrying
+# compressive loads from dead and imposed load (engineering basis, stated in the record).  It covers analysis noise
+# (<= 75 N seen in IN_Ex1-9: 2.2 N in an IN_Ex4 CHS168 roof strut, squash load 717 kN) AND small real compression up to
+# 0.1 % Ag fy (IN_Ex19 WPB300 braces 1.2-1.4 kN, an IN_Ex9 brace 553 N).  Row (vi) needs no compression above 1 N.
 P_COMP_TOL_REL = 1.0e-3
 
 
@@ -3094,6 +3096,21 @@ def is_lateral_combo(label):
     if lab in _LATERAL_REGISTRY:
         return _LATERAL_REGISTRY[lab]
     return bool(_LATERAL_TOKEN.search(lab))
+
+
+def table3_compression_only_lateral(Ps, member, tol_rel):
+    """Re-check 2 (review 2026-11): IS 800 Table 3 row (iii) -- 'compression forces resulting only from a combination
+    with wind / earthquake actions' -- holds when the member's largest wind / earthquake compression exceeds 1 N and
+    its gravity compression (over ALL its records when the pipeline gives it, else over Ps) is below the relative floor
+    tol_rel (0.1 % Ag fy) AND below that wind / earthquake compression.  A member whose only compression is a small
+    gravity force (no wind / earthquake compression above it) stays on row (i): the relative floor only decides between
+    rows (i) and (iii), never sends a member to row (vi)."""
+    lat = max([P for P, lab in Ps if is_lateral_combo(lab)] + [0.0])
+    grav = member.get("t3_gravity_compression_N")
+    if grav is None:
+        grav = max([P for P, lab in Ps if not is_lateral_combo(lab)] + [0.0])
+    grav = float(grav)
+    return lat > P_COMP_TOL_N and lat > grav and grav <= tol_rel
 
 
 def table3_row_combo(Ps, row, member=None):
@@ -3301,9 +3318,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         # review 2026-11 (MSME): one rule for both checks -- the member-wind combinations (WM0+, WM90-R, ...) are wind
         # combinations, and an axial force below P_COMP_TOL_N (analysis noise) is not compression
         tol3 = p_comp_tol(p_gross.get("A"), fy)
-        comp_only_lat = Pmax > tol3 and all(P <= tol3 or is_lateral_combo(lab) for P, lab in Ps)
-        if member.get("t3_gravity_compression_N") is not None:      # over ALL the member's records (design_pipeline)
-            comp_only_lat = Pmax > tol3 and float(member["t3_gravity_compression_N"]) <= tol3
+        comp_only_lat = table3_compression_only_lateral(Ps, member, tol3)
         # H34: a beam whose axial compression is negligible (<= 0.05 Pd, e.g. a small collector / chord force) is not
         # a 'member carrying compressive loads' in the Table 3 sense and stays on row (iv); the 0.05 threshold is an
         # engineering basis stated in the record (member / cfg 'beam_axial_negligible_ratio' changes it)
@@ -3318,7 +3333,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             if Pmax > 1e-6:
                 row += (" (axial compression %.1f kN <= %.2f Pd = %.1f kN treated as negligible; engineering basis, "
                         "H34)" % (Pmax / 1e3, neg_ratio, P_neg / 1e3))
-        elif member.get("truss_chord") and Pmax <= tol3:
+        elif member.get("truss_chord") and Pmax <= P_COMP_TOL_N:     # row (vi) only without any compression
             rmin_ = p_gross.get("r_min") or min(v for v in (p_gross.get("rx"), p_gross.get("ry")) if v)
             v3, lim, row = L / rmin_, TABLE3_LIMITS["tension_only"], "(vi) member always under tension: L / r_min"
         elif comp_only_lat or member.get("compression_only_from_WL_EL"):
@@ -3467,11 +3482,9 @@ def axial_member_check_is800(member, combo_forces, *, cfg=None, _pre=None):
     Ps = [(r["P_N"], str(r.get("combo") or "")) for r in per]
     Pmax = max([P_ for P_, _ in Ps] or [0.0])
     tol3 = p_comp_tol(p.get("A"), fy)
-    if Pmax > tol3:
+    if Pmax > P_COMP_TOL_N:                    # row (vi) only when no record has compression above the absolute 1 N
         klr = comp.get("KL_over_r_max")
-        grav_ = member.get("t3_gravity_compression_N")
-        if (all(P_ <= tol3 or is_lateral_combo(lab) for P_, lab in Ps) if grav_ is None
-                else float(grav_) <= tol3):
+        if table3_compression_only_lateral(Ps, member, tol3):
             lim, row = TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
         else:
             lim, row = TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"

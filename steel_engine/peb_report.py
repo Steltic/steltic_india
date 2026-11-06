@@ -39,7 +39,8 @@ TRUSS_RULINGS = [
               "each knee-brace connection (bolts and gussets) for 1.2 Ag fy, the gusset at the column face, its "
               "complete-penetration weld, the column web at the knee and the heel cap-plate weld for the same couple; "
               "the brace's own bolted end is not weaker than its gross-section yield (design values), so the knee and "
-              "heel connections are designed so that the brace yields (gross section) before they fail; the truss "
+              "heel connections checked are designed so that the brace yields (gross section) before they fail (the "
+              "short vertical at the knee-brace node yields first; IS 800 12.10 asks no member hierarchy); the truss "
               "joints use fully tensioned HSFG 8.8 bolts (12.4.1) and the welds to the column are complete-penetration "
               "welds (12.4.2)"),
 ]
@@ -150,7 +151,7 @@ def _truss_head(cfg, pkg):
     # one row per knee check, the governing knee (review 2026-11: the D-T10 rows -- bolts, gussets, the brace yielding
     # first, the heel seat)
     _KNEE_STRESS_ROWS = ("12.10.2.1_knee_gusset_cjp_weld", "12.10.2.4_heel_cap_weld",
-                         "12.10.2.1_knee_gusset_face_section")
+                         "12.10.2.1_knee_gusset_face_section", "12.10.2.1_knee_chord_gusset_section")
     KNEE_ROWS = (("12.10.2.1_knee_brace_connection", "knee-brace end bolts, for 1.2 N_del"),
                  ("12.10.2.1_knee_gusset_whitmore_yield", "knee gusset, Whitmore yield, for 1.2 N_del"),
                  ("12.10.2.1_knee_gusset_block_shear", "knee gusset, block shear, for 1.2 N_del"),
@@ -164,7 +165,11 @@ def _truss_head(cfg, pkg):
                  ("12.10.2.1_knee_brace_yields_first", "knee brace: bolted end not weaker than gross yield (design "
                                                        "values)"),
                  ("12.10.2.4_heel_seat", "heel seat bolts (12.10.2.4)"),
-                 ("12.10.2.4_heel_cap_weld", "heel cap-plate CJP weld to the column top (10.5.7.1.2)"))
+                 ("12.10.2.4_heel_cap_weld", "heel cap-plate CJP weld to the column top (10.5.7.1.2)"),
+                 ("12.10.2.1_knee_chord_bolts", "knee-brace node: gusset-to-chord bolts, horizontal component"),
+                 ("12.10.2.1_knee_chord_gusset_section", "knee-brace node: gusset section along the chord"),
+                 ("12.10.2.1_short_vertical_order", "short vertical at the knee-brace node (a ductility-order "
+                                                    "record, not a check)"))
     krow = []
     for cid, label in KNEE_ROWS:
         cs = [c for c in s12 if c.get("id") == cid]
@@ -195,13 +200,18 @@ def _truss_head(cfg, pkg):
                    "the heel.%s Each knee-brace connection (bolts and gussets, at the column and at the bottom chord) is "
                    "designed for 1.2 N_del and the gusset buckling for 1.2 times the characteristic buckling strength; "
                    "the gusset at the column face, its complete-penetration weld, the column web at the knee (local "
-                   "capacity, buckling and shear) and the heel cap-plate weld take the same couple. The brace's own "
-                   "bolted end (net-section rupture and block shear) is not weaker than its gross-section yield, both "
-                   "as design values (a ductility-order check, with no 1.2 margin: a single angle bolted through one "
-                   "leg cannot develop 1.2 times its yield at its end, because of shear lag, so the knee connection is "
-                   "designed for more than the brace can transmit). So the knee and heel connections are designed so "
-                   "that the brace yields (gross section) before they fail. One row per check, the governing knee "
-                   "shown; stresses in MPa where marked.</p>" % mp_txt)
+                   "capacity, buckling and shear), the heel cap-plate weld and, at the bottom chord, the gusset-to-"
+                   "chord bolts and the gusset section take the same couple. The welds are complete-penetration butt "
+                   "welds, checked as parent metal (IS 800 10.5.7.1.2, 10.5.10.2.2), with the moment of the "
+                   "eccentricity that the gusset's outline and the bolt line give. The brace's own bolted end "
+                   "(net-section rupture and block shear) is not weaker than its gross-section yield, both as design "
+                   "values (a ductility-order check, with no 1.2 margin: a single angle bolted through one leg cannot "
+                   "develop 1.2 times its yield at its end, because of shear lag, so the knee connection is designed "
+                   "for more than the brace can transmit). So the knee and heel connections checked here are designed "
+                   "so that the brace yields (gross section) before they fail. The short vertical at the knee-brace "
+                   "node is not part of that order: it, or its end bolts, yields before the brace could deliver its "
+                   "vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame. One row per "
+                   "check, the governing knee shown; stresses in MPa where marked.</p>" % mp_txt)
         out.append(_tab(["check", "governing knee", "knee brace Ag fy / Pd &gamma;m0 (kN)", "N_del (kN)",
                          "lever arm (mm)", "M_del (kN-m)", "demand (kN or MPa)", "capacity (kN or MPa)", "D/C",
                          "knees"], krow))
