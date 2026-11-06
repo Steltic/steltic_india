@@ -339,8 +339,15 @@ def panel_zone_check(
     continuity_plates: bool = True,
     tf_beam_mm: Optional[float] = None,
     n_webs: int = 1,
+    doubler_fy_MPa: Optional[float] = None,
+    doubler_grade: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Panel zone - IS 800:2007 12.11.2.3 / 12.11.2.4 (HR800-17).
+
+    fy_MPa is the COLUMN web's fy.  A doubler plate is checked at its OWN fy (engine checks, 2026-11): the IS 2062:2025
+    Table 3 band of its grade for its thickness (doubler_grade; fy_is2062), a declared doubler_fy_MPa capped at that band
+    (india_connections.plate_fy_band); neither declared -> E250 (the assumption is stated in the record).  The column's
+    fy is never used for the doubler.
 
     12.11.2.4: the INDIVIDUAL thickness of the column web and of each doubler plate shall satisfy
     t >= (dp + bp)/90 (dp = panel depth between continuity plates, bp = width between column flanges).
@@ -370,9 +377,21 @@ def panel_zone_check(
     web_ok = tw >= t_min
     dbl_ok = (t_dbl >= t_min) if t_dbl > 0 else None
     thickness_ok = web_ok and (dbl_ok is not False)
-    eps = math.sqrt(250.0 / fy)
 
-    def _tau_b(t):
+    def _dbl_fy(t):
+        # engine checks (2026-11): the doubler's own IS 2062:2025 Table 3 fy (never the column's)
+        import india_connections as _C
+        return _C.plate_fy_band(t if t and t > 0 else None, doubler_grade, fy_MPa=doubler_fy_MPa,
+                                what="panel-zone doubler plate")
+
+    fy_d, fy_d_rec = _dbl_fy(t_dbl)
+    if doubler_fy_MPa is None and not doubler_grade:
+        fy_d_rec = dict(fy_d_rec, grade_basis="doubler grade not declared (joint 'doubler_grade' / 'doubler_fy_MPa'): "
+                                              "E250 assumed, IS 2062:2025 Table 3 for its thickness; the column's fy "
+                                              "is not used")
+
+    def _tau_b(t, fy_):
+        eps = math.sqrt(250.0 / fy_)
         dt = bp / t
         if continuity_plates:
             cd = dp / bp
@@ -381,27 +400,27 @@ def panel_zone_check(
             Kv = 5.35
         limit = 67 * eps * math.sqrt(Kv / 5.35)
         if dt <= limit:
-            return fy / math.sqrt(3.0), dt, Kv, False
+            return fy_ / math.sqrt(3.0), dt, Kv, False
         tcr = Kv * math.pi ** 2 * E_DEFAULT_MPA / (12 * (1 - 0.3 ** 2) * dt ** 2)
-        lw = math.sqrt(fy / (math.sqrt(3.0) * tcr))
+        lw = math.sqrt(fy_ / (math.sqrt(3.0) * tcr))
         if lw <= 0.8:
-            tb = fy / math.sqrt(3.0)
+            tb = fy_ / math.sqrt(3.0)
         elif lw < 1.2:
-            tb = (1 - 0.8 * (lw - 0.8)) * fy / math.sqrt(3.0)
+            tb = (1 - 0.8 * (lw - 0.8)) * fy_ / math.sqrt(3.0)
         else:
-            tb = fy / (math.sqrt(3.0) * lw ** 2)
+            tb = fy_ / (math.sqrt(3.0) * lw ** 2)
         return tb, dt, Kv, True
 
     n_webs = max(int(n_webs or 1), 1)
-    plates = ([("column web", tw)] if n_webs == 1 else [("column web %d" % (i + 1), tw) for i in range(n_webs)]) + \
-        ([("doubler", t_dbl)] if t_dbl > 0 else [])
+    plates = ([("column web", tw, fy)] if n_webs == 1 else [("column web %d" % (i + 1), tw, fy) for i in range(n_webs)]) + \
+        ([("doubler", t_dbl, fy_d)] if t_dbl > 0 else [])
     detail = []
     Vn = 0.0
-    for name, t in plates:
-        tb, dt, Kv, buck = _tau_b(t)
+    for name, t, fy_ in plates:
+        tb, dt, Kv, buck = _tau_b(t, fy_)
         Vn += bp * t * tb
         detail.append({"plate": name, "t_mm": t, "t_min_mm": t_min, "t_ok": t >= t_min, "b_over_t": dt,
-                       "Kv": Kv, "tau_b_MPa": tb, "shear_buckling": buck})
+                       "Kv": Kv, "tau_b_MPa": tb, "shear_buckling": buck, "fy_MPa": fy_})
     if Av_override_mm2:
         Vn = float(Av_override_mm2) * fy / math.sqrt(3.0)
     Vd = Vn / float(gamma_m0)
@@ -409,7 +428,13 @@ def panel_zone_check(
     shear_ok = dc is not None and dc <= 1.0
     t_need_shear = 0.0
     if dc is not None and dc > 1.0:
-        t_need_shear = max(0.0, V * float(gamma_m0) * math.sqrt(3.0) / (fy * bp) - n_webs * tw)
+        # the doubler that closes the shear at its own fy (the band of its grade for the thickness found: 3 passes)
+        Vreq = V * float(gamma_m0) * math.sqrt(3.0) / bp - n_webs * tw * fy
+        fy_n = _dbl_fy(16.0)[0]
+        for _ in range(3):
+            t_need_shear = max(0.0, Vreq / fy_n)
+            fy_n = _dbl_fy(max(t_need_shear, t_min))[0]
+        t_need_shear = max(0.0, Vreq / fy_n)
     # A doubler (if needed for shear) must itself be >= t_min (12.11.2.4); a web thinner than t_min cannot be
     # cured by a doubler -> doubler_required None (change the column section).
     if not web_ok:
@@ -426,12 +451,14 @@ def panel_zone_check(
         "plates": detail, "Vd_N": Vd, "V_design_N": V, "DC_shear": dc, "dc": max(dc or 0.0, (t_min / tw) if tw else 0.0),
         "doubler_required_mm": doubler_req,
         "doubler_provided_mm": t_dbl,
+        "doubler_fy": fy_d_rec,
         "clause": "IS 800:2007 12.11.2.3 / 12.11.2.4",
         "cite": "IS 800:2007 12.11.2.4 individual thickness t >= (dp+bp)/90; 12.11.2.3 shear buckling per 8.4.2",
         "note": ("Web alone fails 12.11.2.4; a doubler must itself satisfy t >= (dp+bp)/90 (thicknesses are not "
                  "summed) - replace the column or use a thicker web section" if not web_ok else ""),
         "inputs": {"d_col_mm": d_col_mm, "tw_mm": tw_mm, "bf_mm": bf_mm, "tf_mm": tf_mm, "d_beam_mm": d_beam_mm,
-                   "V_design_N": V_design_N, "fy_MPa": fy_MPa, "gamma_m0": gamma_m0, "doubler_t_mm": doubler_t_mm},
+                   "V_design_N": V_design_N, "fy_MPa": fy_MPa, "gamma_m0": gamma_m0, "doubler_t_mm": doubler_t_mm,
+                   "doubler_fy_MPa": doubler_fy_MPa, "doubler_grade": doubler_grade},
     }
 
 
@@ -1829,6 +1856,9 @@ def panel_zone_apply_doubler_in_model(
         fy_MPa=inputs["fy_MPa"],
         doubler_t_mm=float(t_model),
         gamma_m0=inputs.get("gamma_m0", GAMMA_M0_DEFAULT),
+        # engine checks (2026-11): the doubler at its own grade / fy (E250 band when not declared), never the column's
+        doubler_grade=cfg.get("panel_zone_doubler_grade") or inputs.get("doubler_grade"),
+        doubler_fy_MPa=cfg.get("panel_zone_doubler_fy_MPa") or inputs.get("doubler_fy_MPa"),
     )
     detail.update({
         "found": True,

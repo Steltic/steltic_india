@@ -1220,8 +1220,12 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
                 # H09: a box column framed in its second direction -- the panel is bounded by the flange plates,
                 # which act as the two webs (d_col = B, web t = tf, 'flange' t = tw)
                 geo = dict(d_col_mm=cp["bf"], tw_mm=cp["tf"], bf_mm=cp["d"], tf_mm=cp["tw"])
+            # engine checks (2026-11): the doubler at its own grade / fy (joint 'doubler_grade' / 'doubler_fy_MPa', from
+            # the beam_column connection spec; E250 when not declared), never the column's fy
             pz = I8.panel_zone_check(d_beam_mm=bp0["d"], tf_beam_mm=None, V_design_N=Vpz, fy_MPa=fyc,
                                      doubler_t_mm=joint.get("doubler_t_mm") or 0.0,
+                                     doubler_grade=joint.get("doubler_grade"),
+                                     doubler_fy_MPa=joint.get("doubler_fy_MPa"),
                                      continuity_plates=bool(joint.get("continuity_plates")),
                                      n_webs=2 if is_box else 1, **geo)
             out.append(_chk("12.11.2.3_panel_zone", pz.get("dc"), 1.0, clause="IS 800:2007 12.11.2.3 / 12.11.2.4",

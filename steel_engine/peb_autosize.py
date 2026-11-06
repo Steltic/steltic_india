@@ -1207,6 +1207,7 @@ class LocalModel:
                 inp = (c.get("detail") or {}).get("inputs") or {}
                 pz = I8.panel_zone_check(d_beam_mm=d0, V_design_N=S12.panel_zone_design_shear(mps, d0, tf0, vcol),
                                          fy_MPa=fyc, doubler_t_mm=float(inp.get("doubler_t_mm") or 0.0),
+                                         doubler_grade=inp.get("doubler_grade"), doubler_fy_MPa=inp.get("doubler_fy_MPa"),
                                          continuity_plates=True, n_webs=1, d_col_mm=pc["d"], tw_mm=pc["tw"],
                                          bf_mm=pc["bf"], tf_mm=pc["tf"])
                 dc = float(pz.get("dc") or 0.0)

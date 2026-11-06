@@ -505,7 +505,10 @@ You:
      plate_b_mm, plate_t_mm, fy_plate_MPa, weld{size_mm, length_mm, fu_MPa, n_sides, site}} or 'end_plate'
      {`end_plate`: rows[{h_mm, n_pairs}], d_mm, grade, t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
      pretensioned} (10.3.5 + 10.4.7 prying), `shear` (fin/web plate + bolts, 12.11.2.2), `continuity_plates`,
-     `doubler_t_mm`, `weld_type`, `bolt_type`. Checked per joint against 1.2 Mp (12.11.2.1), the 12.11.2.2
+     `doubler_t_mm`, `doubler_grade` / `doubler_fy_MPa` (the panel-zone doubler plate: its fy is the IS 2062:2025
+     Table 3 band of its grade for its thickness, a declared fy capped at it; neither declared -> E250, stated in
+     the record; never the column's fy -- 2026-11 engine checks), `weld_type`, `bolt_type`. Checked per joint
+     against 1.2 Mp (12.11.2.1), the 12.11.2.2
      shear, the panel zone (12.11.2.3/.4) and SCWB (12.11.3.2 >= 1.2; IS 18168 8.2 > 1.4 with Ry).
    * `beam_shear[<beam section>|'default']` (pinned beams, braced-bay beams): t_plate_mm, h_plate_mm,
      fy/fu_plate_MPa, bolts, `block_shear_areas`, `weld` (fillet) or `cjp` {t_mm, length_mm, fy_MPa, site},

@@ -1605,7 +1605,9 @@ def design_india(name, cfg, outdir):
                 if cn:
                     j["connection"] = cn
                     joint_conn[bm["section"]] = cn
-                    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm"):   # t for the OMF 12.10.2.5 check
+                    # t for the OMF 12.10.2.5 check; the doubler grade / fy for the 12.11.2.3 panel zone (2026-11)
+                    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm", "doubler_grade",
+                              "doubler_fy_MPa"):
                         if k in cn:
                             j[k] = cn[k]
     except Exception as ex:

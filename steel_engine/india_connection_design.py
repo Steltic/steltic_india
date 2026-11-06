@@ -8,7 +8,8 @@ cfg['connections'] = {
                    L_unbraced_mm, K, Avg_mm2, Avn_mm2, Atg_mm2, Atn_mm2}, An_mm2 (brace net area at the slot),
                    moment_capacity_Nmm?, system_max_force_N?, bolts_and_welds_share (bool), slip_surface?}},
   'beam_column':  {<beam section> | 'default': {type 'end_plate' {bolt rows...} | 'welded_cover_plate' {...},
-                   shear: {fin plate / web bolts ...}, weld_type, bolt_type, continuity_plates, doubler_t_mm, cite}},
+                   shear: {fin plate / web bolts ...}, weld_type, bolt_type, continuity_plates, doubler_t_mm,
+                   doubler_grade / doubler_fy_MPa (panel-zone doubler: IS 2062:2025 band, E250 if absent), cite}},
   'beam_shear':   {<beam section> | 'default': fin_plate_shear_checks inputs (gravity beams)},
   'column_base':  {<column section> | 'default': base_plate_design geometry (B_mm, L_mm, t_plate_mm, fy_plate_MPa,
                    fck_MPa, anchors{n_total, n_tension, d_mm, grade, f_mm, pitch_mm, edge_mm, n_per_row},
@@ -141,7 +142,8 @@ def beam_column_connection(cfg, beam_member, p_beam, fy_beam, *, col_props=None)
             r = C.fin_plate_shear_checks(V_N=1.0, **sh)
             out["shear_capacity_N"] = r.get("capacity_N")
             out["shear_detail"] = r
-    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm", "max_deliverable_moment_Nmm", "rbs"):
+    for k in ("continuity_plates", "continuity_plate_t_mm", "doubler_t_mm", "doubler_grade", "doubler_fy_MPa",
+              "max_deliverable_moment_Nmm", "rbs"):
         if k in sp:
             out[k] = sp[k]
     return out
