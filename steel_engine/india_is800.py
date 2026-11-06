@@ -2160,6 +2160,19 @@ def _welded_I(p, welded):
 # ---------------------------------------------------------------- 3.7.2(d) effective section (PEB, 2026-10)
 CITE_3_7_2D = ("IS 800:2007 3.7.2(d): slender (Class 4) cross-section -- effective section by deducting the width of "
                "each compression plate element in excess of its semi-compact (Class 3) limit of Table 2")
+# Engineering basis (lead ruling, 2026-11-06, engine checks fix B): which Table 2 web limit the effective AREA takes.
+# Corpus IS_800_2007.md: 9.3.2.2 "Pdy, Pdz = design strength under axial compression as governed by buckling about
+# minor (y) and major (z) axis"; 7.1.2 Pd = Ae fcd, "Ae = effective sectional area as defined in 7.3.2"; 7.3.2 "Except
+# as modified in 3.7.2 (Class 4), the gross sectional area shall be taken as the effective sectional area ... so long
+# as the section is semi-compact or better"; 3.7.2(d) "deducting width of the compression plate element in excess of
+# the semi-compact section limit".  (The ruling's "7.3.2.1" is clause 7.3.2 of the corpus text, which has no 7.3.2.1.)
+PD_BASIS_3_7_2D = (
+    "Engineering basis (lead ruling 2026-11-06): Pd in the 9.3.2.2 interaction is the member's design strength under "
+    "axial compression alone (9.3.2.2 'design strength under axial compression'; 7.1.2 Pd = Ae fcd).  For a slender "
+    "section its effective area Ae (7.3.2, as modified in 3.7.2 Class 4) deducts each element's width in excess of its "
+    "Table 2 semi-compact limit under axial compression: the web to the 'axial compression' row 42 eps tw (3.7.2(d)); "
+    "the same Ae gives Nd = Ae fy / gamma_m0 (9.3.1).  The 'generally' web rows with the combination's r1 / r2 decide "
+    "the class of the combination and the bending resistance Md (Ze_eff with the web kept to 126 eps / (1 + 2 r2) tw).")
 
 
 def effective_section_3_7_2d(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEFAULT, web_dt_limit=None):
@@ -2230,6 +2243,7 @@ def effective_section_3_7_2d(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEF
             "Ze_eff_minor_mm3": Sy_eff, "neutral_axis_shift_mm": D / 2.0 - yc,
             "web_dt_limit_bending": None if lim_w == math.inf else lim_w,
             "web_dt_limit_bending_eps": None if lim_w == math.inf else lim_w / eps,
+            "web_dt_limit_axial_eps": 42.0, "Pd_basis": PD_BASIS_3_7_2D,
             "basis": "Ae: every element in compression (web 42 eps, flange outstands at the semi-compact limit); "
                      "Ze_eff: compression flange outstands + web %s kept (the Table 2 semi-compact web limit"
                      "%s), the excess deducted from the middle of the compression half of the web, modulus about the "
@@ -3384,7 +3398,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
                                                     "r1", "r2", "governing_element") if sc_c.get(k) is not None}}
         if caps["eff"] is not None:
             rec["effective_section_3_7_2d"] = {k: caps["eff"].get(k) for k in (
-                "A_eff_mm2", "Ze_eff_mm3", "web_d_eff_axial_mm", "web_d_eff_bending_mm", "web_dt_limit_bending_eps")}
+                "A_eff_mm2", "Ze_eff_mm3", "web_d_eff_axial_mm", "web_d_eff_bending_mm", "web_dt_limit_bending_eps",
+                "web_dt_limit_axial_eps")}
         for ax_, c_ in (("z", cmz), ("y", cmy)):
             if c_.get("row"):
                 rec["Cm%s_basis" % ax_] = "%s: %s%s%s" % (
@@ -3456,6 +3471,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     if effs:
         e_ = cg["eff"] if cg["eff"] is not None else effs[0]["eff"]
         res["effective_section_3_7_2d"] = e_
+        res["Pd_basis"] = PD_BASIS_3_7_2D
         res["flags"].append("slender section: IS 800 3.7.2(d) effective section (A_eff %.0f mm2, Ze_eff %.0f mm3)%s"
                             % (e_["A_eff_mm2"], e_["Ze_eff_mm3"],
                                "" if ncls.get("slender", 0) == len(per) else
