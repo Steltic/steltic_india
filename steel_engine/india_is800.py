@@ -2282,9 +2282,10 @@ _ORDER = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
 # (HR-INTEGRATE decision above).  A row whose denominator is zero or negative (r1 <= -1, or r2 <= -1/2: tension large
 # enough that the formula's limit grows without bound) sets no limit for that class -- the web is not a compression
 # element there (engine reading; the formulas tend to no limit as the denominator tends to zero).  The 'axial
-# compression' row is used when the combination carries axial compression and no major-axis moment (the web is in
-# uniform compression); with a major-axis moment the 'generally' rows; with no axial force the mid-depth row.  Its
-# 'Not applicable' plastic and compact cells are read as: the web sets no plastic / compact requirement there (it is
+# compression' row is used when the combination carries axial compression and no bending moment about either axis (a
+# compression member: the class then decides only the area of 7.3.2); with any bending the 'generally' rows ('in
+# general': the rows that take the axial force through r1 and r2); with no axial force the mid-depth row.  Its 'Not
+# applicable' plastic and compact cells are read as: the web sets no plastic / compact requirement there (it is
 # semi-compact or better up to 42e and slender beyond; the flanges classify the section).
 WEB_ROWS_CITE = ("IS 800:2007 Table 2 web of an I, H or box section (mid-depth / generally with r1, r2 of Note 5 / "
                  "axial compression); r1 = (N/(d tw))/(fy/gamma_m0), r2 = (N/A)/(fy/gamma_m0), N compression +")
@@ -2344,8 +2345,8 @@ def section_class_table2(sec, fy_MPa, *, P_N=0.0, welded=False, gamma_m0=GAMMA_M
 
     P_N > 0 = axial compression (uses the 'generally' web rows with r1, r2 of Note 5); P_N < 0 tension (r1, r2
     negative: the 'r1 is negative' row).  axial_only=True (with P_N > 0): the combination carries axial compression
-    and no major-axis moment -- the web of an I / box takes the 'axial compression' row (engine checks fix B,
-    2026-11; see WEB_ROWS_CITE above).
+    and no bending moment -- the web of an I / box takes the 'axial compression' row (engine checks fix B, 2026-11;
+    see WEB_ROWS_CITE above).
     loading='axial' classifies angles/CHS for pure axial compression.
     Web d = D - 2(tf + R1) for rolled I (clear of root fillets, Fig. 2); D - 2tf for welded.
     Note (decision, HR-INTEGRATE): the printed web limits read 'but <= 42 eps' (pdf p. 24); they are applied as a
@@ -3185,8 +3186,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         caps_by_key[key] = c
         return c
 
-    def _classify(P, Mz_any):
-        sc = section_class_table2(p_gross, fy, P_N=P, welded=welded, axial_only=(P > 0.0 and not Mz_any))
+    def _classify(P, bending):
+        sc = section_class_table2(p_gross, fy, P_N=P, welded=welded, axial_only=(P > 0.0 and not bending))
         web = next((e for e in sc.get("elements") or [] if e.get("web_row")), None)
         if web is not None and web.get("no_limit"):
             sc = dict(sc, web_no_limit=web["no_limit"])
@@ -3257,8 +3258,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         cmlt_row = cmz.get("Cm_table18") if Mzf else None
         psi = cmz.get("psi")
         # fix B: the Table 2 class with this combination's N ('axial compression' row when it has no major-axis
-        # moment: |Mz| <= 1 N-m at every check point is taken as none)
-        sc_c = _classify(P, max(Mz_sag, Mz_hog) > 1.0e3)
+        # moment about either axis: |M| <= 1 N-m at every check point is taken as none)
+        sc_c = _classify(P, max(Mz_sag, Mz_hog, My) > 1.0e3)
         caps = _caps(sc_c)
         caps_of[cf.get("combo")] = caps
         p_c, comp_c = caps["p"], caps["comp"]

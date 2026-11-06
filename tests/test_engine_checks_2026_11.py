@@ -179,10 +179,10 @@ def test_B_table2_tension_rows_and_no_limit_beyond_the_denominator():
     json.dumps(big)                                           # JSON-safe (no Infinity)
 
 
-def test_B_axial_compression_row_without_major_axis_moment():
+def test_B_axial_compression_row_without_bending():
     """The 'axial compression' row (semi-compact 42 eps; plastic / compact 'Not applicable') applies to a combination
-    with axial compression and no major-axis moment: d/tw above 42 eps is slender; below it the web does not limit
-    the class (the flanges do)."""
+    with axial compression and no bending: d/tw above 42 eps is slender; below it the web does not limit the class
+    (the flanges do)."""
     import india_is800 as I8
     lab = _wi(300, 200, 12, 5)                                # d/tw = 55.2 > 42 (E250)
     r = I8.section_class_table2(lab, 250.0, P_N=1e5, axial_only=True)
@@ -191,6 +191,22 @@ def test_B_axial_compression_row_without_major_axis_moment():
     lab2 = _wi(300, 200, 12, 8)                               # d/tw = 34.5 <= 42
     r2 = I8.section_class_table2(lab2, 250.0, P_N=1e5, axial_only=True)
     assert r2["web_class"] == "plastic" and r2["section_class"] == "plastic"           # not downgraded
+
+
+def test_B_axial_row_only_without_any_bending_in_the_member_check():
+    """The 'axial compression' row decides a combination with axial compression and no bending (a compression member:
+    only the 7.3.2 area follows); with a minor-axis moment only, the 'generally' rows with r1 / r2 (the web is not
+    classified as if the member were a pure strut, so the minor-axis capacity is not cut to the elastic one by a web
+    carrying a small uniform stress)."""
+    import india_is800 as I8
+    lab = _wi(200, 190, 12, 4)                                # IN_Ex3 corner column: d/tw = 44 > 42 eps (E350)
+    mem = {"id": "c", "section": lab, "grade": "E350", "role": "column", "L_mm": 3000.0, "Kz": 1.0, "Ky": 1.0,
+           "LLT_sag_mm": 3000.0, "LLT_hog_mm": 3000.0}
+    r = I8.member_check_is800(mem, [{"combo": "N", "P_N": 5e4}, {"combo": "NMy", "P_N": 5e4, "My_i_Nmm": 5e6,
+                                                                   "My_j_Nmm": 5e6}])
+    by = {p["combo"]: p for p in r["per_combo"]}
+    assert by["N"]["table2"]["web_row"] == "axial compression" and by["N"]["table2"]["section_class"] == "slender"
+    assert by["NMy"]["table2"]["web_row"].startswith("generally") and by["NMy"]["section_class"] != "semi-compact"
 
 
 def test_B_member_check_classifies_each_combination_and_capacity_follows():
