@@ -37,19 +37,27 @@ S.register_custom_sections(cfg)
 
 
 def bolted_end_plate(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_grade="E250", ext=60.0,
-                     weld=8.0, gauge=None, web_doubler=0.0, member_fy=350.0):
+                     weld=8.0, gauge=None, web_doubler=0.0, member_fy=None, doubler_grade="E250"):
+    # the PEB golds' helper (2026-11): plate, member web and web doubler fy from the IS 2062:2025 bands; the web
+    # strip with a doubler at the thickness-weighted mean
+    import india_is800 as I8
     p = S.props(sec)
+    if member_fy is None:
+        member_fy = I8.fy_is2062("E350", I8.governing_thickness_mm(p))
+    web_t = float(p["tw"]) + float(web_doubler)
+    web_fy = ((float(p["tw"]) * member_fy + float(web_doubler) * I8.fy_is2062(doubler_grade, float(web_doubler))) / web_t
+              if web_doubler else member_fy)
     hf = p["d"] - p["tf"]
     g = gauge or (120.0 if d_bolt >= 30 else 110.0)
     lv = max(ext - p["tf"] / 2.0 - weld, g / 2.0 - p["tw"] / 2.0 - weld)
     rows = ([{"h_mm": round(hf + ext + k * pitch, 1), "n_pairs": 1} for k in range(n_out)] +
             [{"h_mm": round(hf - ext - k * pitch, 1), "n_pairs": 1} for k in range(n_in)
              if hf - ext - k * pitch >= hf / 2.0 - 1.0])
-    fy = 250.0 if t <= 20 else 240.0 if t <= 40 else 230.0
+    fy = I8.fy_is2062(plate_grade, t)
     return {"rows": rows, "d_mm": d_bolt, "grade": grade, "t_plate_mm": t, "fy_plate_MPa": fy,
             "plate_grade": plate_grade, "be_mm": round(min(pitch, b_plate / 2.0), 1), "lv_mm": round(lv, 1),
             "le_mm": min(50.0, (b_plate - g) / 2.0), "pretensioned": True, "bolt_type": "HSFG",
-            "web_t_mm": float(p["tw"]) + float(web_doubler), "web_fy_MPa": member_fy, "hf_mm": hf}
+            "web_t_mm": web_t, "web_fy_MPa": round(web_fy, 2), "hf_mm": hf}
 
 
 KNEE_FACE = PB.section_at(RAF_T, 0.0)
