@@ -3,7 +3,17 @@
 Branch `fix/2026-10-third-sections`, based on main 44b74de. On the lead's instruction it merges
 `fix/2026-10-column-span-moment` (28831f8: IS 800 Table 18 uniform-loading Cm / CmLT for columns with a span load,
 both signs, end-moment-only connection demands, 17-field records). The provisional cherry-pick of the first cut
-(2cb42ff) was reverted first. Every job was sized, and every sized design verified, against the merged checks.
+(2cb42ff) was reverted first. It then merges origin/main twice: c4bf49b (PR #29 span fix, PR #30) and 56909e3
+(PR #31 MSME shed, PR #32 engine-check fix). Every job was sized, and every sized design verified, against the merged
+checks.
+
+Two passes (coordinator, 2026-11-06):
+- **First pass** on main as of PR #30. Not published.
+- **Final pass** on main 56909e3 with the engine-check fix (`CHANGES_2026-11-engine-checks.md`). It starts from each
+  job's first-pass design (IN_Ex19 from the published one) and re-sizes what fails, plus the re-size this brief asks
+  for. These are the results below. Each move is tagged with the fix behind it, using the tags of
+  `CHANGES_2026-11-engine-checks.md` (A, B, R1, D-T11, G, PZ, SW ...); "re-size" marks a move the sizer made for
+  weight with nothing failing.
 
 Scope (owner decisions of 2026-10-30):
 - re-size IN_Ex7 … IN_Ex20 and their units (Ex11 workshop, Ex12 unit B and unit C, Ex19 stem) to Indian section
@@ -92,7 +102,11 @@ D8).
   - declared secondary members (`cfg['secondary_members']`) whose section is a sized group, such as the IN_Ex9 lean-to
     roof beam under snow drift and ponding, are checked with the engine's own functions;
   - brace ends are designed under the braced part of a combined system (`SMRF+SCBF` → SCBF), as
-    `section12_checks` checks them.
+    `section12_checks` checks them;
+  - since the engine checks every combination with both signs (fix A), an element of a tall job carries 100+
+    combinations. An element with more than 48 is predicted on a short list: the 24 with the largest ratios at its
+    current section, plus the two largest of each force. The list is computed once per run, and the full run still
+    checks every combination. On IN_Ex19 the local step had grown past 40 minutes a pass.
 - **Groups without frame elements** are sized from their own checks: the IN_Ex7 gantry girder
   (`design_pipeline.gantry_girder_checks`, with its MC cap) and groups used only by declared secondary members.
   No IS 808 MB / WB section passes the IN_Ex7 gantry (WB600 × 145 kg/m: vertical deflection 1.40 of the Table 6
