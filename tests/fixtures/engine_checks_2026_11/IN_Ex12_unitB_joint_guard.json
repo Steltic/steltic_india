@@ -1,0 +1,1294 @@
+{
+ "source": "gold run pub/jobs_hr/IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitB_link (gold/runs/eng10, engine e45a65d), cut to what consistency._consultancy_issues reads",
+ "cfg": {
+  "name": "IN_Ex12_SMF_3levels_Zplan_school_Chandigarh/unitB_link",
+  "units": "N-mm",
+  "jurisdiction": "india",
+  "NX": 2,
+  "NY": 2,
+  "SX": 8500.0,
+  "SY": 8500.0,
+  "heights": [
+   3600.0,
+   3600.0
+  ],
+  "arch": "SMF",
+  "system": "SMF",
+  "floor_system": "one-way composite metal deck",
+  "notes": "IN_Ex12 wing B (link, 2 storeys) of the Z-plan school (sub-job); perimeter SMRF both ways with built-up box columns, Chandigarh Zone IV, I 1.5, R 5, RSA. IS 808 / built-up sections, IS 2062 E250 B0. Composite deck: bare-steel scope. Anchorage embedment = EOR input. Wings B and C are separate units (7.11.3).",
+  "composite_scope": "bare_steel",
+  "snow": 0.0,
+  "adjacent_units": [
+   {
+    "id": "wing A (classroom, 3 storeys) - joint normal to Y",
+    "direction": "Y",
+    "gap_mm": 250.0,
+    "R2": 5.0,
+    "delta2_mm": 28.6,
+    "same_floor_levels": true,
+    "delta2_source": "main job (wing A, gold run) drift table: (0.0016 + 0.003115 + 0.00323) x 3600 (Y)"
+   },
+   {
+    "id": "wing C (gym, 8 m single storey) - joint normal to Y",
+    "direction": "Y",
+    "gap_mm": 250.0,
+    "R2": 5.0,
+    "delta2_mm": 2.9,
+    "same_floor_levels": false,
+    "delta2_source": "unitC_gym sub-job (gold run) drift table: 0.000359 x 8000 (Y)"
+   }
+  ],
+  "delegated_design": [
+   {
+    "item": "floor / roof deck (composite metal deck on filler beams, or metal roof deck on purlins)",
+    "criteria": "deck supplier: construction stage per cfg['construction_stage'] where declared; service dead / imposed loads of load_plan.gravity_summary (IS 875-1 / -2); rigid diaphragm (IS 1893 7.6.4)",
+    "interface_forces": "deck reactions on the filler beams / girders; diaphragm shears to the perimeter SMRF = load_plan.story_forces EQ_X / EQ_Y (RSA-scaled) with 7.8.2 torsion"
+   },
+   {
+    "item": "cladding and fixings",
+    "criteria": "IS 875 (Part 3):2015 local Cpe, Vb 47 m/s; 0.5 kN/m2; IS 1893 7.11.1 drift and 7.11.3 joint movement",
+    "interface_forces": "0.5 kN/m2 x storey height line load on the perimeter beams; wind pd rows of wind_summary"
+   },
+   {
+    "item": "pedestals / footings under the fixed SMRF bases",
+    "criteria": "IS 18168:2023 9.3: 1.1 Ry Mpc and 2.2 Ry Mpc/Hc of the column, M40; anchorage per the EOR embedment",
+    "interface_forces": "per base: the 12.12_base governing case in design/calc_package.json"
+   },
+   {
+    "item": "anchor group breakout / pedestal design (column bases)",
+    "criteria": "foundation EOR: concrete cone / group breakout, side-face blow-out and pull-out of every anchor group for the anchor tension and shear of design/calc_package.json (12.12_base / 7.4_base governing cases), by a recognised method (e.g. ACI 318-19 Ch. 17 or fib Bulletin 58; not in the corpus) with anchor reinforcement (hairpins / closed ties developed each side of the failure cone) wherever the plain-concrete breakout is below the demand; pedestal / pile-cap design to IS 456 for the column-base forces; embedment lengths of the bond record respected",
+    "interface_forces": "per base: P, Mz, My, V and the corner-anchor tension T_corner_anchor_N of the governing 12.12_base / 7.4_base case in design/calc_package.json"
+   }
+  ]
+ },
+ "pkg": {
+  "unit_system": "N-mm",
+  "members": [
+   {
+    "id": "floor-NPB350X170X66.05",
+    "inputs": {
+     "role": "floor",
+     "length_mm": 8500.0,
+     "section": "NPB350X170X66.05",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "roof-NPB350X170X66.05",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 8500.0,
+     "section": "NPB350X170X66.05",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "floor-NPB450X190X67.16",
+    "inputs": {
+     "role": "floor",
+     "length_mm": 8500.0,
+     "section": "NPB450X190X67.16",
+     "n_elements": 2
+    }
+   },
+   {
+    "id": "roof-NPB450X190X67.16",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 8500.0,
+     "section": "NPB450X190X67.16",
+     "n_elements": 2
+    }
+   },
+   {
+    "id": "floor-NPB450X190X92.37",
+    "inputs": {
+     "role": "floor",
+     "length_mm": 8500.0,
+     "section": "NPB450X190X92.37",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "roof-NPB450X190X92.37",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 8500.0,
+     "section": "NPB450X190X92.37",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "roof-NPB550X210X105.52",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 8500.0,
+     "section": "NPB550X210X105.52",
+     "n_elements": 2
+    }
+   },
+   {
+    "id": "floor-NPB700X250X143.42",
+    "inputs": {
+     "role": "floor",
+     "length_mm": 8500.0,
+     "section": "NPB700X250X143.42",
+     "n_elements": 2
+    }
+   },
+   {
+    "id": "lateral_col-BOX450X450X25",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 3600.0,
+     "section": "BOX450X450X25",
+     "n_elements": 16
+    }
+   },
+   {
+    "id": "gravity_col-WPB300X300X117.03",
+    "inputs": {
+     "role": "gravity_col",
+     "length_mm": 3600.0,
+     "section": "WPB300X300X117.03",
+     "n_elements": 2
+    }
+   }
+  ],
+  "ponding": null,
+  "composite_design": {
+   "status": "evaluated",
+   "chI_worksheet": {
+    "status": "stubs",
+    "scope": "bare_steel",
+    "cite": "IS 11384 (not in corpus); IS 800:2007 8.2 bare-steel scope - COMPOSITE_INDIA.md",
+    "policy": "found:false until bare_steel (IS 800 8.2 + construction stage) or delegated scope is recorded",
+    "blocks_complete": false,
+    "slots": [
+     {
+      "component": "is11384_composite_strength",
+      "found": false,
+      "DC": null,
+      "capacity": {},
+      "cited": null,
+      "cite": "IS 11384",
+      "note": "IS 11384 composite flexure - not in corpus (found:false); bare-steel scope: composite action not relied on (not required)",
+      "not_required": true
+     },
+     {
+      "component": "is11384_shear_connectors",
+      "found": false,
+      "DC": null,
+      "capacity": {},
+      "cited": null,
+      "cite": "IS 11384",
+      "note": "IS 11384 shear connectors - not in corpus (found:false); bare-steel scope: composite action not relied on (not required)",
+      "not_required": true
+     },
+     {
+      "component": "bare_steel_8_2",
+      "found": true,
+      "DC": 0.9834991090932802,
+      "capacity": {},
+      "cited": "IS 800:2007 8.2.1.2 / 8.2.2 / 9.3 via member_check_is800 (members[])",
+      "cite": "IS 800:2007 8.2",
+      "note": "bare-steel scope: every floor/roof beam checked in members[] (no composite action relied on)"
+     },
+     {
+      "component": "construction_stage",
+      "found": true,
+      "DC": 0.5484261744608203,
+      "capacity": {
+       "Md_Nmm": 445090909.09090906
+      },
+      "cited": "IS 800:2007 8.2.2 (unrestrained compression flange, LLT = 2833 mm)",
+      "cite": "IS 800:2007 8.2.2",
+      "note": "unshored wet-concrete stage: 8.2.2 with pre-hardening restraint + camber",
+      "detail": {
+       "DC": 0.5484261744608203,
+       "section": "NPB450X190X92.37",
+       "element": 19,
+       "dir": "X",
+       "nb": 1,
+       "trib_mm": 4250.0,
+       "grade": "E250 B0",
+       "M_Nmm": 215903320.3125,
+       "combo": "1.5Dwet+1.5Lconst",
+       "LLT_mm": 2833.0,
+       "capacity": {
+        "found": true,
+        "beta_b": 1.0,
+        "Md_uncapped_Nmm": 445090909.09090906,
+        "cap_Nmm": 468654545.45454544,
+        "cap_factor": 1.2,
+        "Md_Nmm": 445090909.09090906,
+        "cap_governs": false,
+        "section_class": "plastic",
+        "cite": "IS 800:2007 8.2.1.2 Md = beta_b Zp fy/gamma_m0; cap 1.2 Ze fy/gamma_m0 (1.5 cantilever)"
+       },
+       "basis": "per element and direction; tributary nb x bay/2 (edge beam: half a bay); element grade (H40)"
+      },
+      "value": 215903320.3125,
+      "limit": 393678001.4643962
+     }
+    ]
+   },
+   "note": "WP2.9: IS 11384 not in the corpus; scope per COMPOSITE_INDIA.md",
+   "blocks_complete": false
+  },
+  "deformation_compatibility": {
+   "separation": [
+    {
+     "unit": "wing A (classroom, 3 storeys) - joint normal to Y",
+     "value": 90.47142932203644,
+     "limit": 250.0,
+     "D1_mm": 7.588571728814578,
+     "D1_basis": "max over levels: declare adjacent_units[].level (or n_levels) for the matching level",
+     "level": null,
+     "delta2_mm": 28.6,
+     "R1": 5.0,
+     "R2": 5.0,
+     "dc": 0.3618857172881458,
+     "ok": true,
+     "clause": "IS 1893 7.11.3",
+     "cite": "IS 1893 7.11.3 as amended by Amd 1: (R1 D1 + R2 D2)/2"
+    },
+    {
+     "unit": "wing C (gym, 8 m single storey) - joint normal to Y",
+     "value": 52.44285864407289,
+     "limit": 250.0,
+     "D1_mm": 7.588571728814578,
+     "D1_basis": "max over levels (R x (D1 + D2))",
+     "level": null,
+     "delta2_mm": 2.9,
+     "R1": 5.0,
+     "R2": 5.0,
+     "dc": 0.20977143457629158,
+     "ok": true,
+     "clause": "IS 1893 7.11.3",
+     "cite": "IS 1893 7.11.3: R x (D1 + D2)"
+    }
+   ]
+  },
+  "connections": [
+   {
+    "id": "conn-floor-NPB350X170X66.05",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "IS 800 12.11.2.1 connection_moment (joint e25)",
+    "DC": 0.7235228539576366,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-NPB350X170X66.05",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "IS 800 12.11.2.1 connection_moment (joint e37)",
+    "DC": 0.7235228539576366,
+    "checks": true
+   },
+   {
+    "id": "conn-floor-NPB450X190X67.16",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.20741832626639403,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-NPB450X190X67.16",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.06627044743189389,
+    "checks": true
+   },
+   {
+    "id": "conn-floor-NPB450X190X92.37",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "IS 800 12.11.2.1 connection_moment (joint e19)",
+    "DC": 0.7791666666666667,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-NPB450X190X92.37",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "IS 800 12.11.2.1 connection_moment (joint e31)",
+    "DC": 0.7791666666666667,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-NPB550X210X105.52",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end bolts slip_service_10_4_3",
+    "DC": 0.5370481049562682,
+    "checks": true
+   },
+   {
+    "id": "conn-floor-NPB700X250X143.42",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end bolts slip_service_10_4_3",
+    "DC": 0.8957622691933915,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-BOX450X450X25",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": "column base (base-e7): plate_thickness",
+    "DC": 0.9346897256951243,
+    "checks": true
+   },
+   {
+    "id": "conn-gravity_col-WPB300X300X117.03",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": "column base (base-e9): plate_thickness_7_4_3_1",
+    "DC": 0.5798604946540602,
+    "checks": true
+   }
+  ],
+  "capacity_design": {
+   "checks": {
+    "12.11.2.3_panel_zone": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100000-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100000-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100001-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100002-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100002-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100100-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100102-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100200-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100200-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100201-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100202-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j100202-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200000-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200000-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200001-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200002-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200002-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200100-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200102-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200200-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200200-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200201-y": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200202-x": {
+     "dc": 0.5
+    },
+    "12.11.2.3_panel_zone@j200202-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100000-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100000-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100001-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100002-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100002-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100100-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100102-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100200-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100200-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100201-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100202-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j100202-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200000-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200000-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200001-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200002-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200002-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200100-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200102-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200200-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200200-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200201-y": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200202-x": {
+     "dc": 0.5
+    },
+    "12.11.3.2_scwb@j200202-y": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e1": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e11": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e12": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e13": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e14": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e15": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e16": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e17": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e18": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e2": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e3": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e4": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e5": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e6": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e7": {
+     "dc": 0.5
+    },
+    "12.11.3.4_out_of_plane_12.2.3@e8": {
+     "dc": 0.5
+    },
+    "12.12_base": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e1": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e11": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e13": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e15": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e17": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e3": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e5": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e7": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e1": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e11": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e12": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e13": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e14": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e15": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e16": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e17": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e18": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e2": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e3": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e4": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e5": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e6": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e7": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e8": {
+     "dc": 0.5
+    },
+    "7.4_base": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e9": {
+     "dc": 0.5
+    },
+    "anchor_combined_10_3_6": {
+     "dc": 0.5
+    },
+    "anchor_combined_biaxial_10_3_6": {
+     "dc": 0.5
+    },
+    "anchor_shear_10_3_3": {
+     "dc": 0.5
+    },
+    "anchor_tension_10_3_5": {
+     "dc": 0.5
+    },
+    "anchor_tension_biaxial_10_3_5": {
+     "dc": 0.5
+    },
+    "anchorage_embedment": {
+     "dc": 0.5
+    },
+    "bearing": {
+     "dc": 0.5
+    },
+    "bearing_biaxial": {
+     "dc": 0.5
+    },
+    "bp_mm": {
+     "dc": 0.5
+    },
+    "ca": {
+     "dc": 0.5
+    },
+    "checks": {
+     "dc": 0.5
+    },
+    "connection_moment": {
+     "dc": 0.5
+    },
+    "connection_moment@e19": {
+     "dc": 0.5
+    },
+    "connection_moment@e20": {
+     "dc": 0.5
+    },
+    "connection_moment@e23": {
+     "dc": 0.5
+    },
+    "connection_moment@e24": {
+     "dc": 0.5
+    },
+    "connection_moment@e25": {
+     "dc": 0.5
+    },
+    "connection_moment@e26": {
+     "dc": 0.5
+    },
+    "connection_moment@e29": {
+     "dc": 0.5
+    },
+    "connection_moment@e30": {
+     "dc": 0.5
+    },
+    "connection_moment@e31": {
+     "dc": 0.5
+    },
+    "connection_moment@e32": {
+     "dc": 0.5
+    },
+    "connection_moment@e35": {
+     "dc": 0.5
+    },
+    "connection_moment@e36": {
+     "dc": 0.5
+    },
+    "connection_moment@e37": {
+     "dc": 0.5
+    },
+    "connection_moment@e38": {
+     "dc": 0.5
+    },
+    "connection_moment@e41": {
+     "dc": 0.5
+    },
+    "connection_moment@e42": {
+     "dc": 0.5
+    },
+    "connection_shear": {
+     "dc": 0.5
+    },
+    "connection_shear@e19": {
+     "dc": 0.5
+    },
+    "connection_shear@e20": {
+     "dc": 0.5
+    },
+    "connection_shear@e23": {
+     "dc": 0.5
+    },
+    "connection_shear@e24": {
+     "dc": 0.5
+    },
+    "connection_shear@e25": {
+     "dc": 0.5
+    },
+    "connection_shear@e26": {
+     "dc": 0.5
+    },
+    "connection_shear@e29": {
+     "dc": 0.5
+    },
+    "connection_shear@e30": {
+     "dc": 0.5
+    },
+    "connection_shear@e31": {
+     "dc": 0.5
+    },
+    "connection_shear@e32": {
+     "dc": 0.5
+    },
+    "connection_shear@e35": {
+     "dc": 0.5
+    },
+    "connection_shear@e36": {
+     "dc": 0.5
+    },
+    "connection_shear@e37": {
+     "dc": 0.5
+    },
+    "connection_shear@e38": {
+     "dc": 0.5
+    },
+    "connection_shear@e41": {
+     "dc": 0.5
+    },
+    "connection_shear@e42": {
+     "dc": 0.5
+    },
+    "db_mm": {
+     "dc": 0.5
+    },
+    "dc": {
+     "dc": 0.5
+    },
+    "dc_shear": {
+     "dc": 0.5
+    },
+    "detail": {
+     "dc": 0.5
+    },
+    "doubler_provided_mm": {
+     "dc": 0.5
+    },
+    "doubler_required_mm": {
+     "dc": 0.5
+    },
+    "dp_mm": {
+     "dc": 0.5
+    },
+    "eps": {
+     "dc": 0.5
+    },
+    "fb_mpa": {
+     "dc": 0.5
+    },
+    "geometry_anchor_edge": {
+     "dc": 0.5
+    },
+    "geometry_anchor_fit": {
+     "dc": 0.5
+    },
+    "geometry_anchor_pitch": {
+     "dc": 0.5
+    },
+    "governing_p_n": {
+     "dc": 0.5
+    },
+    "gusset_bending": {
+     "dc": 0.5
+    },
+    "gusset_outstand_table2": {
+     "dc": 0.5
+    },
+    "gusset_shear_8_4": {
+     "dc": 0.5
+    },
+    "gusset_weld_to_column_10_5_7": {
+     "dc": 0.5
+    },
+    "gusset_weld_to_plate_10_5_7": {
+     "dc": 0.5
+    },
+    "height_m": {
+     "dc": 0.5
+    },
+    "is18168_1_3_system": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e19": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e20": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e23": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e24": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e25": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e26": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e29": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e30": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e31": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e32": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e35": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e36": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e37": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e38": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e41": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing@e42": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e19": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e20": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e23": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e24": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e25": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e26": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e29": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e30": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e31": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e32": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e35": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e36": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e37": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e38": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e41": {
+     "dc": 0.5
+    },
+    "is18168_6_2_beam_bracing_2db@e42": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e1": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e11": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e12": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e13": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e14": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e15": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e16": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e17": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e18": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e2": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e3": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e4": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e5": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e6": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e7": {
+     "dc": 0.5
+    },
+    "is18168_7_2_column_kl_r@e8": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100000-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100000-y": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100001-y": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100002-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100002-y": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100100-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100102-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100200-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100200-y": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100201-y": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100202-x": {
+     "dc": 0.5
+    },
+    "is18168_8_2_scwb@j100202-y": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e19": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e20": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e23": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e24": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e25": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e26": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e29": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e30": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e31": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e32": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e35": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e36": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e37": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e38": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e41": {
+     "dc": 0.5
+    },
+    "is18168_table2_beam@e42": {
+     "dc": 0.5
+    },
+    "is18168_table2_column": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e1": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e11": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e12": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e13": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e14": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e15": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e16": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e17": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e18": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e2": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e3": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e4": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e5": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e6": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e7": {
+     "dc": 0.5
+    },
+    "is18168_table2_column@e8": {
+     "dc": 0.5
+    },
+    "lb_mm": {
+     "dc": 0.5
+    },
+    "level": {
+     "dc": 0.5
+    },
+    "limit": {
+     "dc": 0.5
+    },
+    "m_comp_nmm": {
+     "dc": 0.5
+    },
+    "m_comp_side": {
+     "dc": 0.5
+    },
+    "m_comp_stiffened": {
+     "dc": 0.5
+    },
+    "m_comp_unstiffened": {
+     "dc": 0.5
+    },
+    "m_nmm": {
+     "dc": 0.5
+    },
+    "m_per_mm": {
+     "dc": 0.5
+    },
+    "m_side_zone": {
+     "dc": 0.5
+    },
+    "m_ten_nmm": {
+     "dc": 0.5
+    },
+    "m_ten_stiffened": {
+     "dc": 0.5
+    },
+    "m_ten_unstiffened": {
+     "dc": 0.5
+    },
+    "m_tension_side": {
+     "dc": 0.5
+    },
+    "my_nmm": {
+     "dc": 0.5
+    },
+    "mz_nmm": {
+     "dc": 0.5
+    },
+    "n_cases": {
+     "dc": 0.5
+    },
+    "n_records": {
+     "dc": 0.5
+    },
+    "n_records_judged": {
+     "dc": 0.5
+    },
+    "n_records_not_judged": {
+     "dc": 0.5
+    },
+    "n_webs": {
+     "dc": 0.5
+    },
+    "p_n": {
+     "dc": 0.5
+    },
+    "per_case": {
+     "dc": 0.5
+    },
+    "plate_thickness": {
+     "dc": 0.5
+    },
+    "plate_thickness_7_4_3_1": {
+     "dc": 0.5
+    },
+    "q_comp_n_per_mm": {
+     "dc": 0.5
+    },
+    "q_mpa": {
+     "dc": 0.5
+    },
+    "q_ten_n_per_mm": {
+     "dc": 0.5
+    },
+    "ry": {
+     "dc": 0.5
+    },
+    "ry_mm": {
+     "dc": 0.5
+    },
+    "t_corner_anchor_n": {
+     "dc": 0.5
+    },
+    "t_min_mm": {
+     "dc": 0.5
+    },
+    "t_prov_mm": {
+     "dc": 0.5
+    },
+    "t_provided_mm": {
+     "dc": 0.5
+    },
+    "t_req_mm": {
+     "dc": 0.5
+    },
+    "ts_mm": {
+     "dc": 0.5
+    },
+    "v_comp_n": {
+     "dc": 0.5
+    },
+    "v_design_n": {
+     "dc": 0.5
+    },
+    "v_n": {
+     "dc": 0.5
+    },
+    "v_ten_n": {
+     "dc": 0.5
+    },
+    "value": {
+     "dc": 0.5
+    },
+    "vd_n": {
+     "dc": 0.5
+    },
+    "y:anchor_combined_10_3_6": {
+     "dc": 0.5
+    },
+    "y:anchor_tension_10_3_5": {
+     "dc": 0.5
+    },
+    "y:bearing": {
+     "dc": 0.5
+    },
+    "y:gusset_bending": {
+     "dc": 0.5
+    },
+    "y:gusset_outstand_table2": {
+     "dc": 0.5
+    },
+    "y:gusset_shear_8_4": {
+     "dc": 0.5
+    },
+    "y:gusset_weld_to_column_10_5_7": {
+     "dc": 0.5
+    },
+    "y:gusset_weld_to_plate_10_5_7": {
+     "dc": 0.5
+    },
+    "y:plate_thickness": {
+     "dc": 0.5
+    },
+    "zone_mm": {
+     "dc": 0.5
+    }
+   }
+  },
+  "load_plan": {
+   "snow_summary": null
+  }
+ },
+ "issues_e45a65d": []
+}
