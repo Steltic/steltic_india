@@ -381,10 +381,11 @@ def test_section12_cfg_carries_the_truss_connections_to_the_knee_checks():
     knee = {"id": "K0-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": "ISA65X65X6",
             "brace_role": "truss_diagonal", "span_mm": 18000.0, "V_gravity_N": 40e3, "Pd_N": 80e3, "Tdg_N": 169.1e3,
             "Tdn_N": 180e3, "Tdb_N": 175e3}
-    rows = TD.knee_checks(knee, {}, s12, nodes=nodes, member_capacity=169.1e3)
-    assert rows and all(r["dc"] is not None for r in rows)
-    bare = TD.knee_checks(knee, {}, DP.section12_cfg({"zone": "II"}), nodes=nodes, member_capacity=80e3)
-    assert all(r["dc"] is None for r in bare)
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, s12, nodes=nodes, member_capacity=169.1e3)}
+    assert rows["12.10.2.1_knee_brace_connection"]["dc"] is not None and rows["12.10.2.4_heel_seat"]["dc"] is not None
+    bare = {r["id"]: r for r in TD.knee_checks(knee, {}, DP.section12_cfg({"zone": "II"}), nodes=nodes,
+                                               member_capacity=80e3)}
+    assert bare["12.10.2.1_knee_brace_connection"]["dc"] is None and bare["12.10.2.4_heel_seat"]["dc"] is None
 
 
 def test_column_line_read_from_the_grid_end():
@@ -431,47 +432,103 @@ def test_d_t10_recorded_with_its_meaning_in_the_rulings_register():
     doc = (Path(ROOT) / "docs" / "PEB_LIMITATIONS.md").read_text(encoding="utf-8")
     row = [ln for ln in doc.splitlines() if ln.startswith("| D-T10")]
     assert len(row) == 1
-    for must in ("12.10.2.1", "1.2 times", "knee brace", "HSFG 8.8", "complete-penetration", "2026-11-01"):
+    for must in ("12.10.2.1", "1.2 x what the knee brace can deliver", "lead reading 2026-11-01",
+                 "Ag fy characteristic", "12.7.3.1(a)", "max over tension and compression", "HSFG 8.8", "CJP"):
         assert must in row[0], must
 
 
 # ------------------------------------------------------------------------------------------------ review 2026-11
-def test_d_t10_knee_uses_the_force_the_brace_delivers_in_either_direction():
-    """HIGH finding: the knee brace works both ways under reversing wind.  N_del = max(Pd, Tdg = Ag fy / gamma_m0);
-    every knee-brace connection takes 1.2 N_del, the gusset buckling 1.2 Pd, the heel the matching horizontal force;
-    the brace's bolted end must not be weaker than its gross yield (the brace yields first)."""
+def _knee_case(n_bolts=8):
     sec = "ISA90X90X8"
     A = S.props(sec)["A"]
-    Pd, Tdg = 114.7e3, A * 250.0 / GM0
-    assert Tdg == pytest.approx(315.9e3, rel=1e-3) and Tdg > Pd          # tension governs the deliverable force
-    sp = {"n_bolts": 8, "d_mm": 16, "grade": "8.8", "bolt_type": "HSFG", "d0_mm": 18.0, "pitch_mm": 50.0,
+    Pd = 114.7e3
+    sp = {"n_bolts": n_bolts, "d_mm": 16, "grade": "8.8", "bolt_type": "HSFG", "d0_mm": 18.0, "pitch_mm": 50.0,
           "end_mm": 35.0, "gauge_mm": 50.0, "gusset_t_mm": 8.0, "edge": "rolled", "end_cut": "sheared",
-          "gusset_end_mm": 35.0, "gusset_edge_mm": 40.0, "gusset_K": 0.65, "gusset_free_mm": 150.0}
-    cfg = {"truss_connections": {"truss_knee_brace:%s" % sec: sp, "heel": _cfg_conn()["truss_connections"]["heel"]}}
+          "gusset_end_mm": 35.0, "gusset_edge_mm": 60.0, "gusset_support": "one_edge", "gusset_free_mm": 150.0,
+          "gusset_width_mm": 300.0}
+    heel = dict(_cfg_conn()["truss_connections"]["heel"], cap_weld="cjp")
+    cfg = {"truss_connections": {"truss_knee_brace:%s" % sec: sp, "heel": heel,
+                                 "knee_gusset": {"face_length_mm": 480.0, "t_mm": 8.0, "weld": "cjp", "e_face_mm": 0.0}}}
     nodes = {1: (0.0, 0.0, 6500.0), 2: (0.0, 0.0, 5000.0), 3: (0.0, 1500.0, 6500.0)}
+    pc = S.props("MB300")
     knee = {"id": "K1-L", "heel_node": 1, "knee_node": 2, "chord_node": 3, "brace_section": sec,
-            "brace_role": "truss_knee_brace", "span_mm": 18000.0, "V_gravity_N": 40e3, "Pd_N": Pd, "Tdg_N": Tdg,
-            "Tdn_N": 348.8e3, "Tdb_N": 413.6e3}
-    Nd = max(Pd, Tdg)
-    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=Nd)}
-    assert rows["12.10.2.1_knee_brace_connection"]["value"] == pytest.approx(1.2 * Tdg)         # not 1.2 min(Pd, Td)
-    assert rows["12.10.2.1_knee_gusset_whitmore_yield"]["value"] == pytest.approx(1.2 * Tdg)
-    assert rows["12.10.2.1_knee_gusset_block_shear"]["value"] == pytest.approx(1.2 * Tdg)
-    assert rows["12.10.2.1_knee_gusset_buckling"]["value"] == pytest.approx(1.2 * Pd)           # compression only
+            "brace_role": "truss_knee_brace", "span_mm": 18000.0, "V_gravity_N": 40e3, "Pd_N": Pd,
+            "Pd_char_N": Pd * GM0, "Ty_N": A * 250.0, "Tdg_N": A * 250.0 / GM0, "Tdn_N": 348.8e3, "Tdb_N": 413.6e3,
+            "column_section": "MB300", "column_Mp_Nmm": pc["Zx"] * 250.0}
+    return sec, A, Pd, sp, cfg, nodes, knee
+
+
+def test_d_t10_knee_on_the_characteristic_force_the_brace_delivers():
+    """D-T10 (owner ruling 2026-11-01, 1.2 x what the knee brace can deliver; lead reading 2026-11-01: N_del = Ag fy
+    characteristic, per IS 800 12.7.3.1(a), max over tension and compression).  Every knee-brace connection takes
+    1.2 Ag fy; the gusset buckling 1.2 x the characteristic buckling strength; the brace-yields-first check compares
+    DESIGN values (Tdg vs the end rupture); the heel and the knee load path take the matching couple."""
+    sec, A, Pd, sp, cfg, nodes, knee = _knee_case()
+    Ty = A * 250.0
+    assert Ty == pytest.approx(347.5e3, rel=1e-3) and Ty > Pd * GM0              # tension governs N_del
+    rows = {r["id"]: r for r in TD.knee_checks(knee, {}, cfg, nodes=nodes, member_capacity=max(Ty, Pd * GM0))}
+    F = 1.2 * Ty
+    assert rows["12.10.2.1_knee_brace_connection"]["value"] == pytest.approx(F)               # 417 kN
+    assert rows["12.10.2.1_knee_gusset_whitmore_yield"]["value"] == pytest.approx(F)
+    assert rows["12.10.2.1_knee_gusset_whitmore_yield"]["limit"] == pytest.approx(300.0 * 8.0 * 250.0 / GM0)  # capped
+    assert rows["12.10.2.1_knee_gusset_block_shear"]["value"] == pytest.approx(F)
+    assert rows["12.10.2.1_knee_gusset_buckling"]["value"] == pytest.approx(1.2 * Pd * GM0)
+    assert "K 1.20" in rows["12.10.2.1_knee_gusset_buckling"]["cite"]                       # one edge held
     yf = rows["12.10.2.1_knee_brace_yields_first"]
-    assert yf["value"] == pytest.approx(Tdg) and yf["limit"] == pytest.approx(348.8e3) and yf["ok"]
+    assert yf["value"] == pytest.approx(A * 250.0 / GM0) and yf["limit"] == pytest.approx(348.8e3)   # design values
+    # knee load path by hand: the gusset at the column face (480 x 8), the brace at 45 deg
+    N_f = V_f = F / math.sqrt(2.0)
+    Ag = 480.0 * 8.0
+    Vd = Ag * 250.0 / (math.sqrt(3.0) * GM0)
+    beta = (2 * V_f / Vd - 1) ** 2 if V_f > 0.6 * Vd else 0.0
+    assert rows["12.10.2.1_knee_gusset_face_section"]["dc"] == pytest.approx(max(V_f / Vd, N_f / (Ag * 250.0 / GM0)))
+    fe = math.sqrt((N_f / Ag) ** 2 + 3 * (V_f / Ag) ** 2)
+    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["value"] == pytest.approx(fe)
+    assert rows["12.10.2.1_knee_gusset_cjp_weld"]["limit"] == pytest.approx(250.0 / 1.25)
+    pc = S.props("MB300")
+    n2 = 2.5 * (pc["tf"] + pc.get("R1", 0.0))
+    fyc = I8.is2062_properties("E250", max(pc["tw"], pc["tf"]))["fy_MPa"]
+    assert rows["12.10.2.1_column_web_bearing"]["limit"] == pytest.approx((480.0 + 2 * n2) * pc["tw"] * fyc / GM0)
+    H = F / math.sqrt(2.0)
+    assert rows["12.10.2.4_column_web_shear"]["value"] == pytest.approx(H)
+    assert rows["12.10.2.4_column_web_shear"]["limit"] == pytest.approx(pc["d"] * pc["tw"] * fyc / (math.sqrt(3) * GM0))
     e = 1500.0 / math.sqrt(2.0)
-    R = math.hypot(1.2 * Tdg / math.sqrt(2.0), 40e3 + 2 * 1.2 * Tdg * e / 18000.0)
-    assert rows["12.10.2.4_heel_seat"]["value"] == pytest.approx(R)
-    assert all(r["ok"] for r in rows.values()), {k: r.get("dc") for k, r in rows.items()}
-    # a weak bolted end (rupture below gross yield) is flagged: the brace would not yield first
-    weak = dict(knee, Tdn_N=0.9 * Tdg)
-    w = {r["id"]: r for r in TD.knee_checks(weak, {}, cfg, nodes=nodes, member_capacity=Nd)}
+    V_heel = 40e3 + 2 * 1.2 * Ty * e / 18000.0
+    assert rows["12.10.2.4_heel_seat"]["value"] == pytest.approx(math.hypot(H, V_heel))
+    assert rows["12.10.2.4_heel_cap_weld"]["value"] == pytest.approx(
+        math.sqrt((V_heel / pc["A"]) ** 2 + 3 * (H / pc["A"]) ** 2))
+    assert "12.10.2.1_column_web_buckling" in rows
+    kn = rows["12.10.2.1_knee_brace_connection"]["knee"]
+    assert kn["M_del_Nmm"] / kn["column_Mp_Nmm"] > 1.8                     # M_del about twice the column's Mp
+    assert "lead reading 2026-11-01" in rows["12.10.2.1_knee_brace_connection"]["note"]
+    # a weak bolted end (rupture below gross yield, design values) is flagged: the brace would not yield first
+    w = {r["id"]: r for r in TD.knee_checks(dict(knee, Tdn_N=0.9 * A * 250.0 / GM0), {}, cfg, nodes=nodes,
+                                            member_capacity=Ty)}
     assert w["12.10.2.1_knee_brace_yields_first"]["ok"] is False
-    # 3 bolts (the first gold) cannot develop 1.2 Tdg
-    few = {"truss_connections": dict(cfg["truss_connections"], **{"truss_knee_brace:%s" % sec: dict(sp, n_bolts=3)})}
-    f = {r["id"]: r for r in TD.knee_checks(knee, {}, few, nodes=nodes, member_capacity=Nd)}
+    # 3 bolts (the first gold) cannot develop 1.2 Ag fy
+    _, _, _, _, few, _, _ = _knee_case(n_bolts=3)
+    f = {r["id"]: r for r in TD.knee_checks(knee, {}, few, nodes=nodes, member_capacity=Ty)}
     assert f["12.10.2.1_knee_brace_connection"]["dc"] > 1.0
+    # without the declared knee gusset the load-path rows are not evaluated (never assumed)
+    nokg = {"truss_connections": {k: v for k, v in cfg["truss_connections"].items() if k != "knee_gusset"}}
+    n = {r["id"]: r for r in TD.knee_checks(knee, {}, nokg, nodes=nodes, member_capacity=Ty)}
+    assert n["12.10.2.1_knee_gusset_face_section"]["ok"] is None
+
+
+def test_gusset_K_by_support_and_the_width_cap():
+    """K 0.65 only for a gusset held on two edges; 1.2 for one edge (a declared lower K is raised); the Whitmore
+    width is capped by the declared gusset width."""
+    assert TD.gusset_K({"gusset_support": "two_edges"}) == 0.65
+    assert TD.gusset_K({"gusset_support": "one_edge"}) == 1.2
+    assert TD.gusset_K({"gusset_support": "one_edge", "gusset_K": 0.65}) == 1.2
+    assert TD.gusset_K({"gusset_K": 0.9}) == 0.9 and TD.gusset_K({}) is None
+    sp = dict(_cfg_conn()["truss_connections"]["truss_diagonal:ISA65X65X6"], n_bolts=8)
+    free = dict(TD.gusset_rows(sp, 100e3))
+    capped = dict(TD.gusset_rows(dict(sp, gusset_width_mm=250.0), 100e3))
+    k_free = [k for k in free if "Whitmore" in k and "yield" in k][0]
+    k_cap = [k for k in capped if "Whitmore" in k and "yield" in k][0]
+    assert free[k_free]["limit"] == pytest.approx(2 * 350.0 * math.tan(math.radians(30)) * 8.0 * 250.0 / GM0)
+    assert capped[k_cap]["limit"] == pytest.approx(250.0 * 8.0 * 250.0 / GM0) and "gusset width" in k_cap
 
 
 def test_member_wind_combinations_count_as_wind_in_table3():
@@ -641,3 +698,81 @@ def test_chord_splice_at_a_panel_gusset():
     cr2 = TD.end_connection_record({"truss_connections": {"truss_bottom_chord": nos}}, "truss_bottom_chord",
                                    "2ISA70X70X6-G8", [1], envt, {}, {1: 1500.0})
     assert not any(c["name"].startswith("chord splice") for c in cr2["checks"])     # no splice declared, no row
+
+
+def test_table3_wind_classified_by_the_combination_record_with_real_gold_rows():
+    """Review 2026-11: a combination is wind / earthquake by its record, not its label text.  Rows copied from the
+    calc packages of IN_Ex6 (member wind WMX / WMY), IN_Ex1 (WM0 / WM90), IN_Ex7 (crane), IN_Ex9 (snow, vertical
+    earthquake) and IN_Ex13 (storey wind, earthquake)."""
+    rows = [
+        {"label": "1.5DL+1.5WMX+", "lateral_kind": None, "tags": ["member_wind"], "fE": None, "fW": None},      # Ex6
+        {"label": "1.5DL+1.5WMY+", "lateral_kind": None, "tags": ["member_wind"], "fE": None, "fW": None},      # Ex6
+        {"label": "1.5DL+1.5LL+N_X", "lateral_kind": None, "tags": [], "fE": None, "fW": None},                 # Ex6
+        {"label": "1.2DL+1.2LL+1.2EQ_X[ea]", "lateral_kind": "EQ", "tags": [], "fE": 1.2, "fW": None},          # Ex6
+        {"label": "1.2DL+1.2LL+1.2W_X", "lateral_kind": "W", "tags": [], "fE": None, "fW": 1.2},                 # Ex6
+        {"label": "1.5DL+1.5WM0+", "lateral_kind": None, "tags": ["member_wind"], "fE": None, "fW": None},      # Ex1
+        {"label": "1.5DL+1.5WM90+", "lateral_kind": None, "tags": ["member_wind"], "fE": None, "fW": None},     # Ex1
+        {"label": "1.5DL+1.5LL+1.05CL[CL:LS+]", "lateral_kind": None, "tags": [], "fE": None, "fW": None},      # Ex7
+        {"label": "1.5DL+1.5LL+1.5SL[SL:X-lo]", "lateral_kind": None, "tags": [], "fE": None, "fW": None},      # Ex9
+        {"label": "1.2DL+1.2LL+1.2SL+1.2EQ_X[ea]+0.3EQ_Z", "lateral_kind": "EQ", "tags": [], "fE": 1.2},       # Ex9
+        {"label": "1.5DL+1.5LL", "lateral_kind": None, "tags": [], "fE": None, "fW": None},                     # Ex13
+        {"label": "1.2DL+1.2LL+1.2EQ_Y[ea]+0.3EQ_Z", "lateral_kind": "EQ", "tags": [], "fE": 1.2},             # Ex13
+    ]
+    lateral = {"1.5DL+1.5WMX+", "1.5DL+1.5WMY+", "1.2DL+1.2LL+1.2EQ_X[ea]", "1.2DL+1.2LL+1.2W_X", "1.5DL+1.5WM0+",
+               "1.5DL+1.5WM90+", "1.2DL+1.2LL+1.2SL+1.2EQ_X[ea]+0.3EQ_Z", "1.2DL+1.2LL+1.2EQ_Y[ea]+0.3EQ_Z"}
+    try:
+        I8.register_combinations(rows)
+        for r in rows:
+            assert I8.is_lateral_combo(r["label"]) == (r["label"] in lateral), r["label"]
+        # the record decides, not the text: a registered gravity combination whose label happens to read 'W_'
+        I8.register_combinations([{"label": "1.5DL+1.5W_X(gravity-only test)", "lateral_kind": None, "tags": []}])
+        assert I8.is_lateral_combo("1.5DL+1.5W_X(gravity-only test)") is False
+    finally:
+        I8.register_combinations([])
+    # unregistered labels fall back on the text, which now also knows WMX / WMY
+    assert I8.is_lateral_combo("0.9DL+1.5WMXR-") and not I8.is_lateral_combo("1.5DL+1.5LL+1.5SL")
+    # and the Table 3 row follows: wind-only compression from a WMX combination is row (iii)
+    m = {"id": "s", "section": "CHS114.3X3.6", "grade": "YSt 310", "process": "ERW", "role": "column", "L_mm": 6000.0,
+         "Kz": 1.0, "Ky": 1.0, "LLT_sag_mm": 6000.0, "LLT_hog_mm": 6000.0}
+    z = dict(Mz_i_Nmm=0.0, Mz_j_Nmm=0.0, Mz_mid_Nmm=0.0, My_i_Nmm=0.0, My_j_Nmm=0.0, Vy_N=0.0, Vz_N=0.0)
+    r = I8.member_check_is800(m, [dict(z, combo="1.5DL+1.5WMX+", P_N=20e3), dict(z, combo="1.5DL+1.5LL", P_N=0.2)])
+    assert r["table3_slenderness"]["limit"] == 250
+
+
+def test_group_table3_line_shows_the_worst_element():
+    """Review 2026-11: the group's Table 3 line comes from the element with the largest Table 3 ratio (IN_Ex21 bottom
+    chord: row (iii) 0.56 on the 9.3-governing element, row (i) 0.78 near the knees)."""
+    import design_pipeline as DP
+    t3a = {"value": 140.0, "limit": 250, "dc": 0.56, "ok": True, "clause": "IS 800:2007 3.8 / Table 3",
+           "cite": "Table 3 (iii) compression only from WL / EL combinations <= 250", "governing_combo": "0.9DL+1.5WM0-R"}
+    t3b = {"value": 140.0, "limit": 180, "dc": 0.78, "ok": True, "clause": "IS 800:2007 3.8 / Table 3",
+           "cite": "Table 3 (i) compression from DL + LL <= 180", "governing_combo": "1.5DL+1.5LL"}
+    res = {1: {"found": True, "dc": 0.95, "interaction_dc": 0.95, "governing_check": "IS 800 9.3 interaction",
+               "governing_combo": "0.9DL+1.5WM0-R", "table3_slenderness": t3a},
+           2: {"found": True, "dc": 0.80, "interaction_dc": 0.6, "table3_slenderness": t3b}}
+    rows = DP.group_table3_row(DP._check_rows(res[1]), [1, 2], res, 1)
+    t3 = [r for r in rows if r["name"].startswith("IS 800 Table 3")]
+    assert len(t3) == 1 and t3[0]["dc"] == pytest.approx(0.78) and t3[0]["limit"] == 180 and "e2" in t3[0]["name"]
+    assert max(r["dc"] for r in rows) == pytest.approx(0.95)                  # the group D/C is unchanged
+
+
+def test_table3_row_reads_all_records_not_the_top_subset():
+    """Review 2026-11: the member check receives only the top-ranked records (_top_records); the Table 3 row must still
+    see a gravity compression elsewhere in the member's records (the IN_Ex7 crane columns: every top record was a wind
+    / earthquake combination, which put them on row (iii))."""
+    import design_pipeline as DP
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+    rec = lambda N, M=0.0: [N, M] + [0.0] * (n - 2)
+    recs = {"1.5DL+1.5LL": rec(-50e3)}                                  # gravity compression, small moment
+    for i in range(20):                                                 # 20 wind combinations with big moments
+        recs["1.2DL+1.2LL+1.2W_X#%d" % i] = rec(-80e3 - i, 90e6 + i)
+    top = DP._top_records(recs)
+    m = DP.table3_gravity_input({"id": "c"}, recs)
+    assert m["t3_gravity_compression_N"] == pytest.approx(50e3) and m["t3_gravity_combo"] == "1.5DL+1.5LL"
+    col = {"id": "c", "section": "CHS114.3X3.6", "grade": "YSt 310", "process": "ERW", "role": "column",
+           "L_mm": 4000.0, "Kz": 1.0, "Ky": 1.0, "LLT_sag_mm": 4000.0, "LLT_hog_mm": 4000.0}
+    cf = SM.combo_forces_for_member_check({k: v for k, v in top.items() if "W_X" in k}, "col")
+    assert I8.member_check_is800(col, cf)["table3_slenderness"]["limit"] == 250           # the subset alone: (iii)
+    r = I8.member_check_is800(dict(col, **{k: m[k] for k in ("t3_gravity_compression_N", "t3_gravity_combo")}), cf)
+    assert r["table3_slenderness"]["limit"] == 180 and r["table3_slenderness"]["governing_combo"] == "1.5DL+1.5LL"

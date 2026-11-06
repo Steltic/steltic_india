@@ -418,10 +418,14 @@ Before `pipeline.design_and_report`:
     True brings the roof area loads and the roof wind to the top chord as purlin reactions at its panel points.
   - Knees: the custom_build returns `info['truss_knees']` = [{id, heel_node, knee_node, chord_node, brace_tag, truss,
     span_mm, trib_mm}]; the knee lines are moment-frame lines; Section 12 (OMF) checks each knee for IS 800 12.10.2.1
-    / 12.10.2.4 (Steltic design ruling D-T10, owner 2026-11-01: the knee designed for 1.2 times the moment the knee
-    brace can deliver in either direction, N_del = max(Pd, Ag fy / gamma_m0), the brace's bolted end not weaker than
-    its gross-section yield, so the brace yields before the knee and heel connections fail; HSFG 8.8 bolts and
-    complete-penetration welds at the column; see docs/PEB_LIMITATIONS.md).
+    / 12.10.2.4 (Steltic design ruling D-T10: owner ruling 2026-11-01, 1.2 x what the knee brace can deliver; lead
+    reading 2026-11-01, N_del = Ag fy characteristic per IS 800 12.7.3.1(a), max over tension and compression; the
+    brace's bolted end not weaker than its gross-section yield on design values; HSFG 8.8 bolts and complete-
+    penetration welds at the column; see docs/PEB_LIMITATIONS.md). The knee load path is checked from
+    `truss_connections['knee_gusset']` = {face_length_mm, t_mm, grade, weld 'cjp', e_face_mm} and
+    `truss_connections['heel']['cap_weld']` = 'cjp'; the knee record carries the column section at the knee. Gusset
+    spec keys also `gusset_width_mm` (caps the Whitmore width) and `gusset_support` ('two_edges' K 0.65 | 'one_edge'
+    K 1.2; a lower declared `gusset_K` is raised).
   - Connections: `truss_connections` = {'<role>:<SECTION>' | '<role>' | 'default': {n_bolts, d_mm, grade, bolt_type
     ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, end_cut ('sheared' default, 1.7 d0 | 'sawn' |
     'machine_flame_cut' | 'planed', 1.5 d0; 10.2.4.2), edge (the toe, 'rolled'), gusset_t_mm, gusset_grade,

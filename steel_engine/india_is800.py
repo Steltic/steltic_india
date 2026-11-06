@@ -3059,7 +3059,8 @@ def combination_is_lateral(case):
         meta = case
     meta = meta or {}
     return bool(meta.get("kind") in ("EQ", "W") or meta.get("lateral_kind") in ("EQ", "W") or meta.get("fWM")
-                or meta.get("member_wind") or meta.get("rsa") or meta.get("fEv") or meta.get("fE") or meta.get("fW"))
+                or meta.get("member_wind") or "member_wind" in (meta.get("tags") or []) or meta.get("rsa")
+                or meta.get("fEv") or meta.get("fE") or meta.get("fW"))
 
 
 def register_combinations(cases):
@@ -3083,9 +3084,11 @@ def is_lateral_combo(label):
     return bool(_LATERAL_TOKEN.search(lab))
 
 
-def table3_row_combo(Ps, row):
+def table3_row_combo(Ps, row, member=None):
     """The combination a Table 3 row names: row (i) the largest compression of a combination without wind or
     earthquake (the gravity compression that puts the member on row (i)); otherwise the largest compression."""
+    if str(row).startswith("(i)") and (member or {}).get("t3_gravity_combo"):
+        return member["t3_gravity_combo"]
     if str(row).startswith("(i)"):
         grav = [t for t in Ps if t[0] > P_COMP_TOL_N and not is_lateral_combo(t[1])]
         if grav:
@@ -3286,6 +3289,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         # review 2026-11 (MSME): one rule for both checks -- the member-wind combinations (WM0+, WM90-R, ...) are wind
         # combinations, and an axial force below P_COMP_TOL_N (analysis noise) is not compression
         comp_only_lat = Pmax > P_COMP_TOL_N and all(P <= P_COMP_TOL_N or is_lateral_combo(lab) for P, lab in Ps)
+        if member.get("t3_gravity_compression_N") is not None:      # over ALL the member's records (design_pipeline)
+            comp_only_lat = Pmax > P_COMP_TOL_N and float(member["t3_gravity_compression_N"]) <= P_COMP_TOL_N
         # H34: a beam whose axial compression is negligible (<= 0.05 Pd, e.g. a small collector / chord force) is not
         # a 'member carrying compressive loads' in the Table 3 sense and stays on row (iv); the 0.05 threshold is an
         # engineering basis stated in the record (member / cfg 'beam_axial_negligible_ratio' changes it)
@@ -3311,7 +3316,7 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             # RR-BUG-5: the Table 3 row carries its own combination -- the one with the largest axial compression
             # for rows (i) / (iii); none for row (iv) (a geometric LLT / ry limit, no axial compression).  Row (i)
             # names the largest compression of a combination without wind or earthquake (review 2026-11)
-            gc3 = (table3_row_combo(Ps, row) if (Ps and not row.startswith(("(iv)", "(vi)"))) else None)
+            gc3 = (table3_row_combo(Ps, row, member) if (Ps and not row.startswith(("(iv)", "(vi)"))) else None)
             res["table3_slenderness"] = {"value": v3, "limit": lim, "dc": v3 / lim, "ok": v3 <= lim,
                                          "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim),
                                          "governing_combo": gc3,
@@ -3450,11 +3455,13 @@ def axial_member_check_is800(member, combo_forces, *, cfg=None, _pre=None):
     Pmax = max([P_ for P_, _ in Ps] or [0.0])
     if Pmax > P_COMP_TOL_N:
         klr = comp.get("KL_over_r_max")
-        if all(P_ <= P_COMP_TOL_N or is_lateral_combo(lab) for P_, lab in Ps):
+        grav_ = member.get("t3_gravity_compression_N")
+        if (all(P_ <= P_COMP_TOL_N or is_lateral_combo(lab) for P_, lab in Ps) if grav_ is None
+                else float(grav_) <= P_COMP_TOL_N):
             lim, row = TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
         else:
             lim, row = TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"
-        gc3 = table3_row_combo(Ps, row)
+        gc3 = table3_row_combo(Ps, row, member)
     else:
         rmin = p.get("r_min") or min(v for v in (p.get("rx"), p.get("ry"), p.get("rv")) if v)
         klr = L / rmin

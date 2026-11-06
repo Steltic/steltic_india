@@ -757,6 +757,25 @@ def _top_records(recs, k=12):
     return {l: recs[l] for l in keep}
 
 
+def table3_gravity_input(member, records):
+    """Review 2026-11 (MSME): the IS 800 Table 3 row needs to know whether the member is in compression in ANY
+    combination without wind or earthquake -- over ALL its records, not the top-ranked subset the member check
+    receives (_top_records keeps the largest |N|, |M|, |V|; a gravity combination can drop out, which put the IN_Ex7
+    crane columns on row (iii)).  Adds t3_gravity_compression_N / t3_gravity_combo to a copy of the member record."""
+    import india_is800 as I8
+    best = (0.0, None)
+    for lab, r in (records or {}).items():
+        try:
+            P = -float(r[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if P > I8.P_COMP_TOL_N and not I8.is_lateral_combo(lab) and P > best[0]:
+            best = (P, lab)
+    m = dict(member)
+    m["t3_gravity_compression_N"], m["t3_gravity_combo"] = best
+    return m
+
+
 def member_checks_is800(cfg, elem):
     """Call HR-MEMBERS' member_check_is800 (guarded).  elem = {member, kind, records}."""
     try:
@@ -768,7 +787,7 @@ def member_checks_is800(cfg, elem):
     import static_model as SM
     cf = SM.combo_forces_for_member_check(_top_records(elem["records"]), elem["kind"])
     try:
-        return f(elem["member"], cf, cfg=cfg)
+        return f(table3_gravity_input(elem["member"], elem["records"]), cf, cfg=cfg)
     except Exception as ex:
         return {"found": False, "ok": None, "dc": None, "reason": "member_check_is800 failed: %s" % ex}
 
@@ -782,6 +801,7 @@ def peb_station_checks(cfg, mem, kind, recs, res_el, stations):
     import static_model as SM
     import india_is800 as I8
     cf = SM.combo_forces_for_member_check(_top_records(recs), kind)
+    mem = table3_gravity_input(mem, recs)
     out = [("element (mid-depth section)", mem["section"], res_el)]
     for end, sec_e in (("i", stations[0]), ("j", stations[1])):
         cfe = []
