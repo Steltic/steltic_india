@@ -1256,6 +1256,7 @@ def member_wind_loads(cfg, model, pat, f):
         if cols and all(c.get("transf") in (1, 2) for (c, *_r) in cols):
             posts = _wind_post_columns(cols)
             ws_ = ((cfg.get("load_plan") or {}).get("wind_summary") or {})
+            loads_, area_, seen_ = [], {}, set()
             for (c, c1, c2, xa, yo, z0, z1) in cols:
                 zm = 0.5 * (z0 + z1)
                 same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
@@ -1267,24 +1268,32 @@ def member_wind_loads(cfg, model, pat, f):
                     if abs(xa - upwind_first) > 1e-6:
                         continue
                     F = f * float(q) * wtrib / 1000.0 * fs      # N/mm along +axis
+                    loads_.append((c, c1, c2, F))
                     post = posts.get(c["tag"])
-                    if post is not None:
-                        # engine checks (2026-11): a wind post (a wall column pinned at its top) is a beam-type
-                        # element spanning base to roof -- IS 875-3 7.2.2.1 (b) Ka from its OWN tributary area
-                        # (span x spacing), not the frame's (7.2.2.1 (a)) that the pattern pressure carries
-                        kf = wind_post_ka_factor(ws_, wtrib * post["H_mm"] / 1.0e6)
-                        if kf.get("applied"):
-                            F *= kf["factor"]
-                        model.setdefault("wind_post_Ka", {})[(post["line"], pat.get("name"))] = dict(
-                            kf, column_line=post["line"], pattern=pat.get("name"), tributary_width_mm=round(wtrib, 1),
-                            span_mm=round(post["H_mm"], 1))
-                    # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
-                    if c["transf"] == 2:
-                        Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
-                    else:
-                        Wy, Wz = (0.0, F) if ax == 0 else (-F, 0.0)
-                    ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
-                    tot["wall_N"] += F * abs(c2[2] - c1[2])
+                    if post is not None and c["tag"] not in seen_:
+                        seen_.add(c["tag"])
+                        area_[post["line"]] = area_.get(post["line"], 0.0) + wtrib * abs(c2[2] - c1[2])
+            kfs = {}
+            for ln, A_mm2 in area_.items():
+                # engine checks (2026-11): a wind post (a wall column pinned at its top) is a beam-type element spanning
+                # base to roof -- IS 875-3 7.2.2.1 (b) Ka from its OWN tributary area (span x spacing: the wall area
+                # the pattern loads it with, piece by piece), not the frame's (7.2.2.1 (a)) that the pattern carries
+                H = next(p_["H_mm"] for p_ in posts.values() if p_["line"] == ln)
+                kfs[ln] = wind_post_ka_factor(ws_, A_mm2 / 1.0e6)
+                model.setdefault("wind_post_Ka", {})[(ln, pat.get("name"))] = dict(
+                    kfs[ln], column_line=ln, pattern=pat.get("name"), span_mm=round(H, 1),
+                    tributary_width_mm=round(A_mm2 / H, 1) if H else None)
+            for (c, c1, c2, F) in loads_:
+                post = posts.get(c["tag"])
+                if post is not None and kfs.get(post["line"], {}).get("applied"):
+                    F *= kfs[post["line"]]["factor"]
+                # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
+                if c["transf"] == 2:
+                    Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
+                else:
+                    Wy, Wz = (0.0, F) if ax == 0 else (-F, 0.0)
+                ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
+                tot["wall_N"] += F * abs(c2[2] - c1[2])
         else:
             alln = set(ops.getNodeTags())
             for k in range(1, NF + 1):
