@@ -614,6 +614,8 @@ def tonnage(cfg, info, length, role_of, peb=None):
                     grp = "canopy"                 # PEB canopy cantilevers (peb_build.beam kind 'canopy')
             except Exception:
                 pass
+        if grp is None and t in (info.get("truss") or {}):
+            grp = "primary"                        # MSME (2026-10): truss chords, webs and knee braces (truss_design)
         if grp is None:
             if kind == "brace":
                 grp = "bracing"
