@@ -1238,15 +1238,15 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
                 continue              # no stiffness asked: a candidate more than MASS_SPAN_MAX x the current mass
             if not _capacity_screen(lab, grade, dem, family_of(lab) == "CHS"):
                 continue
-            n_eval += 1
-            if n_eval > MAX_EVALS:
-                break                 # a row no candidate answers (e.g. a drift-driven link rotation): keep the section
             if spec.get("role") == "gantry":
                 register(lab)
                 if float(props(lab)["Ix"]) < lm.gantry_ix_req(margins.get(g, spec.get("margin", 0.95))) * 0.999:
                     continue
             if need and kind and stiffness(lab, kind) < need - 1e-6:
                 continue
+            n_eval += 1               # full evaluations only
+            if n_eval > MAX_EVALS:
+                break                 # a row no candidate answers (e.g. a drift-driven link rotation): keep the section
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
             if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
                 ok = False                    # the beam-end connection (V + N) of an earlier run does not fit
