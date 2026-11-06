@@ -8,7 +8,7 @@ checks that let auto-sized members at 0.99–1.00 pass when they are overstresse
 affect every HR job, not only the PEB ones. This branch closes them and two small items. Gold cfgs are not edited: the
 job owners re-size their golds on this engine (the gold-impact table below says what moves).
 
-Three follow-ups are plain commits on top of the round-1 head 711cc38:
+Four follow-ups are plain commits on top of the round-1 head 711cc38:
 - **Follow-up 1:** the lead's first ruling, the Section 12 class gates with N, the panel-zone doubler fy and the
   member-wind artefact.
 - **Follow-up 2:** the independent review (`briefs/ENG_REVIEW.md`), the lead's two rulings (Pd under axial
@@ -16,9 +16,19 @@ Three follow-ups are plain commits on top of the round-1 head 711cc38:
 - **Follow-up 3:** the lead's rulings on open points 1 (side walls) and 2 (the Section 12 gates in the hinge state of
   the earthquake combinations), the review's R-1 (the PEB buckling section's area) and its gable-triangle note (every
   wall area reaches a member), and a facade-step fix the per-wall totals found.
+- **Follow-up 4:** the lead's rulings on the brace hinge (accepted) and on IS 18168 Table 2 Ca (the earthquake records
+  only).
+- **Re-check 2** (`briefs/ENG_REVIEW.md`, at 10b3ae6): R2-1 (no earthquake record is never a silent pass), R2-2 (the
+  facade step by shared height), R2-3 (cite 7.3), R2-4 (a WARN for an unmatched hand-built pattern), R2-5 (docs).
 
-The code is final at 0482f9a, the commit the final gold A/B ran on. Later commits add tests and docs only. Nothing is
-pushed.
+The code is final at bca766e.
+- The full gold A/B ran on 0482f9a.
+- 4e051ce changes only the IS 18168 Ca (and the sizer's copy of it). Its own A/B covers every gold with an IS 18168
+  Table 2 column row.
+- 10b3ae6 is text only.
+- 9353828 / 0f8fd18 / bca766e (re-check 2) move no gold. IN_Ex9 was re-run, and that re-run caught one regression
+  in 9353828, fixed by 0f8fd18 (Re-check 2 below).
+- Later commits are docs only. Nothing is pushed.
 
 ## Why
 
@@ -363,7 +373,7 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
     one average Cpe for each of the four walls: "the wind at θ = 0° blows onto wall **A**; **B** is the opposite wall;
     **C** and **D** are the two side walls (at θ = 90° the wind blows onto **C**)."
   - It has no zones by distance from the windward edge. Its only edge band is the local Cpe strip of width 0.25 w,
-    and 7.3.1 keeps local coefficients off members: "Coefficients for the local effects should only be used for
+    and 7.3 (the general text of Pressure Coefficients) keeps local coefficients off members: "Coefficients for the local effects should only be used for
     calculation of forces on these local areas affecting roof sheeting, glass panels, and individual cladding units
     including their fixtures. They should not be used for calculating force on entire structural elements such as
     roof, walls or structure as a whole."
@@ -376,8 +386,9 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
     surface and Cpe of each wall) and `pd_kNm2` on every pattern; `india_combos` carries them to the static model.
   - `static_model.side_wall_pressure` takes the pattern's value. For a pattern without it (IN_Ex6's hand-built
     patterns) it derives the Cpe from Table 5 at the model geometry: θ = 0 for wind onto the longer face, checked
-    against the windward / leeward Cpe the pattern's own pressures imply. A pattern whose side walls cannot be loaded
-    is a FAIL in the package check (`consistency.member_wind_side_wall_issues`), never silent.
+    against the windward / leeward Cpe the pattern's own pressures imply. If they are more than 0.05 from both
+    angles, the record carries a WARN (re-check 2, R2-4). A pattern whose side walls cannot be loaded is a FAIL in
+    the package check (`consistency.member_wind_side_wall_issues`), never silent.
   - The side walls are found by the same wall scan as the windward and leeward walls, run across the wind
     (`wall_wind_pieces`: first exposed line per strip, the roof envelope, the own wall's width). The parametric
     nodal fallback loads them too. Text: `SIDE_WALL_CITE`.
@@ -404,9 +415,10 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
   - In each earthquake record the web is classified in the hinge state, major-axis plastic bending with that
     combination's N: the "generally" rows with its r1 / r2 (the mid-depth row with no N). D-T11's "axial compression"
     row is not used there; it stays for the member resistance checks in every combination.
-  - A member with no earthquake record is classified without N, stated in the record.
-- **Engine reading for braces, for the lead to confirm.** A brace's plastic hinge is its buckling hinge, about the axis
-  of the larger KL/r (`brace_hinge_axis`).
+  - A member with no earthquake record is not judged (re-check 2, R2-1, below): not applicable under `no_seismic`,
+    otherwise not evaluated and open.
+- **Braces (the lead's ruling, 2026-11-06, part of D-T11).** A brace's plastic hinge is its buckling hinge, about the
+  axis of the larger KL/r (`brace_hinge_axis`).
   - About the major axis the brace takes the same "generally" rows.
   - About the minor axis (or on a tie) the web lies on that hinge's neutral axis and carries the uniform N, so it
     keeps the axial row. Reading major-axis bending into a minor-axis buckling hinge would be unconservative.
@@ -414,9 +426,8 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
     the axial row, with the 42ε floor).
 - **The sizer's 12.11.3.1 screen** does the same (`LocalModel._class_with_N`, `peb_autosize.py:1370`): earthquake labels
   from the run's `load_combinations`, the generally rows.
-- **Not changed, flagged:** the IS 18168 Table 2 (ii) column web limit takes Ca = Pu / (Py / γm0) from the largest |P|
-  of every combination (`_ca_governing`). It is not an IS 800 Section 12 class gate, does not use the D-T11 row and is
-  the stricter side. Say if it should be the earthquake records only.
+- **IS 18168 Table 2 (ii) Ca** (follow-up 4, the lead's ruling): from the earthquake records only, as the gates
+  (Follow-up 4 below).
 
 ### R-1: the PEB buckling section takes the segment's effective area (review, blocking)
 
@@ -466,7 +477,8 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
   - The +Y face carried 270 m² below the eave line against 252.
 - `wall_wind_pieces` now ends a wall at its line when the neighbouring strip's wall lies behind it. When the
   neighbouring wall stands in front and a column of this plane stands at the neighbour's line (the re-entrant corner),
-  that column carries the other half. The record lists the steps (`stepped_facade`).
+  that column carries the other half, piece by piece over the height each of its pieces shares with the wall (re-check
+  2, R2-2). The record lists the steps (`stepped_facade`).
 - No other gold has a step.
 
 ### D-T11: the lead's acceptance of the two readings (stated as rulings)
@@ -481,6 +493,73 @@ per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the fina
 - A slender welded box now has a Pd (`effective_area_box_axial`), but its bending capacity is not coded. So its member
   check is "not evaluable" in any combination where it is slender: a visible failure, the lead's ruling to keep. No
   gold has one.
+
+## Follow-up 4 (2026-11-06): the lead's decisions on the follow-up 3 open points
+
+- **Brace hinge: accepted.** A brace's hinge is its buckling hinge; on a minor-axis hinge (or a tie) the web keeps the
+  axial row. Stated under D-T11 (Follow-up 3 (b), `D_T11_GATE_CITE`).
+- **IS 18168 Table 2 (ii) Ca from the earthquake records only** (4e051ce):
+  - The rule: Ca = Pu / (Py / γm0) is the axial ratio at the seismic ductility demand. So `_ca_governing`
+    (`india_is800_s12.py:329`) takes Pu from the earthquake records only (`earthquake_record`: the Table 4 EL rows and
+    the 12.2.3 rows), as the Section 12 gates.
+  - The wind, gravity and service records are not judged, and the record counts both (`CA_EQ_BASIS`, `:324`). A
+    member with no earthquake record has no Ca, never 0: its row is not judged (re-check 2, R2-1).
+  - The sizer's Table 2 screen follows (`LocalModel._Ca`, `peb_autosize.py:1390`).
+  - The Table 2 (ii) web limit falls with Ca, so this can only relax a column whose largest Pu was a wind or gravity
+    record.
+- **Gust ratio:** for the PEB owner. The lead tells them that the side walls take the same factor as the other walls
+  in each pattern.
+- **Slender box bending:** a known limit (Follow-up 3).
+- **Gold A/B of the Ca change** (`gold/results/eng6`, `results/compose_ca.md`, `gold/tools/compose_ca.py`):
+  - It covers every gold whose package has IS 18168 Table 2 (ii) column rows, 19 runs at 4e051ce against eng5 at
+    0482f9a. That is the SMF golds too (the PEB IN_Ex2 / Ex4 SMRF, IN_Ex8, IN_Ex9, IN_Ex12 and its units, IN_Ex16,
+    IN_Ex18), not only the EBF / SCBF / OCBF ones: Ca reaches every IS 18168 column.
+  - Result: no Table 2 (ii) dc and no ok moved, no other member, connection or Section 12 row moved, and every status
+    is equal.
+  - Ca from the earthquake records can only be at or below Ca from every record, and the web limit falls with Ca, so
+    a row can only relax. None did by more than the digests' precision.
+
+## Re-check 2 (2026-11-06, `briefs/ENG_REVIEW.md` at 10b3ae6): R2-1 to R2-5
+
+- **R2-1 (medium): no earthquake record is never a silent pass.** Before, a member with no earthquake record was
+  classified at N = 0 by the Section 12 class gates and passed, and its IS 18168 Table 2 (ii) Ca defaulted to 0 (the
+  loosest web limit). Now (`no_earthquake_record`, `table2_class_by_combination`, `_ca_governing`,
+  `_table2_column_row`, `india_is800_s12.py`):
+  - **`no_seismic` declared** (no earthquake family; `section12_model_data` passes it): the gate rows and the Table 2
+    (ii) column row are not applicable, with ok None, the reason and `not_applicable`. The design status does not count
+    them (`_screen_findings`, `india_seismic_gates.py`; `capacity_check_entry`, `design_pipeline.py`), since no
+    seismic detailing applies.
+  - **A job with a Section 12 seismic system** but no earthquake record for a member the gate covers: the rows are not
+    evaluated, with ok None and a plain message ("no earthquake combination among the member's N force records in a
+    job with a Section 12 seismic system: a model / cfg error ..."). They count as open reasons.
+  - Ca is never 0 in either case. The sizer's 12.11.3.1 and Table 2 screens skip such a member instead of using the
+    N = 0 class or Ca 0.
+  - **Gold check:** every gate and Ca row of the 30 golds has at least one earthquake record (for braces, a Table 4
+    EL row; from each run's `member_combo_forces.json` and `load_combinations`). No gold declares `no_seismic`, and
+    every gold has earthquake combinations. So no status can move. The IN_Ex9 re-run at 9353828 is below.
+- **R2-2 (low): the facade step by shared height.** Every piece of the re-entrant line now takes width × the height it
+  shares with the stepped wall's piece, spread over its own length. So lines split at different heights load the wall
+  once. The reviewer's two IN_Ex9 variants (the lean-to corner column split at 2.5 m; the hall column in one piece
+  0–8 m) gave 318 / 306 m² and now give 288 m².
+  - 9353828 took the shared height over the stepped piece's whole length. On IN_Ex9's −X face (the across-ridge wind)
+    the hall column (12, 37.5), one piece 0–8 m, then gave the re-entrant line's upper piece (5–8 m) a share it already
+    carries with its own width: 11.25 m² twice. The IN_Ex9 status re-run caught it (2 member ratios moved).
+  - 0f8fd18 limits the share to the step band, the heights where the neighbouring strip's wall stands in front. A test
+    pins both IN_Ex9 faces across the ridge at 480 m².
+  - bca766e lists the steps of both scans in the package (`stepped_facade`, `side_stepped_facade`).
+- **R2-3:** the local-coefficient sentence is IS 875-3 7.3 (the general text of Pressure Coefficients), not 7.3.1,
+  in `SIDE_WALL_CITE`, the generator's record and this file. 7.3.1 stays for F = (Cpe − Cpi) A pd.
+- **R2-4:** a hand-built pattern whose own windward / leeward Cpe are more than 0.05 from both Table 5 wind angles gets
+  a WARN in its side-wall record and in `member_wind_wall_scan.warnings`. IN_Ex6's patterns match.
+- **R2-5:** the IN_Ex7 row in the gold table now gives the governing record's forces (element 1: P 3.5 kN, Mz 320.7
+  kN·m, My 217.0 kN·m).
+- **Status check at bca766e.** None of the 30 gold statuses changes:
+  - IN_Ex9 re-run (`gold/results/eng8`) equals 0482f9a: PARTIAL (4), with none of its 12 members, 12 connections or
+    50 Section 12 rows moved. At 9353828 two member ratios had moved: R2-2's regression, fixed by 0f8fd18.
+  - No gold lacks earthquake combinations or declares `no_seismic`, so there is no no-seismic gold to re-run.
+  - R2-1 cannot move a gold (the row check above).
+  - The per-wall member-wind totals of the 17 golds at bca766e are identical to 0482f9a's and equal the hand totals
+    on every wall (`gold/results/wind_totals2`).
 
 ## Tests
 
@@ -543,9 +622,10 @@ Mutation check of the follow-ups (`/home/claude/wt/ENG/tools/mutate2.py`, log `l
 | F5: the web strip back to the column fy | 1 |
 | F12: different column LLT_sag / LLT_hog accepted | 1 |
 
-Follow-up 3 (`tests/test_engine_checks_2026_11_followup3.py`, 9 tests, and in `test_engine_checks_2026_11_followup.py`;
+Follow-ups 3 and 4 and re-check 2 (`tests/test_engine_checks_2026_11_followup3.py`, 19 tests, and in `test_engine_checks_2026_11_followup.py`;
 new fixtures `IN_Ex4_smf_column_e13_s12.json` (an IN_Ex4 SMRF column piece and its 189 records from the eng4 run),
-`IN_Ex9_wall_wind_geometry.json`; the IN_Ex13 fixture gains each record's `lateral_kind`):
+`IN_Ex9_wall_wind_geometry.json`, `IN_Ex20_scbf_column_e126_s12.json`; the IN_Ex13 fixture gains each record's
+`lateral_kind`):
 
 | Item | Unit tests | End-to-end on a real gold piece |
 |---|---|---|
@@ -554,9 +634,12 @@ new fixtures `IN_Ex4_smf_column_e13_s12.json` (an IN_Ex4 SMRF column piece and i
 | (a) side walls | `test_side_wall_pressure_from_the_generator_IN_Ex21` (C / D −0.6 at θ 0, A / B −0.5 at θ 90, q = (Cpe − Cpi) pd), `test_side_wall_pressure_derived_for_a_pattern_without_it_IN_Ex6` (2 cases: θ from the plan, checked against the pattern's own Cpe), `test_side_walls_not_loadable_is_a_consistency_failure` | `test_integration_mini_PEB_side_walls_and_gable_residual` (member_wind_loads on the PEB test shed: both gables 75.6 m² as side walls, equal and opposite; every side member loaded along X with its surface and Cpe recorded), `test_integration_mini_PEB_side_wall_post_takes_the_Ka_of_its_own_side_area`, `test_e2e_IN_Ex21_long_walls_as_side_walls_under_the_along_ridge_wind` (IN_Ex21's geometry: 234 m² each, the gable posts above the eave not on the long wall) |
 | Every wall area | (the mini-shed test: corners +0.45 m², the post −0.9 m² at their top nodes) | `test_e2e_IN_Ex21_every_gable_area_reaches_a_member`: IN_Ex21's gables 135.00 → 137.25 m², each corner column's 1.125 m² triangle at its top |
 | Facade step | — | `test_e2e_IN_Ex9_lean_to_facade_step`: both gable faces 288 m², the hall's corner 12 m wide, the re-entrant column 6 m |
+| Re-check 2 | `test_R2_1_no_earthquake_record_in_a_seismic_job_is_not_evaluated_and_open` (2 cases: the reviewer's noeq_probe, wind only and gravity only; with an EQ record judged), `test_R2_1_no_seismic_job_marks_the_gates_not_applicable` (column and brace; no open reason), `test_R2_4_derived_side_wall_warns_when_the_pattern_matches_neither_angle` | `test_R2_2_facade_step_with_offset_splits_loads_the_wall_once` (2 variants on IN_Ex9's geometry, the reviewer's step_probe), `test_R2_2_IN_Ex9_across_the_lean_to_each_wall_once` (both faces 480 m²) |
+| IS 18168 Ca (follow-up 4) | `test_Ca_from_the_earthquake_records_only` (the largest Pu, 0.6 Py, is a wind record: Ca 0.3 from the EL row; wind / gravity only: Ca = 0), `test_Ca_sizer_screen_from_the_earthquake_records_only` | `test_Ca_e2e_IN_Ex20_column_whose_largest_Pu_is_a_wind_record`: IN_Ex20 SCBF column e126 WPB320X300X126.66, largest Pu 243.5 kN in 1.5DL−1.5W_Y+1.5W_Y_across (Ca 0.0693, web limit 58.19 at 0482f9a); now Ca from its 104 earthquake records, the web limit higher, the row's dc on the flange unchanged |
 
-Mutation check of follow-up 3 (`/home/claude/wt/ENG/tools/mutate3.py`, log `logs/mutation3.txt`, at c837ac6): every
-reverted fix fails its tests.
+Mutation check of follow-ups 3 and 4 and re-check 2 (`/home/claude/wt/ENG/tools/mutate3.py`; logs
+`logs/mutation3.txt` at c837ac6, `logs/mutation4.txt` at 4e051ce, `logs/mutation5.txt` at 9353828 / 0f8fd18, 23 of
+23): every reverted fix fails its tests.
 
 | Mutation (reverted in a scratch copy) | Tests that fail |
 |---|---|
@@ -575,6 +658,14 @@ reverted fix fails its tests.
 | E2: the residual computed but not applied | 1 |
 | F1: a wall runs on past its corner at a facade step | 1 |
 | F2: no re-entrant corner column | 1 |
+| Ca1: IS 18168 Table 2 Ca from every record again | 2 |
+| Ca2: the sizer's Ca from every record again | 1 |
+| R21a: every member with no earthquake record not applicable (silent, never open) | 2 |
+| R21b: Ca back to 0 with no earthquake record | 4 |
+| R21c: a not-applicable row counted as open again | 1 |
+| R22: the step's re-entrant share by width, not width × shared height | 2 |
+| R22b: the step's share over the whole shared height, not the step band (9353828's double count) | 1 |
+| R24: no warning for a pattern matching neither angle | 1 |
 
 Full HR suite, under heavy:
 - the merged head 1414ba4: 1,281 passed, 5 skipped, 0 failed (main e927f35: 1,258 / 5 as the lead reports; main
@@ -583,8 +674,12 @@ Full HR suite, under heavy:
 - 8b2ffbf: 1,306 passed, 3 failed, 5 skipped (`logs/suite_eng_review.txt`). The three failures were record-layout
   assertions that pinned 17 fields (finding 4 adds `Mmaj_hog_min`); eccfc95 extends them;
 - eccfc95 (the follow-up 2 head): 1,312 passed, 5 skipped, 0 failed (`logs/suite_eng_final2.txt`);
-- **the final head c837ac6 (code 0482f9a): 1,324 passed, 5 skipped, 0 failed, 1 warning (a third-party starlette/httpx
-  deprecation), 420.8 s under heavy** (`logs/suite_eng_f3.txt`).
+- c837ac6 (code 0482f9a, the follow-up 3 head): 1,324 passed, 5 skipped, 0 failed (`logs/suite_eng_f3.txt`);
+- 10b3ae6: not run here (the batch was stopped for re-check 2); the reviewer's run there is 1,327 passed, 5 skipped;
+- bca766e: 1,332 passed, 2 failed (the two existing tests above, updated in 3dc1c5b), 5 skipped
+  (`logs/suite_eng_r2.txt`);
+- **the final head 3dc1c5b (code bca766e): 1,334 passed, 5 skipped, 0 failed, 1 warning (a third-party
+  starlette/httpx deprecation), 443.5 s under heavy** (`logs/suite_eng_r2b.txt`).
 
 Existing tests changed, each because a review finding changes the value it pins:
 - `test_peb_levers_2026_10.py::test_rods_refused_outside_zone_II_ocbf`: rod Td at 240 MPa (finding 6);
@@ -594,6 +689,10 @@ Existing tests changed, each because a review finding changes the value it pins:
   (ruling 2);
 - follow-up 3: this branch's own Section 12 gate tests in `test_engine_checks_2026_11_followup.py` (the gates now judge
   the earthquake records in the hinge state: the records carry `lateral_kind`, the expected rows and counts follow).
+- re-check 2: `test_fix_H05.py::test_box_column_smrf_zone_iv_checked_with_box_row` gives its box column one
+  earthquake record with N = 0 (its Table 2 (ii) row is not judged with none, R2-1; the limits it pins are at Ca 0 as
+  before); `test_fix_IN_min_dc_sense.py::test_capacity_design_flattening_keeps_sense` checks the sense through
+  `capacity_check_entry`, where the copy now lives.
 
 ## Gold impact (final A/B: main e927f35 against the head 0482f9a; every HR gold run once per engine)
 
@@ -645,7 +744,7 @@ Existing tests changed, each because a review finding changes the value it pins:
 | published | IN_Ex4 | PARTIAL (4) → PARTIAL (70) → PARTIAL (4) | gravity_col-WI350X250X12X6 1.207 → 1.359 (9.3) | 0.984 → 0.984 brace-WPB180X180X51.22 | WI350X250X12X6 (corner post) 1.207 → 1.284 → 1.359 (Ka ×1.063; SW); WI450X200X10X6 1.091 → 1.076 → 1.078 (Ka < 1; R1; SW); **the 66 `smf_column_class` rows pass (G)** |
 | published | IN_Ex5 | PARTIAL (13) → PARTIAL (17) → PARTIAL (17) | lateral_col-WI300X180X8X5 1.301 → 1.473 (9.3) | 0.969 → 1.033 knee-WI1000X250X14X6-WI1000X250X14X6 | WI300X180X8X5 (gable corner column) 1.301 → 1.378 → 1.473 (Ka; SW); WI972 / WI781 / WI869 / WI956 rafters 1.03–1.14 (B, as at 8b2ffbf); knee 0.969 → 1.033 (F5) |
 | published | IN_Ex6 | COMPLETE → COMPLETE → COMPLETE | floor-NPB600X220X122.45 0.887 → 0.887 | 0.919 → 0.919 | none (the side walls derived from Table 5 for its hand-built patterns move no ratio by more than 0.002) |
-| published | IN_Ex7 | COMPLETE → COMPLETE → **PARTIAL (2)** | lateral_col-WPB600X300X211.92 0.953 → 1.154 (9.3) | 0.838 → 0.838 lateral_col-NPB750X270X202.49 | **WPB600X300X211.92 0.953 → 0.953 → 1.154 (SW)**: 1.5DL+1.5WM0+R, P 191 kN, Mz 482 kN·m, My 219 kN·m (the gable's side-wall suction, (−0.7 − 0.5) pd = −2.0 kN/m², on the end frames' columns about their minor axis); NPB750 0.941 → 0.956 (A; R1, as at 8b2ffbf) |
+| published | IN_Ex7 | COMPLETE → COMPLETE → **PARTIAL (2)** | lateral_col-WPB600X300X211.92 0.953 → 1.154 (9.3) | 0.838 → 0.838 lateral_col-NPB750X270X202.49 | **WPB600X300X211.92 0.953 → 0.953 → 1.154 (SW)**: element 1, an end-frame column (0–8.5 m), under 1.5DL+1.5WM0+R: P 3.5 kN compression, Mz 320.7 kN·m (hogging at the base), My 217.0 kN·m about its minor axis from the gable's side-wall suction ((−0.7 − 0.5) pd = −2.0 kN/m² over half the 21 m gable; the reviewer's hand check gives 1.1536); NPB750 0.941 → 0.956 (A; R1, as at 8b2ffbf) |
 | published | IN_Ex8 | COMPLETE → COMPLETE → COMPLETE | roof-WPB500X300X155.08 0.804 → 0.818 (9.3) | 0.893 → 0.893 | none; the roof beam 0.804 → 0.818 and BOX400 column 0.584 → 0.594 (SW) |
 | published | IN_Ex9 | PARTIAL (4) → PARTIAL (4) → PARTIAL (4) | gravity_col-WPB200X200X42.26 2.081 → 2.081 | 0.897 → 0.897 | WPB200X200X42.26 2.081, WPB200X200X61.3 1.120 (unchanged); the BOX450X400 column 0.404 → 0.353 (SW: the facade step, the hall's corner no longer loaded over the lean-to's width) |
 | published | IN_Ex10 | COMPLETE → COMPLETE → COMPLETE | roof-WPB450X300X139.76 0.920 → 0.920 | 0.786 → 0.786 | none; the WPB320 column 0.446 → 0.494 (SW) |
@@ -849,28 +948,23 @@ The study cfgs that `peb_autosize.apply_plate` wrote before this branch (fy 250 
 
 ## Open points for the lead
 
-Open points 1 (side walls) and 2 (D-T11 in the Section 12 gates) of follow-up 2 are closed by the lead's rulings
-(Follow-up 3 (a) and (b)).
+The open points of follow-ups 2 and 3 are closed by the lead's rulings:
+- side walls (Follow-up 3 (a): one Cpe per wall);
+- the Section 12 gates and the brace hinge (Follow-up 3 (b), Follow-up 4);
+- IS 18168 Ca (Follow-up 4);
+- the gust ratio (for the PEB owner);
+- slender box bending (a known limit).
 
-1. **The brace hinge (an engine reading to confirm).** The ruling's hinge state is "major-axis plastic bending with
-   the N present". For a brace the engine reads the hinge as the brace's buckling hinge: about the minor axis (or on a
-   tie) its web carries the uniform N and keeps the axial row. No gold brace moves either way.
-2. **IS 18168 Table 2 (ii) Ca** is taken over every combination (the largest |P|), as before. It is not an IS 800
-   Section 12 gate. Say if it should follow the gates to the earthquake records.
-3. **The 10.2 gust ratio of IN_Ex2 / IN_Ex5.** Their cfgs scale the across-ridge windward and leeward wall pressures to
-   the along-wind force after the generator; the side-wall pressure stays at the 7.2 pd. That is the owners' choice to
-   make (their cfgs are not edited here).
-4. **Zones by distance from the windward edge** (the ruling's wording) are not in IS 875-3:2015 Table 5: one Cpe per
-   wall, and the 0.25 w local strip for cladding only (7.3.1). The engine applies the whole-wall Cpe. If the lead
-   wants an EN 1991-1-4 style zoning, it needs a ruling with a source.
-5. **Merging with `fix/2026-10-third-peb-golds`** (trial merge at 711cc38, not committed): one conflict, in
+What remains:
+1. **Merging with `fix/2026-10-third-peb-golds`** (trial merge at 711cc38, not committed): one conflict, in
    `india_connections.base_plate_design_biaxial`, where the PEB branch made the same minor-axis outline fix. Keep
-   either side. The sizer has changed since (the base-outline screen, the 12.11.3.1 screen, the web-strip and
-   member-web fy), so a fresh trial merge is advised.
-6. **Gold owners re-size on this engine.**
-   - Side walls now load every portal's corner columns and gable posts across the wind (the A/B above).
+   either side. The sizer has changed since (the base-outline screen, the 12.11.3.1 and Table 2 screens, the
+   web-strip and member-web fy), so a fresh trial merge is advised.
+2. **Gold owners re-size on this engine.**
+   - Side walls now load every portal's corner columns and gable posts across the wind (the A/B above): the PEB
+     corner posts, IN_Ex7's end frames.
    - The knee stiffener rows: the web doubler is at its own (E250) fy. A job with E350 doublers declares
      `knee_panel.doubler_grade`; a Section 12 joint declares `doubler_grade` in its `beam_column` spec.
    - The golds with Section 12 doublers declare no doubler grade. They are at E250 now: IN_Ex12 (48 mm, 230 MPa),
      IN_Ex16, IN_Ex18 and IN_Ex9 (20 mm, 240 MPa).
-7. **The cfg band helpers** listed above, to switch to `fy_is2062` (the lead takes this list).
+3. **The cfg band helpers** listed above, to switch to `fy_is2062` (the lead takes this list).
