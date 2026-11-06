@@ -1160,6 +1160,10 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
                 chosen = (lab, grade)
                 notes[g] = "%s %s tier %d: strength %.3f slender %.3f" % (lab, grade or "", tier, worst[0], worst[1])
                 break
+        if chosen is not None and spec.get("role") == "link":
+            chosen, note = _least_overstrength_link(lm, g, spec, chosen, dem, margins, bar, conn_req)
+            if note:
+                notes[g] = note
         if chosen is None:
             chosen = x[g]
             notes[g] = "no candidate passes: kept %s" % (x[g],)
@@ -1168,6 +1172,48 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
         if lm.specs[g].get("same_as"):
             new[g] = new[lm.specs[g]["same_as"]]
     return new, notes
+
+
+def link_vp(label, grade=None):
+    """Plastic shear strength of a link web, 0.6 fy (d - 2 tf) tw (N; IS 18168 / IS 800 12.11 Vp), fy from the
+    IS 2062 band of the web."""
+    register(label)
+    p = props(label)
+    tw = float(p["tw"])
+    return 0.6 * plate_fy(tw, grade or "E250") * (float(p["d"]) - 2.0 * float(p["tf"])) * tw
+
+
+def _least_overstrength_link(lm, g, spec, first, dem, margins, bar, conn_req, *, mass_span=1.3, max_evals=60):
+    """EBF links: every brace, beam outside the link and column (and its base) is designed for the link overstrength
+    1.1 Ry Vp, so among the candidates of the first passing one's tier (rolled stays rolled) that pass within
+    mass_span x its mass, the one with the least web shear strength Vp is taken.  Returns (choice, note)."""
+    lab0, gr0 = first
+    cands = candidates(spec)
+    tier0 = next((t for (l, gr, t) in cands if l == lab0 and gr == gr0), None)
+    m0, vp0 = mass_kg_m(lab0), link_vp(lab0, gr0)
+    best, best_vp, n = first, vp0, 0
+    for lab, grade, tier in cands:
+        if tier != tier0 or lab in bar or (lab, grade) == first:
+            continue
+        if mass_kg_m(lab) > mass_span * m0:
+            continue
+        vp = link_vp(lab, grade)
+        if vp >= 0.97 * best_vp:
+            continue
+        if not _capacity_screen(lab, grade, dem, False):
+            continue
+        n += 1
+        if n > max_evals:
+            break
+        ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
+        if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
+            ok = False
+        if ok:
+            best, best_vp = (lab, grade), vp
+    if best == first:
+        return first, None
+    return best, ("%s %s tier %d: least link overstrength, Vp %.0f kN (lightest passing %s, Vp %.0f kN)"
+                  % (best[0], best[1] or "", tier0, best_vp / 1e3, lab0, vp0 / 1e3))
 
 
 _STACK_RX = re.compile(r"^(?P<base>.+?)_(?:(?P<a>\d+)(?:_(?P<b>\d+))?|(?P<w>lo|hi|roof))$")
@@ -1452,19 +1498,30 @@ def design_fin_plate(sec, V_N, template=None, *, V_service_N=None, margin=0.9):
     """Lightest fin plate whose IS 800 checks (bolts 10.3, plate 8.4.1, block shear 6.4.1, CJP weld, HSFG slip 10.4.3
     at the service shear) pass at V_N within the margin, in this order: one fin plate with one bolt line, then two
     lines; then two fin plates (double shear); each with the template's faying surface, then sand-blasted (IS 800
-    Table 20, mu 0.48).  Within a tier: fewest bolts, then the thinnest plate.  The service shear is the run's
-    (V_service_N), else V_N / 1.5."""
+    Table 20, mu 0.48).  Within a tier: fewest bolts, then the thinnest plate.  When none passes, the same search
+    with three or four bolt lines.  The service shear is the run's (V_service_N), else V_N / 1.5."""
+    Vs = V_service_N if V_service_N is not None else V_N / 1.5
+    surf0 = (template or {}).get("slip_surface", "clean_mill_scale")
+    for lines in ((1, 2), (3, 4)):
+        # three or four bolt lines (the IN_Ex19 collector fins of the published gold: 4 lines x 3 rows of M24 in
+        # double shear) only when no one- or two-line plate takes the demand
+        sp = _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin)
+        if sp is not None:
+            return sp
+    return None
+
+
+def _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin):
+    """design_fin_plate over the given bolt-line counts."""
     import india_connections as C
     import india_connection_design as CD
-    Vs = V_service_N if V_service_N is not None else V_N / 1.5
     trials = []
-    for n_lines in (1, 2):
+    for n_lines in lines:
         for d in (20, 24, 30):
             for n in range(2, 13):
                 if not fin_plate_fits(sec, n, d):
                     break
                 trials.append((n * n_lines * d * d, n_lines, d, n))
-    surf0 = (template or {}).get("slip_surface", "clean_mill_scale")
     for surface in [surf0] + (["sand_blasted"] if surf0 != "sand_blasted" else []):
         for plates in (1, 2):
             for _, n_lines, d, n in sorted(trials):

@@ -521,3 +521,35 @@ def test_doubler_grade_follows_the_columns_the_beams_frame_into():
     assert bc["WB500"]["doubler_grade"] == "E350 B0"            # both columns at its joint are E350
     assert bc["beam:MB400"]["doubler_grade"] == "E250 B0"       # one E250 column at its joint
     assert "doubler_grade" not in bc["default"] and "doubler_grade" not in bc["WB600"]
+
+
+def test_fin_plate_takes_three_or_four_bolt_lines_only_when_two_do_not_fit():
+    """A beam-end shear connection tries one and two bolt lines first; three or four lines (the published IN_Ex19
+    collector fins, 4 x 3 M24 in double shear) only when no one- or two-line plate passes."""
+    AZ = _az()
+    AZ.register("WI550X325X22X14")
+    small = AZ.design_fin_plate("WI550X325X22X14", 300e3, {})
+    assert small is not None and int(small.get("bolt_lines") or 1) <= 2
+    big = AZ.design_fin_plate("WI550X325X22X14", 1730e3, {})
+    assert big is not None and int(big.get("bolt_lines") or 1) >= 3
+    assert AZ._fin_plate_tier("WI550X325X22X14", 1730e3, 1730e3 / 1.5, {}, "clean_mill_scale", (1, 2), 0.9) is None
+
+
+def test_ebf_link_takes_the_least_overstrength_within_the_mass_span():
+    """EBF links: every brace, beam outside the link, column and base follows the link overstrength 1.1 Ry Vp.  Among
+    the passing candidates of the lightest passing one's tier within 1.3 x its mass, the least Vp is taken."""
+    AZ = _az()
+    spec = {"role": "link", "families": ["MB", "WB", "HB"]}
+    zreq = 1.5e6                      # rolled: the lightest passing MB450 (Vp 585 kN) gives way to HB400 (511 kN)
+
+    class LM:
+        def group_ok(self, g, lab, grade, margin):
+            AZ.register(lab)
+            return AZ.props(lab)["Zx"] >= zreq, (0.5, 0.1)
+    cands = [(l, gr, t) for (l, gr, t) in AZ.candidates(spec) if t == 0]
+    first = next((l, gr) for (l, gr, t) in cands if (AZ.register(l) or True) and AZ.props(l)["Zx"] >= zreq)
+    dem = {"N": 0.0, "Mz": 0.0, "My": 0.0}
+    got, note = AZ._least_overstrength_link(LM(), "lk", spec, first, dem, {}, set(), None)
+    assert AZ.mass_kg_m(got[0]) <= 1.3 * AZ.mass_kg_m(first[0]) + 1e-9
+    assert AZ.link_vp(got[0]) < 0.97 * AZ.link_vp(first[0]) and note
+    assert AZ.props(got[0])["Zx"] >= zreq and AZ.family_of(got[0]) in ("MB", "WB", "HB")

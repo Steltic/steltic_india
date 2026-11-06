@@ -148,10 +148,17 @@ D8).
     is answered first by stiffer moment-frame beams. Stepping up the column raises its own share of the stiffness,
     and K with it.
   - Section 12 margins are kept per group and row kind, so a KL/r failure no longer tightens the Table 2 rows.
-- **EBF links.** The links are sized for their shear and the IS 18168 link rules only. They get no stiffness and no
-  end-connection step-ups, and they are held after the first two passes. Their own failing members release them.
-  The reason: every brace and column force follows the link overstrength 1.1 Ry Vp / V (IS 18168 12.3.2.2 /
-  12.3.4.5). On IN_Ex15, links made larger for stiffness and connections had raised it to 4.96.
+- **EBF links.** Every brace, beam outside the link, column and base is designed for the link overstrength
+  1.1 Ry Vp (IS 18168 12.3.2.2 / 12.3.4.5). On IN_Ex15, links made larger for stiffness had raised it to 4.96. So:
+  - links are sized for their shear and the IS 18168 link rules only, and get no stiffness step-ups;
+  - they are held after the first two passes. Their own failing members, or an end connection that does not fit,
+    release them, and the step-up is the smallest link that takes the connection;
+  - among the passing candidates of the lightest passing link's tier (rolled stays rolled), within 1.3 × its mass,
+    the link with the least web shear strength Vp = 0.6 fy (d − 2 tf) tw is taken.
+- **Beam-end fin plates with three or four bolt lines** are tried only when no one- or two-line plate (single or
+  double fin) takes the demand. This is the published IN_Ex19 collector-fin detail: 4 lines × 3 rows of M24 in
+  double shear. Before this, the IN_Ex19 link beams were deepened to fit two lines, which raised Vp and with it the
+  whole capacity-design chain.
 - **Base gussets** stay within the IS 800 Table 2 outstand limit (h / t ≤ 13.6 ε). Past it, one more gusset is added
   on each face, up to 6.
 - **Unused groups.** Groups that no member of the model takes (IN_Ex11 corner and perimeter columns: every corner
