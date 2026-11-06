@@ -1992,7 +1992,11 @@ def bump_splice(sp, failing):
             pl["A_mm2"] = round(need, 1)
             pl["inner_plates"] = True
             pl["note"] = "outer + inner flange plates (double shear)"
-        pl["fy_MPa"] = plate_fy(pl["t_mm"])
+        pl["fy_MPa"] = plate_fy(pl["t_mm"], pl.get("grade") or sp.get("plate_grade") or "E250")
+    w = sp.get("weld")
+    if isinstance(w, dict) and re.search(r"plate_weld", names):
+        dcw = max([d for n, d in _rows(failing) if "plate_weld" in n] + [1.05])
+        w["length_mm"] = float(math.ceil(float(w.get("length_mm") or 300.0) * dcw * 1.05 / 10.0) * 10.0)
     wp = sp.get("web_plate")
     if isinstance(wp, dict) and re.search(r"web_plate|sumMp", names):
         t0 = float(wp.get("t_mm") or 10.0)
@@ -2001,6 +2005,7 @@ def bump_splice(sp, failing):
             if wp.get(k):
                 wp[k] = round(float(wp[k]) * t1 / t0, 1)
         wp["t_mm"] = t1
+        wp["fy_MPa"] = plate_fy(t1, wp.get("grade") or sp.get("plate_grade") or "E250")
         if isinstance(sp.get("web_bolts"), dict):
             sp["web_bolts"]["n_bolts"] = int(sp["web_bolts"].get("n_bolts") or 2) + 2
     return sp
