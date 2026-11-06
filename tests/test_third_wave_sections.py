@@ -582,3 +582,22 @@ def test_local_prediction_uses_a_short_list_of_combinations_for_long_records(tmp
         AZ.register(lab)
         full = I8.member_check_is800(dict(mem, section=lab), cf, cfg=lm.cfg)
         assert abs(lm.member_dc(9, lab, None)[0] - full.get("interaction_dc", full["dc"])) < 1e-9
+
+
+def test_link_rotation_stiffens_the_braces_of_its_storey():
+    """IS 18168 12.3.3.1: the link's plastic rotation follows the storey drift, so a failing link rotation row asks the
+    braces of that link for A x ratio^2 x 1.03 (kept from then on)."""
+    AZ = _az()
+
+    class LM:
+        groups_of = {11: "br", 12: "br", 20: "lk"}
+        specs = {"br": {"role": "brace"}, "lk": {"role": "link"}}
+        s12 = (None, {"links": [{"id": "link-e20", "member_id": "e20", "brace_ids": ["e11", "e12"]}]})
+    AZ.register("HB300")
+    x = {"br": ("HB300", None), "lk": ("WB300", None)}
+    ev = {"s12_fail": [{"id": "12.3.3.1_link_rotation", "member": "link-e20", "dc": 1.032, "ok": False}]}
+    st = {}
+    req = AZ.torsion_requirements(LM(), ev, x, st)
+    A = AZ.stiffness("HB300", "A")
+    assert abs(req["br"] - round(A * 1.032 ** 2 * 1.03, 1)) < 0.2 and "lk" not in req
+    assert st["tor_req"]["br"] == req["br"]

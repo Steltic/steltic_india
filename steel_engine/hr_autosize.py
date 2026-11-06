@@ -830,6 +830,24 @@ def torsion_requirements(lm, ev, x, st):
                 req[g] = round(need, 1)
                 log("    modes %s (first three translational modes %.0f %% of the mass): %s keeps %s >= %.4g"
                     % (d, 100.0 * mass, g, kind, need))
+    # IS 18168 12.3.3.1 link rotation: the plastic rotation follows the storey drift (theta_p L / e), which no link
+    # section changes much -- the braces of those links keep A x ratio^2 x 1.03 from now on (stiffer storey)
+    links = {str(ln.get("id")): ln for ln in ((lm.s12[1].get("links") or []) if lm.s12 is not None else [])}
+    for r_ in ev.get("s12_fail") or []:
+        if "link_rotation" not in str(r_.get("id")) or not isinstance(r_.get("dc"), (int, float)) or r_["dc"] <= 1.0:
+            continue
+        ln = links.get(str(r_.get("member")))
+        if not ln:
+            continue
+        f = min(max(float(r_["dc"]) ** 2 * 1.03, 1.05), 1.35)
+        for bid in ln.get("brace_ids") or []:
+            g = lm.groups_of.get(int(str(bid).lstrip("e"))) if str(bid).lstrip("e").isdigit() else None
+            if g is None or g not in x or (lm.specs.get(g) or {}).get("role") == "fixed":
+                continue
+            need = stiffness(x[g][0], "A") * f
+            if need > req.get(g, 0.0) * 1.0001:
+                req[g] = round(need, 1)
+                log("    link rotation %s (%.3f): %s keeps A >= %.4g" % (r_.get("member"), r_["dc"], g, need))
     return {g: v for g, v in req.items()}
 
 

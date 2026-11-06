@@ -178,6 +178,9 @@ D8).
     is answered first by stiffer moment-frame beams. Stepping up the column raises its own share of the stiffness,
     and K with it.
   - Section 12 margins are kept per group and row kind, so a KL/r failure no longer tightens the Table 2 rows.
+- **EBF link rotation (IS 18168 12.3.3.1).** The link's plastic rotation follows the storey drift (θp L / e), which
+  no link section changes much. A failing rotation row asks the braces of that link for A × ratio² × 1.03, kept from
+  then on (IN_Ex19: 0.0826 against 0.08 in one storey).
 - **EBF links.** Every brace, beam outside the link, column and base is designed for the link overstrength
   1.1 Ry Vp (IS 18168 12.3.2.2 / 12.3.4.5). On IN_Ex15, links made larger for stiffness had raised it to 4.96. So:
   - links are sized for their shear and the IS 18168 link rules only, and get no stiffness step-ups;
