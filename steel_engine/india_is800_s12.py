@@ -236,6 +236,19 @@ def _brace_compression(model_data, m, families=None):
 _N_DEPENDENT_TYPES = ("I", "box")          # Table 2 web rows that take the axial force (r1 / r2, axial compression)
 
 
+def no_earthquake_record(model_data, n_records):
+    """(not_applicable, reason) of a member with no earthquake record, for the Section 12 class gates and the IS 18168
+    Table 2 (ii) Ca (review R2-1, 2026-11-06): a job that declares no_seismic (no earthquake family) has no seismic
+    detailing -- the row is not applicable and does not count as an open reason; in a job with a Section 12 seismic
+    system the member must carry earthquake combinations -- the row is not evaluated and counts (a model / cfg error)."""
+    if (model_data or {}).get("no_seismic"):
+        return True, ("no_seismic declared (no earthquake family): no Section 12 / IS 18168 seismic detailing applies -- "
+                      "not applicable")
+    return False, ("no earthquake combination among the member's %d force records in a job with a Section 12 seismic "
+                   "system: a model / cfg error -- give the member its earthquake combinations, or declare no_seismic "
+                   "with its basis" % n_records)
+
+
 def earthquake_record(f):
     """True for a force record of an earthquake combination (Steltic ruling D-T11, Section 12 gates): an IS 800
     Table 4 row with EL (the combination's lateral_kind 'EQ', section12_model_data) or a 12.2.3 / IS 18168 5.5 row."""
@@ -266,18 +279,18 @@ def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading=
         fs_all = [f for f in fs_all if (f.get("family") or "table4") in families]
     fs = [f for f in fs_all if earthquake_record(f)]
     n_not = len(fs_all) - len(fs)
-    if st not in _N_DEPENDENT_TYPES or not fs:
+    if not fs:
+        # review R2-1: no earthquake record -- the gate is not judged (not applicable under no_seismic, else not
+        # evaluated), never classified at N = 0 and passed
+        na, why = no_earthquake_record(model_data, len(fs_all))
+        return {"section_class": None}, {"class_basis": why, "reason": why, "not_applicable": na,
+                                         "web_class_basis": I8.D_T11_GATE_CITE, "n_records": len(fs_all),
+                                         "n_records_judged": 0, "n_records_not_judged": len(fs_all)}
+    if st not in _N_DEPENDENT_TYPES:
         sc = I8.section_class_table2(p, fy, welded=welded, loading=loading)
-        if st not in _N_DEPENDENT_TYPES and fs_all:
-            basis = "Table 2 rows of this section type do not take the axial force"
-        elif fs_all:
-            basis = ("no earthquake combination among the %d force records: the hinge state classified without "
-                     "axial force (mid-depth web row)" % len(fs_all))
-        else:
-            basis = "no force records: classified without axial force (mid-depth web row)"
-        return sc, {"class_basis": basis, "web_class_basis": I8.D_T11_GATE_CITE, "n_records": len(fs_all),
-                    "n_records_judged": len(fs) if st in _N_DEPENDENT_TYPES else len(fs_all),
-                    "n_records_not_judged": n_not if st in _N_DEPENDENT_TYPES else 0}
+        return sc, {"class_basis": "Table 2 rows of this section type do not take the axial force",
+                    "web_class_basis": I8.D_T11_GATE_CITE, "n_records": len(fs_all), "n_records_judged": len(fs),
+                    "n_records_not_judged": n_not}
     by, worst = {}, None
     for f in fs:
         P = float(f.get("P_N") or 0.0)
@@ -307,6 +320,16 @@ def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading=
     return sc, rec
 
 
+def _table2_column_row(m, p, fy, model_data, cite):
+    """The IS 18168 Table 2 (ii) column row with Ca from the earthquake records (_ca_governing); with no earthquake
+    record the row is not judged (ok None, the reason; not_applicable under no_seismic) -- review R2-1."""
+    Ca, ca_rec = _ca_governing(m, p, fy, model_data)
+    if Ca is None:
+        return _chk("is18168_table2_column", None, None, clause="IS 18168:2023 Table 2 / 5.3", member=m["id"], ok=None,
+                    cite=cite + "; " + CA_EQ_BASIS, **ca_rec)
+    return dict(I18.table2_check("column", p, fy, _ry(m, p)[0], Ca=Ca, member=m["id"]), cite=cite, **ca_rec)
+
+
 def brace_hinge_axis(m, p):
     """(hinge, record) of a brace for the Section 12 class gates (D-T11 gates: the hinge state): a brace's plastic
     hinge is its buckling hinge, about the axis of the larger slenderness (Kz L / rz major, Ky L / ry minor).  'major':
@@ -330,15 +353,16 @@ def _ca_governing(m, p, fy, model_data):
     """IS 18168:2023 Table 2 (ii) column web: Ca = Pu / (Py / gamma_m0) (Pu 'maximum factored axial load demand', the
     notation of IS 18168 -- |P|, as before) of each EARTHQUAKE record (earthquake_record: the Table 4 EL rows and the
     12.2.3 rows; lead ruling 2026-11-06, CA_EQ_BASIS); the web limit falls with Ca, so the record with the largest Ca
-    governs (the governing combination is reported).  No earthquake record: Ca = 0, stated.  Returns (Ca, record)."""
+    governs (the governing combination is reported).  No earthquake record: Ca None and the row is not judged
+    (no_earthquake_record, review R2-1).  Returns (Ca, record)."""
     Py = fy * p["A"] / I8.GAMMA_M0_DEFAULT
     fs_all = _forces(model_data, m.get("id"))
-    if not fs_all:
-        return 0.0, {"Ca_basis": "no force records: Ca = 0"}
     fs = [r for r in fs_all if earthquake_record(r)]            # CA_EQ_BASIS: the earthquake records only
     if not fs:
-        return 0.0, {"Ca_basis": "no earthquake combination among the %d force records: Ca = 0" % len(fs_all),
-                     "n_records": len(fs_all), "n_records_judged": 0, "n_records_not_judged": len(fs_all)}
+        # review R2-1: no earthquake record -- Ca is not formed (never 0); the Table 2 (ii) row is not judged
+        na, why = no_earthquake_record(model_data, len(fs_all))
+        return None, {"Ca_basis": why, "reason": why, "not_applicable": na, "n_records": len(fs_all),
+                      "n_records_judged": 0, "n_records_not_judged": len(fs_all)}
     f = max(fs, key=lambda f_: abs(float(f_.get("P_N") or 0.0)))
     Ca = abs(float(f.get("P_N") or 0.0)) / Py
     return Ca, {"Ca_basis": CA_EQ_BASIS,
@@ -419,11 +443,11 @@ def brace_member_checks(system, m, model_data, cfg):
     if sysn == "OCBF":
         out.append(_chk("brace_not_slender", sc["section_class"], "not slender", clause="IS 800:2007 12.7.2.4",
                         cite="plastic, compact or semi-compact, not slender", member=m["id"],
-                        ok=sc["section_class"] != "slender", **bas))
+                        ok=(sc["section_class"] != "slender") if sc["section_class"] else None, **bas))
     else:
         out.append(_chk("brace_plastic", sc_m["section_class"], "plastic", clause="IS 800:2007 12.8.2.5",
                         cite="braced cross-section shall be plastic (3.7.2)", member=m["id"],
-                        ok=sc_m["section_class"] == "plastic", **bas_m))
+                        ok=(sc_m["section_class"] == "plastic") if sc_m["section_class"] else None, **bas_m))
     An = m.get("An_mm2")
     gy_cl = "IS 800:2007 12.7.2.6" if sysn == "OCBF" else "IS 800:2007 12.8.2.7"
     if An and fu:
@@ -1230,7 +1254,8 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
             sc, bas = table2_class_by_combination(m, p, fy, model_data)
             out.append(_chk("smf_beam_class", sc["section_class"], "plastic (hinge) / compact",
                             clause="IS 800:2007 12.11.3.1", cite="plastic or compact; plastic at hinge locations",
-                            member=m["id"], ok=sc["section_class"] in ("plastic", "compact"), **bas))
+                            member=m["id"], ok=(sc["section_class"] in ("plastic", "compact")) if sc["section_class"]
+                            else None, **bas))
         Mdem = 1.2 * Mp
         cl = "IS 800:2007 12.11.2.1" if sysn == "SMF" else "IS 800:2007 12.10.2.1"
         if sysn == "OMF" and conn.get("max_deliverable_moment_Nmm"):
@@ -1692,12 +1717,13 @@ def section12_checks(system, model_data, cfg=None):
                 t2_skipped.append("%s (%s, %s)" % (m.get("id"), m.get("section"), pm.get("section_type")))
                 continue
             comp = {"brace": "brace", "column": "column", "beam": "beam"}[m["role"]]
-            Ca, ca_rec = None, {}
+            cite_t2 = ("IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
+                       % {"brace": "iii", "column": "ii", "beam": "i"}[comp])
             if comp == "column":
-                Ca, ca_rec = _ca_governing(m, pm, fym, model_data)
-            checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
-                               cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
-                                    % {"brace": "iii", "column": "ii", "beam": "i"}[comp], **ca_rec))
+                checks.append(_table2_column_row(m, pm, fym, model_data, cite_t2))
+            else:
+                checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=None, member=m["id"]),
+                                   cite=cite_t2))
             t2_done.add(m["id"])
     if t2_skipped:
         advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True,
@@ -1750,9 +1776,8 @@ def section12_checks(system, model_data, cfg=None):
                 continue
             pc = _props(mc); fyc, _ = _fy(mc, pc)
             if fyc and pc.get("section_type") in I18.TABLE2_SECTION_TYPES:
-                Ca, ca_rec = _ca_governing(mc, pc, fyc, model_data)
-                checks.append(dict(I18.table2_check("column", pc, fyc, _ry(mc, pc)[0], Ca=Ca, member=mc["id"]),
-                                   cite="12.3.4.1: columns satisfy Table 2 (ii), Ca = Pu/(Py/gamma_m0)", **ca_rec))
+                checks.append(_table2_column_row(mc, pc, fyc, model_data,
+                                                 "12.3.4.1: columns satisfy Table 2 (ii), Ca = Pu/(Py/gamma_m0)"))
         for m in _members(model_data, "brace"):
             checks += ebf_brace_checks(m, model_data, cfg)
             checks += brace_connection_checks("EBF", m, conns.get(m["id"]), model_data, cfg)

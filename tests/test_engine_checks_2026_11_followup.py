@@ -182,10 +182,11 @@ def test_DT11_gate_web_beyond_the_generally_limit_at_an_EL_combination_still_fai
     assert smf["ok"] is False and smf["value"] == "semi-compact" and smf["governing_combo"] == "1.2(DL+LL+EL)"
     assert smf["web_row"] == "generally, r1 positive" and smf["n_records_not_judged"] == 1
     assert "hinge state" in smf["web_class_basis"] and "D-T11" in smf["web_class_basis"]
-    # only wind and gravity records: no earthquake record is judged, the hinge state is classified without N
+    # only wind and gravity records: no earthquake record -- the gate is not judged and is an open item (review R2-1)
     m3, md3 = _column_md(ratios=((0.45, "table4", "1.5(DL+WL)"), (0.45, "table4", "1.5(DL+LL)")))
     g = next(c for c in S.column_checks("SMF", md3, {}) if c["id"] == "smf_column_class")
-    assert g["ok"] is True and g["value"] == "plastic" and "no earthquake combination" in g["class_basis"]
+    assert g["ok"] is None and g["value"] is None and g["not_applicable"] is False
+    assert "no earthquake combination" in g["reason"]
 
 
 def test_DT11_gate_e2e_IN_Ex4_column_failing_only_in_a_wind_record_now_passes():

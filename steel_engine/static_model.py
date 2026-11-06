@@ -1434,8 +1434,8 @@ WALL_SCAN_BASIS = (
     "wind, an interior column above the eave) is not on a wall.  Its width is half the distance to the neighbouring "
     "strips at that height, and to the neighbouring column lines of its own wall where a roof member of that wall "
     "rises over them (the gable triangle above the eave: the post keeps its own tributary width).  At a facade step "
-    "(a lean-to's end wall) a wall ends at its corner line, and a column at the re-entrant corner carries the other "
-    "half of the wall that runs into it.  The two side walls "
+    "(a lean-to's end wall) a wall ends at its corner line, and the column at the re-entrant corner carries the other "
+    "half of the wall that runs into it, piece by piece over the height each piece shares with it.  The two side walls "
     "(parallel to the wind) are scanned the same way across the wind and take the Table 5 side-wall Cpe "
     "(SIDE_WALL_CITE).  Every wall area reaches a member: where the wall plane has a sloping envelope member (gable "
     "rafter, truss top chord) each column line carries the wall area of its tributary strip up to that member, the "
@@ -1448,7 +1448,7 @@ SIDE_WALL_CITE = (
     "wall, with each +-Cpi of the pattern: F = (Cpe - Cpi) A pd (7.3.1), the width of the member's own wall and the "
     "Ka of a wind post's own area.  Table 5 gives one coefficient per wall surface (A, B, C, D) and no zones by "
     "distance from the windward edge; its only edge band, the local Cpe strip of width 0.25 w, is for cladding "
-    "(7.3.1: 'Coefficients for the local effects should only be used for calculation of forces on these local areas "
+    "(7.3: 'Coefficients for the local effects should only be used for calculation of forces on these local areas "
     "affecting roof sheeting, glass panels, and individual cladding units including their fixtures. They should not "
     "be used for calculating force on entire structural elements such as roof, walls or structure as a whole.'), so no "
     "member's tributary spans two zones.  The two side walls' suctions are equal and opposite (Table 5 has C = D at "
@@ -1480,6 +1480,7 @@ def _column_uniform_components(c, a_, F):
 
 
 _T5_FACES = {0: ("A", "B", ("C", "D")), 90: ("C", "D", ("A", "B"))}
+SIDE_WALL_MATCH_TOL = 0.05       # review R2-4: a derived pattern whose own Cpe is further than this from both angles warns
 
 
 def side_wall_pressure(cfg, pat, cols, ax):
@@ -1543,6 +1544,16 @@ def side_wall_pressure(cfg, pat, cols, ax):
     cp = tried[th]["Cpe"]
     a_, b_, sides = _T5_FACES[th]
     Cs = min(float(cp[k]) for k in sides)
+    warn = None
+    if imp is not None:
+        off = max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
+        if off > SIDE_WALL_MATCH_TOL:
+            # review R2-4: the pattern was built on other coefficients -- say so, the Table 5 side walls are an
+            # assumption here
+            warn = ("WARN: the pattern's own windward / leeward Cpe (%.3f / %.3f, from its pressures, pd and Cpi) match "
+                    "neither Table 5 wind angle (closest: theta %d, %s %.2f / %s %.2f, off by %.3f > %.2f); the side "
+                    "walls take that row's Cpe %.2f -- check the pattern or declare wall_side_kNm2"
+                    % (imp[0], imp[1], th, a_, float(cp[a_]), b_, float(cp[b_]), off, SIDE_WALL_MATCH_TOL, Cs))
     rec.update(applied=True, q_kNm2=(Cs - cpi) * pd, source="derived: Table 5 at the model geometry (the pattern "
                                                             "declares no wall_side_kNm2)",
                surfaces=list(sides), Cpe=Cs, Cpi=cpi, pd_kNm2=pd, theta_deg=th, h_over_w=round(h / w_, 4),
@@ -1550,6 +1561,8 @@ def side_wall_pressure(cfg, pat, cols, ax):
                check={"pattern_windward_Cpe": None if imp is None else round(imp[0], 4),
                       "pattern_leeward_Cpe": None if imp is None else round(imp[1], 4),
                       "table5_windward_Cpe": float(cp[a_]), "table5_leeward_Cpe": float(cp[b_])})
+    if warn:
+        rec["warning"] = warn
     return rec
 
 
@@ -1711,13 +1724,17 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
                                                                 "ends at this line"})
                         g = 0.0
                     elif (fn < xa - 1.0) if up else (fn > xa + 1.0):
-                        rc = [r for r in nbr if abs(r[3] - xa) < 1.0]
-                        if rc:
-                            ex = extra.setdefault((rc[0][0]["tag"], face), {"row": rc[0], "q": q, "fs": fs,
-                                                                           "half": [0.0, 0.0]})
-                            ex["half"][0 if side > 0 else 1] += g
-                            steps.append({"tag": rc[0][0]["tag"], "face": face, "z_mid_mm": round(zm, 1),
-                                          "side": -side, "width_mm": round(g, 1),
+                        # review R2-2: every piece of the re-entrant line takes width x the height it shares with
+                        # this piece (area), so lines split at different heights load the wall once
+                        rc = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - xa) < 1.0
+                              and min(z1, r[6]) - max(z0, r[5]) > 1.0]
+                        for r in rc:
+                            ov = min(z1, r[6]) - max(z0, r[5])
+                            ex = extra.setdefault((r[0]["tag"], face), {"row": r, "q": q, "fs": fs,
+                                                                       "area": [0.0, 0.0]})
+                            ex["area"][0 if side > 0 else 1] += g * ov
+                            steps.append({"tag": r[0]["tag"], "face": face, "z_mid_mm": round(zm, 1),
+                                          "side": -side, "width_mm": round(g, 1), "overlap_mm": round(ov, 1),
                                           "basis": "re-entrant corner column: the other half of the wall of tag %s"
                                                    % c["tag"]})
                 # the own wall: the nearest column line of the same wall plane on this side that ends below this
@@ -1740,9 +1757,11 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
             halves.append((half[0], half[1]))
     for (tag, face), ex in sorted(extra.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
         r = ex["row"]
-        if sum(ex["half"]) > 0.0:
-            pieces.append((r[0], r[1], r[2], face, ex["q"], ex["fs"], sum(ex["half"])))
-            halves.append((ex["half"][0], ex["half"][1]))
+        L_ = r[6] - r[5]
+        if sum(ex["area"]) > 0.0 and L_ > 0.0:
+            h_ = (ex["area"][0] / L_, ex["area"][1] / L_)             # the area spread over the piece's own length
+            pieces.append((r[0], r[1], r[2], face, ex["q"], ex["fs"], sum(h_)))
+            halves.append(h_)
     return {"pieces": pieces, "halves": halves, "record": {"sheltered": sheltered, "own_wall_width": widened,
                                                            "stepped_facade": steps, "basis": WALL_SCAN_BASIS}}
 

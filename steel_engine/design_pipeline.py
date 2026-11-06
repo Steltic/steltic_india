@@ -937,6 +937,22 @@ def sfrs_beam_tags(reg, info0):
     return out
 
 
+def capacity_check_entry(c):
+    """pkg['capacity_design']['checks'] entry of one Section 12 row.  Review R2-1: a row not judged for want of an
+    earthquake record says why (reason), and under no_seismic carries not_applicable -- the design status does not
+    count it as open (india_seismic_gates._screen_findings)."""
+    out = {"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"), "ok": c.get("ok"), "pass": c.get("ok"),
+           "clause": c.get("clause"), "cite": c.get("cite"), "found": c.get("ok") is not None}
+    if c.get("sense"):
+        out["sense"] = c["sense"]
+    if c.get("ok") is None and "not_applicable" in c:
+        if c.get("reason"):
+            out["reason"] = c["reason"]
+        if c.get("not_applicable"):
+            out["not_applicable"] = True
+    return out
+
+
 def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, info0, run=None):
     """model_data for india_is800_s12.section12_checks (see its module docstring): members with the declared
     connection / base geometry (india_connection_design), per-combination forces tagged by family, joints, bases,
@@ -1079,6 +1095,8 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
             fl += ts
         forces[mid] = fl
     md = {"members": members, "forces": forces,
+          # review R2-1: a job with no earthquake family -- its gates and Ca rows are not applicable (not open)
+          "no_seismic": bool(cfg.get("no_seismic")),
           "combos_12_2_3_present": any("is800_12_2_3" in v for v in tagof.values()),
           "combos_is18168_5_5_present": any("is18168_5_5" in v for v in tagof.values())}
     # declared connections / bases (india_connection_design)
@@ -1489,6 +1507,9 @@ def design_india(name, cfg, outdir):
         pkg["member_wind_wall_scan"] = {
             "basis": next((v.get("basis") for v in _mww.values() if v.get("basis")), None),
             "side_wall_basis": _SMw.SIDE_WALL_CITE, "envelope_residual_basis": _SMw.ENVELOPE_RESIDUAL_BASIS,
+            # review R2-4: a hand-built pattern whose own Cpe match neither Table 5 wind angle
+            "warnings": sorted({"%s: %s" % (k, (v.get("side_walls") or {}).get("warning")) for k, v in _mww.items()
+                                if (v.get("side_walls") or {}).get("warning")}),
             "patterns": {str(k): {"sheltered": v.get("sheltered") or [], "own_wall_width": v.get("own_wall_width") or [],
                                   "side_walls": v.get("side_walls"), "side_sheltered": v.get("side_sheltered") or [],
                                   "side_own_wall_width": v.get("side_own_wall_width") or [],
@@ -1650,11 +1671,7 @@ def design_india(name, cfg, outdir):
         s12 = S12.section12_checks(cfg.get("system"), md, s12_cfg)
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12": _jsonable(s12),
                                   "checks": {c.get("id", "c%d" % i) + ("@" + str(c.get("member")) if c.get("member") else ""):
-                                             dict({"value": c.get("value"), "limit": c.get("limit"), "dc": c.get("dc"),
-                                                   "ok": c.get("ok"), "pass": c.get("ok"), "clause": c.get("clause"),
-                                                   "cite": c.get("cite"), "found": c.get("ok") is not None},
-                                                  **({"sense": c["sense"]} if c.get("sense") else {}))
-                                             for i, c in enumerate(s12.get("checks") or [])}}
+                                             capacity_check_entry(c) for i, c in enumerate(s12.get("checks") or [])}}
     except ImportError as ex:
         s12 = {"checks": []}
         pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "checks": {},

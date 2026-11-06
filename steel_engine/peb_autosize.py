@@ -1345,7 +1345,9 @@ class LocalModel:
                     fy = fy_of(s_, grade)
                     ry = S12._ry({"grade": grade}, p)[0]
                     Ca = self._Ca(c, s_, fy) if comp == "column" else None
-                    r = I18.table2_check(comp, p, fy, ry, Ca=Ca)
+                    # review R2-1: a column with no earthquake record has no Ca (never 0) -- the screen does not judge
+                    # it; the full run reports the row not evaluated / not applicable
+                    r = I18.table2_check(comp, p, fy, ry, Ca=Ca) if (comp != "column" or Ca is not None) else {}
                     if r.get("ok") is False:
                         out = (False, "IS 18168 Table 2 (%s %s)" % (comp, r.get("value")))
                         break
@@ -1353,7 +1355,7 @@ class LocalModel:
                     # (india_is800_s12.table2_class_by_combination): D-T11 for the gates, the hinge state of each
                     # earthquake record
                     sc = self._class_with_N(c, p, fy)
-                    if sc not in ("plastic", "compact"):
+                    if sc is not None and sc not in ("plastic", "compact"):
                         out = (False, "IS 800 12.11.3.1 %s not compact" % s_)
                         break
         self._t2_cache[key] = out
@@ -1371,7 +1373,7 @@ class LocalModel:
         """The least favourable IS 800 Table 2 class of section p for the 12.11.3.1 screen, as the full run's Section 12
         gate (india_is800_s12.table2_class_by_combination, Steltic ruling D-T11 for the gates): over the earthquake
         records of constituent c only, each in the hinge state -- the 'generally' web rows with its N (tension + in
-        the records); no earthquake record: without axial force."""
+        the records); no earthquake record: None (not judged, review R2-1 -- never the N = 0 class)."""
         import india_is800 as I8
         order = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
         eq = self._eq_labels()
@@ -1385,20 +1387,21 @@ class LocalModel:
                     cls = I8.section_class_table2(p, fy, P_N=P, welded=True, axial_only=False)["section_class"]
                     if order.get(cls, 0) > order.get(worst, 0):
                         worst = cls
-        return worst or I8.section_class_table2(p, fy, welded=True)["section_class"]
+        return worst
 
     def _Ca(self, c, sec, fy):
         """IS 18168 Table 2 (ii) Ca of the screen, as the full run (india_is800_s12._ca_governing, CA_EQ_BASIS): the
-        largest |P| of the earthquake records of constituent c over Py / gamma_m0."""
+        largest |P| of the earthquake records of constituent c over Py / gamma_m0; None with no earthquake record
+        (review R2-1: never 0)."""
         import sections as S
         eq = self._eq_labels()
-        P = 0.0
+        P, seen = 0.0, False
         for mid in self.mem_of_const.get(c) or []:
             for t in self.el_of_mem[mid]:
                 for lab, r in (self.envt.get(t, {}).get("records") or {}).items():
                     if lab in eq:
-                        P = max(P, abs(float(r[0])))
-        return P / (fy * float(S.props(sec)["A"]) / 1.10)
+                        P, seen = max(P, abs(float(r[0]))), True
+        return P / (fy * float(S.props(sec)["A"]) / 1.10) if seen else None
 
     # ------------------------------------------------------------------ global predictors
     def _globals(self):

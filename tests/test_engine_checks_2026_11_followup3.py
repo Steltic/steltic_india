@@ -294,7 +294,7 @@ def test_Ca_from_the_earthquake_records_only():
     """Lead ruling (2026-11-06): IS 18168 Table 2 (ii) Ca = Pu / (Py / gamma_m0) is the axial ratio at the seismic
     ductility demand -- taken from the earthquake records only (the Table 4 EL rows and the 12.2.3 rows), as the
     Section 12 gates.  A member whose largest Pu (0.6 Py) is a wind record: Ca 0.3, from its Table 4 EL row; with
-    wind and gravity records only, Ca = 0, stated."""
+    wind and gravity records only, Ca is not formed (None, never 0: review R2-1)."""
     import india_is800_s12 as S12
     m, p, md = _ca_md([(0.6, "table4", "W", "1.5(DL+WL)"), (0.3, "table4", "EQ", "1.2(DL+LL+EL)"),
                        (0.2, "12.2.3", "EQ", "1.2DL+0.5LL+2.5EL"), (0.5, "table4", None, "1.5(DL+LL)")])
@@ -304,7 +304,7 @@ def test_Ca_from_the_earthquake_records_only():
     assert rec["Ca_basis"] == S12.CA_EQ_BASIS and "ductility" in rec["Ca_basis"]
     m2, p2, md2 = _ca_md([(0.6, "table4", "W", "1.5(DL+WL)"), (0.5, "table4", None, "1.5(DL+LL)")])
     Ca2, rec2 = S12._ca_governing(m2, p2, 250.0, md2)
-    assert Ca2 == 0.0 and "no earthquake combination" in rec2["Ca_basis"]
+    assert Ca2 is None and "no earthquake combination" in rec2["Ca_basis"] and rec2["not_applicable"] is False
 
 
 def test_Ca_e2e_IN_Ex20_column_whose_largest_Pu_is_a_wind_record():
@@ -347,3 +347,112 @@ def test_Ca_sizer_screen_from_the_earthquake_records_only():
     sec = "NPB600X220X107.57"
     A = float(S.props(sec)["A"])
     assert PA.LocalModel._Ca(_Stub(), "c", sec, 250.0) == pytest.approx(5.0e4 / (250.0 * A / 1.10))
+
+
+
+# ====================================================================================================== review R2-1
+def _noeq_md(kind, no_seismic=False):
+    """The reviewer's noeq_probe.py member: NPB600X220X107.57, fy 250, P = 0.45 Py, Mz 200 kN-m, in one record."""
+    import sections as SS
+    p = SS.props("NPB600X220X107.57")
+    Py = p["A"] * 250.0 / 1.10
+    rec = {"EQ": dict(combo="1.2DL+1.2LL+1.2EQ_X", family="table4", lateral_kind="EQ"),
+           "W": dict(combo="1.5DL+1.5W_X", family="table4", lateral_kind="W"),
+           "G": dict(combo="1.5DL+1.5LL", family="table4", lateral_kind=None)}[kind]
+    m = {"id": "c1", "role": "column", "section": "NPB600X220X107.57", "grade": "E250BR", "L_mm": 4000.0}
+    md = {"members": [m], "forces": {"c1": [dict(rec, member="c1", P_N=0.45 * Py, Mz_i_Nmm=200e6, Mz_j_Nmm=200e6)]}}
+    if no_seismic:
+        md["no_seismic"] = True
+    return m, p, md
+
+
+def _status_reasons(rows):
+    import design_pipeline as DP
+    import india_seismic_gates as G
+    pkg = {"capacity_design": {"checks": {"%s@%s" % (r["id"], r["member"]): DP.capacity_check_entry(r) for r in rows}}}
+    return [x for x in G._screen_findings(pkg, {}) if x.startswith("capacity_design")]
+
+
+@pytest.mark.parametrize("kind", ["W", "G"])
+def test_R2_1_no_earthquake_record_in_a_seismic_job_is_not_evaluated_and_open(kind):
+    """Review R2-1, the reviewer's noeq_probe.py: with an earthquake record the 12.11.3.1 gate judges it (semi-compact,
+    fails) and Ca = 0.45; with only a wind or a gravity record, in a job with a Section 12 system, the gate is not judged
+    (ok None) and Ca is not formed (never 0) -- both rows not evaluated, each an open reason with a plain message."""
+    import india_is800_s12 as S12
+    m, p, md = _noeq_md("EQ")
+    sc, bas = S12.table2_class_by_combination(m, p, 250.0, md)
+    assert sc["section_class"] == "semi-compact" and S12._ca_governing(m, p, 250.0, md)[0] == pytest.approx(0.45)
+    m, p, md = _noeq_md(kind)
+    sc, bas = S12.table2_class_by_combination(m, p, 250.0, md)
+    assert sc["section_class"] is None and bas["not_applicable"] is False and bas["n_records_judged"] == 0
+    Ca, rec = S12._ca_governing(m, p, 250.0, md)
+    assert Ca is None and rec["not_applicable"] is False
+    gate = next(c for c in S12.column_checks("SMF", md, {}) if c["id"] == "smf_column_class")
+    t2 = S12._table2_column_row(m, p, 250.0, md, "IS 18168:2023 5.3")
+    assert gate["ok"] is None and t2["ok"] is None and t2["id"] == "is18168_table2_column" and t2.get("Ca") is None
+    reasons = _status_reasons([gate, t2])
+    assert len(reasons) == 2 and all("not evaluated: no earthquake combination" in r for r in reasons)
+
+
+def test_R2_1_no_seismic_job_marks_the_gates_not_applicable():
+    """Review R2-1: a job declaring no_seismic (no earthquake family) has no seismic detailing -- the gate and the
+    Table 2 (ii) row are not applicable (ok None, stated) and are not open reasons in the design status."""
+    import india_is800_s12 as S12
+    m, p, md = _noeq_md("W", no_seismic=True)
+    gate = next(c for c in S12.column_checks("SMF", md, {}) if c["id"] == "smf_column_class")
+    t2 = S12._table2_column_row(m, p, 250.0, md, "IS 18168:2023 5.3")
+    assert gate["ok"] is None and gate["not_applicable"] is True and "no_seismic" in gate["reason"]
+    assert t2["ok"] is None and t2["not_applicable"] is True
+    assert _status_reasons([gate, t2]) == []
+    # brace and beam gates take the same rule
+    b = {"id": "b1", "role": "brace", "section": "NPB600X220X107.57", "grade": "E250BR", "L_mm": 5000.0}
+    mdb = {"members": [b], "no_seismic": True, "forces": {"b1": [dict(md["forces"]["c1"][0], member="b1")]}}
+    row = next(c for c in S12.brace_member_checks("OCBF", b, mdb, {}) if c["id"] == "brace_not_slender")
+    assert row["ok"] is None and row["not_applicable"] is True
+
+
+@pytest.mark.parametrize("variant", ["lean_to_column_split", "hall_column_one_piece"])
+def test_R2_2_facade_step_with_offset_splits_loads_the_wall_once(variant):
+    """Review R2-2 (the reviewer's step_probe.py on IN_Ex9's geometry): the re-entrant column's share is width x the
+    height each piece of the stepped wall's line shares with it, spread over its own length.  Before, the lean-to
+    corner column split at 2.5 m doubled the re-entrant width (+Y face 318 m2), and a hall column in one piece 0-8 m
+    took the 6 m width over 8 m (306 m2).  Now both faces are 288 m2 in every variant."""
+    import copy
+    import static_model as SM
+    fx = copy.deepcopy(_fixture("IN_Ex9_wall_wind_geometry.json"))
+    if variant == "lean_to_column_split":
+        c17 = next(c for c in fx["cols"] if c["tag"] == 17)
+        fx["cols"] = [c for c in fx["cols"] if c["tag"] != 17] + [dict(c17, c2=[0.0, 30000.0, 2500.0]),
+                                                                   dict(c17, tag=9017, c1=[0.0, 30000.0, 2500.0])]
+    else:
+        c18 = next(c for c in fx["cols"] if c["tag"] == 18)
+        fx["cols"] = [c for c in fx["cols"] if c["tag"] not in (18, 19)] + [dict(c18, c2=[12000.0, 30000.0, 8000.0])]
+    cols = []
+    for c in fx["cols"]:
+        c1, c2 = c["c1"], c["c2"]
+        cols.append((c, c1, c2, 0.5 * (c1[1] + c2[1]), round(0.5 * (c1[0] + c2[0]), 3), min(c1[2], c2[2]),
+                     max(c1[2], c2[2])))
+    env = [tuple(map(tuple, e)) for e in fx["envelope"]]
+    scan = SM.wall_wind_pieces(cols, env, 1, 1.0, (("up", 1.0, 1.0), ("down", 1.0, -1.0)), fx["SX"])
+    res = SM.envelope_residuals(scan["pieces"], scan["halves"], env, 1)
+    tot = {}
+    for i, (c, c1, c2, face, q, fs, w) in enumerate(scan["pieces"]):
+        tot[face] = tot.get(face, 0.0) + w * abs(c2[2] - c1[2]) + res.get(i, 0.0)
+    assert tot["up"] / 1e6 == pytest.approx(288.0, abs=0.01) and tot["down"] / 1e6 == pytest.approx(288.0, abs=0.01)
+    rc = [(w, abs(c2[2] - c1[2])) for (c, c1, c2, face, q, fs, w) in scan["pieces"]
+          if face == "down" and abs(c1[0] - 12000.0) < 1.0 and abs(c1[1] - 30000.0) < 1.0]
+    assert sum(w * L for w, L in rc) / 1e6 == pytest.approx(30.0, abs=1e-6)        # the lean-to end wall's 6 x 5 m
+
+
+def test_R2_4_derived_side_wall_warns_when_the_pattern_matches_neither_angle():
+    """Review R2-4: a hand-built pattern built on other coefficients (its own Cpe +0.9 / -0.6 imply neither Table 5
+    angle on IN_Ex6's plan) gets the Table 5 side walls with a WARN in the record; IN_Ex6's own patterns do not."""
+    import static_model as SM
+    pd, cpi = 0.9256, 0.5
+    cols = _box_cols(18000.0, 32000.0, 9000.0, 3, 4)
+    odd = {"name": "W1", "wind_axis": "X", "wall_windward_kNm2": (0.9 - cpi) * pd, "wall_leeward_kNm2": (-0.6 - cpi) * pd,
+           "Cpi": cpi, "pd_kNm2": pd}
+    r = SM.side_wall_pressure({}, odd, cols, 0)
+    assert r["applied"] and r["warning"].startswith("WARN") and "neither Table 5 wind angle" in r["warning"]
+    ok = dict(odd, wall_windward_kNm2=(0.7 - cpi) * pd, wall_leeward_kNm2=(-0.25 - cpi) * pd)
+    assert "warning" not in SM.side_wall_pressure({}, ok, cols, 0)

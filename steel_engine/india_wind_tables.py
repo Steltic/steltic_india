@@ -1066,7 +1066,7 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
     src90 = walls90.get("resolved_via") if isinstance(walls90, dict) else None
     # side walls (lead ruling on open point 1, 2026-11-06): the two walls parallel to the wind take their Table 5
     # Cpe -- C / D at theta = 0, A / B at theta = 90 -- one average coefficient per wall (Table 5 has no zones by
-    # distance; the 0.25 w local strip is for cladding, 7.3.1); the larger suction when the two differ
+    # distance; the 0.25 w local strip is for cladding, 7.3); the larger suction when the two differ
     side0 = {k: wc.get(k) for k in ("C", "D") if wc.get(k) is not None}
     side90 = {k: wc90.get(k) for k in ("A", "B") if wc90.get(k) is not None}
     Cs0 = min(side0.values()) if side0 else None
@@ -1077,7 +1077,7 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
                 "side": {"surfaces": sorted(side), "Cpe": min(side.values()) if side else None,
                          "Cpe_by_surface": dict(side)},
                 "cite": "IS 875 (Part 3):2015 Table 5 (7.3.3.1): one average Cpe per wall surface; the local 0.25 w "
-                        "strip is for cladding only (7.3.1)"}
+                        "strip is for cladding only (7.3)"}
     pats = []
     for s_cpi in (+cpi, -cpi):
         # theta = 0: wind normal to the ridge (E/F windward slope, G/H leeward)
