@@ -42,6 +42,9 @@ D8).
   - Proof: IN_Ex13 run with PYTHONHASHSEED 1 and 2 gives byte-identical `calc_package.json`, csv and md files and
     `report.html`. Before the fix there were 86 differences.
   - The printed tie labels can differ from the published golds; no ratio changes.
+  - Since PR #32 (merged here at 56909e3), the member checks see every combination in the order of the records
+    (`design_pipeline.member_check_records`; `_top_records` is now an alias), so the property holds by
+    construction. The merge took main's version of that block.
 - Test: `tests/test_third_wave_sections.py`, run in subprocesses with four hash seeds.
 - **Shared frame builder (`frame_build.py`, lead request 2026-11-01, found by the CFS agent).** The moment lines
   were read from a set, so a column on both an X and a Y moment line took the orientation of whichever line the hash
@@ -246,4 +249,75 @@ D8).
 
 ## Results
 
-(see the tables below; filled from the final runs)
+Final pass on main 56909e3 (PR #31 MSME, PR #32 engine-check fix). Every job was run on the SECT gold copies
+(`/home/claude/wt/SECT/gold/jobs_hr`) with PYTHONHASHSEED 0, and its report built. "Old" is the published gold as
+published (`/home/claude/gold/jobs_hr`). kg/m² is the engine's take-off of the analysis members per m² of floor;
+connections are not included.
+
+| Job | kg/m² old → new | change | worst strength ratio old → new (governing, new) | drift / wind ratio, new | status old → new |
+|---|---|---|---|---|---|
+| IN_Ex7 | 73.79 → 64.90 | -12.0 % | 0.953 → 0.945 (lateral_col-BOX500X500X14, IS 800 9.3 interaction / mem) | 0.141 / 0.712 | complete → complete |
+| IN_Ex8 | 72.06 → 55.56 | -22.9 % | 0.804 → 0.861 (roof-WI550X275X18X14, IS 800 9.3 interaction / mem) | 0.084 / 0.261 | complete → complete |
+| IN_Ex9 | 52.81 → 74.76 | +41.6 % | 0.810 → 0.811 (roof-WI500X325X22X12, IS 800 9.3 interaction / mem) | 0.062 / 0.073 | complete → complete |
+| IN_Ex10 | 29.56 → 26.33 | -10.9 % | 0.920 → 0.935 (roof-WI300X175X12X8, IS 800 9.3 interaction / mem) | 0.020 / 0.014 | complete → complete |
+| IN_Ex11 | 42.36 → 31.92 | -24.6 % | 0.947 → 0.943 (gravity_col-HB250, IS 800 9.3 interaction / mem) | 0.341 / 0.096 | complete → complete |
+| IN_Ex11 workshop | 50.01 → 35.28 | -29.5 % | 0.947 → 0.935 (floor-WB600, IS 800 9.3 interaction / mem) | 0.043 / 0.056 | complete → complete |
+| IN_Ex12 | 63.79 → 54.84 | -14.0 % | 0.984 → 0.941 (floor-WI800X300X16X8, IS 800 9.3 interaction / mem) | 0.892 / 0.220 | complete → complete |
+| IN_Ex12 unitB_link | 64.52 → 50.08 | -22.4 % | 0.984 → 0.941 (floor-WI800X300X16X8, IS 800 9.3 interaction / mem) | 0.726 / 0.164 | complete → complete |
+| IN_Ex12 unitC_gym | 116.36 → 112.55 | -3.3 % | 0.960 → 0.736 (roof-WI1000X225X16X10, IS 800 9.3 interaction / mem) | 0.083 / 0.083 | complete → complete |
+| IN_Ex13 | 58.07 → 73.76 | +27.0 % | 0.970 → 0.949 (roof-MB300, IS 800 9.3 interaction / mem) | 0.040 / 0.008 | complete → complete |
+| IN_Ex14 | 69.43 → 51.75 | -25.5 % | 0.864 → 0.975 (brace-WI250X250X16X8, IS 800 9.3 interaction / mem) | 0.233 / 0.039 | complete → complete |
+| IN_Ex15 | 66.20 → 54.99 | -16.9 % | 0.999 → 0.945 (floor-WI550X325X22X14, IS 800 9.3 interaction / mem) | 0.300 / 0.064 | complete → complete |
+| IN_Ex16 | 74.49 → 58.19 | -21.9 % | 0.774 → 0.937 (floor-WI550X225X18X14, IS 800 9.3 interaction / mem) | 0.848 / 0.784 | complete → complete |
+| IN_Ex17 | 62.43 → 50.72 | -18.8 % | 0.932 → 0.945 (gravity_col-BOX350X350X10, IS 800 9.3 interaction / mem) | 0.536 / 0.154 | complete → complete |
+| IN_Ex18 | 79.91 → 82.70 | +3.5 % | 0.889 → 0.918 (gravity_col-WB600X145.06, IS 800 9.3 interaction / mem) | 0.897 / 0.542 | complete → complete |
+| IN_Ex19 | 87.98 → 87.98 | +0.0 % | 0.972 → 0.972 (floor-WPB400X300X155.26, IS 800 9.3 interaction / mem) | 0.362 / 0.080 | complete → complete |
+| IN_Ex19 stem | 105.29 → 79.68 | -24.3 % | 0.947 → 0.983 (floor-WI550X275X18X14, IS 800 9.3 interaction / mem) | 0.332 / 0.137 | complete → complete |
+| IN_Ex20 | 88.29 → 91.00 | +3.1 % | 0.967 → 0.942 (lateral_col-BOX250X250X22, IS 800 9.3 interaction / mem) | 0.307 / 0.470 | complete → complete |
+
+Reading the table:
+- **Every job and unit is COMPLETE with 0 reasons** on the fixed engine.
+- **IN_Ex6** keeps its sections. Its cfg now takes `fy_is2062` and it stays COMPLETE.
+- **Lighter:** the Indian families save weight on most jobs, between 3 % and 30 %.
+- **Heavier:**
+  - IN_Ex9 (+41.6 %): the SMF portal columns become welded boxes, BOX600X600X32 in place of WPB600X300X211.92. No
+    IS 808 rolled section passed the SMF Table 2 limits, the IS 18168 7.2 column KL/r and the torsion and
+    mode-separation checks of this Zone IV shed together. The lean-to columns go to WB600 sections.
+  - IN_Ex13 (+27.0 %): the SCBF braces. The lightest IS 808 rolled E250 brace that meets the IS 18168 brace limits
+    (owner decision 1) is HB450X92.19, in place of WPB200X200X50.92, in every bay and storey.
+  - IN_Ex18 (+3.5 %) and IN_Ex20 (+3.1 %).
+- **IN_Ex19**: see below.
+
+**Final-pass moves.** Each job's SOLUTION.md lists its own moves under "Final pass on the fixed engine". Tags are those
+of `CHANGES_2026-11-engine-checks.md`.
+- Moved for an engine fix:
+  - IN_Ex8 rafter (A: the hogging extreme of the uplift combination, 0.895 → 1.107);
+  - IN_Ex10 braced-bay columns (B, with SW and R1: 0.873 → 1.114);
+  - IN_Ex14 storey 6–8 braced-bay columns and IN_Ex20 cl_5 / ch_5 (G: SCBF columns plastic in the hinge state of
+    the earthquake combinations, 4 and 6 rows). On IN_Ex20 the monotone-stack and soft-storey rules carry the move
+    down to cl_4 / cl_3 and brace_1.
+- Moved for weight, with nothing failing (re-size): IN_Ex12, IN_Ex14 (beams and braces), IN_Ex15 and the IN_Ex19
+  stem, through the least-overstrength link rule and the three- or four-line fin plates.
+- Moved for a connection that cannot fit: the IN_Ex8 eave strut WB150 → MB225 (a sizer rule, not an engine move).
+- Rose but still pass: IN_Ex7 end-frame columns 0.687 → 0.928 (SW, with the gable triangle); gravity WB600 columns of
+  IN_Ex17 / Ex18 / Ex19 stem (R1); the IN_Ex8 ordinary frame's roof 0.743 → 0.988 (B / R1).
+- The other jobs pass on the fixed engine as sized in the first pass.
+
+**Panel-zone doublers.** Every doubler states its grade.
+- IN_Ex12: E350 B0 (all three doubler specs sit on E350 box columns).
+- IN_Ex9, IN_Ex12 unit B / unit C, IN_Ex16 and IN_Ex18: E250 B0. They pass at their own grade (PZ).
+
+**Gold cfg helpers.** The hand-coded IS 2062 bands now call `fy_is2062` (sandbox tool `tools/fy_helpers.py`):
+- IN_Ex6 (1 helper), IN_Ex8 (2) and its ordinary-frame copy (2), IN_Ex11 (1) and the workshop (1);
+- IN_Ex14 (1), IN_Ex15 (2), IN_Ex16 (5), IN_Ex17 (4), IN_Ex18 (3), IN_Ex20 (1);
+- IN_Ex19 (3) and the stem (3).
+
+No hand-coded band is left in Ex6–Ex20. The IN_Ex13 gusset literal (20 mm at 240) is inside the band.
+
+**IN_Ex8 cost of compliance** (`compliance_comparison.json`): SMRF 55.56 kg/m² against an ordinary frame at 41.85, a
+difference of 13.71 kg/m² (+32.8 %). Wind governs the shed.
+
+**Reports.** The leak scan (`report_public.leaks`) finds nothing in the 19 SECT reports (IN_Ex6–Ex20 and the four
+units). The published set has one hit, the IN_Ex17 raw dict, which is fixed here.
+
+**HR suite** (this branch, merged main 56909e3): **1,366 passed, 5 skipped** (`pytest -q tests/`).
