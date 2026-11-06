@@ -297,3 +297,118 @@ def test_G1_PEB_station_checks_record_the_worst_strength_station():
     assert rows[0]["dc"] == pytest.approx(sw["interaction_dc"]) and "e5, station j (NPB400X180X57.38)" in rows[0]["name"]
     assert wst["strength_worst"]["where"] == "station j (NPB400X180X57.38)"
     assert max(r["dc"] for r in rows) == pytest.approx(res["dc"])
+
+
+# ============================================================================================================= C-1
+def _member_wind_pkg():
+    """A package as a member-wind job writes it: the wall scan record of IN_Ex9's geometry (its facade steps, so the
+    keys stepped_facade / side_stepped_facade and the scan's basis sentence with 'tributary'), a wind post Ka record
+    (tributary_width_mm), the 7.6.4 record echoing the declared label -- and no step transfer or diaphragm
+    distribution designed."""
+    import static_model as SM
+    fx = _fixture("IN_Ex9_wall_wind_geometry.json")
+    tot, by, sc = _scan(fx, 1)
+    assert sc["record"]["stepped_facade"]
+    pat = {"stepped_facade": sc["record"]["stepped_facade"], "side_stepped_facade": [], "height_bands": [],
+           "members": [], "envelope_residual": []}
+    return {"members": [], "unit_system": "N-mm",
+            "connections": [{"id": "base-C1", "type": "base_plate", "DC": 0.61, "checks": [{"name": "bearing", "dc": 0.61}]},
+                            {"id": "step-tie-L2 (declared)", "type": "step_tie", "note": "to be designed"}],
+            "member_wind_wall_scan": {"basis": SM.WALL_SCAN_BASIS, "patterns": {"WM0+": pat}},
+            "wind_post_Ka": [{"column_line": "A", "tributary_width_mm": 6000.0, "factor": 1.02}],
+            "diaphragm_7_6_4": {"declared": "semi-rigid", "classification": "semi-rigid", "ok": True},
+            "capacity_design": {"checks": {"smf_scwb@C1": {"value": 1.4, "limit": 1.0, "dc": 0.71, "ok": True}}}}
+
+
+def test_C1_drift_exempt_stories_flagged_in_a_package_with_stepped_facade():
+    """The coordinator's regression: since bca766e every member-wind package holds 'stepped_facade', and the
+    drift_exempt_stories rule searched the whole package text for 'step', so it could not fire.  Now it reads the
+    designed records: a declared, undesigned step tie and the wall scan's keys do not clear it; a designed
+    connection or capacity-design check labelled step / split-level / inter-diaphragm / offset does.  The US twin
+    (_design_basis_issues) takes the same rule."""
+    import json
+    import consistency as CC
+    pkg = _member_wind_pkg()
+    assert "step" in json.dumps(pkg).lower()                       # the text that cleared the rule before
+    cfg = {"system": "SMF", "drift_exempt_stories": {"2": "split-level inter-diaphragm offset, step ties designed"}}
+    hit = lambda iss: [i for i in iss if "drift_exempt_stories" in i]
+    assert len(hit(CC._india_design_basis_issues(cfg, pkg))) == 1
+    assert len(hit(CC._design_basis_issues(dict(cfg, seis={}), None, pkg))) == 1
+    designed = dict(pkg, connections=pkg["connections"] + [
+        {"id": "split-level step tie L2", "type": "step_tie", "DC": 0.74, "checks": [{"name": "tie tension", "dc": 0.74}]}])
+    assert hit(CC._india_design_basis_issues(cfg, designed)) == []
+    assert hit(CC._design_basis_issues(dict(cfg, seis={}), None, designed)) == []
+    cd = dict(pkg, capacity_design={"checks": {"inter_diaphragm_shear@L2": {"value": 120.0, "limit": 200.0, "dc": 0.6}}})
+    assert hit(CC._india_design_basis_issues(cfg, cd)) == []
+    # a crane 'stepped column' is not a step transfer
+    crane = dict(pkg, connections=[{"id": "stepped column seat", "type": "crane_seat", "DC": 0.5, "checks": [{}]}])
+    assert len(hit(CC._india_design_basis_issues(cfg, crane))) == 1
+
+
+def test_C1_flexible_or_semi_rigid_diaphragm_needs_a_recorded_distribution():
+    """The diaphragm rule found 'tributary' in every member-wind package (the wall scan's basis, a wind post's
+    tributary width) and 'semi-rigid' in the 7.6.4 record's echo of the declaration.  It now reads the recorded
+    distribution: the 7.6.4 line shears / rigid-vs-tributary / flexible run, a Table 5(ii) run, or the collectors'
+    flexible levels."""
+    import consistency as CC
+    pkg = _member_wind_pkg()
+    hit = lambda iss: [i for i in iss if "diaphragm" in i and "7.6.4" in i]
+    for dia in ("flexible", "semi-rigid"):
+        assert len(hit(CC._india_design_basis_issues({"system": "SMF", "diaphragm": dia}, pkg))) == 1, dia
+    for rec in ({"diaphragm_7_6_4": {"flexible": True, "line_shears": {"lines": {"X": [0.0, 60000.0]}}}},
+                {"seismic_analysis": {"flexible_diaphragm_run": True}},
+                {"collectors": {"flexible_levels": [1]}}):
+        assert hit(CC._india_design_basis_issues({"system": "SMF", "diaphragm": "flexible"}, dict(pkg, **rec))) == []
+    # an error record is not a distribution
+    err = dict(pkg, diaphragm_7_6_4={"line_shears": {"x": 1}, "error": "no lines"})
+    assert len(hit(CC._india_design_basis_issues({"system": "SMF", "diaphragm": "flexible"}, err))) == 1
+
+
+def test_C1_consultancy_guards_read_their_records():
+    """Ponding, composite, seismic joint and snow drift: words in notes, cites, stub labels or record keys no longer
+    clear the guards; the records they mean do."""
+    import consistency as CC
+    roof = {"id": "roof-NPB400", "inputs": {"role": "roof", "length_mm": 15000.0}, "DC": 0.5, "checks": []}
+    base = dict(_member_wind_pkg(), members=[roof],
+                load_plan={"retrieval": [{"quote": "ponding of rain water on flat roofs ..."}]},
+                drift_table=[{"storey": 1, "clause": "IS 1893 7.11.1.1 storey drift", "dc": 0.4}],
+                notes="studs, camber and the wet-concrete stage: scope to follow; pounding by others")
+    iss = lambda cfg, pkg: CC._consultancy_issues(cfg, pkg)
+    has = lambda cfg, pkg, w: any(w in i for i in iss(cfg, pkg))
+    # ponding: the screen record clears it
+    assert has({}, base, "ponding")
+    assert not has({}, dict(base, ponding={"clause": "IS 875 (Part 4):2021 4.4", "ok": True, "value": 20.0,
+                                           "limit": 60.0}), "ponding")
+    # composite: no worksheet and no scope -> flagged; honest stubs or a recorded scope clear it
+    comp = {"floor_system": "composite deck on steel beams"}
+    assert has(comp, base, "COMPOSITE")
+    import india_is800 as I8
+    stubs = dict(base, composite_design={"status": "stubs", "chI_worksheet": I8.composite_is11384_worksheet_stubs({})})
+    assert not has(comp, stubs, "COMPOSITE")
+    assert not has(dict(comp, composite_scope="bare_steel"), base, "COMPOSITE")
+    # seismic joint: a 7.11.3 separation record or a recorded decision
+    twin = {"arch": "twin tower offices"}
+    assert has(twin, base, "seismic-joint")
+    assert not has(twin, dict(base, deformation_compatibility={"separation": [{"unit": "A", "value": 80.0,
+                                                                                "limit": 100.0}]}), "seismic-joint")
+    assert not has(dict(twin, seismic_joint={"decision": "connected", "basis": "one diaphragm"}), base, "seismic-joint")
+    # snow drift at a step: the snow summary's drift record (IN_Ex9's form), not the storey-drift rows
+    snow = {"arch": "stepped roof hall", "snow": 1.2}
+    assert has(snow, base, "DRIFT surcharge")
+    lp = dict(base["load_plan"], snow_summary={"drift": {"h_m": 3.0, "s_max_kNm2": 2.4}})
+    assert not has(snow, dict(base, load_plan=lp), "DRIFT surcharge")
+
+
+def test_C1_US_capacity_design_guards_read_computed_records():
+    """The US path's capacity-design guards (per-system required checks, skewed frames) read the computed check
+    records -- not notes or the labels of records without a number."""
+    import consistency as CC
+    note = {"capacity_design": {"note": "SCWB, panel zone doubler and biaxial interaction to follow",
+                                "smf_scwb": {"status": "pending"}}}
+    sys_ = lambda pkg: [i for i in CC._system_checks_issues({"system": "SMF"}, pkg) if "requires check" in i]
+    assert len(sys_(note)) == 2
+    done = {"capacity_design": {"checks": {"smf_scwb@C1": {"dc": 0.8}, "panel_zone@J1": {"value": 300.0,
+                                                                                         "limit": 500.0}}}}
+    assert sys_(done) == []
+    assert len(CC._nonparallel_issues({"skew": 15.0}, note)) == 1
+    assert CC._nonparallel_issues({"skew": 15.0}, {"capacity_design": {"scwb_biaxial@C3": {"dc": 0.9}}}) == []
