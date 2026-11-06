@@ -1349,8 +1349,9 @@ class LocalModel:
                     if r.get("ok") is False:
                         out = (False, "IS 18168 Table 2 (%s %s)" % (comp, r.get("value")))
                         break
-                    # review finding 7 (2026-11-06): the 12.11.3.1 screen classifies with each record's N, as the full
-                    # run's Section 12 gate (india_is800_s12.table2_class_by_combination, Steltic ruling D-T11)
+                    # review finding 7 (2026-11-06): the 12.11.3.1 screen classifies as the full run's Section 12 gate
+                    # (india_is800_s12.table2_class_by_combination): D-T11 for the gates, the hinge state of each
+                    # earthquake record
                     sc = self._class_with_N(c, p, fy)
                     if sc not in ("plastic", "compact"):
                         out = (False, "IS 800 12.11.3.1 %s not compact" % s_)
@@ -1358,19 +1359,30 @@ class LocalModel:
         self._t2_cache[key] = out
         return out
 
+    def _eq_labels(self):
+        """Labels of the earthquake combinations (Table 4 EL rows and 12.2.3 rows: lateral_kind 'EQ') of the run."""
+        if getattr(self, "_eq_lab", None) is None:
+            self._eq_lab = {c.get("label") for c in (self.pkg.get("load_combinations") or [])
+                            if isinstance(c, dict) and (str(c.get("lateral_kind") or "").upper() == "EQ"
+                                                        or set(c.get("tags") or []) & {"is800_12_2_3", "is18168_5_5"})}
+        return self._eq_lab
+
     def _class_with_N(self, c, p, fy):
-        """The least favourable IS 800 Table 2 class of section p over the force records of constituent c (N tension +
-        in the records; the web row by Steltic ruling D-T11: 'axial compression' with |Mz| <= 0.05 Mdz)."""
+        """The least favourable IS 800 Table 2 class of section p for the 12.11.3.1 screen, as the full run's Section 12
+        gate (india_is800_s12.table2_class_by_combination, Steltic ruling D-T11 for the gates): over the earthquake
+        records of constituent c only, each in the hinge state -- the 'generally' web rows with its N (tension + in
+        the records); no earthquake record: without axial force."""
         import india_is800 as I8
         order = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
-        Mdz0 = I8.mdz_without_axial_force(p, fy, welded=True)
+        eq = self._eq_labels()
         worst = None
         for mid in self.mem_of_const.get(c) or []:
             for t in self.el_of_mem[mid]:
-                for r in (self.envt.get(t, {}).get("records") or {}).values():
+                for lab, r in (self.envt.get(t, {}).get("records") or {}).items():
+                    if lab not in eq:
+                        continue
                     P = -float(r[0])
-                    ax = I8.d_t11_axial_row(P, abs(float(r[1])), p, fy, welded=True, Mdz_Nmm=Mdz0)
-                    cls = I8.section_class_table2(p, fy, P_N=P, welded=True, axial_only=ax)["section_class"]
+                    cls = I8.section_class_table2(p, fy, P_N=P, welded=True, axial_only=False)["section_class"]
                     if order.get(cls, 0) > order.get(worst, 0):
                         worst = cls
         return worst or I8.section_class_table2(p, fy, welded=True)["section_class"]

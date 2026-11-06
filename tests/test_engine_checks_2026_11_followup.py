@@ -135,14 +135,16 @@ def _column_md(sec="NPB600X220X107.57", ratios=((0.15, "table4", "1.5(DL+LL)"), 
     p = SS.props(sec)
     Py = p["A"] * 250.0 / 1.1
     m = {"id": "C1", "role": "column", "section": sec, "grade": "E250BR", "L_mm": 4000.0}
-    fs = [{"combo": c, "family": fam, "P_N": r * Py, "Mz_i_Nmm": 200e6} for r, fam, c in ratios]
+    fs = [{"combo": c, "family": fam, "P_N": r * Py, "Mz_i_Nmm": 200e6,
+           "lateral_kind": "EQ" if ("EL" in c or fam == "12.2.3") else ("W" if "WL" in c else None)}
+          for r, fam, c in ratios]
     return m, {"members": [m], "forces": {"C1": fs}}
 
 
 def test_1_class_by_combination_takes_each_axial_force():
     """NPB600X220X107.57 (d/tw 52.4, E250): plastic with N = 0 (84 eps); under the 12.2.3 record with N = 0.45 Py the
     'generally' rows give r1 = 1.22 -> plastic / compact limits at the 42 eps floor, semi-compact 126 / (1 + 2 x 0.45) =
-    66.3 eps: semi-compact, and that record governs."""
+    66.3 eps: semi-compact, and that record governs.  D-T11 (gates): the gravity record 1.5(DL+LL) is not judged."""
     import india_is800_s12 as S
     import sections as SS
     m, md = _column_md()
@@ -151,7 +153,8 @@ def test_1_class_by_combination_takes_each_axial_force():
     assert rec["governing_combo"] == "1.2DL+0.5LL+2.5EL" and rec["governing_family"] == "12.2.3"
     assert rec["r2"] == pytest.approx(0.45) and rec["web_row"] == "generally, r1 positive"
     assert rec["web_limits"][2] == pytest.approx(126.0 / 1.9)
-    assert rec["classes_by_combination"] == {"plastic": 2, "semi-compact": 1}
+    assert rec["classes_by_combination"] == {"plastic": 1, "semi-compact": 1}
+    assert (rec["n_records"], rec["n_records_judged"], rec["n_records_not_judged"]) == (3, 2, 1)
 
 
 def test_1_smf_and_scbf_column_gates_with_the_axial_force():
@@ -162,27 +165,80 @@ def test_1_smf_and_scbf_column_gates_with_the_axial_force():
     assert smf["governing_combo"] == "1.2DL+0.5LL+2.5EL" and smf["class_without_axial_force"] == "plastic"
     scbf = next(c for c in S.column_checks("SCBF", md, {}) if c["id"] == "scbf_column_plastic")
     assert scbf["ok"] is False and scbf["governing_combo"] == "1.2DL+0.5LL+2.5EL"
-    # light axial force: the gate passes and still names the governing record
-    m2, md2 = _column_md(ratios=((0.05, "table4", "1.5(DL+LL)"),))
+    # light axial force in a Table 4 EL row: the gate passes and still names the governing record
+    m2, md2 = _column_md(ratios=((0.05, "table4", "1.2(DL+LL+EL)"),))
     ok = next(c for c in S.column_checks("SMF", md2, {}) if c["id"] == "smf_column_class")
-    assert ok["ok"] is True and ok["governing_combo"] == "1.5(DL+LL)"
+    assert ok["ok"] is True and ok["governing_combo"] == "1.2(DL+LL+EL)"
 
 
-def test_1_brace_gates_use_the_table4_records_and_the_axial_compression_row():
-    """An I-section brace in compression with no bending takes the 'axial compression' web row (42 eps): NPB600's web
-    (52.4 eps) is slender there (OCBF 12.7.2.4 fails), mid-depth semi-compact before; a CHS brace keeps its rows; the
-    12.2.3 records are not brace demands (H07)."""
+def test_DT11_gate_web_beyond_the_generally_limit_at_an_EL_combination_still_fails():
+    """D-T11 (gates): a column whose web exceeds the 'generally' limit at the N of a Table 4 EL combination fails
+    12.11.3.1, however the wind and gravity records classify it.  NPB600X220X107.57 (52.4 eps) at N = 0.45 Py in
+    1.2(DL+LL+EL): r1 1.22, r2 0.45 -> semi-compact (126 / 1.9 = 66.3 eps); a 1.5(DL+WL) record at 0.05 Py is plastic
+    and is not judged."""
+    import india_is800_s12 as S
+    m, md = _column_md(ratios=((0.45, "table4", "1.2(DL+LL+EL)"), (0.05, "table4", "1.5(DL+WL)")))
+    smf = next(c for c in S.column_checks("SMF", md, {}) if c["id"] == "smf_column_class")
+    assert smf["ok"] is False and smf["value"] == "semi-compact" and smf["governing_combo"] == "1.2(DL+LL+EL)"
+    assert smf["web_row"] == "generally, r1 positive" and smf["n_records_not_judged"] == 1
+    assert "hinge state" in smf["web_class_basis"] and "D-T11" in smf["web_class_basis"]
+    # only wind and gravity records: no earthquake record is judged, the hinge state is classified without N
+    m3, md3 = _column_md(ratios=((0.45, "table4", "1.5(DL+WL)"), (0.45, "table4", "1.5(DL+LL)")))
+    g = next(c for c in S.column_checks("SMF", md3, {}) if c["id"] == "smf_column_class")
+    assert g["ok"] is True and g["value"] == "plastic" and "no earthquake combination" in g["class_basis"]
+
+
+def test_DT11_gate_e2e_IN_Ex4_column_failing_only_in_a_wind_record_now_passes():
+    """IN_Ex4 (PEB SMRF, Zone IV) tapered column piece e13, WI636X250X20X14 E350 B0 (fy 330 at 20 mm, 42 eps = 36.56):
+    d/tw 42.57.  At 8b2ffbf the 12.11.3.1 gate read D-T11's 'axial compression' row in the wind record 0.9DL+1.5W_Y
+    (N 25.7 kN, |Mz| < 0.05 Mdz) and failed it 'slender'.  Judged in the hinge state of its 136 earthquake records it
+    is plastic ('generally' rows with each N, r1 <= 0.07); the 53 wind / gravity records are not judged."""
+    import india_is800_s12 as S12
+    import sections as S
+    fx = _fixture("IN_Ex4_smf_column_e13_s12.json")
+    s = fx["section"]
+    S.register_welded_I(s["label"], s["d"], s["bf"], s["tf"], s["tw"])
+    md = {"members": [fx["member"]], "forces": fx["forces"]}
+    r = next(c for c in S12.column_checks("SMF", md, {}) if c["id"] == "smf_column_class")
+    assert fx["branch_8b2ffbf_row"]["value"] == "slender" and fx["branch_8b2ffbf_row"]["governing_combo"] == "0.9DL+1.5W_Y"
+    assert r["ok"] is True and r["value"] == "plastic" and r["web_row"] == "generally, r1 positive"
+    assert (r["n_records"], r["n_records_judged"], r["n_records_not_judged"]) == (189, 136, 53)
+    assert r["governing_combo"] == "1.2DL+1.2LL-1.2EQ_X[eb]+0.3EQ_Z" and r["classes_by_combination"] == {"plastic": 136}
+    assert r["web_d_tw"] == pytest.approx(42.5714, rel=1e-4)
+    # the member resistance check keeps D-T11's web row in the wind record (slender there, Pd / Md on that class)
+    import india_is800 as I8
+    f = next(f for f in fx["forces"]["e13"] if f["combo"] == "0.9DL+1.5W_Y")
+    p = S.props(s["label"])
+    Mz = max(abs(f.get(k) or 0.0) for k in ("Mz_i_Nmm", "Mz_j_Nmm", "Mz_mid_Nmm"))
+    assert I8.d_t11_axial_row(f["P_N"], Mz, p, 330.0, welded=True)
+
+
+def test_1_brace_gates_judge_the_buckling_hinge_in_the_table4_EL_records():
+    """D-T11 (gates) for a brace: the Table 4 earthquake records only (12.2.3 rows are not brace demands, H07; a gravity
+    record is not judged), each in the brace's hinge state -- its buckling hinge.  NPB600 (52.4 eps) with Kz = Ky = 1
+    buckles about its minor axis: the web lies on that hinge's neutral axis and carries the uniform N, the 'axial
+    compression' row (42 eps): slender, OCBF 12.7.2.4 fails.  With Ky = 0.1 the major axis governs: the 'generally'
+    rows with N = 500 kN (r1 0.40, plastic limit 60 eps): plastic, the gate passes."""
     import india_is800_s12 as S
     import sections as SS
     m = {"id": "B1", "role": "brace", "section": "NPB600X220X107.57", "grade": "E250BR", "L_mm": 5000.0}
     p = SS.props(m["section"])
-    md = {"members": [m], "forces": {"B1": [{"combo": "1.5(DL+EL)", "family": "table4", "P_N": 500e3},
-                                            {"combo": "1.2DL+0.5LL+2.5EL", "family": "12.2.3", "P_N": 2.0e6}]}}
-    sc, rec = S.table2_class_by_combination(m, p, 250.0, md, families=("table4",))
+    md = {"members": [m], "forces": {"B1": [{"combo": "1.5(DL+EL)", "family": "table4", "P_N": 500e3,
+                                             "lateral_kind": "EQ"},
+                                            {"combo": "1.5(DL+LL)", "family": "table4", "P_N": 900e3},
+                                            {"combo": "1.2DL+0.5LL+2.5EL", "family": "12.2.3", "P_N": 2.0e6,
+                                             "lateral_kind": "EQ"}]}}
+    sc, rec = S.table2_class_by_combination(m, p, 250.0, md, families=("table4",), hinge="minor")
     assert sc["section_class"] == "slender" and rec["web_row"] == "axial compression"
-    assert rec["governing_combo"] == "1.5(DL+EL)" and rec["n_records"] == 1
+    assert rec["governing_combo"] == "1.5(DL+EL)" and (rec["n_records"], rec["n_records_judged"]) == (2, 1)
     ocbf = next(c for c in S.brace_member_checks("OCBF", m, md, {}) if c["id"] == "brace_not_slender")
-    assert ocbf["ok"] is False and ocbf["web_row"] == "axial compression"
+    assert ocbf["ok"] is False and ocbf["web_row"] == "axial compression" and ocbf["hinge_axis"] == "minor"
+    m2 = dict(m, Ky=0.1)
+    ocbf2 = next(c for c in S.brace_member_checks("OCBF", m2, md, {}) if c["id"] == "brace_not_slender")
+    assert ocbf2["ok"] is True and ocbf2["hinge_axis"] == "major" and ocbf2["web_row"] == "generally, r1 positive"
+    scbf2 = next(c for c in S.brace_member_checks("SCBF", m2, md, {}) if c["id"] == "brace_plastic")
+    assert scbf2["ok"] is True and scbf2["value"] == "plastic"
+    assert ocbf2["hinge_KL_r_major"] > ocbf2["hinge_KL_r_minor"]
     chs = {"id": "B2", "role": "brace", "section": "CHS168.3X4.8", "grade": "YSt 310", "process": "ERW", "L_mm": 5000.0}
     try:
         pc = SS.props(chs["section"], grade=chs["grade"], process="ERW")
@@ -404,23 +460,35 @@ def test_DT11_tiny_compression_is_not_axial_compression():
 
 
 def test_DT11_section12_gate_and_sizer_screen_use_the_same_rule():
+    """D-T11 for the gates (lead ruling on open point 2): the member check classifies the IN_Ex3 corner column's web
+    (d/tw 44 > 42 eps) on the 'axial compression' row under N + My (slender); the Section 12 gate judges the hinge
+    state of the earthquake record -- 'generally' rows with its N -- compact (web plastic); the sizer's 12.11.3.1 screen does the
+    same and skips a wind record (it would be slender on D-T11's row)."""
     import india_is800_s12 as S12
+    import india_is800 as I8
     import sections as S
     lab, mem, cf = _corner()
+    assert I8.member_check_is800(mem, [cf])["per_combo"][0]["table2"]["section_class"] == "slender"
     m = {"id": "C1", "role": "column", "section": lab, "grade": "E350BR", "L_mm": 3000.0}
-    md = {"members": [m], "forces": {"C1": [dict(cf, combo="1.2DL+0.5LL+2.5EL", family="12.2.3")]}}
+    md = {"members": [m], "forces": {"C1": [dict(cf, combo="1.2DL+0.5LL+2.5EL", family="12.2.3", lateral_kind="EQ"),
+                                            dict(cf, combo="0.9DL+1.5WL", family="table4", lateral_kind="W")]}}
     sc, rec = S12.table2_class_by_combination(m, S.props(lab), 350.0, md)
-    assert rec["web_row"] == "axial compression" and sc["section_class"] == "slender"
-    assert "D-T11" in rec["web_class_basis"]
+    assert rec["web_row"] == "generally, r1 positive" and sc["section_class"] == "compact"     # the flange governs
+    assert sc["web_class"] == "plastic" and "flange" in rec["governing_element"]
+    assert rec["n_records_judged"] == 1 and rec["governing_combo"] == "1.2DL+0.5LL+2.5EL"
+    assert rec["web_class_basis"] == I8.D_T11_GATE_CITE and "hinge state" in I8.D_T11_GATE_CITE
     import peb_autosize as PA
 
     class _Stub:                                            # the sizer's record access, two records of one element
         mem_of_const = {"c": ["m"]}
         el_of_mem = {"m": [1]}
-        envt = {1: {"records": {"g": (-5.0e4, 0.0) + (0.0,) * 15, "b": (-5.0e4, 2.0e8) + (0.0,) * 15}}}
-    import india_is800 as I8
-    cls = PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0)
-    assert cls == "slender"                                   # the axial-only record (N, no Mz) governs
+        envt = {1: {"records": {"w": (-5.0e4, 0.0) + (0.0,) * 15, "e": (-5.0e4, 2.0e8) + (0.0,) * 15}}}
+        pkg = {"load_combinations": [{"label": "w", "lateral_kind": "W"}, {"label": "e", "lateral_kind": "EQ"}]}
+        _eq_labels = PA.LocalModel._eq_labels
+    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "compact"
+    _Stub.pkg = {"load_combinations": [{"label": "w", "lateral_kind": "EQ"}, {"label": "e", "lateral_kind": "EQ"}]}
+    _Stub._eq_lab = None
+    assert PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0) == "compact"    # generally rows, both
 
 
 # ====================================================================================================== review findings
@@ -491,18 +559,22 @@ def _s12_fixture(name):
 
 
 def test_1_e2e_IN_Ex13_scbf_column_gate_with_the_12_2_3_axial_force():
-    """IN_Ex13 SCBF column e1 (WPB260X260X114.4, E250 B0), its 125 captured force records: the 12.8.4.1 gate is now
-    classified with each record's N; the governing record is the 12.2.3 row 1.2DL+0.5LL-2.5EQ_Y[eb]+0.3EQ_Z[col]
-    (N = 1,020 kN, small Mz: D-T11 puts the web on the 'axial compression' row, 42 eps); d/tw 14.2 is well inside,
-    so the column stays plastic -- on origin/main the gate read the N = 0 class only."""
+    """IN_Ex13 SCBF column e1 (WPB260X260X114.4, E250 B0), its 125 captured force records: the 12.8.4.1 gate is
+    classified in the hinge state of each of its 104 earthquake records (D-T11 for the gates; 16 wind and 5 gravity
+    records are not judged); the governing record is the 12.2.3 row 1.2DL+0.5LL-2.5EQ_Y[eb]+0.3EQ_Z[col] (N = 1,020
+    kN: 'generally' rows, r1 2.11 -> plastic / compact at the 42 eps floor, semi-compact 126 eps / (1 + 2 r2));
+    d/tw 14.2 is well inside, so the column stays plastic -- on origin/main the gate read the N = 0 class only."""
     import india_is800_s12 as S12
     fx = _s12_fixture("IN_Ex13_scbf_column_e1_s12.json")
     md = {"members": [fx["member"]], "forces": fx["forces"]}
     r = next(c for c in S12.column_checks(fx["system"], md, fx["cfg"]) if c["id"] == "scbf_column_plastic")
     assert r["ok"] is True and r["value"] == "plastic" and r["n_records"] == 125
+    assert (r["n_records_judged"], r["n_records_not_judged"]) == (104, 21)
     assert r["governing_family"] == "12.2.3" and r["governing_combo"] == "1.2DL+0.5LL-2.5EQ_Y[eb]+0.3EQ_Z[col]"
-    assert r["governing_P_N"] == pytest.approx(1020268.0, rel=1e-6) and r["web_row"] == "axial compression"
-    assert r["web_limits"][2] == pytest.approx(42.0 * math.sqrt(250.0 / 240.0))          # E250, flange > 16 mm: 240
+    assert r["governing_P_N"] == pytest.approx(1020268.0, rel=1e-6) and r["web_row"] == "generally, r1 positive"
+    eps = math.sqrt(250.0 / 240.0)                                                    # E250, flange > 16 mm: 240
+    assert r["web_limits"][0] == pytest.approx(42.0 * eps) and r["web_limits"][2] == pytest.approx(
+        126.0 * eps / (1.0 + 2.0 * r["r2"]))
 
 
 @pytest.mark.parametrize("name,t_dbl,fy_dbl,fy_col", [("IN_Ex12_smf_joint_J100000-X.json", 48.0, 230.0, 240.0),

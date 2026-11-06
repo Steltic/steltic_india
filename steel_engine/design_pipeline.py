@@ -1067,6 +1067,8 @@ def section12_model_data(cfg, reg, length, role_of, env, per_case_tags, cases, i
         for f in fl:
             f["family"] = fam.get(f["combo"], "table4")
             f["tags"] = tagof.get(f["combo"], [])
+            # D-T11 (Section 12 gates, 2026-11-06): the gates are judged in the earthquake combinations only
+            f["lateral_kind"] = kindof.get(f["combo"])
             if kindof.get(f["combo"]) == "EQ" and f["family"] == "table4" and "P_LAT_N" in f:
                 f["P_EL_N"] = f["P_LAT_N"]        # EL share of the IS 800 Table 4 EQ combination (IS 18168 12.3.2.2)
         if kind == "brace":

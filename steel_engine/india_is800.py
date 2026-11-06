@@ -2216,7 +2216,22 @@ D_T11_CITE = (
     "My and carries the uniform N / A: it is classified on the 'axial compression' row (42 eps) whatever My.  Table 2 "
     "has no biaxial row; this follows the element's stress state and matches the common practice of classifying the "
     "web as in compression for N plus minor-axis bending.  The 'generally' rows with r1 / r2 apply only with "
-    "major-axis bending.")
+    "major-axis bending.  This web row is for the member resistance checks in every combination; the Section 12 "
+    "section-class gates judge the hinge state instead (D_T11_GATE_CITE).")
+# D-T11, Section 12 gates (lead ruling on open point 2, 2026-11-06): 12.11.3.1 and the other Section 12 class
+# requirements are about the plastic hinge forming under earthquake, so the gates are judged in the earthquake
+# combinations only (IS 800 Table 4 rows with EL and the 12.2.3 rows), each classified in the hinge state.
+D_T11_GATE_CITE = (
+    "Steltic ruling D-T11, Section 12 gates (lead ruling 2026-11-06), IS 800 12.7.2.4 / 12.8.2.5 / 12.8.4.1 / "
+    "12.11.3.1 with Table 2: a Section 12 section-class requirement is about the plastic hinge that forms under "
+    "earthquake, so it is judged in the earthquake combinations only (the Table 4 rows with EL and the 12.2.3 rows), "
+    "not in the wind or gravity records.  In each of them the web is classified in the hinge state: for the frame's "
+    "beams and columns, major-axis plastic bending with the combination's N present -- the 'generally' web rows with "
+    "its r1 / r2 (Table 2 Note 5; the mid-depth row with no axial force), not D-T11's 'axial compression' row.  "
+    "Engine reading for a brace (12.7.2.4 / 12.8.2.5), stated for the lead: its hinge is its buckling hinge, about the "
+    "axis of the larger KL/r -- about the major axis the same 'generally' rows; about the minor axis (or a tie) the "
+    "web lies on the hinge's neutral axis and carries the uniform N, the 'axial compression' row.  The member "
+    "resistance checks keep the D-T11 web row in every combination (D_T11_CITE).")
 
 
 def mdz_without_axial_force(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEFAULT):
