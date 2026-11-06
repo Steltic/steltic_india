@@ -20,7 +20,7 @@ For every member AND connection it checks:
 check(name) prints a PASS/FAIL summary and returns the list of issue strings ([] == consistent).
 Never raises -- a malformed package is itself reported as an issue.
 """
-import os, json, re
+import os, json, re, math
 
 TOL = 0.04   # 4% relative tolerance on recomputed ratios
 
@@ -662,13 +662,17 @@ def _consultancy_issues(cfg, pkg):
     # review N1 (2026-11-07): the roof's real span, not one element -- a PEB rafter is split into short tapered
     # pieces (IN_Ex1: 9 m) and a flat roof's beam into pieces at the secondary beams
     roof_el = [_len_m(m) for m in mem if isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "roof"]
-    span, basis = _roof_span_m(cfg, pkg) if (roof_el or cfg.get("roof_planes")) else (0.0, None)
-    if max([span] + roof_el) >= 12.0 and not (isinstance(pkg.get("ponding"), dict) or lab("ponding")):
-        why = ("%s %.1f m" % (basis, span)) if span >= 12.0 else ("a roof member %.1f m" % max(roof_el))
-        out.append("long-span (>= 12 m) roof framing (%s) and NO ponding evaluation in calc_package -- "
-                   "check ponding / impounded rain (roof slope + secondary drainage head; IS 875 (Part 4) "
-                   "for snow-water) and record it (cfg['ponding'] = {span_mm, delta_mm, roof_slope}: the IS 875 "
-                   "(Part 4) 4.4 screen in calc_package 'ponding')" % why)
+    # the slope ruling (2026-11-07): a long span flatter than 1 in 20, or of unknown slope (PONDING_SLOPE_BASIS)
+    flat_long = [r for r in _roofs_for_ponding(cfg, pkg, roof_el)
+                 if r[0] >= 12.0 and (r[1] is None or r[1] < PONDING_SLOPE_LIMIT - 1e-9)]
+    if flat_long and not (isinstance(pkg.get("ponding"), dict) or lab("ponding")):
+        sp, sl, bs, src = max(flat_long, key=lambda t: t[0])
+        why = "%s %.1f m, slope %s (%s)" % (bs, sp, ("1 in %.0f" % (1.0 / sl)) if sl else ("flat" if sl == 0 else
+                                                                                          "unknown"), src)
+        out.append("long-span (>= 12 m) roof framing flatter than 1 in 20 or of unknown slope (%s) and NO ponding "
+                   "evaluation in calc_package -- check ponding / impounded rain (roof slope + secondary drainage "
+                   "head; IS 875 (Part 4) for snow-water) and record it (cfg['ponding'] = {span_mm, delta_mm, "
+                   "roof_slope}: the IS 875 (Part 4) 4.4 screen in calc_package 'ponding'); %s" % (why, PONDING_SLOPE_BASIS))
     # A6 footfall vibration: long floor spans or vibration-sensitive occupancy (H31: cfg['roof_levels'] are roofs,
     # not floors; cleared only by a structured cfg/pkg['vibration_screen'] {basis, result, cite}, never by a keyword)
     floor_long = _has_floor_levels(cfg) and any(
@@ -738,33 +742,65 @@ def _consultancy_issues(cfg, pkg):
     return out
 
 
-def _roof_span_m(cfg, pkg):
-    """(span in m, basis) of the roof framing for the ponding guard (review N1, 2026-11-07): the longest roof plane's
-    eave-to-eave span (a portal's frame span, cfg['roof_planes'], always mm); without roof planes, on an N-mm job, the
-    longest grid bay (the span of the roof beams between the column lines).  (0.0, None) when neither is known."""
+PONDING_SLOPE_LIMIT = 1.0 / 20.0
+PONDING_SLOPE_BASIS = (
+    "engineering basis (Steltic ruling, 2026-11-07): IS 875 (Part 4):2021 4.4 asks for the ponding investigation on "
+    "'flat roofs (or with a small slope)' and gives no number; the engine's 4.4 screen (mid-span deflection < the fall "
+    "over the half span) has a fall of span/40 at 1 in 20, which a roof meeting IS 800 Table 6 (span/180 for a rafter "
+    "under profiled metal sheeting) passes with a margin of 180/40 = 4.5 -- so the guard asks for the screen on long "
+    "spans flatter than 1 in 20, or of unknown slope (not an IS criterion)")
+
+
+def _declared_roof_slope(cfg):
+    """(slope as rise / run, source) declared outside the roof planes: the ponding input's roof_slope, else
+    cfg['roof_pitch_deg']; (None, None) when neither is declared."""
+    try:
+        sl = (cfg.get("ponding") or {}).get("roof_slope") if isinstance(cfg.get("ponding"), dict) else None
+        if sl is not None:
+            return abs(float(sl)), "cfg['ponding'].roof_slope"
+        if cfg.get("roof_pitch_deg") is not None:
+            return abs(math.tan(math.radians(float(cfg["roof_pitch_deg"])))), "cfg['roof_pitch_deg']"
+    except (TypeError, ValueError):
+        pass
+    return None, None
+
+
+def _roofs_for_ponding(cfg, pkg, roof_el_m=()):
+    """[(span m, slope or None, basis, slope source)] of the roof framing for the ponding guard (reviews N1 and the slope ruling,
+    2026-11-07).  Each roof plane: its eave-to-eave span (a portal's frame span; cfg['roof_planes'], always mm) and its
+    flatter slope.  The roof outside the planes (a flat roof, a lean-to): the longest roof element and, on an N-mm job
+    without planes, the longest grid bay (the span of the roof beams between the column lines), with the declared
+    slope (_declared_roof_slope) or None."""
+    out = []
     try:
         import roof_geometry as RG
     except Exception:
-        return 0.0, None
-    best = (0.0, None)
-    try:
-        for pl in RG.planes(cfg):
-            sp = (float(pl["hi"]) - float(pl["lo"])) / 1000.0
-            if sp > best[0]:
-                best = (sp, "roof plane %d span eave to eave" % pl["idx"])
-    except Exception:
-        pass
+        RG = None
+    if RG is not None:
+        try:
+            for pl in RG.planes(cfg):
+                rise = float(pl["rz"]) - float(pl["ez"])
+                runs = [float(pl["ridge"]) - float(pl["lo"]), float(pl["hi"]) - float(pl["ridge"])]
+                out.append(((float(pl["hi"]) - float(pl["lo"])) / 1000.0, min(rise / r for r in runs if r > 0),
+                            "roof plane %d span eave to eave" % pl["idx"], "the roof plane"))
+        except Exception:
+            pass
+    slope, src = _declared_roof_slope(cfg)
+    flat = max(roof_el_m) if roof_el_m else 0.0
+    basis = "a roof member"
     mm = (isinstance(pkg, dict) and pkg.get("unit_system") == "N-mm") or \
         str(cfg.get("units") or "").lower() in ("n-mm", "si", "mm")
-    if best[1] is None and mm and cfg.get("NX") and cfg.get("NY"):
+    if RG is not None and not out and roof_el_m and mm and cfg.get("NX") and cfg.get("NY"):
         try:
             xs, ys = RG.grid_lines(cfg)
             bays = [b - a for a, b in zip(xs, xs[1:])] + [b - a for a, b in zip(ys, ys[1:])]
-            if bays:
-                best = (max(bays) / 1000.0, "longest grid bay (roof beam span)")
+            if bays and max(bays) / 1000.0 > flat:
+                flat, basis = max(bays) / 1000.0, "longest grid bay (roof beam span)"
         except Exception:
             pass
-    return best
+    if flat > 0.0:
+        out.append((flat, slope, basis, src or "not declared"))
+    return out
 
 
 def _has_floor_levels(cfg):
