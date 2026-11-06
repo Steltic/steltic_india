@@ -2599,7 +2599,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         st["gbs"] = gbs1
         st["conns"] = conns1
         st["it"] = it + 1
-        _cleanup(work, keep={"it%02d" % it, "it%02d" % (it - 1), "it%02d" % (st["best"] or {}).get("it", -1)})
+        # it00 is kept too: the starting design's run is the baseline that each later move is compared with
+        _cleanup(work, keep={"it00", "it%02d" % it, "it%02d" % (it - 1), "it%02d" % (st["best"] or {}).get("it", -1)})
         save_state(work, st)
         if cycle and st.get("best"):
             log_fn("the proposal repeats an earlier design (a cycle of the frozen-force sizing): stop at it%02d, best "
