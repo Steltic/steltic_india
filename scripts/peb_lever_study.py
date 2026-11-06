@@ -537,7 +537,7 @@ def run_job(job, a, solar=False):
                "start_from": kw.get("start_from") or ("gold" if name in ("strict", "solar_ready") else "strict"),
                "extra_overrides": extra_ov, "cfg_patch": patch, "n_full_runs": res.get("n_full_runs"),
                "elapsed_s": round(time.time() - t0, 1), "secondary": res.get("secondary"), "done": True,
-               "history": [{k: h.get(k) for k in ("it", "passed", "total_kg", "governing", "blocking", "elapsed_s")}
+               "history": [{k: h.get(k) for k in ("it", "passed", "total_kg", "governing", "blocking", "n_blocking", "elapsed_s")}
                            for h in res.get("history") or []]}
         if best:
             R = best["run"]

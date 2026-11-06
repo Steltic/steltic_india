@@ -3213,7 +3213,9 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
         tot = _total(R)
         out["history"].append({"it": it, "x": x_run, "conn": R.get("design_connections"), "passed": R["passed"],
                                "total_kg": tot, "tonnage_kg": R.get("tonnage_kg"), "governing": R.get("governing"),
-                               "blocking": (R.get("blocking") or [])[:12], "elapsed_s": R.get("elapsed_s"),
+                               "blocking": (R.get("blocking") or [])[:12],
+                               # final review Low 6: the list keeps 12 reasons; keep the full count too
+                               "n_blocking": len(R.get("blocking") or []), "elapsed_s": R.get("elapsed_s"),
                                "margins": dict(margins)})
         if R["passed"]:
             if best is None or tot < best["total_kg"] - 0.5:

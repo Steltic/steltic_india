@@ -462,7 +462,8 @@ def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_
     runs = iter([
         {"ok_run": True, "passed": True, "kg": 100.0},                       # 0: the start design
         {"ok_run": True, "passed": False, "kg": 95.0,                        # 1: lighter, sway 1.05
-         "fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]},
+         "fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"],
+         "blocking": ["reason %d" % i for i in range(20)]},
         {"ok_run": True, "passed": True, "kg": 104.0},                       # 2: passes, heavier: relax
         {"ok_run": True, "passed": True, "kg": 97.0},                        # 3: passes, lighter: the best
         {"ok_run": True, "passed": True, "kg": 99.0}])                       # 4: not lighter again: relax / stop
@@ -471,7 +472,7 @@ def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_
     def full_run(run_dir, spec, x, rules, **k):
         r = next(runs)
         seen.append(dict(k.get("margins_seen") or {}))
-        return dict(r, tonnage_kg={"primary": r["kg"]}, governing=None, blocking=[], elapsed_s=0.0)
+        return dict(r, tonnage_kg={"primary": r["kg"]}, governing=None, blocking=r.get("blocking", []), elapsed_s=0.0)
 
     class LM:
         x0 = {}
@@ -501,6 +502,9 @@ def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_
     out = A.autosize(str(tmp_path), {"members": {"C": {}}, "job": "t"}, {}, str(tmp_path / "w"), name="v",
                      cfs_root="", resize_secondary=False, max_full_runs=5, log_fn=lambda *a: None)
     assert out["best"]["total_kg"] == 97.0 and out["n_full_runs"] == 5
+    # review Low 6: the history keeps 12 blocking reasons and the full count
+    h1 = out["history"][1]
+    assert len(h1["blocking"]) == 12 and h1["n_blocking"] == 20 and out["history"][0]["n_blocking"] == 0
     sway = [m.get("sway") for m in seen if "sway" in m]
     assert sway[:4] == [pytest.approx(0.98), pytest.approx(0.93), pytest.approx(0.955), pytest.approx(0.955)]
 
