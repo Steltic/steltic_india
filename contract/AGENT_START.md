@@ -88,6 +88,11 @@ Before `pipeline.design_and_report`:
      pattern's own `sign` fixes it); walls load the first exposed facade per strip by tributary width, the
      along-ridge patterns carry the gable walls, the roof pressure reaches every roof level and splits at
      `cfg['ridge']` = {axis, coord_mm} (default: plan mid-line). `member_wind_not_required` needs a reason.
+     The two side walls (parallel to the wind) are loaded too, with their Table 5 Cpe (C / D at theta 0, A / B at
+     theta 90; one coefficient per wall, the 0.25 w local strip is for cladding only): the generator writes
+     `wall_side_kNm2`, `wall_cpe` and `pd_kNm2` on every pattern. A hand-built pattern without `wall_side_kNm2`
+     must carry `Cpi` and `pd_kNm2` (or the wind summary's `pd_kNm2`): the engine then takes the side-wall Cpe
+     from Table 5 at the model geometry, and a pattern it cannot load fails the package check.
    * Tall or flexible buildings (IS 875-3 9.1: h/b > 5 or f1 < 1 Hz): the along-wind forces from the
      10.2 gust factor (`wind_summary.gust_factor`) and the across-wind response (10.3) in
      `wind_summary.across_wind` (ruling R10 — it counts only when evaluated): `{found: True, Mc_kNm}` (or
@@ -379,9 +384,11 @@ Before `pipeline.design_and_report`:
       column_flange_grade, column_flange_lv_mm, column_weld_mm, bom_plates. Checked in both signs at 1.2 Mp of the
       face section (D-T7; IS 18168 route B 8.4: 1.1 Ry fy Zpb), with the column flange as a T-stub on the same bolt
       rows and the column web (plus the knee_panel doubler) feeding the inner rows.
-    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa}, flange_stiffener {n, b_mm, t_mm,
-      fy_MPa} (sized for the connection-moment flange force), doubler_t_mm, weld_mm}; the panel shear is checked on
-      the analysis moment.
+    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa, grade}, flange_stiffener {n, b_mm, t_mm,
+      fy_MPa, grade} (sized for the connection-moment flange force), doubler_t_mm, doubler_grade, doubler_fy_MPa,
+      weld_mm}; the panel shear is checked on the analysis moment.  Every stiffener / doubler fy is the IS 2062:2025
+      Table 3 band of its grade (its own, else cfg['plate_grade'], else E250) for its thickness
+      (india_is800.fy_is2062); a declared fy above the band is capped at it (2026-11 engine checks).
   - Secondary members designed by the CFS engine (owner decision D-T5) are imported as `peb_secondary` =
     [{id, kind, section, checks [{name, value, limit, dc, ok, clause}], mass_kg, file, sha256, source}] (the file is
     re-hashed every run). Tonnage groups: `peb_mass_groups` {group: {tags | sections}} (crane, canopy) and
@@ -503,7 +510,10 @@ You:
      plate_b_mm, plate_t_mm, fy_plate_MPa, weld{size_mm, length_mm, fu_MPa, n_sides, site}} or 'end_plate'
      {`end_plate`: rows[{h_mm, n_pairs}], d_mm, grade, t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
      pretensioned} (10.3.5 + 10.4.7 prying), `shear` (fin/web plate + bolts, 12.11.2.2), `continuity_plates`,
-     `doubler_t_mm`, `weld_type`, `bolt_type`. Checked per joint against 1.2 Mp (12.11.2.1), the 12.11.2.2
+     `doubler_t_mm`, `doubler_grade` / `doubler_fy_MPa` (the panel-zone doubler plate: its fy is the IS 2062:2025
+     Table 3 band of its grade for its thickness, a declared fy capped at it; neither declared -> E250, stated in
+     the record; never the column's fy -- 2026-11 engine checks), `weld_type`, `bolt_type`. Checked per joint
+     against 1.2 Mp (12.11.2.1), the 12.11.2.2
      shear, the panel zone (12.11.2.3/.4) and SCWB (12.11.3.2 >= 1.2; IS 18168 8.2 > 1.4 with Ry).
    * `beam_shear[<beam section>|'default']` (pinned beams, braced-bay beams): t_plate_mm, h_plate_mm,
      fy/fu_plate_MPa, bolts, `block_shear_areas`, `weld` (fillet) or `cjp` {t_mm, length_mm, fy_MPa, site},

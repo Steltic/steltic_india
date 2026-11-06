@@ -1033,8 +1033,11 @@ def _screen_findings(pkg, cfg_hint=None) -> list:
         for k, v in chk.items():
             if isinstance(v, dict) and (v.get("pass") is False or v.get("ok") is False):
                 out.append("capacity_design.checks.%s fails (pass/ok false)" % k)
+            elif isinstance(v, dict) and v.get("ok") is None and v.get("not_applicable"):
+                continue                     # review R2-1: not applicable (no_seismic: no seismic detailing applies)
             elif isinstance(v, dict) and (v.get("found") is False or v.get("ok") is None and v.get("pass") is None):
-                out.append("capacity_design.checks.%s not evaluated" % k)
+                out.append("capacity_design.checks.%s not evaluated%s" % (k, (": " + v["reason"]) if v.get("reason")
+                                                                         else ""))
     for row in (pkg.get("drift_table") or []):
         if isinstance(row, dict) and row.get("ok") is False:
             out.append("drift_table storey %s fails" % row.get("storey"))

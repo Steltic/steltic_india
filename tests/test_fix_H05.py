@@ -20,6 +20,9 @@ def test_box_column_smrf_zone_iv_checked_with_box_row():
     S.register_box("BOX450X450X16", 450.0, 450.0, 16.0, 16.0)
     md = _md([{"id": "c1", "section": "BOX450X450X16", "grade": "E250 B0", "role": "column", "L_mm": 3500.0,
                "sfrs": True, "Kz": 1.0, "Ky": 1.0}])
+    # engine checks re-check 2 (R2-1): Ca comes from the member's earthquake records -- one EL record with N = 0 (Ca 0,
+    # the limits pinned below); with no earthquake record the row would not be judged
+    md["forces"]["c1"] = [{"combo": "1.2DL+1.2LL+1.2EL", "family": "table4", "lateral_kind": "EQ", "P_N": 0.0}]
     r = S12.section12_checks("SMF", md, {"zone": "IV", "I": 1.2, "height_m": 12.0})
     c = [c for c in r["checks"] if c["id"] == "is18168_table2_column" and c["member"] == "c1"]
     assert c, "box SFRS column must get a Table 2 record"

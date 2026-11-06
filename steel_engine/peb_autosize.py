@@ -234,20 +234,34 @@ def run_child(args, cwd, timeout, env=None, log_path=None):
 
 # =================================================================================================== connections
 def plate_fy(t, grade):
-    """IS 2062 Table 3 yield stress by thickness, as the golds' helpers use it (E250: 250 / 240 / 230; E350: 350 /
-    330 / 320 for t <= 20 / <= 40 / > 40 mm)."""
-    if str(grade).upper().startswith("E350"):
-        return 350.0 if t <= 20 else 330.0 if t <= 40 else 320.0
-    return 250.0 if t <= 20 else 240.0 if t <= 40 else 230.0
+    """IS 2062 (Part 1):2025 Table 3 yield stress of a plate of thickness t (engine checks fix C, 2026-11): the
+    engine's one band function india_is800.fy_is2062 (<= 16 / > 16-40 / > 40-100 / > 100 mm; E250 250 / 240 / 230 /
+    210, E350 350 / 330 / 320 / 290).  Until 2026-11 this helper copied the golds' old helpers, 250 / 350 MPa up to
+    20 mm, and wrote fy 250 into the cfgs the full runs judge for 16-20 mm E250 plates (review PEB_REVIEW.md C).
+    grade None: E250."""
+    import india_is800 as I8
+    return float(I8.fy_is2062(grade or "E250", float(t)))
+
+
+def member_web_fy(sec, member_grade="E350"):
+    """Review finding 6 (2026-11-06): the member web fy of a sizer end-plate proposal -- the IS 2062:2025 Table 3 band
+    of the member's grade for its governing thickness (fy_is2062; E350, the PEB member grade, when not given), not a
+    fixed 350 MPa."""
+    import india_is800 as I8
+    import sections as S
+    p = S.props(sec)
+    return float(I8.fy_is2062(member_grade or "E350", I8.governing_thickness_mm(p)))
 
 
 def ep_dict(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_grade="E250", ext=60.0, weld=8.0,
-            gauge=None, web_doubler=0.0, member_fy=350.0):
+            gauge=None, web_doubler=0.0, member_fy=None):
     """The extended end plate of the PEB golds (their bolted_end_plate helper, identical arithmetic): n_out rows
     beyond the tension flange, n_in rows inside it (only rows in the tension half), be = min(pitch, b/2), lv to the
     weld toe, le = min(50, (b - g)/2), plate fy by thickness."""
     import sections as S
     p = S.props(sec)
+    if member_fy is None:
+        member_fy = member_web_fy(sec)
     hf = p["d"] - p["tf"]
     g = gauge or (120.0 if d_bolt >= 30 else 110.0)
     lv = max(ext - p["tf"] / 2.0 - weld, g / 2.0 - p["tw"] / 2.0 - weld)
@@ -315,7 +329,7 @@ def ep_params(spec, sec):
     return {"t": float(ep.get("t_plate_mm")), "d": int(ep.get("d_mm")), "grade": ep.get("grade", "10.9"),
             "plate_grade": ep.get("plate_grade") or "E250", "n_out": len(out), "n_in": len(inn), "pitch_rule": rule,
             "b_plate": b_plate, "web_doubler": round(float(ep.get("web_t_mm") or p["tw"]) - float(p["tw"]), 3),
-            "member_fy": float(ep.get("web_fy_MPa") or 350.0), "gauge": float(g) if g else None}
+            "member_fy": float(ep.get("web_fy_MPa") or member_web_fy(sec)), "gauge": float(g) if g else None}
 
 
 def pitch_of(par, sec):
@@ -956,8 +970,10 @@ def _eps(fy):
 def fy_of(sec, grade):
     import india_is800 as I8
     import sections as S
-    m = I8.material_for_section(S.props(sec), grade)
-    return float(m.get("fy_MPa") or 250.0)
+    p = S.props(sec)
+    m = I8.material_for_section(p, grade)
+    # fix C: no grade -> the E250 band of the governing thickness (was 250 MPa whatever the thickness)
+    return float(m.get("fy_MPa") or I8.fy_is2062("E250", I8.governing_thickness_mm(p) or 1.0))
 
 
 class LocalModel:
@@ -1203,6 +1219,7 @@ class LocalModel:
                 inp = (c.get("detail") or {}).get("inputs") or {}
                 pz = I8.panel_zone_check(d_beam_mm=d0, V_design_N=S12.panel_zone_design_shear(mps, d0, tf0, vcol),
                                          fy_MPa=fyc, doubler_t_mm=float(inp.get("doubler_t_mm") or 0.0),
+                                         doubler_grade=inp.get("doubler_grade"), doubler_fy_MPa=inp.get("doubler_fy_MPa"),
                                          continuity_plates=True, n_webs=1, d_col_mm=pc["d"], tw_mm=pc["tw"],
                                          bf_mm=pc["bf"], tf_mm=pc["tf"])
                 dc = float(pz.get("dc") or 0.0)
@@ -1301,8 +1318,8 @@ class LocalModel:
             bf, tf, tw = d[-3], d[-2], d[-1]
             Ds = d[:2] if k == "tapered" else d[:1]
             grade = self.cfg.get("steel_grade") or "E350"
-            fyf = 350.0 if str(grade).startswith("E350") and tf <= 20 else (330.0 if str(grade).startswith("E350") and tf <= 40 else (320.0 if str(grade).startswith("E350") else 250.0))
-            fyw = 350.0 if str(grade).startswith("E350") and tw <= 20 else (330.0 if str(grade).startswith("E350") else 250.0)
+            # fix C: the IS 2062 Table 3 band of each plate (was 350 up to 20 mm, 250 for any other grade)
+            fyf, fyw = I8.fy_is2062(grade, tf), I8.fy_is2062(grade, tw)
             if tw < float(fab.get("tw_min", 4.0)) - 1e-9:
                 out = (False, "web below the minimum")
             elif tf < tw:
@@ -1315,6 +1332,8 @@ class LocalModel:
                 out = (False, "depth outside the fabrication range")
             elif bf > float(fab.get("bf_max", 400.0)) + 1e-9 or bf < float(fab.get("bf_min", 120.0)) - 1e-9:
                 out = (False, "flange width outside the fabrication range")
+            elif self._base_outline_fails(c, lab):
+                out = (False, self._base_outline_fails(c, lab))
             if out[0] and self.is18 and self.spec["members"][c].get("sfrs", True):
                 import india_is18168 as I18
                 import india_is800_s12 as S12
@@ -1326,25 +1345,63 @@ class LocalModel:
                     fy = fy_of(s_, grade)
                     ry = S12._ry({"grade": grade}, p)[0]
                     Ca = self._Ca(c, s_, fy) if comp == "column" else None
-                    r = I18.table2_check(comp, p, fy, ry, Ca=Ca)
+                    # review R2-1: a column with no earthquake record has no Ca (never 0) -- the screen does not judge
+                    # it; the full run reports the row not evaluated / not applicable
+                    r = I18.table2_check(comp, p, fy, ry, Ca=Ca) if (comp != "column" or Ca is not None) else {}
                     if r.get("ok") is False:
                         out = (False, "IS 18168 Table 2 (%s %s)" % (comp, r.get("value")))
                         break
-                    sc = I8.section_class_table2(p, fy, welded=True)["section_class"]
-                    if sc not in ("plastic", "compact"):
+                    # review finding 7 (2026-11-06): the 12.11.3.1 screen classifies as the full run's Section 12 gate
+                    # (india_is800_s12.table2_class_by_combination): D-T11 for the gates, the hinge state of each
+                    # earthquake record
+                    sc = self._class_with_N(c, p, fy)
+                    if sc is not None and sc not in ("plastic", "compact"):
                         out = (False, "IS 800 12.11.3.1 %s not compact" % s_)
                         break
         self._t2_cache[key] = out
         return out
 
-    def _Ca(self, c, sec, fy):
-        import sections as S
-        P = 0.0
+    def _eq_labels(self):
+        """Labels of the earthquake combinations (Table 4 EL rows and 12.2.3 rows: lateral_kind 'EQ') of the run."""
+        if getattr(self, "_eq_lab", None) is None:
+            self._eq_lab = {c.get("label") for c in (self.pkg.get("load_combinations") or [])
+                            if isinstance(c, dict) and (str(c.get("lateral_kind") or "").upper() == "EQ"
+                                                        or set(c.get("tags") or []) & {"is800_12_2_3", "is18168_5_5"})}
+        return self._eq_lab
+
+    def _class_with_N(self, c, p, fy):
+        """The least favourable IS 800 Table 2 class of section p for the 12.11.3.1 screen, as the full run's Section 12
+        gate (india_is800_s12.table2_class_by_combination, Steltic ruling D-T11 for the gates): over the earthquake
+        records of constituent c only, each in the hinge state -- the 'generally' web rows with its N (tension + in
+        the records); no earthquake record: None (not judged, review R2-1 -- never the N = 0 class)."""
+        import india_is800 as I8
+        order = {"plastic": 1, "compact": 2, "semi-compact": 3, "slender": 4}
+        eq = self._eq_labels()
+        worst = None
         for mid in self.mem_of_const.get(c) or []:
             for t in self.el_of_mem[mid]:
-                for r in (self.envt.get(t, {}).get("records") or {}).values():
-                    P = max(P, abs(float(r[0])))
-        return P / (fy * float(S.props(sec)["A"]) / 1.10)
+                for lab, r in (self.envt.get(t, {}).get("records") or {}).items():
+                    if lab not in eq:
+                        continue
+                    P = -float(r[0])
+                    cls = I8.section_class_table2(p, fy, P_N=P, welded=True, axial_only=False)["section_class"]
+                    if order.get(cls, 0) > order.get(worst, 0):
+                        worst = cls
+        return worst
+
+    def _Ca(self, c, sec, fy):
+        """IS 18168 Table 2 (ii) Ca of the screen, as the full run (india_is800_s12._ca_governing, CA_EQ_BASIS): the
+        largest |P| of the earthquake records of constituent c over Py / gamma_m0; None with no earthquake record
+        (review R2-1: never 0)."""
+        import sections as S
+        eq = self._eq_labels()
+        P, seen = 0.0, False
+        for mid in self.mem_of_const.get(c) or []:
+            for t in self.el_of_mem[mid]:
+                for lab, r in (self.envt.get(t, {}).get("records") or {}).items():
+                    if lab in eq:
+                        P, seen = max(P, abs(float(r[0]))), True
+        return P / (fy * float(S.props(sec)["A"]) / 1.10) if seen else None
 
     # ------------------------------------------------------------------ global predictors
     def _globals(self):
@@ -1520,6 +1577,41 @@ class LocalModel:
         fb = eb["f"][0] if int(self.dump[k["tb"]]["member"]["node_i"]) == k["node"] else eb["f"][1]
         return PB.section_at(labc, ec["f"][1]), PB.section_at(labb, fb)
 
+    def _base_outline_fails(self, c, lab):
+        """A column constituent whose base section does not fit its declared base plate (the full run's
+        geometry_plate_outline gates: L >= 0.95 d and B >= 0.95 bf about the two axes, india_connections
+        base_plate_design / _biaxial).  The sizer keeps the declared plates, so such a section cannot pass; it is
+        screened out here instead of failing the next full run (2026-11-06).  Returns the reason or None."""
+        import peb_build as PB
+        import sections as S
+        if c not in (self.spec.get("base_consts") or []):
+            return None
+        conn = self.cfg.get("connections") or {}
+        specs = [v for v in (conn.get("column_base") or {}).values()
+                 if isinstance(v, dict) and v.get("B_mm") and v.get("L_mm")]
+        if not specs:
+            return None
+        # the declared plates the bases of this constituent can take (by the member's old section key, else all)
+        els = {t for mid in self.mem_of_const.get(c) or [] for t in self.el_of_mem[mid]}
+        for t in self.base_info:
+            if t not in els:
+                continue
+            pe = self.dump[t].get("peb") or {}
+            f0 = min(pe.get("f") or [0.0])
+            sec_b = PB.section_at(lab, f0) if pe else lab
+            PB.ensure(sec_b)
+            p = S.props(sec_b)
+            old = self.reg[t][1]
+            mlab = (self.members.get(pe.get("member")) or {}).get("section")
+            cand = [v for k, v in (conn.get("column_base") or {}).items() if isinstance(v, dict) and v.get("B_mm")
+                    and v.get("L_mm") and (k.split(":", 1)[-1] in (old, mlab))] or specs
+            B = max(float(v["B_mm"]) for v in cand)
+            L = max(float(v["L_mm"]) for v in cand)
+            if L < 0.95 * float(p["d"]) - 1e-6 or B < 0.95 * float(p["bf"]) - 1e-6:
+                return ("base section %s outside the declared base plate %g x %g mm (L >= 0.95 d, B >= 0.95 bf)"
+                        % (sec_b, B, L))
+        return None
+
     def _bases(self):
         out = []
         for t, e in self.dump.items():
@@ -1597,16 +1689,19 @@ def knee_rows(lm, cfg_c, dem, kspec, kp):
     ds = kp.get("diagonal_stiffener") or {}
     theta = math.atan2(pb["d"], pc["d"])
     A_d = float(ds.get("n", 2)) * float(ds.get("b_mm", 0.0)) * float(ds.get("t_mm", 0.0))
-    V_d = A_d * float(ds.get("fy_MPa", 250.0)) / 1.10 * math.cos(theta)
+    V_d = A_d * float(PC._stiffener_fy(ds, cfg_c, "knee diagonal stiffener")) / 1.10 * math.cos(theta)
     dbl = float(kp.get("doubler_t_mm") or 0.0)
-    V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * 250.0 / (math.sqrt(3.0) * 1.10)
+    fy_dbl = float(PC._stiffener_fy(kp, cfg_c, "knee web doubler", t_key="doubler_t_mm", fy_key="doubler_fy_MPa",
+                                    grade_key="doubler_grade"))
+    V_dbl = (pc["d"] - 2 * pc["tf"]) * dbl * fy_dbl / (math.sqrt(3.0) * 1.10)
     rows = [("knee panel shear", Vp, Vweb + V_d + V_dbl)]
     fs_ = kp.get("flange_stiffener") or {}
     A_f = float(fs_.get("n", 2)) * float(fs_.get("b_mm", 0.0)) * float(fs_.get("t_mm", 0.0))
     t_cfl = float(kspec.get("column_flange_t_mm") or pc["tf"])
     tw_c = float(pc["tw"]) + dbl
     b_web = pb["tf"] + 5.0 * (t_cfl + float(kp.get("weld_mm", 6.0)))
-    cap_f = (A_f * float(fs_.get("fy_MPa", 250.0)) + tw_c * b_web * fyc) / 1.10
+    cap_f = (A_f * float(PC._stiffener_fy(fs_, cfg_c, "knee flange stiffener"))
+             + (float(pc["tw"]) * fyc + dbl * fy_dbl) * b_web) / 1.10           # fix C: as peb_checks.knee_records
     rows.append(("knee column stiffeners", max(Mk, Mconn) / lever, cap_f))
     if kep.get("rows"):
         sym = bool(kspec.get("symmetric"))
@@ -1626,7 +1721,7 @@ def knee_rows(lm, cfg_c, dem, kspec, kp):
         grade_c = (kspec.get("column_flange_grade") or (cfg_c.get("grade_by_section") or {}).get(csec)
                    or cfg_c.get("steel_grade"))
         cf = dict(kep, t_plate_mm=t_cfl, fy_plate_MPa=fyc, lv_mm=lv_cf, plate_grade=grade_c, web_t_mm=tw_c,
-                  web_fy_MPa=fyc, hf_mm=lay["hf_mm"])
+                  web_fy_MPa=(float(pc["tw"]) * fyc + dbl * fy_dbl) / tw_c, hf_mm=lay["hf_mm"])   # finding 5
         caps = [(PC.end_plate_capacity(cf, cfg_c) or {}).get("capacity_Nmm")]
         if not sym and lay["reverse_rows"]:
             caps.append((PC.end_plate_capacity(cf, cfg_c, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
@@ -1918,7 +2013,8 @@ def splice_fixed(lm, key, dem, face, par, margin=1.0):
                    or lm.cfg.get("steel_grade"))
         cf = dict(ep, t_plate_mm=t_cf, fy_plate_MPa=PC._fy_plate(csec_, lm.cfg), lv_mm=lv_cf, plate_grade=grade_c,
                   web_t_mm=float(pcol["tw"]) + float(sp.get("column_web_doubler_mm") or 0.0),
-                  web_fy_MPa=PC._fy_plate(csec_, lm.cfg), hf_mm=lay["hf_mm"])
+                  web_fy_MPa=PC.column_web_strip_fy(pcol, PC._fy_plate(csec_, lm.cfg), sp.get("column_web_doubler_mm"),
+                                                    lm.cfg), hf_mm=lay["hf_mm"])               # finding 5
         caps_cf = [(PC.end_plate_capacity(cf, lm.cfg) or {}).get("capacity_Nmm")]
         if not sym and lay["reverse_rows"]:
             caps_cf.append((PC.end_plate_capacity(cf, lm.cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
@@ -2015,15 +2111,18 @@ def key_catalogue():
 _KEYCAT = None
 
 
-def size_key(need_N, fck, margin=1.0, b_max=None):
+def size_key(need_N, fck, margin=1.0, b_max=None, floor=None):
     """Lightest cruciform key with capacity >= need (None: no key needed); the key plates fit under the base plate
-    (b <= the smaller plan dimension of the base plate)."""
+    (b <= the smaller plan dimension of the base plate).  floor = [b, t, h] of a floor design (strengthen-only): no
+    key dimension below it (a shorter key can be stronger in bending, so the lightest passing key may be shorter)."""
     global _KEYCAT
     if need_N <= 0.0:
         return None, 0.0
     _KEYCAT = _KEYCAT or key_catalogue()
     for kg, b, t, h in _KEYCAT:
         if b_max and b > b_max + 1e-9:
+            continue
+        if floor and any(v < f - 1e-9 for v, f in zip((b, t, h), floor)):
             continue
         if shear_key(b, t, h, plate_fy(t, "E250"), fck)["capacity_N"] * margin >= need_N:
             return [b, t, h], kg
@@ -2173,9 +2272,9 @@ class Evaluator:
         for slot, need in bd.items():
             if slot not in cp:
                 continue
-            dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
-                                 b_max=cp[slot].get("b_max"))
             fk = (fl.get(slot) or {}).get("key")
+            dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
+                                 b_max=cp[slot].get("b_max"), floor=fk)
             if fk and shear_key(fk[0], fk[1], fk[2], plate_fy(fk[1], "E250"),
                                 cp[slot].get("fck", 30.0))["capacity_N"] * self.margin("conn:base") >= need:
                 dims, kgk = list(fk), 2 * fk[0] * fk[1] * (fk[2] + 50.0) * STEEL

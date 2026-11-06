@@ -106,6 +106,28 @@ def plate_fy_is2062(fy_MPa, t_mm, grade=None, *, job_grade=None, what="plate"):
     return fy, rec
 
 
+def plate_fy_band(t_mm, grade=None, *, fy_MPa=None, job_grade=None, what="plate", default_grade="E250"):
+    """Engine checks fix C (2026-11): the fy of a plate or stiffener whose fy may or may not be declared, from the one
+    IS 2062:2025 Table 3 band (india_is800.fy_is2062):
+      * fy declared: plate_fy_is2062 (capped at the Table 3 ReH of its grade for ITS thickness; a lower value kept);
+      * fy not declared: the Table 3 ReH of its grade (declared, else default_grade -- E250, the grade the old
+        default of 250 MPa stood for) for its thickness.  Before this a missing fy was taken as 250 MPa whatever the
+        thickness (240 MPa is the E250 value above 16 mm).
+    t_mm missing or zero (no plate): the declared fy, else the <= 16 mm value.  Returns (fy_MPa, record)."""
+    import india_is800 as _I8
+    t_ok = _isnum(t_mm) and float(t_mm) > 0
+    if fy_MPa is not None:
+        return plate_fy_is2062(fy_MPa, t_mm if t_ok else None, grade, job_grade=job_grade, what=what)
+    g, _q = _I8.parse_is2062_grade(grade)
+    key = g if g in _I8.IS2062_TABLE3 else default_grade
+    fy = _I8.fy_is2062(key, float(t_mm) if t_ok else 1.0)
+    return fy, {"what": what, "fy_declared_MPa": None, "fy_used_MPa": fy, "t_mm": t_mm, "grade": key,
+                "grade_basis": ("declared grade %s" % grade) if g in _I8.IS2062_TABLE3 else
+                               "no fy or grade declared: %s assumed (the old 250 MPa default)" % default_grade,
+                "reduced": False, "band_checked": t_ok, "clause": PLATE_FY_CLAUSE, "cite": _I8.IS2062_CITE,
+                "source": "steel_engine/india_connections.py"}
+
+
 def tag_plate_fy(check, rec):
     """Attach a plate_fy record to a check row; a reduction is stated in the row's note and cite (AUD-2)."""
     if not isinstance(check, dict) or not rec:
@@ -1245,6 +1267,13 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
     # plate thickness
     a_proj = (L_mm - 0.95 * col_d_mm) / 2.0
     b_proj = (B_mm - 0.8 * col_bf_mm) / 2.0
+    if a_proj < 0.0 or b_proj < 0.0:
+        # third wave (2026-10-30): a plate inside the column outline is a geometric failure, not a crash (the
+        # compression-side cantilever below divided by a zero bearing length)
+        checks["geometry_plate_outline"] = _geom_gate(
+            round(max(0.95 * col_d_mm - L_mm, 0.8 * col_bf_mm - B_mm), 1), 0.0, clause="geometric feasibility",
+            cite="the base plate must extend beyond the column outline (0.95 d along L, 0.8 bf along B: the IS 800 "
+                 "7.4.3.1 projections)")
     big, small = max(a_proj, b_proj), min(a_proj, b_proj)
     if P > 0 and e <= L_mm / 6.0 and M_dem == 0:
         w = P / (B_mm * L_mm)
@@ -1258,7 +1287,9 @@ def base_plate_design(*, P_N, M_Nmm=0.0, V_N=0.0, B_mm, L_mm, t_plate_mm, fy_pla
         if fp is not None:
             m = a_proj
             Y = bearing.get("Y_mm", L_mm)
-            if Y >= m:
+            if m <= 0.0:
+                Mcomp = 0.0                     # no projection beyond the column face (geometry_plate_outline fails)
+            elif Y >= m:
                 f_face = fp * (1 - m / Y) if Y < L_mm else fp
                 Mcomp = f_face * m ** 2 / 2 + (fp - f_face) * m ** 2 / 3
             else:
@@ -1370,7 +1401,11 @@ def base_plate_design_biaxial(*, P_N, Mz_Nmm=0.0, My_Nmm=0.0, V_N=0.0, B_mm, L_m
         ry = base_plate_design(P_N=P_N, M_Nmm=My, V_N=0.0, B_mm=L_mm, L_mm=B_mm, col_d_mm=col_bf_mm, col_bf_mm=col_d_mm,
                                col_tf_mm=col_tf_mm, anchors=ay, **common_y)
         for k, v in ry["checks"].items():
-            if k.startswith(("geometry_", "shear_path", "shear_key", "anchor_shear", "anchorage_embedment")):
+            # the anchor / weld geometry rows belong to the major-axis call; the plate-outline gate of the swapped
+            # outline is kept (engine checks, 2026-11: a plate inside the column outline about the minor axis, B <
+            # 0.95 bf, fails loudly here instead of returning a zero compression-side plate moment)
+            if k.startswith(("geometry_", "shear_path", "shear_key", "anchor_shear", "anchorage_embedment")) and \
+                    k != "geometry_plate_outline":
                 continue
             out["checks"]["y:" + k] = v
         out["bearing_y"] = ry.get("bearing")
