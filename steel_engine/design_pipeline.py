@@ -1513,6 +1513,8 @@ def design_india(name, cfg, outdir):
             "patterns": {str(k): {"sheltered": v.get("sheltered") or [], "own_wall_width": v.get("own_wall_width") or [],
                                   "side_walls": v.get("side_walls"), "side_sheltered": v.get("side_sheltered") or [],
                                   "side_own_wall_width": v.get("side_own_wall_width") or [],
+                                  "stepped_facade": v.get("stepped_facade") or [],
+                                  "side_stepped_facade": v.get("side_stepped_facade") or [],
                                   "envelope_residual": v.get("envelope_residual") or [],
                                   "members": v.get("members") or []}
                          for k, v in sorted(_mww.items(), key=lambda kv: str(kv[0]))}}

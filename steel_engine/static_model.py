@@ -1311,7 +1311,8 @@ def member_wind_loads(cfg, model, pat, f):
                 sscan = wall_wind_pieces(cols_s, env, oth, 1.0, (("up", qs, 1.0), ("down", qs, -1.0)),
                                          cfg["SX"] if ax == 0 else cfg["SY"])
                 rec.update(side_sheltered=sscan["record"]["sheltered"],
-                           side_own_wall_width=sscan["record"]["own_wall_width"])
+                           side_own_wall_width=sscan["record"]["own_wall_width"],
+                           side_stepped_facade=sscan["record"]["stepped_facade"])
                 jobs.append(("side", oth, sscan))
             model.setdefault("member_wind_wall", {})[pat.get("name")] = rec
             loads_, area_ = [], {}
