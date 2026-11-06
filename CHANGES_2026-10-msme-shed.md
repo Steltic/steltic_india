@@ -16,13 +16,19 @@ Most new paths leave earlier golds unchanged:
 
 Three changes are not gated, and the first two DO change earlier golds (intended; the lead's final gold run shows
 them):
-- **IS 800 Table 3 row choice (review 2026-11).** The member-wind combinations (`WM0+`, `WM90-R`, ...) now count as
-  wind combinations, in the general member check and in the axial check. Before, only `EQ`, `W_`, `WL` and `EL` did.
-  A member whose compression arises only in member-wind combinations moves from row (i) 180 to row (iii) 250, so
-  IN_Ex1, IN_Ex2 and IN_Ex8 members (e.g. the IN_Ex2 roof rows) become less conservative.
-- **Row (i) label.** An axial force below 1 N (analysis noise) is no longer compression, and row (i) now names the
-  largest compression of a combination without wind or earthquake (it printed "(i) compression from DL + LL" with a
-  wind or earthquake combination). This changes labels, not ratios.
+- **IS 800 Table 3 row choice (review 2026-11 and its re-check).**
+  - A combination is wind / earthquake by its own record (its load terms: kind, member-wind pattern or tag,
+    response-spectrum or vertical-earthquake terms), registered by `design_india`; the label text is only a fallback
+    (now also `WM*`). Member-wind combinations (`WM0+`, `WM90-R`, IN_Ex6's `WMX+` / `WMY+`) count as wind. Before,
+    only labels with `EQ`, `W_`, `WL` or `EL` did.
+  - An axial force below 1 N (analysis noise) is no longer compression.
+  - The row reads the member's gravity compression over ALL its records. The member check itself only receives the
+    top-ranked records (largest |N|, |M|, |V|), which can drop the gravity combinations; with member wind counted as
+    wind that put the IN_Ex7 crane columns on row (iii) until this was added.
+  - Row (i) names the largest compression of a combination without wind or earthquake.
+  - The group's Table 3 line shows the element with the largest Table 3 ratio, with its own row and ratio.
+  - A member whose compression arises only in wind combinations moves from row (i) 180 to row (iii) 250: ratios DO
+    change, not only labels. The moves in the published golds, from actual runs, are listed under "Gold moves" below.
 - **Single angles in 9.3.** `member_check_is800` passes `section_type = 'angle'` for a single angle, so 9.3.1 uses the
   conservative linear form of 9.3.1.1 instead of the 9.3.1.2 I / H reduced moments (a compact angle went from 0.06 to
   0.35 in the review's example). No earlier gold has an angle in this check; fly braces use their own path.
@@ -95,7 +101,13 @@ them):
     declared gusset edge) and buckling on the Whitmore width (7.1.2 class c, declared K and free length). For a chord
     the full chord force is used: the heel and apex gussets, where the chord ends. Missing gusset geometry leaves the
     row not evaluated.
-  - The knee checks of IS 800 12.10.2.1 / 12.10.2.4 (D-T10, below).
+  - The knee checks of IS 800 12.10.2.1 / 12.10.2.4 (D-T10, below), with the knee load path:
+    `truss_connections['knee_gusset']` = {face_length_mm, t_mm, grade, weld 'cjp', e_face_mm} and
+    `truss_connections['heel']['cap_weld']` = 'cjp'.
+  - Gusset width: `gusset_width_mm` (the declared outline across the bolt line) caps the Whitmore width (the
+    `available_width_mm` of `whitmore_section`, wired now). Gusset buckling K by the edge support, `gusset_support`:
+    'two_edges' 0.65, 'one_edge' 1.2 (a lower declared K is raised; engineering practice, the engine's brace-gusset
+    rule).
   - Angles only: a CHS or other non-angle truss member takes the general member check, and its end connection is
     reported as not covered (it crashed before).
   - A declared chord splice at a panel-point gusset (`splice`: {at, gusset_depth_mm}): 7.3.4.2, the gusset across
@@ -125,26 +137,39 @@ them):
 - **`peb_report.py`:** the angle-truss section: members, end connections, knees, and the rulings that apply.
 - **`report_public.py`:** new ruling D-T10. **`viewer3d.py`:** truss members drawn as axial members.
 
-### Steltic design ruling D-T10 (owner, 2026-11-01)
+### Steltic design ruling D-T10
+
+**Owner ruling 2026-11-01** (1.2 × what the knee brace can deliver); **lead reading 2026-11-01**: N_del = Ag·fy
+characteristic, per IS 800 12.7.3.1(a), max over tension and compression.
 
 Knee-braced truss portal, IS 800 12.10.2.1:
 
 - The truss is pinned on the column cap. It reaches the column only through the couple of the knee brace and the heel
-  seat.
-- So the maximum moment the beam can deliver to the joint is the largest force the knee brace can deliver in EITHER
-  direction (the wind reverses), N_del = max(Pd, Tdg): its compression design strength, or its tension strength on
-  gross-section yield Tdg = Ag fy / γm0. Rupture and block shear of the brace end are connection limit states and do
-  not cap it. M_del = N_del times the lever arm about the heel.
-- The knee is designed for 1.2 times that moment:
-  - each knee-brace connection, the bolts and the gussets at both ends, for 1.2 N_del; gusset buckling for 1.2 Pd;
-  - the brace's own bolted end (6.3.3 rupture, 6.4.1 block shear) not weaker than Tdg;
+  seat, so the maximum moment the beam can deliver to the joint is the largest force the knee brace can deliver in
+  either direction (the wind reverses) times its lever arm about the heel: M_del = N_del e.
+- N_del is characteristic, on the engine's Section 12 convention (Mp = Zp fy for D-T7) and the 1.2 fy Ag of
+  12.7.3.1(a): the larger of the gross yield Ag fy and the characteristic buckling strength Pd γm0. For the knee
+  brace this is Ag fy (347.5 kN against 126.2 kN). Rupture and block shear of the brace end are connection limit
+  states and do not cap it.
+- The knee is designed for 1.2 M_del:
+  - each knee-brace connection (the bolts and the gussets at both ends, the Whitmore width capped by the declared
+    gusset outline) for 1.2 N_del; gusset buckling for 1.2 × the characteristic buckling strength;
+  - the knee load path that the CJP welds imply: the gusset at the column face (8.4.1 / 9.2.2 / 9.3.1.1), its CJP
+    weld (10.5.7.1.2), the column web at the knee (8.7.4 local capacity, 8.7.3.1 buckling), the column web shear
+    between the knee and the heel (8.4.1) and the heel cap-plate CJP weld;
   - the heel seat for the horizontal force of the couple, with the 12.10.2.4 shear (1.2DL + 0.5LL plus
     2 × 1.2 M_del / span).
+- The brace-yields-first check is a ductility-order check on design values on both sides (Tdg = Ag fy / γm0 against
+  the end rupture / block shear), with no 1.2 margin on the angle's own end. A single angle bolted through one leg
+  cannot develop 1.2 × its yield at its end (6.3.3 shear lag: Tdn tends to about 1.2 Tdg only as the connection
+  length tends to infinity), so the knee connection is designed for more than the brace can transmit.
 - So the knee and heel connections are designed so that the brace yields (gross section) before they fail.
-- The first implementation used min(Pd, Td), the weaker direction. The 2026-11 review found that and it was
-  corrected: the owner's ruling is "1.2 × the moment the knee brace can deliver".
-- The truss joints use fully tensioned HSFG bolts (12.4.1). The welds to the column are CJP (12.4.2).
+- M_del is about twice the column's plastic moment (368.6 kN-m against 163 kN-m for MB300), so the rule is
+  conservative for the knee: the column hinges first. The demand is not capped.
+- The truss joints use fully tensioned HSFG 8.8 bolts (12.4.1). The welds to the column are CJP (12.4.2).
 - The Mp alternative of 12.10.2.1 is not used: a triangular truss has no plastic moment at the column face.
+- History: first coded as min(Pd, Td) (the weaker direction), then max(Pd, Ag fy / γm0) (design values). The two
+  reviews found both; the lead reading settled the characteristic basis.
 
 ## Gold run (IN_Ex21, 2026-11-01, after the independent review; on main `41fb2f7` with the span-moment fix)
 

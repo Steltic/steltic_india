@@ -776,3 +776,20 @@ def test_table3_row_reads_all_records_not_the_top_subset():
     assert I8.member_check_is800(col, cf)["table3_slenderness"]["limit"] == 250           # the subset alone: (iii)
     r = I8.member_check_is800(dict(col, **{k: m[k] for k in ("t3_gravity_compression_N", "t3_gravity_combo")}), cf)
     assert r["table3_slenderness"]["limit"] == 180 and r["table3_slenderness"]["governing_combo"] == "1.5DL+1.5LL"
+
+
+def test_table3_compression_noise_floor_is_relative_to_the_squash_load():
+    """A 'gravity compression' of a few newtons (2.2 N in an IN_Ex4 CHS168.3X4.5 roof strut, squash load 717 kN) is
+    analysis noise: the strut stays on row (iii) with its wind compression.  Real gravity compression (IN_Ex21 bottom
+    chord 16.3 kN against a 406 N floor) keeps row (i)."""
+    p = S.props("CHS168.3X4.5")
+    assert I8.p_comp_tol(p["A"], 310.0) == pytest.approx(1e-3 * p["A"] * 310.0)
+    assert I8.p_comp_tol(1.0, 250.0) == I8.P_COMP_TOL_N                          # never below 1 N
+    m = {"id": "s", "section": "CHS168.3X4.5", "grade": "YSt 310", "process": "ERW", "role": "column",
+         "L_mm": 6000.0, "Kz": 1.0, "Ky": 1.0, "LLT_sag_mm": 6000.0, "LLT_hog_mm": 6000.0,
+         "t3_gravity_compression_N": 2.2, "t3_gravity_combo": "1.5DL+1.5LL+N_X"}
+    z = dict(Mz_i_Nmm=0.0, Mz_j_Nmm=0.0, Mz_mid_Nmm=0.0, My_i_Nmm=0.0, My_j_Nmm=0.0, Vy_N=0.0, Vz_N=0.0)
+    cf = [dict(z, combo="1.5DL+1.5WM90-", P_N=15e3), dict(z, combo="1.5DL+1.5LL+N_X", P_N=2.2)]
+    assert I8.member_check_is800(m, cf)["table3_slenderness"]["limit"] == 250
+    real = dict(m, t3_gravity_compression_N=16.3e3, t3_gravity_combo="1.5DL+1.5LL")
+    assert I8.member_check_is800(real, cf)["table3_slenderness"]["limit"] == 180
