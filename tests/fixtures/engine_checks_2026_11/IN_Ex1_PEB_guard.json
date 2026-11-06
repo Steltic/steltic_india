@@ -1,0 +1,1770 @@
+{
+ "source": "gold run pub/jobs_hr/IN_Ex1_PEB_factory_shed_tapered_Bengaluru (gold/runs/eng10, engine e45a65d), cut to what consistency._consultancy_issues reads",
+ "cfg": {
+  "name": "IN_Ex1_PEB_factory_shed_tapered_Bengaluru",
+  "units": "N-mm",
+  "jurisdiction": "india",
+  "NX": 10,
+  "NY": 4,
+  "SX": 7500.0,
+  "SY": 7500.0,
+  "heights": [
+   10000.0
+  ],
+  "roof_planes": [
+   {
+    "axis": "Y",
+    "eave_coords_mm": [
+     0.0,
+     30000.0
+    ],
+    "ridge_coord_mm": 15000.0,
+    "eave_z_mm": 10000.0,
+    "ridge_z_mm": 11500.0,
+    "lines": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10
+    ],
+    "rafter_members": {
+     "lo": [
+      [
+       6000.0,
+       "TI1000-550X250X14X6"
+      ],
+      [
+       15000.0,
+       "WI550X220X10X5"
+      ]
+     ]
+    },
+    "rafter_members_by_line": {
+     "0": {
+      "lo": [
+       [
+        15000.0,
+        "WI350X160X8X5"
+       ]
+      ]
+     },
+     "10": {
+      "lo": [
+       [
+        15000.0,
+        "WI350X160X8X5"
+       ]
+      ]
+     }
+    },
+    "gravity_lines": [
+     0,
+     10
+    ],
+    "braced_lines": [
+     0,
+     10
+    ],
+    "ridge_sec": "CHS114.3X3.6"
+   }
+  ],
+  "arch": "PEB portal shed (tapered OMRF portals + OCBF end bays)",
+  "system": "OMRF+OCBF",
+  "floor_system": "one-way purlins + profiled metal sheeting",
+  "notes": "IN_Ex1 PEB factory shed, Bengaluru: 9 tapered OMRF portals (30 m clear span, 7.5 m bays, eave 10 m, 1:10) + post-and-beam gable frames, OCBF CHS X-bracing in the end bays, lapped Z purlins / girts (IS 801, CFS engine). Wind governs the sway (H/240 brittle dado); gravity governs the knees.",
+  "snow": 0.0,
+  "delegated_design": [
+   {
+    "item": "column pedestals, footings and anchor-group concrete breakout / pull-out (foundation EOR)",
+    "criteria": "IS 456:2000 pedestal (M30) for the base reactions; concrete cone / group breakout of the 4 M24 anchors (900 mm embedment) in tension and the shear-key bearing; edge distances; thrust tie between the pinned bases or footing design for the portal thrust",
+    "interface_forces": "design/reactions.csv (unfactored per basic case and column line) and design/connection_demands.csv"
+   },
+   {
+    "item": "profiled roof and wall sheeting with fixings, polycarbonate daylight sheets, ridge ventilator (supplier)",
+    "criteria": "IS 875-3 local Cpe (roof -1.4 / -1.2, wall -1.0) with Cpi +-0.5 x pz = 0.563 kN/m2; IS 875-2 0.75 kN/m2; span 1.5 m (roof) / 1.8 m (walls); fastener pull-out",
+    "interface_forces": "fastener pull-out = local suction x fastener tributary area"
+   },
+   {
+    "item": "230 mm brick dado wall on the plinth beam (self-supporting, tied to the columns out of plane)",
+    "criteria": "IS 1905 masonry (outside the corpus): wind (0.7 + 0.5) pd = 0.506 kN/m2 and the IS 1893 out-of-plane seismic coefficient on 3.0 m x 0.23 m x 19.25 kN/m3; ties at 3.0 m to every column",
+    "interface_forces": "tie force per column ~ 0.5 x 3.0 m x 7.5 m x q (the column wind load already includes the dado zone: the frame model carries the full wall wind on the columns)"
+   },
+   {
+    "item": "roller-shutter doors 5 m x 5 m (4 no.) with their jamb / header framing (door supplier)",
+    "criteria": "wind (0.7 + 0.5) pd = 0.506 kN/m2 on the shutter (Cpi +-0.5 basis: 6.7 % openings per long wall)",
+    "interface_forces": "jamb reactions to the main columns / girts"
+   }
+  ]
+ },
+ "pkg": {
+  "unit_system": "N-mm",
+  "members": [
+   {
+    "id": "roof-CHS114.3X3.6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 7500.0,
+     "section": "CHS114.3X3.6",
+     "n_elements": 10
+    }
+   },
+   {
+    "id": "roof-CHS168.3X4.5",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 7500.0,
+     "section": "CHS168.3X4.5",
+     "n_elements": 16
+    }
+   },
+   {
+    "id": "roof-CHS193.7X4.8",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 7500.0,
+     "section": "CHS193.7X4.8",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "roof-WI350X160X8X5",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 7537.4,
+     "section": "WI350X160X8X5",
+     "n_elements": 8
+    }
+   },
+   {
+    "id": "roof-WI550X220X10X5",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 9044.9,
+     "section": "WI550X220X10X5",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI578X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI578X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI634X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI634X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI691X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI691X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI747X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI747X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI803X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI803X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI859X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI859X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI916X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI916X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "roof-WI972X250X14X6",
+    "inputs": {
+     "role": "roof",
+     "length_mm": 753.7,
+     "section": "WI972X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "brace-CHS168.3X4.5",
+    "inputs": {
+     "role": "brace",
+     "length_mm": 12500.0,
+     "section": "CHS168.3X4.5",
+     "n_elements": 8
+    }
+   },
+   {
+    "id": "lateral_col-WI300X180X8X5",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 10000.0,
+     "section": "WI300X180X8X5",
+     "n_elements": 4
+    }
+   },
+   {
+    "id": "lateral_col-WI344X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI344X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "gravity_col-WI400X180X8X5",
+    "inputs": {
+     "role": "gravity_col",
+     "length_mm": 11500.0,
+     "section": "WI400X180X8X5",
+     "n_elements": 6
+    }
+   },
+   {
+    "id": "lateral_col-WI431X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI431X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI519X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI519X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI606X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI606X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI694X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI694X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI781X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI781X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI869X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI869X250X14X6",
+     "n_elements": 18
+    }
+   },
+   {
+    "id": "lateral_col-WI956X250X14X6",
+    "inputs": {
+     "role": "lateral_col",
+     "length_mm": 1250.0,
+     "section": "WI956X250X14X6",
+     "n_elements": 18
+    }
+   }
+  ],
+  "ponding": null,
+  "composite_design": null,
+  "deformation_compatibility": {
+   "separation": null
+  },
+  "connections": [
+   {
+    "id": "conn-roof-CHS114.3X3.6",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.006231712628737281,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-CHS168.3X4.5",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.2024442225688493,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-CHS193.7X4.8",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.12667279791001815,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI350X160X8X5",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "beam-end shear connection: (V + N resultant) bolts_10_3",
+    "DC": 0.37369259137996375,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI550X220X10X5",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI578X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI634X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI691X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI747X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI803X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI859X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI916X250X14X6",
+    "type": "PEB rafter piece (continuous; no beam-to-column connection)",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-roof-WI972X250X14X6",
+    "type": "beam-to-column",
+    "name": null,
+    "governing_check": "IS 800 12.10.2.1 connection_moment (joint e159)",
+    "DC": 0.9690103396333245,
+    "checks": true
+   },
+   {
+    "id": "conn-brace-CHS168.3X4.5",
+    "type": "brace-to-gusset",
+    "name": null,
+    "governing_check": "brace end: brace_conn_1p2Mp",
+    "DC": 0.41339796676500234,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI300X180X8X5",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": "column base (base-e1): shear_key",
+    "DC": 0.9182182064995938,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI344X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": "column base (base-e6): shear_key",
+    "DC": 0.9532556922175043,
+    "checks": true
+   },
+   {
+    "id": "conn-gravity_col-WI400X180X8X5",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": "column base (base-e2): plate_thickness_7_4_3_1",
+    "DC": 0.16000000000000003,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI431X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI519X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI606X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI694X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI781X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI869X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-lateral_col-WI956X250X14X6",
+    "type": "column splice / base",
+    "name": null,
+    "governing_check": null,
+    "DC": null,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-100002",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.3362164869661029,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-101002",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.3362164869661029,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190701",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5836458457212672,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190702",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5839750738565869,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190703",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.583830766951824,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190704",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838518208878958,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190705",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838483204732577,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190706",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838518208878958,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190707",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.583830766951824,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190708",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5839750738565869,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190709",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5836458453344384,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190801",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5836463636851529,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190802",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5839755852443813,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190803",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838312779527896,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190804",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838523318888614,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190805",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838488314742232,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190806",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838523318888614,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190807",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5838312779527896,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190808",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.5839755848575524,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-190809",
+    "type": "PEB rafter splice (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (rafter splice)",
+    "DC": 0.583646363298324,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198001",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198002",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198003",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198004",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198005",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198006",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198007",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198008",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-splice-198009",
+    "type": "PEB apex joint (bolted extended end plate, HSFG)",
+    "name": null,
+    "governing_check": "end-plate moment (apex joint)",
+    "DC": 0.8566370655350154,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-knee-WI1000X250X14X6-WI1000X250X14X6",
+    "type": "PEB knee: column panel and stiffeners",
+    "name": null,
+    "governing_check": "column flange at the end-plate bolt rows (T-stub flange and column web, both signs)",
+    "DC": 1.0331670838315656,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-flange-brace-rafter",
+    "type": "PEB flange (fly) braces on the rafters",
+    "name": null,
+    "governing_check": "fly brace slenderness KL/r",
+    "DC": 0.7424670433145009,
+    "checks": true
+   },
+   {
+    "id": "conn-peb-flange-brace-column",
+    "type": "PEB flange (fly) braces on the columns",
+    "name": null,
+    "governing_check": "fly brace slenderness KL/r",
+    "DC": 0.7424670433145009,
+    "checks": true
+   },
+   {
+    "id": "peb-frame-stability",
+    "type": "frame stability (IS 800 4.6)",
+    "name": null,
+    "governing_check": "elastic buckling load factor lambda_cr (Y sway): required 5 / provided",
+    "DC": 0.4629629629629629,
+    "checks": true
+   }
+  ],
+  "capacity_design": {
+   "checks": {
+    "12.12_base": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e1": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e102": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e110": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e118": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e126": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e134": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e14": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e142": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e150": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e154": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e22": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e30": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e38": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e46": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e5": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e54": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e6": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e62": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e70": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e78": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e86": {
+     "dc": 0.5
+    },
+    "12.12_base@base-e94": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e1": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e10": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e100": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e101": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e102": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e103": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e104": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e105": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e106": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e107": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e108": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e109": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e11": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e110": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e111": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e112": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e113": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e114": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e115": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e116": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e117": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e118": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e119": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e12": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e120": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e121": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e122": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e123": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e124": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e125": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e126": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e127": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e128": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e129": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e13": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e130": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e131": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e132": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e133": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e134": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e135": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e136": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e137": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e138": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e139": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e14": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e140": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e141": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e142": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e143": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e144": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e145": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e146": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e147": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e148": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e149": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e15": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e150": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e154": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e16": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e17": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e18": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e19": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e20": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e21": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e22": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e23": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e24": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e25": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e26": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e27": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e28": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e29": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e30": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e31": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e32": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e33": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e34": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e35": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e36": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e37": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e38": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e39": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e40": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e41": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e42": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e43": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e44": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e45": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e46": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e47": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e48": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e49": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e5": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e50": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e51": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e52": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e53": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e54": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e55": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e56": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e57": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e58": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e59": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e6": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e60": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e61": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e62": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e63": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e64": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e65": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e66": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e67": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e68": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e69": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e7": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e70": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e71": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e72": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e73": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e74": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e75": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e76": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e77": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e78": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e79": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e8": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e80": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e81": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e82": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e83": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e84": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e85": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e86": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e87": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e88": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e89": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e9": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e90": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e91": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e92": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e93": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e94": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e95": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e96": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e97": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e98": {
+     "dc": 0.5
+    },
+    "12.5.1_trigger@e99": {
+     "dc": 0.5
+    },
+    "7.4_base": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e151": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e152": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e153": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e2": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e3": {
+     "dc": 0.5
+    },
+    "7.4_base@base-e4": {
+     "dc": 0.5
+    },
+    "anchor_combined_10_3_6": {
+     "dc": 0.5
+    },
+    "anchor_shear_10_3_3": {
+     "dc": 0.5
+    },
+    "anchor_tension_10_3_5": {
+     "dc": 0.5
+    },
+    "anchorage_embedment": {
+     "dc": 0.5
+    },
+    "bearing": {
+     "dc": 0.5
+    },
+    "brace_compression": {
+     "dc": 0.5
+    },
+    "brace_compression@e355": {
+     "dc": 0.5
+    },
+    "brace_compression@e356": {
+     "dc": 0.5
+    },
+    "brace_compression@e357": {
+     "dc": 0.5
+    },
+    "brace_compression@e358": {
+     "dc": 0.5
+    },
+    "brace_compression@e359": {
+     "dc": 0.5
+    },
+    "brace_compression@e360": {
+     "dc": 0.5
+    },
+    "brace_compression@e361": {
+     "dc": 0.5
+    },
+    "brace_compression@e362": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e355": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e356": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e357": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e358": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e359": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e360": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e361": {
+     "dc": 0.5
+    },
+    "brace_conn_1p2mp@e362": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e355": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e356": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e357": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e358": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e359": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e360": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e361": {
+     "dc": 0.5
+    },
+    "brace_conn_block_shear@e362": {
+     "dc": 0.5
+    },
+    "brace_conn_welds": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e355": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e356": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e357": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e358": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e359": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e360": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e361": {
+     "dc": 0.5
+    },
+    "brace_conn_welds@e362": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e355": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e356": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e357": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e358": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e359": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e360": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e361": {
+     "dc": 0.5
+    },
+    "brace_gross_yield_governs@e362": {
+     "dc": 0.5
+    },
+    "brace_kl_r": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e355": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e356": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e357": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e358": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e359": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e360": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e361": {
+     "dc": 0.5
+    },
+    "brace_kl_r@e362": {
+     "dc": 0.5
+    },
+    "checks": {
+     "dc": 0.5
+    },
+    "connection_moment": {
+     "dc": 0.5
+    },
+    "connection_moment@e159": {
+     "dc": 0.5
+    },
+    "connection_moment@e176": {
+     "dc": 0.5
+    },
+    "connection_moment@e177": {
+     "dc": 0.5
+    },
+    "connection_moment@e194": {
+     "dc": 0.5
+    },
+    "connection_moment@e195": {
+     "dc": 0.5
+    },
+    "connection_moment@e212": {
+     "dc": 0.5
+    },
+    "connection_moment@e213": {
+     "dc": 0.5
+    },
+    "connection_moment@e230": {
+     "dc": 0.5
+    },
+    "connection_moment@e231": {
+     "dc": 0.5
+    },
+    "connection_moment@e248": {
+     "dc": 0.5
+    },
+    "connection_moment@e249": {
+     "dc": 0.5
+    },
+    "connection_moment@e266": {
+     "dc": 0.5
+    },
+    "connection_moment@e267": {
+     "dc": 0.5
+    },
+    "connection_moment@e284": {
+     "dc": 0.5
+    },
+    "connection_moment@e285": {
+     "dc": 0.5
+    },
+    "connection_moment@e302": {
+     "dc": 0.5
+    },
+    "connection_moment@e303": {
+     "dc": 0.5
+    },
+    "connection_moment@e320": {
+     "dc": 0.5
+    },
+    "connection_shear": {
+     "dc": 0.5
+    },
+    "connection_shear@e159": {
+     "dc": 0.5
+    },
+    "connection_shear@e176": {
+     "dc": 0.5
+    },
+    "connection_shear@e177": {
+     "dc": 0.5
+    },
+    "connection_shear@e194": {
+     "dc": 0.5
+    },
+    "connection_shear@e195": {
+     "dc": 0.5
+    },
+    "connection_shear@e212": {
+     "dc": 0.5
+    },
+    "connection_shear@e213": {
+     "dc": 0.5
+    },
+    "connection_shear@e230": {
+     "dc": 0.5
+    },
+    "connection_shear@e231": {
+     "dc": 0.5
+    },
+    "connection_shear@e248": {
+     "dc": 0.5
+    },
+    "connection_shear@e249": {
+     "dc": 0.5
+    },
+    "connection_shear@e266": {
+     "dc": 0.5
+    },
+    "connection_shear@e267": {
+     "dc": 0.5
+    },
+    "connection_shear@e284": {
+     "dc": 0.5
+    },
+    "connection_shear@e285": {
+     "dc": 0.5
+    },
+    "connection_shear@e302": {
+     "dc": 0.5
+    },
+    "connection_shear@e303": {
+     "dc": 0.5
+    },
+    "connection_shear@e320": {
+     "dc": 0.5
+    },
+    "dc": {
+     "dc": 0.5
+    },
+    "detail": {
+     "dc": 0.5
+    },
+    "geometry_anchor_edge": {
+     "dc": 0.5
+    },
+    "geometry_anchor_fit": {
+     "dc": 0.5
+    },
+    "geometry_anchor_pitch": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e355": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e356": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e357": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e358": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e359": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e360": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e361": {
+     "dc": 0.5
+    },
+    "gusset_out_of_plane_buckling@e362": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e355": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e356": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e357": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e358": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e359": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e360": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e361": {
+     "dc": 0.5
+    },
+    "gusset_whitmore_yield@e362": {
+     "dc": 0.5
+    },
+    "kly_mm": {
+     "dc": 0.5
+    },
+    "klz_mm": {
+     "dc": 0.5
+    },
+    "ky": {
+     "dc": 0.5
+    },
+    "kz": {
+     "dc": 0.5
+    },
+    "l_mm": {
+     "dc": 0.5
+    },
+    "limit": {
+     "dc": 0.5
+    },
+    "m_comp_side": {
+     "dc": 0.5
+    },
+    "m_nmm": {
+     "dc": 0.5
+    },
+    "m_per_mm": {
+     "dc": 0.5
+    },
+    "m_tension_side": {
+     "dc": 0.5
+    },
+    "my_nmm": {
+     "dc": 0.5
+    },
+    "mz_nmm": {
+     "dc": 0.5
+    },
+    "n_cases": {
+     "dc": 0.5
+    },
+    "p_n": {
+     "dc": 0.5
+    },
+    "pd_n": {
+     "dc": 0.5
+    },
+    "per_case": {
+     "dc": 0.5
+    },
+    "plate_thickness": {
+     "dc": 0.5
+    },
+    "plate_thickness_7_4_3_1": {
+     "dc": 0.5
+    },
+    "shear_key": {
+     "dc": 0.5
+    },
+    "t_prov_mm": {
+     "dc": 0.5
+    },
+    "t_req_mm": {
+     "dc": 0.5
+    },
+    "ts_mm": {
+     "dc": 0.5
+    },
+    "v_n": {
+     "dc": 0.5
+    },
+    "value": {
+     "dc": 0.5
+    }
+   }
+  },
+  "load_plan": {
+   "snow_summary": null
+  }
+ },
+ "issues_e45a65d": []
+}

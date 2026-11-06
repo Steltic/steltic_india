@@ -659,13 +659,16 @@ def _consultancy_issues(cfg, pkg):
         if inp.get("length_mm") is not None:
             return float(inp.get("length_mm") or 0) / 1000.0
         return float(inp.get("length_in") or 0) * 0.0254
-    roof_long = any(isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "roof"
-                    and _len_m(m) >= 12.0 for m in mem)
-    if roof_long and not (isinstance(pkg.get("ponding"), dict) or lab("ponding")):
-        out.append("long-span (>= 12 m) roof framing and NO ponding evaluation in calc_package -- "
+    # review N1 (2026-11-07): the roof's real span, not one element -- a PEB rafter is split into short tapered
+    # pieces (IN_Ex1: 9 m) and a flat roof's beam into pieces at the secondary beams
+    roof_el = [_len_m(m) for m in mem if isinstance(m, dict) and (m.get("inputs") or {}).get("role") == "roof"]
+    span, basis = _roof_span_m(cfg, pkg) if (roof_el or cfg.get("roof_planes")) else (0.0, None)
+    if max([span] + roof_el) >= 12.0 and not (isinstance(pkg.get("ponding"), dict) or lab("ponding")):
+        why = ("%s %.1f m" % (basis, span)) if span >= 12.0 else ("a roof member %.1f m" % max(roof_el))
+        out.append("long-span (>= 12 m) roof framing (%s) and NO ponding evaluation in calc_package -- "
                    "check ponding / impounded rain (roof slope + secondary drainage head; IS 875 (Part 4) "
                    "for snow-water) and record it (cfg['ponding'] = {span_mm, delta_mm, roof_slope}: the IS 875 "
-                   "(Part 4) 4.4 screen in calc_package 'ponding')")
+                   "(Part 4) 4.4 screen in calc_package 'ponding')" % why)
     # A6 footfall vibration: long floor spans or vibration-sensitive occupancy (H31: cfg['roof_levels'] are roofs,
     # not floors; cleared only by a structured cfg/pkg['vibration_screen'] {basis, result, cite}, never by a keyword)
     floor_long = _has_floor_levels(cfg) and any(
@@ -695,16 +698,20 @@ def _consultancy_issues(cfg, pkg):
                  "unshored wet-concrete stage check")]
         missing = [what for ok_, what in need if not ok_]
         stubs_ok = bool(slots) and all(x.get("found") is False for x in slots)   # H6: honest found:false stubs
-        scope = str(cfg.get("composite_scope") or (ws.get("scope") if isinstance(ws, dict) else "") or "").strip()
-        scoped = stubs_ok or bool(scope)              # a recorded scope: bare_steel / delegated (COMPOSITE_INDIA.md)
+        # review N2 (2026-11-07): a declared composite_scope clears the guard only with the worksheet the engine
+        # builds from it (its slots in the package) -- a declaration whose worksheet failed to build is not a record
+        scope = str((ws.get("scope") if isinstance(ws, dict) else "") or cfg.get("composite_scope") or "").strip()
+        scoped = stubs_ok or (bool(slots) and bool(scope))   # bare_steel / delegated (COMPOSITE_INDIA.md)
         if missing and not scoped:
             out.append("COMPOSITE floor system declared and the package lacks: " + "; ".join(missing) +
                        " -- composite beams in India fall under IS 11384 (not in the corpus -> found:false): "
                        "record the scope (bare-steel design per IS 800 8.2 + construction stage, or delegated)")
     # A8 seismic joint / pounding: multi-wing keywords and no joint decision
     dcomp = pkg.get("deformation_compatibility") if isinstance(pkg.get("deformation_compatibility"), dict) else {}
+    # review N3 (2026-11-07): the 7.11.3 separation record, or a check tagged as the seismic joint -- not any designed
+    # label with 'separation' or 'pounding' in it
     joint = bool(dcomp.get("separation")             # the 7.11.3 separation of cfg['adjacent_units']
-                 or lab("seismic joint", "seismic_joint", "pounding", "joint width", "joint_width", "separation"))
+                 or lab("seismic joint", "seismic_joint", "seismic-joint", "7.11.3"))
     if any(k in arch for k in ("twin", "two tower", "wings", "wing ")) and not joint:
         out.append("multi-wing/tower configuration and NO seismic-joint decision recorded -- either "
                    "size the joint per IS 1893 7.11.3 (R x (D1 + D2), or (R1 D1 + R2 D2)/2 at equal floor "
@@ -729,6 +736,35 @@ def _consultancy_issues(cfg, pkg):
                        "declare cfg['delegated_design'] = [{'item', 'criteria', 'interface_forces'}, ...] listing "
                        "each delegated item, the design criteria handed off, and the interface forces" % bad)
     return out
+
+
+def _roof_span_m(cfg, pkg):
+    """(span in m, basis) of the roof framing for the ponding guard (review N1, 2026-11-07): the longest roof plane's
+    eave-to-eave span (a portal's frame span, cfg['roof_planes'], always mm); without roof planes, on an N-mm job, the
+    longest grid bay (the span of the roof beams between the column lines).  (0.0, None) when neither is known."""
+    try:
+        import roof_geometry as RG
+    except Exception:
+        return 0.0, None
+    best = (0.0, None)
+    try:
+        for pl in RG.planes(cfg):
+            sp = (float(pl["hi"]) - float(pl["lo"])) / 1000.0
+            if sp > best[0]:
+                best = (sp, "roof plane %d span eave to eave" % pl["idx"])
+    except Exception:
+        pass
+    mm = (isinstance(pkg, dict) and pkg.get("unit_system") == "N-mm") or \
+        str(cfg.get("units") or "").lower() in ("n-mm", "si", "mm")
+    if best[1] is None and mm and cfg.get("NX") and cfg.get("NY"):
+        try:
+            xs, ys = RG.grid_lines(cfg)
+            bays = [b - a for a, b in zip(xs, xs[1:])] + [b - a for a, b in zip(ys, ys[1:])]
+            if bays:
+                best = (max(bays) / 1000.0, "longest grid bay (roof beam span)")
+        except Exception:
+            pass
+    return best
 
 
 def _has_floor_levels(cfg):
