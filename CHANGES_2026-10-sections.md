@@ -131,6 +131,25 @@ D8).
 - **Bases at the thickness limit.** A fixed base whose plate has reached 150 mm and still fails in bending gets gusset
   stiffeners (IS 800 7.4.2, the IN_Ex12 detail), which are then stepped up by their ratio. Designed bases and
   splices are cached per column label, so a label that comes back keeps its stepped-up base.
+- **Storey stiffness and capacity coupling.**
+  - Lateral column groups over storey ranges (`_1_3` / `_4_6`, `_0` / `_1`, `_lo` / `_hi`) stay monotone up the
+    height in their own stiffness measure (Ix for moment-frame columns, A for braced-frame columns). Where the
+    sizing made a lower group less stiff, that group is sized again with the upper group's value as its minimum.
+    It never takes a section that fails its own checks. IS 1893 Table 6(i) requires this (IN_Ex16: 58.19 kg/m²
+    after the rule, against a spiral above 90 kg/m² before it).
+  - A soft braced storey is stiffened through its braces; a soft moment-frame storey through its columns.
+  - IS 1893 Table 6(vii), Zones IV and V: when Tx and Ty are less than 10 % apart, the frames of the stiffer
+    direction are stiffened further (the IN_Ex12 gym).
+  - IS 18168 7.2 column KL/r, where K follows the beam-to-column stiffness ratio (IS 800 Annex D, the IN_Ex12 gym),
+    is answered first by stiffer moment-frame beams. Stepping up the column raises its own share of the stiffness,
+    and K with it.
+  - Section 12 margins are kept per group and row kind, so a KL/r failure no longer tightens the Table 2 rows.
+- **EBF links.** The links are sized for their shear and the IS 18168 link rules only. They get no stiffness and no
+  end-connection step-ups, and they are held after the first two passes. Their own failing members release them.
+  The reason: every brace and column force follows the link overstrength 1.1 Ry Vp / V (IS 18168 12.3.2.2 /
+  12.3.4.5). On IN_Ex15, links made larger for stiffness and connections had raised it to 4.96.
+- **Base gussets** stay within the IS 800 Table 2 outstand limit (h / t ≤ 13.6 ε). Past it, one more gusset is added
+  on each face, up to 6.
 - **Unused groups.** Groups that no member of the model takes (IN_Ex11 corner and perimeter columns: every corner
   column is braced) are left out of the eligibility test and marked `unused` in `SIZING_GROUPS`.
 - **Preflight** (`preflight.chs_brace_grade_declared`): CHS braces are declared by either the
