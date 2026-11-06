@@ -379,9 +379,11 @@ Before `pipeline.design_and_report`:
       column_flange_grade, column_flange_lv_mm, column_weld_mm, bom_plates. Checked in both signs at 1.2 Mp of the
       face section (D-T7; IS 18168 route B 8.4: 1.1 Ry fy Zpb), with the column flange as a T-stub on the same bolt
       rows and the column web (plus the knee_panel doubler) feeding the inner rows.
-    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa}, flange_stiffener {n, b_mm, t_mm,
-      fy_MPa} (sized for the connection-moment flange force), doubler_t_mm, weld_mm}; the panel shear is checked on
-      the analysis moment.
+    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa, grade}, flange_stiffener {n, b_mm, t_mm,
+      fy_MPa, grade} (sized for the connection-moment flange force), doubler_t_mm, doubler_grade, doubler_fy_MPa,
+      weld_mm}; the panel shear is checked on the analysis moment.  Every stiffener / doubler fy is the IS 2062:2025
+      Table 3 band of its grade (its own, else cfg['plate_grade'], else E250) for its thickness
+      (india_is800.fy_is2062); a declared fy above the band is capped at it (2026-11 engine checks).
   - Secondary members designed by the CFS engine (owner decision D-T5) are imported as `peb_secondary` =
     [{id, kind, section, checks [{name, value, limit, dc, ok, clause}], mass_kg, file, sha256, source}] (the file is
     re-hashed every run). Tonnage groups: `peb_mass_groups` {group: {tags | sections}} (crane, canopy) and
