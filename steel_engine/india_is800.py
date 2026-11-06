@@ -3240,15 +3240,22 @@ def peb_buckling_section(comp, p, bsec, fy, KLz, KLy, *, process=None, welded=Tr
     cb = compression_capacity(pb, fy, KLz_mm=KLz, KLy_mm=KLy, process=process, welded=_welded_I(pb, welded))
     if not cb.get("found") or "z" not in (cb.get("axes") or {}) or "y" not in (comp.get("axes") or {}):
         return comp
-    sc_ = float(p["A"]) / float(pb["A"])
+    # review R-1 (2026-11-06): the segment's area is its effective area under axial compression alone when comp has
+    # one (lead ruling 1: a segment slender on the 42 eps web row keeps Ae, 3.7.2(d)), so every caller gets Ae -- the
+    # member check passes the 42 eps props already, the Section 12 tapered-column path the gross segment
+    eff = comp.get("effective_section") or {}
+    A_seg = float(eff["A_eff_mm2"]) if eff.get("A_eff_mm2") else float(p["A"])
+    sc_ = A_seg / float(pb["A"])
     az = dict(cb["axes"]["z"], Pd_N=cb["axes"]["z"]["Pd_N"] * sc_, buckling_section=bsec)
     ay = comp["axes"]["y"]
     out = dict(comp)
     out["axes"] = {"z": az, "y": ay}
     out.update(Pd_N=min(az["Pd_N"], ay["Pd_N"]), Pdz_N=az["Pd_N"], Pdy_N=ay["Pd_N"],
                KL_over_r_max=max(az.get("KL_over_r") or 0.0, ay.get("KL_over_r") or 0.0), buckling_section=bsec,
-               buckling_basis="z: Pd = A_segment x fcd(KLz/r of %s, the member's smallest section); y: the "
-                              "segment's own section over KLy (D-T1)" % bsec)
+               A_segment_mm2=A_seg,
+               buckling_basis="z: Pd = A_segment x fcd(KLz/r of %s, the member's smallest section), A_segment the "
+                              "segment's %s area (%.0f mm2); y: the segment's own section over KLy (D-T1)"
+                              % (bsec, "3.7.2(d) effective (ruling 1)" if eff.get("A_eff_mm2") else "gross", A_seg))
     return out
 
 

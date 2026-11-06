@@ -577,6 +577,40 @@ def test_1_e2e_IN_Ex13_scbf_column_gate_with_the_12_2_3_axial_force():
         126.0 * eps / (1.0 + 2.0 * r["r2"]))
 
 
+def test_R1_e2e_IN_Ex1_section12_tapered_segment_takes_its_effective_area():
+    """Review R-1: IN_Ex1 main column piece e36 (WI862X225X12X8 E350, buckling section WI375X225X12X8, Lz 10 m, Ly
+    1.8 m).  The Section 12 path passes the gross segment to peb_buckling_section; Pdz was Ag x fcd,z = 2,696 kN while
+    the member check (the 42 eps props) has 1,709 kN.  Now peb_buckling_section takes the segment's 3.7.2(d) area
+    under axial compression alone (Ae 7,672 of 12,104 mm2) from comp: both paths give the member check's Pdz, and the
+    12.5.1 trigger P/Pd uses it."""
+    import json
+    import sections as S
+    import static_model as SM
+    import india_is800 as I8
+    import india_is800_s12 as S12
+    S.register_welded_I("WI862X225X12X8", 862, 225, 12, 8)
+    S.register_welded_I("WI375X225X12X8", 375, 225, 12, 8)
+    fx = _fixture("IN_Ex1_main_column_WI862X225X12X8.json")
+    m = dict(fx["member"])
+    p = S12._props(m)
+    fy, _ = S12._fy(m, p)
+    comp = I8.compression_capacity(p, fy, KLz_mm=10000.0, KLy_mm=1800.0)
+    c12 = I8.peb_buckling_section(comp, p, m["buckling_section"], fy, 10000.0, 1800.0)
+    assert c12["A_segment_mm2"] == pytest.approx(comp["effective_section"]["A_eff_mm2"]) and c12["A_segment_mm2"] < 0.65 * p["A"]
+    assert "3.7.2(d) effective" in c12["buckling_basis"]
+    cf = SM.combo_forces_for_member_check({k: tuple(v) for k, v in fx["records"].items()}, "col")
+    r = I8.member_check_is800(dict(m), cf)
+    row = r["per_combo"][0]["checks"][0]
+    Pdz_member = row["P_N"] / row["member_9_3_2_2"]["nz"]
+    assert c12["Pdz_N"] == pytest.approx(Pdz_member, rel=1e-9) and c12["Pdz_N"] == pytest.approx(1.709e6, rel=1e-3)
+    assert c12["Pd_N"] == pytest.approx(min(c12["Pdz_N"], c12["Pdy_N"]))
+    for f in cf:
+        f.update(family="table4", lateral_kind=None)
+    rows = S12.column_checks("SMF", {"members": [dict(m, sfrs=True)], "forces": {m["id"]: cf}}, {})
+    trig = next(c for c in rows if c["id"] == "12.5.1_trigger")
+    assert trig["value"] == pytest.approx(max(f["P_N"] for f in cf) / c12["Pd_N"], rel=1e-9)
+
+
 @pytest.mark.parametrize("name,t_dbl,fy_dbl,fy_col", [("IN_Ex12_smf_joint_J100000-X.json", 48.0, 230.0, 240.0),
                                                       ("IN_Ex18_smf_joint_J100000-X.json", 15.0, 250.0, 230.0)])
 def test_2_e2e_gold_panel_zone_doubler_at_its_own_band(name, t_dbl, fy_dbl, fy_col):
