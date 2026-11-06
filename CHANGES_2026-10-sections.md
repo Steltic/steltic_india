@@ -80,6 +80,12 @@ D8).
      connection.
   7. The loop stops when a passing design no longer changes. The lightest passing design in the target families
      is kept.
+- **One rule with the engine.**
+  - The worker records the exact (member, combination forces) of every call the pipeline makes to
+    `india_is800.member_check_is800` for an element, and the local check evaluates exactly those. Whatever
+    combination filter, web-class axial force or fy band the engine applies, the sizer sees the same.
+  - The sizer's plate fy is the engine's IS 2062:2025 band function (`india_is800.fy_is2062`: E250 is 240 MPa
+    above 16 mm). It no longer has its own table.
 - **Details the local step uses so that it predicts the full run:**
   - every member-check call of an element is kept. The IS 1893 7.11.2 check of a gravity column calls the member
     check a second time for the same element; before, that call replaced the strength check's forces;
