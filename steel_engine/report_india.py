@@ -538,23 +538,37 @@ def _is800_s12_detailing(cfg, pkg):
     if not checks:
         return "<p class='note'>No Section 12 checks recorded.</p>"
     fails = [c for c in checks if c.get("ok") is False]
-    notev = [c for c in checks if c.get("ok") is None]
+    # engine checks 2 (review R3-2): a row not applicable (no_seismic: no seismic detailing applies, R2-1) is reported
+    # as such, not as 'not evaluated' -- it does not block COMPLETE
+    na = [c for c in checks if c.get("ok") is None and c.get("not_applicable")]
+    notev = [c for c in checks if c.get("ok") is None and not c.get("not_applicable")]
+    na_txt = ""
+    if na:
+        why = sorted({str(c.get("reason") or "no reason recorded") for c in na})
+        na_txt = ", %d not applicable (%s)" % (len(na), RS._e("; ".join(why)))
     summ = (f"<p>System <b>{cap.get('system')}</b>, R = {_num(cap.get('R'))}: {len(checks)} checks, "
-            f"{len(fails)} failing, {len(notev)} not evaluated (missing inputs block COMPLETE).</p>")
+            f"{len(fails)} failing, {len(notev)} not evaluated (missing inputs block COMPLETE){na_txt}.</p>")
     by = {}
     for c in checks:
         by.setdefault(c.get("id"), []).append(c)
     rows = []
     for cid, cs in by.items():
-        worst = max(cs, key=lambda c: (c.get("ok") is False, c.get("ok") is None,
+        worst = max(cs, key=lambda c: (c.get("ok") is False, c.get("ok") is None and not c.get("not_applicable"),
                                         c.get("dc") if isinstance(c.get("dc"), (int, float)) else -1))
-        nf = sum(1 for c in cs if c.get("ok") is False); nn = sum(1 for c in cs if c.get("ok") is None)
-        # second wave H8: forces in kN, moments in kN-m, width-thickness records as 'b/tf .., d/tw ..' (not N, N-mm, dicts)
-        rows.append([RS._e(PUB.check_label(cid)), len(cs), nf, nn, RS.s12_value(cid, worst.get("value")),
-                     RS.s12_value(cid, worst.get("limit")),
-                     _num(worst.get("dc")), worst.get("clause") or ""])
-    return summ + _t(["check", "n", "failing", "not evaluated", "worst value", "limit", "worst D/C",
-                      "Ref. (IS 800)"], rows)
+        nf = sum(1 for c in cs if c.get("ok") is False)
+        nn = sum(1 for c in cs if c.get("ok") is None and not c.get("not_applicable"))
+        nna = sum(1 for c in cs if c.get("ok") is None and c.get("not_applicable"))
+        if nna == len(cs):
+            val, lim = "not applicable (%s)" % RS._e(str(worst.get("reason") or "")), ""
+        else:
+            # second wave H8: forces in kN, moments in kN-m, width-thickness records as 'b/tf .., d/tw ..' (not N,
+            # N-mm, dicts)
+            val, lim = RS.s12_value(cid, worst.get("value")), RS.s12_value(cid, worst.get("limit"))
+        row = [RS._e(PUB.check_label(cid)), len(cs), nf, nn] + ([nna] if na else []) + [
+            val, lim, _num(worst.get("dc")), worst.get("clause") or ""]
+        rows.append(row)
+    return summ + _t(["check", "n", "failing", "not evaluated"] + (["not applicable"] if na else []) + [
+        "worst value", "limit", "worst D/C", "Ref. (IS 800)"], rows)
 
 
 def _connections(pkg):

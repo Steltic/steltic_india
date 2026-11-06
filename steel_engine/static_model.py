@@ -1312,7 +1312,8 @@ def member_wind_loads(cfg, model, pat, f):
                                          cfg["SX"] if ax == 0 else cfg["SY"])
                 rec.update(side_sheltered=sscan["record"]["sheltered"],
                            side_own_wall_width=sscan["record"]["own_wall_width"],
-                           side_stepped_facade=sscan["record"]["stepped_facade"])
+                           side_stepped_facade=sscan["record"]["stepped_facade"],
+                           side_height_bands=sscan["record"]["height_bands"])
                 jobs.append(("side", oth, sscan))
             model.setdefault("member_wind_wall", {})[pat.get("name")] = rec
             loads_, area_ = [], {}
@@ -1430,7 +1431,10 @@ def member_wind_loads(cfg, model, pat, f):
 WALL_SCAN_BASIS = (
     "member-wind wall scan (engine checks 2026-11): IS 875-3 7.3.1 F = (Cpe - Cpi) A pd on the windward / leeward "
     "wall.  A column piece takes the wall pressure only where it is the first element of its strip met from upwind "
-    "(downwind) at its mid-height, counting the strip's sloping roof members (rafters, truss chords) inside the plan "
+    "(downwind) at its mid-height (a piece that runs past a lower roof or a wall step with no node there, so that what "
+    "it carries changes along its height, is judged band by band between the heights where pieces and roof members "
+    "end, and the area of its loaded bands is spread over its length: review R3-3), counting the strip's sloping roof "
+    "members (rafters, truss chords) inside the plan "
     "extent of its columns as the envelope: a piece under the roof (a gable post above the eave under the across-ridge "
     "wind, an interior column above the eave) is not on a wall.  Its width is half the distance to the neighbouring "
     "strips at that height, and to the neighbouring column lines of its own wall where a roof member of that wall "
@@ -1534,26 +1538,33 @@ def side_wall_pressure(cfg, pat, cols, ax):
                                                "wall_side_kNm2" % (h / w_, l_ / w_))
     order = list(tried)
     th = order[0]
+
+    def miss2(t):
+        """(miss, swapped): the pattern's (windward, leeward) Cpe against Table 5's at angle t, taken directly and
+        with the two fields exchanged (review R3-1: a pattern may write the reversed wind by exchanging them, as
+        IN_Ex6 does) -- the smaller miss."""
+        a_, b_, _s = _T5_FACES[t]
+        cp = tried[t]["Cpe"]
+        d = max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
+        x = max(abs(float(cp[a_]) - imp[1]), abs(float(cp[b_]) - imp[0]))
+        return (x, True) if x + 1e-9 < d else (d, False)
     if imp is not None:
-        def miss(t):
-            a_, b_, _s = _T5_FACES[t]
-            cp = tried[t]["Cpe"]
-            return max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
-        best = min(order, key=miss)
-        if miss(best) + 1e-9 < miss(th):
+        best = min(order, key=lambda t: miss2(t)[0])
+        if miss2(best)[0] + 1e-9 < miss2(th)[0]:
             th = best
     cp = tried[th]["Cpe"]
     a_, b_, sides = _T5_FACES[th]
     Cs = min(float(cp[k]) for k in sides)
-    warn = None
+    warn, swapped = None, False
     if imp is not None:
-        off = max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
+        off, swapped = miss2(th)
         if off > SIDE_WALL_MATCH_TOL:
             # review R2-4: the pattern was built on other coefficients -- say so, the Table 5 side walls are an
             # assumption here
             warn = ("WARN: the pattern's own windward / leeward Cpe (%.3f / %.3f, from its pressures, pd and Cpi) match "
-                    "neither Table 5 wind angle (closest: theta %d, %s %.2f / %s %.2f, off by %.3f > %.2f); the side "
-                    "walls take that row's Cpe %.2f -- check the pattern or declare wall_side_kNm2"
+                    "neither Table 5 wind angle, directly or with the two exchanged (closest: theta %d, %s %.2f / %s "
+                    "%.2f, off by %.3f > %.2f); the side walls take that row's Cpe %.2f -- check the pattern or declare "
+                    "wall_side_kNm2"
                     % (imp[0], imp[1], th, a_, float(cp[a_]), b_, float(cp[b_]), off, SIDE_WALL_MATCH_TOL, Cs))
     rec.update(applied=True, q_kNm2=(Cs - cpi) * pd, source="derived: Table 5 at the model geometry (the pattern "
                                                             "declares no wall_side_kNm2)",
@@ -1561,7 +1572,8 @@ def side_wall_pressure(cfg, pat, cols, ax):
                l_over_w=round(l_ / w_, 4),
                check={"pattern_windward_Cpe": None if imp is None else round(imp[0], 4),
                       "pattern_leeward_Cpe": None if imp is None else round(imp[1], 4),
-                      "table5_windward_Cpe": float(cp[a_]), "table5_leeward_Cpe": float(cp[b_])})
+                      "table5_windward_Cpe": float(cp[a_]), "table5_leeward_Cpe": float(cp[b_]),
+                      "pattern_fields_exchanged": swapped})
     if warn:
         rec["warning"] = warn
     return rec
@@ -1578,7 +1590,9 @@ def _wall_zone(pat, side, wall):
     th = side.get("theta_deg")
     pd, cpi = side.get("pd_kNm2"), pat.get("Cpi")
     q = pat.get("wall_windward_kNm2" if wall == "windward" else "wall_leeward_kNm2")
-    sf = _T5_FACES[th][0 if wall == "windward" else 1] if th in _T5_FACES else None
+    # review R3-1: a pattern that writes the reversed wind by exchanging the fields has its surfaces exchanged too
+    ex = bool((side.get("check") or {}).get("pattern_fields_exchanged"))
+    sf = _T5_FACES[th][(0 if wall == "windward" else 1) ^ int(ex)] if th in _T5_FACES else None
     if pd and cpi is not None and q is not None:
         return sf, round(float(q) / float(pd) + float(cpi), 4)
     return sf, None
@@ -1689,25 +1703,31 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
             wall_c[k] = [(e1, e2) for (e1, e2) in env if abs(e1[ax] - xa) < 1.0 and abs(e2[ax] - xa) < 1.0]
         return wall_c[k]
 
-    pieces, sheltered, widened, halves, steps, extra = [], [], [], [], [], {}
-    for (c, c1, c2, xa, yo, z0, z1) in cols:
-        zm = 0.5 * (z0 + z1)
-        same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
+    pieces, sheltered, widened, halves, steps, extra, banded = [], [], [], [], [], {}, []
+
+    def judge(row, zb, zlo, zhi):
+        """{face: verdict} of one piece judged at height zb, a facade step's band limited to [zlo, zhi]: None (not
+        the first element of its strip there), ('sheltered', record) or ('wall', half, width, steps, extras,
+        widened)."""
+        c, c1, xa, yo = row[0], row[1], row[3], row[4]
+        same_h = [r for r in cols if r[5] - 1e-6 <= zb <= r[6] + 1e-6]        # pieces at this height
         strip = [r[3] for r in same_h if abs(r[4] - yo) < 1.0]
         lo_x, hi_x = ext(yo)
-        env_x = [x for (e1, e2) in env_strip(yo) for x in (_crossing(e1, e2, ax, zm),)
+        env_x = [x for (e1, e2) in env_strip(yo) for x in (_crossing(e1, e2, ax, zb),)
                  if x is not None and lo_x - 1.0 <= x <= hi_x + 1.0]
         ys = sorted({r[4] for r in same_h})
+        out = {}
         for face, q, fs in faces:
             up = (face == "up") == (sgn_w > 0)
             first = min(strip) if up else max(strip)
             if abs(xa - first) > 1e-6:
+                out[face] = None
                 continue
             if any((x < first - 1.0) if up else (x > first + 1.0) for x in env_x):
-                sheltered.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1),
-                                  "at_mm": [round(c1[0], 1), round(c1[1], 1)]})
+                out[face] = ("sheltered", {"tag": c["tag"], "face": face, "z_mid_mm": round(zb, 1),
+                                           "at_mm": [round(c1[0], 1), round(c1[1], 1)]})
                 continue
-            half = []
+            half, st_, ex_ = [], [], []
             for side in (-1, 1):
                 nb = [y for y in ys if side * (y - yo) > 1.0]
                 cur = (min(nb, key=lambda y: abs(y - yo)) if nb else None)
@@ -1720,46 +1740,141 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
                     nbr = [r for r in same_h if abs(r[4] - cur) < 1.0]
                     fn = (min if up else max)(r[3] for r in nbr)
                     if (fn > xa + 1.0) if up else (fn < xa - 1.0):
-                        steps.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1), "side": side,
-                                      "width_mm": 0.0, "basis": "the neighbouring strip's wall lies behind: this wall "
-                                                                "ends at this line"})
+                        st_.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zb, 1), "side": side,
+                                    "width_mm": 0.0, "basis": "the neighbouring strip's wall lies behind: this wall "
+                                                              "ends at this line"})
                         g = 0.0
                     elif (fn < xa - 1.0) if up else (fn > xa + 1.0):
                         # review R2-2: every piece of the re-entrant line takes width x the height it shares with
                         # this piece within the step band (the heights where the neighbour's wall stands in front),
                         # so lines split at different heights load the wall once
                         outer = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - fn) < 1.0]
-                        b0 = max(z0, min(r[5] for r in outer))
-                        b1 = min(z1, max(r[6] for r in outer))
+                        b0 = max(zlo, min(r[5] for r in outer))
+                        b1 = min(zhi, max(r[6] for r in outer))
                         rc = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - xa) < 1.0
                               and min(b1, r[6]) - max(b0, r[5]) > 1.0]
                         for r in rc:
                             ov = min(b1, r[6]) - max(b0, r[5])
-                            ex = extra.setdefault((r[0]["tag"], face), {"row": r, "q": q, "fs": fs,
-                                                                       "area": [0.0, 0.0]})
-                            ex["area"][0 if side > 0 else 1] += g * ov
-                            steps.append({"tag": r[0]["tag"], "face": face, "z_mid_mm": round(zm, 1),
-                                          "side": -side, "width_mm": round(g, 1), "overlap_mm": round(ov, 1),
-                                          "basis": "re-entrant corner column: the other half of the wall of tag %s"
-                                                   % c["tag"]})
+                            ex_.append((r, q, fs, 0 if side > 0 else 1, g * ov))
+                            st_.append({"tag": r[0]["tag"], "face": face, "z_mid_mm": round(zb, 1),
+                                        "side": -side, "width_mm": round(g, 1), "overlap_mm": round(ov, 1),
+                                        "basis": "re-entrant corner column: the other half of the wall of tag %s"
+                                                 % c["tag"]})
                 # the own wall: the nearest column line of the same wall plane on this side that ends below this
                 # height, where a roof member of the wall rises over it (gable triangle) -- the wall goes on to it
-                own = [k_[1] for k_, (zb, zt) in lines.items() if abs(k_[0] - xa) < 1.0 and side * (k_[1] - yo) > 1.0
-                       and zt < zm - 1e-6]
+                own = [k_[1] for k_, (zb_, zt) in lines.items() if abs(k_[0] - xa) < 1.0 and side * (k_[1] - yo) > 1.0
+                       and zt < zb - 1e-6]
                 if own:
                     yn = min(own, key=lambda y: abs(y - yo))
                     if (cur is None or abs(yn - yo) < abs(cur - yo) - 1.0) and any(
-                            _reaches_over(e1, e2, oth, yn, yo, zm) for (e1, e2) in env_wall(xa)):
+                            _reaches_over(e1, e2, oth, yn, yo, zb) for (e1, e2) in env_wall(xa)):
                         g = abs(yn - yo) / 2.0
                 half.append(g)
             w_scan = sum(half)
             wtrib = w_scan or default_width
             w_old = (_strip_widths(ys).get(yo) or default_width)          # the width at this height alone
+            wid = None
             if abs(wtrib - w_old) > 1.0:
-                widened.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1), "width_mm": round(wtrib, 1),
-                                "width_at_height_mm": round(w_old, 1)})
-            pieces.append((c, c1, c2, face, q, fs, wtrib))
-            halves.append((half[0], half[1]))
+                wid = {"tag": c["tag"], "face": face, "z_mid_mm": round(zb, 1), "width_mm": round(wtrib, 1),
+                       "width_at_height_mm": round(w_old, 1)}
+            out[face] = ("wall", (half[0], half[1]), wtrib, st_, ex_, wid)
+        return out
+
+    def keep(face, v):
+        """Record a 'wall' verdict's facade steps, re-entrant shares and own-wall width."""
+        steps.extend(v[3])
+        for (r, q, fs, k, A) in v[4]:
+            ex = extra.setdefault((r[0]["tag"], face), {"row": r, "q": q, "fs": fs, "area": [0.0, 0.0]})
+            ex["area"][k] += A
+        if v[5]:
+            widened.append(v[5])
+
+    def cuts(xa, yo, z0, z1):
+        """Heights inside (z0, z1) where what a piece carries can change (review R3-3): the ends of every piece (its
+        strip's first element, a neighbouring strip's step) and of its strip's envelope members, and where such a
+        member passes the piece's line or the strip's extent."""
+        hs = set(hs_all)
+        lo_x, hi_x = ext(yo)
+        for (e1, e2) in env_strip(yo):
+            hs.update((e1[2], e2[2]))
+            if abs(e2[ax] - e1[ax]) > 1e-9:
+                for x_ in (xa - 1.0, xa + 1.0, lo_x - 1.0, hi_x + 1.0):
+                    t_ = (x_ - e1[ax]) / (e2[ax] - e1[ax])
+                    if 0.0 <= t_ <= 1.0:
+                        hs.add(e1[2] + t_ * (e2[2] - e1[2]))
+        out = []
+        for h in sorted(hs):
+            if z0 + 1.0 < h < z1 - 1.0 and (not out or h - out[-1] > 1.0):
+                out.append(h)
+        return out
+
+    def is_wall(v):
+        return v is not None and v[0] == "wall"
+
+    def tally(items):
+        """(own wall area by side, {(re-entrant piece tag, side): area}) of [(z_a, z_b, verdict)] (mm2)."""
+        own, ex = [0.0, 0.0], {}
+        for a, b, u in items:
+            if is_wall(u):
+                h0, h1 = u[1]
+                s_ = h0 + h1
+                own[0] += (h0 / s_ if s_ > 0.0 else 0.5) * u[2] * (b - a)
+                own[1] += (h1 / s_ if s_ > 0.0 else 0.5) * u[2] * (b - a)
+                for (r, _q, _fs, k, A) in u[4]:
+                    ex[(r[0]["tag"], k)] = ex.get((r[0]["tag"], k), 0.0) + A
+        return own, ex
+
+    hs_all = sorted({h for r in cols for h in (r[5], r[6])})
+    for row in cols:
+        c, c1, c2, xa, yo, z0, z1 = row
+        zm = 0.5 * (z0 + z1)
+        mid = judge(row, zm, z0, z1)
+        hs = cuts(xa, yo, z0, z1)
+        e_ = [z0] + hs + [z1]
+        bands = [(a, b, judge(row, 0.5 * (a + b), a, b)) for a, b in zip(e_, e_[1:])] if hs else []
+        for face, q, fs in faces:
+            v = mid[face]
+            split = False
+            if bands:
+                own_m, ex_m = tally([(z0, z1, v)])
+                own_b, ex_b = tally([(a, b, bv[face]) for (a, b, bv) in bands])
+                split = abs(sum(own_b) - sum(own_m)) > 1.0e3 or any(
+                    abs(ex_b.get(k, 0.0) - ex_m.get(k, 0.0)) > 1.0e3 for k in set(ex_b) | set(ex_m))
+            if not split:
+                # one exposure over the whole piece: judged at its mid-height
+                if v is None:
+                    continue
+                if v[0] == "sheltered":
+                    sheltered.append(v[1])
+                    continue
+                keep(face, v)
+                pieces.append((c, c1, c2, face, q, fs, v[2]))
+                halves.append(v[1])
+                continue
+            # review R3-3: the piece runs past a lower roof or a wall step with no node there, so its mid-height does
+            # not speak for its whole height (its exposure, or the step beside it, changes along it) -- its wall strip
+            # is split by height: each band takes the wall where the piece is the first element of its strip, with
+            # that band's width and facade steps, and the area of those bands is spread over the piece's own length,
+            # as the re-entrant share is (R2-2)
+            rows, top = [], None
+            for (a, b, bv) in bands:
+                u = bv[face]
+                rows.append({"z_mm": [round(a, 1), round(b, 1)],
+                             "exposure": "wall" if is_wall(u) else ("sheltered" if u is not None else "not first"),
+                             "width_mm": round(u[2], 1) if is_wall(u) else 0.0})
+                if is_wall(u):
+                    keep(face, u)
+                    top = u
+            L_ = z1 - z0
+            A = sum(own_b)
+            banded.append({"tag": c["tag"], "face": face, "z_mm": [round(z0, 1), round(z1, 1)], "bands": rows,
+                           "area_m2": round(A / 1.0e6, 4), "width_mm": round(A / L_, 1) if L_ > 0.0 else 0.0,
+                           "area_at_mid_height_m2": round(sum(own_m) / 1.0e6, 4),
+                           "basis": "the wall of its strip split by height (no node at the step); the loaded bands' "
+                                    "area spread over the piece's length"})
+            if A > 0.0 and L_ > 0.0:
+                pieces.append((c, c1, c2, face, q, fs, A / L_))
+                halves.append(top[1])                                     # the strip's extent, for the residuals
     for (tag, face), ex in sorted(extra.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
         r = ex["row"]
         L_ = r[6] - r[5]
@@ -1768,7 +1883,8 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
             pieces.append((r[0], r[1], r[2], face, ex["q"], ex["fs"], sum(h_)))
             halves.append(h_)
     return {"pieces": pieces, "halves": halves, "record": {"sheltered": sheltered, "own_wall_width": widened,
-                                                           "stepped_facade": steps, "basis": WALL_SCAN_BASIS}}
+                                                           "stepped_facade": steps, "height_bands": banded,
+                                                           "basis": WALL_SCAN_BASIS}}
 
 
 WIND_POST_KA_CITE = ("IS 875 (Part 3):2015 7.2.2.1 (b):'For beam type elements, purlins, etc, the tributary area shall be "

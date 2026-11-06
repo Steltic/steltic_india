@@ -133,10 +133,13 @@ def headline(pkg):
         mid, sec = m.get("id"), (m.get("inputs") or {}).get("section") or m.get("section")
         if st is not None and (out["strength"] is None or st > out["strength"]["dc"]):
             out["strength"] = {"dc": round(st, 4), "member": mid, "section": sec,
-                               "check": re.sub(r"\s*\((?:governing )?combination .*$", "",
+                               "check": re.sub(r"\s*\((?:element .*?, )?(?:governing )?combination .*$", "",
                                                str((sc or {}).get("name") or "member check")).strip(),
                                "combination": _combo_of(sc) if sc else (m.get("inputs") or {}).get("governing_combo"),
                                "clause": (sc or {}).get("clause") or "IS 800:2007 7.1.2, 8.2, 8.4, 9.3"}
+            if (sc or {}).get("element") is not None:
+                # engine checks 2: the group's worst strength element, when it is not the D/C-governing one
+                out["strength"]["element"] = "e%s" % sc["element"]
         if sl is not None and (out["slenderness"] is None or sl > out["slenderness"]["ratio"]):
             out["slenderness"] = {"ratio": round(sl, 4), "KL_r": round(float(slc["value"]), 1) if _num(slc.get("value")) else None,
                                   "limit": slc.get("limit"), "member": mid, "section": sec,
@@ -176,8 +179,9 @@ def headline_sentence(h):
     st, sl = (h or {}).get("strength"), (h or {}).get("slenderness")
     parts = []
     if st:
-        parts.append("worst member strength ratio %s (%s, %s%s)" % (
-            _f(st["dc"]), st["member"], st.get("check") or "IS 800 member check",
+        parts.append("worst member strength ratio %s (%s%s, %s%s)" % (
+            _f(st["dc"]), st["member"], (" element %s" % st["element"]) if st.get("element") else "",
+            st.get("check") or "IS 800 member check",
             (", " + st["combination"]) if st.get("combination") else ""))
     if sl:
         parts.append("worst member slenderness KL/r %s against the IS 800 Table 3 limit of %s (ratio %s, %s)" % (
