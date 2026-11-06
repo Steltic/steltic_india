@@ -758,16 +758,18 @@ def torsion_requirements(lm, ev, x, st):
                     log("    period T%s %.3f s > 1 s (IS 875-3 9.1(b)): %s keeps %s >= %.4g" % (d.lower(), T, g, kind, need))
     for d, lst in sorted((ev.get("soft") or {}).items()):
         # IS 1893 Table 6(i): storey i softer than the storey above (K_i < K_i+1) -- the drift limit of that storey
-        # and below drops to 0.2 %: the columns of storey i keep their stiffness x (K_i+1 / K_i) / 0.97
+        # and below drops to 0.2 %: the braces (else the columns) of storey i keep their stiffness x (K_i+1 / K_i) / 0.97
         for i, ratio in lst:
             gs = set()
             mems = (lm.s12[1].get("members") or []) if lm.s12 is not None else []
             lv = i + 1 if any(m.get("role") == "column" and m.get("level") == i + 1 for m in mems) else i   # storeys 1-based
-            for m in mems:
-                if m.get("role") == "column" and m.get("level") == lv:
-                    g = lm.groups_of.get(int(m.get("tag") or str(m["id"]).lstrip("e")))
-                    if g is not None and lm.specs.get(g, {}).get("role") not in (None, "fixed"):
-                        gs.add(g)
+            # a braced storey is stiffened through its braces (brace levels count from 0), a moment-frame storey
+            # through its columns
+            br = [m for m in mems if m.get("role") == "brace" and m.get("level") == i]
+            for m in (br or [m for m in mems if m.get("role") == "column" and m.get("level") == lv]):
+                g = lm.groups_of.get(int(m.get("tag") or str(m["id"]).lstrip("e")))
+                if g is not None and lm.specs.get(g, {}).get("role") not in (None, "fixed"):
+                    gs.add(g)
             f = min(max(1.0 / max(ratio, 0.3) / 0.97, 1.05), 1.6)
             for g in sorted(gs):
                 kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
