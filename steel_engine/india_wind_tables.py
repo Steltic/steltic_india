@@ -1024,7 +1024,8 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
     """Member-level wind pressure sets for low-rise / portal buildings (7.3.1 F = (Cpe - Cpi) A pd):
     walls from Table 5, roof from Table 6 by pitch, Cpi +- from the opening ratio.  Returns a list of
     patterns {name, roof_windward_kNm2, roof_leeward_kNm2, wall_windward_kNm2, wall_leeward_kNm2,
-    direction} (+ = towards the surface, i.e. roof downward / wall inward).
+    wall_side_kNm2 (the two side walls, Table 5 C / D at theta 0, A / B at theta 90), wall_cpe (the Table 5 surfaces
+    and Cpe of each wall), pd_kNm2, direction} (+ = towards the surface, i.e. roof downward / wall inward).
 
     H14 / L-15: ``corpus_hit`` = the retrieved Table 5 record(s) (exact_table 5; a plain record for theta 0 or
     {0: .., 90: ..}) is passed through (walls_source 'corpus'); ``walls`` = resolved wall records (same shapes) and
@@ -1063,6 +1064,20 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
                 "walls": walls90}
     src0 = walls0.get("resolved_via") if isinstance(walls0, dict) else None
     src90 = walls90.get("resolved_via") if isinstance(walls90, dict) else None
+    # side walls (lead ruling on open point 1, 2026-11-06): the two walls parallel to the wind take their Table 5
+    # Cpe -- C / D at theta = 0, A / B at theta = 90 -- one average coefficient per wall (Table 5 has no zones by
+    # distance; the 0.25 w local strip is for cladding, 7.3); the larger suction when the two differ
+    side0 = {k: wc.get(k) for k in ("C", "D") if wc.get(k) is not None}
+    side90 = {k: wc90.get(k) for k in ("A", "B") if wc90.get(k) is not None}
+    Cs0 = min(side0.values()) if side0 else None
+    Cs90 = min(side90.values()) if side90 else None
+
+    def _wcpe(th, ww, lw_, side):
+        return {"theta_deg": th, "windward": ww, "leeward": lw_,
+                "side": {"surfaces": sorted(side), "Cpe": min(side.values()) if side else None,
+                         "Cpe_by_surface": dict(side)},
+                "cite": "IS 875 (Part 3):2015 Table 5 (7.3.3.1): one average Cpe per wall surface; the local 0.25 w "
+                        "strip is for cladding only (7.3)"}
     pats = []
     for s_cpi in (+cpi, -cpi):
         # theta = 0: wind normal to the ridge (E/F windward slope, G/H leeward)
@@ -1071,14 +1086,18 @@ def lowrise_member_wind(pd_kNm2, h_eave_m, w_m, l_m, roof_pitch_deg, opening_rat
                      "roof_leeward_kNm2": (roof["GH"] - s_cpi) * pd_kNm2,
                      "wall_windward_kNm2": (Aw - s_cpi) * pd_kNm2,
                      "wall_leeward_kNm2": (Bw - s_cpi) * pd_kNm2,
-                     "Cpi": s_cpi, "roof": roof, "walls_source": src0})
+                     "wall_side_kNm2": None if Cs0 is None else (Cs0 - s_cpi) * pd_kNm2,
+                     "wall_cpe": _wcpe(0, {"surface": "A", "Cpe": Aw}, {"surface": "B", "Cpe": Bw}, side0),
+                     "pd_kNm2": pd_kNm2, "Cpi": s_cpi, "roof": roof, "walls_source": src0})
         # theta = 90: wind along the ridge -- roof E/G windward, F/H leeward; gable walls C (windward) / D (leeward)
         pats.append({"name": "WM90%s" % ("+" if s_cpi > 0 else "-"), "direction": "along_ridge",
                      "roof_windward_kNm2": (roof["EG"] - s_cpi) * pd_kNm2,
                      "roof_leeward_kNm2": (roof["FH"] - s_cpi) * pd_kNm2,
                      "wall_windward_kNm2": (Cw - s_cpi) * pd_kNm2,
                      "wall_leeward_kNm2": (Dw - s_cpi) * pd_kNm2,
-                     "Cpi": s_cpi, "roof": roof, "walls_source": src90})
+                     "wall_side_kNm2": None if Cs90 is None else (Cs90 - s_cpi) * pd_kNm2,
+                     "wall_cpe": _wcpe(90, {"surface": "C", "Cpe": Cw}, {"surface": "D", "Cpe": Dw}, side90),
+                     "pd_kNm2": pd_kNm2, "Cpi": s_cpi, "roof": roof, "walls_source": src90})
     if ridge_axis in ("X", "Y"):
         across = "Y" if ridge_axis == "X" else "X"
         for p in pats:

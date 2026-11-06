@@ -402,6 +402,16 @@ def write_anchor_plan(cfg, info, outdir, reactions=None):
 
 
 # ------------------------------------------------------------------------------------------- STAAD export
+def staad_label(sec):
+    """IS 808:2021 designations without the old 'IS' prefix (MB 300, MC 150) -> the STAAD.Pro Indian table names
+    (ISMB300, ISMC150); angles (ISA...) and other labels unchanged.  MSME (2026-10)."""
+    u = str(sec).upper().replace(" ", "")
+    for pre in ("MB", "MC", "WB", "LB", "JB", "HB", "SC", "LC", "JC"):
+        if u.startswith(pre) and len(u) > len(pre) and u[len(pre)].isdigit():
+            return "IS" + u
+    return u
+
+
 def write_staad(cfg, info, path, pkg=None):
     """model.std -- STAAD.Pro input of the stepped analysis model.  Coordinates: STAAD X = x, STAAD Y = z (up),
     STAAD Z = -y (right-handed).  Tapered segments as TAPERED (depth at each end, web, flange), prismatic welded I
@@ -459,8 +469,15 @@ def write_staad(cfg, info, path, pkg=None):
             od = p.get("d") or p.get("D") or 100.0
             tt = p.get("t") or p.get("tw") or 4.0
             L.append("%d PIPE OD %.1f ID %.1f" % (mid[t], od, od - 2 * tt))
+        elif p.get("section_type") == "double_angle":
+            # MSME (2026-10): two angles back to back (STAAD 'D' double angle, equal legs; LD / SD long / short legs
+            # back to back for an unequal pair), SP = the gusset gap
+            comp = str(p["component"])
+            eq = abs(float(p["leg_connected_mm"]) - float(p["leg_outstanding_mm"])) < 1e-6
+            kind_ = "D" if eq else ("LD" if p["leg_connected_mm"] > p["leg_outstanding_mm"] else "SD")
+            L.append("%d TABLE %s %s SP %.1f" % (mid[t], kind_, comp, float(p["gap_mm"])))
         else:
-            L.append("%d TABLE ST %s" % (mid[t], sec))
+            L.append("%d TABLE ST %s" % (mid[t], staad_label(sec)))
     L.append("CONSTANTS")
     L.append("MATERIAL STEEL ALL")
     col_dir = info.get("col_dir") or {}
@@ -503,7 +520,7 @@ def write_staad(cfg, info, path, pkg=None):
     if rl:
         L.append("MEMBER RELEASE")
         L += rl
-    br = [mid[t] for (t, kind, sec, n1, n2) in eles if kind == "brace"]
+    br = [mid[t] for (t, kind, sec, n1, n2) in eles if kind in ("brace", "truss")]   # MSME: truss webs / knee braces
     if br:
         L.append("MEMBER TRUSS")
         L.append(" ".join(str(m) for m in br))

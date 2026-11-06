@@ -38,10 +38,15 @@ def test_maximum_type_rows_carry_no_sense():
 
 
 def test_capacity_design_flattening_keeps_sense():
-    """design_pipeline copies section12 rows into capacity_design.checks: the sense must survive the copy."""
+    """design_pipeline copies section12 rows into capacity_design.checks: the sense must survive the copy (since
+    engine checks re-check 2 the copy is design_pipeline.capacity_check_entry, used for every row)."""
+    import design_pipeline as DP
     src = open(os.path.join(os.path.dirname(S12.__file__), "design_pipeline.py")).read()
     i = src.index('pkg["capacity_design"] = {"system": cfg.get("system"), "R": G.declared_R(cfg), "section12"')
-    assert '"sense": c["sense"]' in src[i:i + 900]
+    assert "capacity_check_entry(c)" in src[i:i + 900]
+    row = S12._chk("x", 120.0, 100.0, clause="c", cite="c", dc=100.0 / 120.0, sense=">")
+    assert DP.capacity_check_entry(row)["sense"] == ">" and "sense" not in DP.capacity_check_entry(S12._chk(
+        "y", 50.0, 100.0, clause="c", cite="c"))
 
 
 def test_hr_consistency_does_not_flag_minimum_rows():

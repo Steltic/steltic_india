@@ -111,7 +111,9 @@ def test_combo_forces_hand_the_span_load_to_the_member_check():
     extreme exceeds both ends."""
     import static_model as SM
     n = len(SM.REC_FIELDS)
-    assert SM.REC_FIELDS[13:] == ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+    # engine checks review finding 4 (2026-11-06): the layout is extended by the beam in-span hogging extreme
+    assert SM.REC_FIELDS[13:17] == ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+    assert SM.REC_FIELDS[17:] == ("Mmaj_hog_min",)
     base = dict.fromkeys(SM.REC_FIELDS, 0.0)
     pin = dict(base, N=-1e4, Mmaj_span=-2.0e7, Mmin_span=5.0e6, Mmaj_free=-2.0e7, Mmin_free=5.0e6)   # wind column
     knee = dict(base, N=-1e5, Mmaj_i=0.0, Mmaj_j=-9.0e8, Mmaj_free=-1.0e8)   # portal column: the knee moment governs
@@ -123,7 +125,7 @@ def test_combo_forces_hand_the_span_load_to_the_member_check():
     # an old 13-field record (no span fields) reads as no span moment
     old = {"o": tuple(pin[f] for f in SM.REC_FIELDS[:13])}
     assert "Mz_free_Nmm" not in SM.combo_forces_for_member_check(old, "col")[0]
-    assert n == 17
+    assert n == 18                      # 17 + Mmaj_hog_min (engine checks review finding 4, 2026-11-06)
 
 
 def test_member_check_counts_the_minor_axis_span_moment():
@@ -175,7 +177,7 @@ def test_gable_wind_column_is_checked_for_the_wall_wind(mini_job):
     M_rec = max(float(inp.get("Mz_Nmm") or 0.0), float(inp.get("My_Nmm") or 0.0))
     assert M_rec == pytest.approx(M_ref, rel=0.05)
     recs = json.load(open(os.path.join(out["root"], "design", "member_combo_forces.json")))
-    assert recs["fields"][13:] == ["Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free"]
+    assert recs["fields"][13:17] == ["Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free"]   # + Mmaj_hog_min (finding 4)
     el = recs["elements"][str(inp["governing_element"])]
     assert max(max(abs(r[13]), abs(r[14])) for r in el["records"].values() if len(r) > 14) == pytest.approx(M_ref, rel=0.05)
     rows = [c for c in m["checks"] if "9.3" in str(c.get("name"))]

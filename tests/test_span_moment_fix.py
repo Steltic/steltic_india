@@ -218,7 +218,9 @@ def _rec(**kw):
 def test_record_layout_and_combo_forces():
     import static_model as SM
     assert SM.REC_FIELDS[11:13] == ("N_LAT", "V_LAT")
-    assert SM.REC_FIELDS[13:] == ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+    # engine checks review finding 4 (2026-11-06): the layout is extended by the beam in-span hogging extreme
+    assert SM.REC_FIELDS[13:17] == ("Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+    assert SM.REC_FIELDS[17:] == ("Mmaj_hog_min",)
     wl2 = W0 * L0 ** 2
     recs = {"wind": _rec(N=-1e4, Mmaj_span=wl2 / 8, Mmaj_free=wl2 / 8, Mmin_free=-3e6, Mmin_span=-3e6),
             "ff": _rec(N=-1e4, Mmaj_i=-wl2 / 12, Mmaj_j=-wl2 / 12, Mmaj_span=wl2 / 24, Mmaj_free=wl2 / 8),

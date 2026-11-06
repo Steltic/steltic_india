@@ -34,6 +34,10 @@ RULINGS = {
     "D-T6": "complete-penetration welds for the connection welds",
     "D-T7": "joints designed for 1.2 Mp",
     "D-T9": "reading of the IS 18168 6.5 flange splice-plate rule, open",
+    "D-T10": "knee-braced truss portal: the knee designed for 1.2 times the moment the knee brace can deliver in "
+             "either direction, taken as its characteristic gross-section yield (as IS 800 12.7.3.1(a) does for brace "
+             "connections), so that the brace yields before the knee and heel connections fail, with HSFG 8.8 bolts "
+             "and complete-penetration welds at the column",
     "D8": "floor area taken as the proxy for the number of occupants",
 }
 RULING_PREFIX = "Steltic design ruling"
