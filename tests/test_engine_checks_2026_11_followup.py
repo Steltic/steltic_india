@@ -476,3 +476,52 @@ def test_F12_different_column_LLT_sag_and_hog_are_rejected():
                                                                               "LLT_hog_mm": 3000.0}}},
                                  7, "beam", "WI400X200X12X6", "roof")
     assert beam["LLT_hog_mm"] == 3000.0                          # beams keep their two flanges
+
+
+# ====================================================================================================== 1, 2 on gold pieces
+def _s12_fixture(name):
+    import re
+    import sections as S
+    fx = _fixture(name)
+    for m in fx.get("members") or [fx.get("member")]:
+        g = re.match(r"BOX(\d+)X(\d+)X(\d+)$", m["section"])
+        if g:                                                   # the gold cfgs register their square boxes
+            S.register_box(m["section"], float(g.group(2)), float(g.group(1)), float(g.group(3)), float(g.group(3)))
+    return fx
+
+
+def test_1_e2e_IN_Ex13_scbf_column_gate_with_the_12_2_3_axial_force():
+    """IN_Ex13 SCBF column e1 (WPB260X260X114.4, E250 B0), its 125 captured force records: the 12.8.4.1 gate is now
+    classified with each record's N; the governing record is the 12.2.3 row 1.2DL+0.5LL-2.5EQ_Y[eb]+0.3EQ_Z[col]
+    (N = 1,020 kN, small Mz: D-T11 puts the web on the 'axial compression' row, 42 eps); d/tw 14.2 is well inside,
+    so the column stays plastic -- on origin/main the gate read the N = 0 class only."""
+    import india_is800_s12 as S12
+    fx = _s12_fixture("IN_Ex13_scbf_column_e1_s12.json")
+    md = {"members": [fx["member"]], "forces": fx["forces"]}
+    r = next(c for c in S12.column_checks(fx["system"], md, fx["cfg"]) if c["id"] == "scbf_column_plastic")
+    assert r["ok"] is True and r["value"] == "plastic" and r["n_records"] == 125
+    assert r["governing_family"] == "12.2.3" and r["governing_combo"] == "1.2DL+0.5LL-2.5EQ_Y[eb]+0.3EQ_Z[col]"
+    assert r["governing_P_N"] == pytest.approx(1020268.0, rel=1e-6) and r["web_row"] == "axial compression"
+    assert r["web_limits"][2] == pytest.approx(42.0 * math.sqrt(250.0 / 240.0))          # E250, flange > 16 mm: 240
+
+
+@pytest.mark.parametrize("name,t_dbl,fy_dbl,fy_col", [("IN_Ex12_smf_joint_J100000-X.json", 48.0, 230.0, 240.0),
+                                                      ("IN_Ex18_smf_joint_J100000-X.json", 15.0, 250.0, 230.0)])
+def test_2_e2e_gold_panel_zone_doubler_at_its_own_band(name, t_dbl, fy_dbl, fy_col):
+    """Two gold SMF joints with a declared doubler and no doubler grade: IN_Ex12 J100000-X (BOX450X450X25 column at
+    240 MPa, a 48 mm doubler -> E250 > 40 mm band 230 MPa) and IN_Ex18 J100000-X (BOX800X800X45 at 230 MPa, a 15 mm
+    doubler -> 250 MPa).  origin/main took the column's fy for the doubler: the panel resistance now differs by
+    bp t_dbl (fy_col - fy_dbl) / (sqrt3 gamma_m0), down for IN_Ex12, up for IN_Ex18."""
+    import india_is800_s12 as S12
+    fx = _s12_fixture(name)
+    md = {"members": fx["members"], "forces": fx["forces"]}
+    pz = next(c for c in S12.smf_joint_checks(fx["joint"], md, fx["cfg"], system="SMF") if c["id"] == "12.11.2.3_panel_zone")
+    d = pz["detail"]
+    dbl = next(p for p in d["plates"] if p["plate"] == "doubler")
+    assert dbl["t_mm"] == t_dbl and dbl["fy_MPa"] == fy_dbl
+    assert all(p["fy_MPa"] == fy_col for p in d["plates"] if p["plate"].startswith("column web"))
+    assert "E250 assumed" in d["doubler_fy"]["grade_basis"]
+    bp = d["bp_mm"]
+    Vd_main = d["Vd_N"] + bp * t_dbl * (fy_col - fy_dbl) / math.sqrt(3.0) / 1.1      # the doubler at the column fy
+    assert (d["Vd_N"] < Vd_main) == (fy_dbl < fy_col)
+    assert pz["dc"] == pytest.approx(max(d["DC_shear"], d["t_min_mm"] / float(d["inputs"]["tw_mm"])), rel=1e-9)
