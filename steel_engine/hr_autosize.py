@@ -1206,6 +1206,10 @@ def monotone_columns(x, specs, log_fn=log, lm=None, margins=None, barred=None):
                                         fixed=[g for g in x if g != lo], barred=barred)
                 if "no candidate" not in str(notes.get(lo, "")):
                     new = xx[lo]
+                elif lm.group_ok(lo, x[up][0], x[up][1], (margins or {}).get(lo, specs[lo].get("margin", 0.95)))[0]:
+                    new = x[up]
+                else:
+                    continue          # nothing stiffer passes the lower storeys' own checks: keep their section
             new = new or x[up]
             log_fn("    stack %s: %s %s is stiffer than %s %s below it -> %s %s"
                    % (base, up, x[up][0], lo, x[lo][0], lo, "%s %s" % (new[0], new[1] or "")))
