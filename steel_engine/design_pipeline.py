@@ -651,11 +651,22 @@ def member_override(cfg, t, kind, sec, role):
         return out, used
     keys = [str(sec), "%s:%s" % (_ROLE_TO_I8.get(kind, kind), sec), "%s:%s" % (kind, sec), "%s:%s" % (role, sec),
             "e%d" % t]
+    from_mo = set()
     for k in keys:
         v = mo.get(k)
         if isinstance(v, dict):
             out.update({f: v[f] for f in _OVERRIDE_FIELDS if v.get(f) is not None})
+            from_mo |= {f for f in ("LLT_sag_mm", "LLT_hog_mm") if v.get(f) is not None}
             used.append(k)
+    if kind in ("col", "column") and from_mo and out.get("LLT_sag_mm") is not None and \
+            out.get("LLT_hog_mm") is not None and abs(float(out["LLT_sag_mm"]) - float(out["LLT_hog_mm"])) > 1e-6:
+        # review finding 12 (2026-11-06): for a column 'sagging' / 'hogging' is the sign of the element's end moment
+        # (static_model.member_records), not a physical flange, so two lengths cannot be mapped to the flanges
+        raise ValueError(
+            "cfg['member_overrides'] %s gives column e%d (%s) LLT_sag_mm = %g and LLT_hog_mm = %g. For a column the "
+            "sagging / hogging sign is the sign of the element's end moment, not a flange, so the engine cannot tell "
+            "which flange each length restrains. Declare one length for both (the larger restraint spacing of the two "
+            "flanges)." % (used, t, sec, float(out["LLT_sag_mm"]), float(out["LLT_hog_mm"])))
     return out, used
 
 
@@ -1133,7 +1144,7 @@ def I8_fy(p, grade="E250"):
     """fy of a rolled section by its thickness band (IS 2062), for the column Mp the D-T10 note compares with."""
     import india_is800 as _I8
     t = max(float(p.get("tf") or 0.0), float(p.get("tw") or 0.0))
-    return float(_I8.is2062_properties(grade, t).get("fy_MPa") or 250.0)
+    return float(_I8.is2062_properties(grade, t).get("fy_MPa") or _I8.fy_is2062("E250", t))   # finding 6
 
 
 def _truss_knee_records(cfg, info0, reg, length, elem_results):
@@ -1462,6 +1473,10 @@ def design_india(name, cfg, outdir):
     if (sinfo or {}).get("wind_post_Ka"):
         # engine checks (2026-11): the IS 875-3 7.2.2.1 (b) Ka of each wind post (gable wind column), per pattern
         pkg["wind_post_Ka"] = sinfo["wind_post_Ka"]
+    elif (sinfo or {}).get("wind_post_note"):
+        # review finding 9 (2026-11-06): no wind post was found -- the package says why
+        pkg["wind_post_Ka"] = []
+        pkg["wind_post_Ka_note"] = sinfo["wind_post_note"]
     if (sinfo or {}).get("member_wind_wall"):
         # engine checks (2026-11): the member-wind wall scan per pattern -- column pieces under the roof (not on a wall)
         # and pieces above an eave split that keep their own wall's tributary width (static_model.WALL_SCAN_BASIS)

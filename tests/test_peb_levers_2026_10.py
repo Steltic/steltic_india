@@ -106,7 +106,9 @@ def test_rods_refused_outside_zone_II_ocbf():
     ok, note = PL.rods_allowed(cfg)
     assert ok and "NOT compliant" in note
     r = PL.rod_tension_check(20, 50.0e3)
-    assert r["An_mm2"] == 245.0 and r["Td_N"] == pytest.approx(min(314.16 * 250 / 1.1, 0.9 * 245 * 410 / 1.25), rel=1e-3)
+    # engine checks review finding 6 (2026-11-06): the rod's fy is the IS 2062:2025 Table 3 band of its diameter, 240 MPa
+    # for E250 above 16 mm (it was a fixed 250 MPa)
+    assert r["An_mm2"] == 245.0 and r["Td_N"] == pytest.approx(min(314.16 * 240 / 1.1, 0.9 * 245 * 410 / 1.25), rel=1e-3)
 
 
 # ------------------------------------------------------------------------------------------- pipeline runs

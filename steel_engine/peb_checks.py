@@ -62,6 +62,17 @@ def _stiffener_fy(sp, cfg, what, t_key="t_mm", fy_key="fy_MPa", grade_key="grade
                            job_grade=(cfg or {}).get("steel_grade"), what=what)[0]
 
 
+def column_web_strip_fy(pcol, fy_col, t_dbl, cfg):
+    """Review finding 5 (2026-11-06): the fy of a column web strip with a web doubler, thickness-weighted -- the web at
+    the column fy, the doubler at its own IS 2062:2025 band (cfg['plate_grade'], else E250: _stiffener_fy)."""
+    t_dbl = float(t_dbl or 0.0)
+    tw = float(pcol["tw"])
+    if t_dbl <= 0.0:
+        return fy_col
+    fy_d = float(_stiffener_fy({"t_mm": t_dbl}, cfg, "column web doubler"))
+    return (tw * float(fy_col) + t_dbl * fy_d) / (tw + t_dbl)
+
+
 def _mp(sec, cfg):
     p = S.props(sec)
     return p["Zx"] * _fy_plate(sec, cfg)
@@ -266,7 +277,8 @@ def splice_records(cfg, peb, reg, envt, s12_cfg=None, system=None):
                            or cfg.get("steel_grade"))
                 cf = dict(sp.get("end_plate") or {}, t_plate_mm=t_cf, fy_plate_MPa=_fy_plate(csec_, cfg), lv_mm=lv_cf,
                           plate_grade=grade_c, web_t_mm=float(pcol["tw"]) + float(sp.get("column_web_doubler_mm") or 0.0),
-                          web_fy_MPa=_fy_plate(csec_, cfg), hf_mm=lay["hf_mm"])
+                          web_fy_MPa=column_web_strip_fy(pcol, _fy_plate(csec_, cfg), sp.get("column_web_doubler_mm"),
+                                                         cfg), hf_mm=lay["hf_mm"])
                 caps_cf = [(end_plate_capacity(cf, cfg) or {}).get("capacity_Nmm")]
                 if not sym and lay["reverse_rows"]:
                     caps_cf.append((end_plate_capacity(cf, cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
@@ -821,8 +833,10 @@ def knee_records(cfg, peb, joints, reg, envt, system=None, s12_cfg=None):
                               if g_cf else kep.get("lv_mm")))
             grade_c = (kspec.get("column_flange_grade") or ((cfg or {}).get("grade_by_section") or {}).get(csec)
                        or (cfg or {}).get("steel_grade"))
+            # review finding 5 (2026-11-06): the web strip (column web + doubler) at the thickness-weighted fy of the
+            # two plates -- the doubler at its own IS 2062 fy (fix C), not the column's
             cf = dict(kep, t_plate_mm=t_cf, fy_plate_MPa=_fy_plate(csec, cfg), lv_mm=lv_cf, plate_grade=grade_c,
-                      web_t_mm=tw_c, web_fy_MPa=fyc, hf_mm=lay["hf_mm"])
+                      web_t_mm=tw_c, web_fy_MPa=(float(pc["tw"]) * fyc + dbl * fy_dbl) / tw_c, hf_mm=lay["hf_mm"])
             caps_cf = [(end_plate_capacity(cf, cfg) or {}).get("capacity_Nmm")]
             if not sym and lay["reverse_rows"]:
                 caps_cf.append((end_plate_capacity(cf, cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))

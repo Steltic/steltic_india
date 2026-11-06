@@ -51,10 +51,11 @@ def _in_ex1_check():
     return fx, r
 
 
-def test_R_slender_pd_takes_the_axial_compression_web_limit_IN_Ex1(monkeypatch):
-    """Lead ruling 2026-11-06 on IN_Ex1 lateral_col-WI862X225X12X8: the engine's 3.7.2(d) reading is kept -- Ae (Pd, Nd)
-    with the web at the 'axial compression' row 42 eps tw, Ze_eff with the combination's 126 eps / (1 + 2 r2) -- D/C
-    1.063.  The review's reading (the r2 limit for the area too) would give about 1.03; it is not what the engine does."""
+def test_R_slender_pd_takes_the_axial_compression_web_limit_IN_Ex1():
+    """Lead ruling 1 (2026-11-06) on IN_Ex1 lateral_col-WI862X225X12X8: Pd is the design strength under axial
+    compression alone -- the 3.7.2(d) effective area with the 42 eps web -- one value for every combination; the
+    'generally' rows decide the combination's class and Md (Ze_eff with 126 eps / (1 + 2 r2)).  D/C 1.063 (the
+    review's 'about 1.03' took the r2 web limit for the area as well)."""
     import india_is800 as I8
     fx, r = _in_ex1_check()
     assert 1.060 <= r["dc"] <= 1.066, r["dc"]
@@ -66,47 +67,65 @@ def test_R_slender_pd_takes_the_axial_compression_web_limit_IN_Ex1(monkeypatch):
     assert e["web_dt_limit_axial_eps"] == 42.0
     assert e["web_d_eff_axial_mm"] == pytest.approx(42.0 * eps * p["tw"], rel=1e-9)            # Ae: 42 eps
     assert e["web_dt_limit_bending_eps"] == pytest.approx(126.0 / (1.0 + 2.0 * t2["r2"]), rel=1e-9)   # Md: r2 row
+    pe = r["Pd_effective_section"]
+    assert pe["A_eff_mm2"] == pytest.approx(e["A_eff_mm2"], rel=1e-9)                          # Pd: the same Ae
     basis = r["Pd_basis"]
-    for k in ("9.3.2.2", "7.1.2", "7.3.2", "3.7.2(d)", "42 eps", "126 eps / (1 + 2 r2)", "keeps the gross area"):
+    for k in ("9.3.2.2", "7.1.2", "7.3.2", "3.7.2", "42 eps", "axial compression alone", "one Pd per member",
+              "126 eps / (1 + 2 r2)"):
         assert k in basis, k
-    assert r["effective_section_3_7_2d"]["Pd_basis"] == basis
-    # the other reading, for the record: the axial area with the r2 web limit as well -> about 1.03
-    orig = I8.effective_section_3_7_2d
-
-    def alt(sec, fy, *, welded=False, gamma_m0=I8.GAMMA_M0_DEFAULT, web_dt_limit=None):
-        e_ = orig(sec, fy, welded=welded, gamma_m0=gamma_m0, web_dt_limit=web_dt_limit)
-        if e_.get("found") and web_dt_limit not in (None, math.inf):
-            tw = I8._props(sec)["tw"]
-            d_ax = min(e_["web_d_mm"], web_dt_limit * tw)
-            e_ = dict(e_, A_eff_mm2=e_["A_eff_mm2"] + (d_ax - e_["web_d_eff_axial_mm"]) * tw, web_d_eff_axial_mm=d_ax)
-        return e_
-    monkeypatch.setattr(I8, "effective_section_3_7_2d", alt)
-    _, r_alt = _in_ex1_check()
-    assert 1.02 <= r_alt["dc"] <= 1.04 and r_alt["dc"] < r["dc"] - 0.02
+    assert "not adopted" not in basis and "keeps the gross area" not in basis
 
 
-def test_R_semi_compact_by_the_generally_rows_keeps_the_gross_area_for_pd():
-    """The same ruling, the other side: WI475X220X16X5 (E350, d/tw 88.6 > 42 eps = 35.5) is slender under axial
-    compression alone but semi-compact under a combination with bending (the 'generally' rows decide the class), so Pd
-    takes the gross area (7.3.2 'so long as the section is semi-compact or better'); with no bending at all the axial row
-    classes it slender and Pd takes the 42 eps effective area."""
+def test_R_one_pd_per_member_from_the_class_under_axial_compression_alone():
+    """Lead ruling 1, the jump the review found: WI475X220X16X5 (E350, d/tw 88.6 > 42 eps = 35.5) at N = 155 kN had
+    P/Pdz 0.0750 with no moment and 0.0643 with a 2 N-m moment (gross area once the combination had a moment).  Now
+    Pd is the 42 eps effective-area value in all three combinations (no moment, 2 N-m, a real bending moment), while
+    the bending combination keeps its own semi-compact class for Md."""
     import india_is800 as I8
     import sections as S
     lab = "WI475X220X16X5"
     S.register_welded_I(lab, 475, 220, 16, 5)
     mem = {"id": "c", "section": lab, "grade": "E350", "role": "column", "L_mm": 3000.0, "Kz": 1.0, "Ky": 1.0,
            "LLT_sag_mm": 1000.0, "LLT_hog_mm": 1000.0, "c1": 1.0}
-    r = I8.member_check_is800(mem, [{"combo": "NC", "P_N": 155.1e3, "Mz_i_Nmm": 4.0e8, "Mz_j_Nmm": 4.0e8}])
-    g = r["per_combo"][0]
-    assert g["section_class"] == "semi-compact" and "effective_section_3_7_2d" not in g
-    gross = I8.compression_capacity(I8._props(lab), r["fy_MPa"], KLz_mm=3000.0, KLy_mm=3000.0, welded=True,
+    pds, ratios = [], []
+    for cf in ({"combo": "N", "P_N": 155.1e3}, {"combo": "N2", "P_N": 155.1e3, "Mz_i_Nmm": 2.0e3, "Mz_j_Nmm": 2.0e3},
+               {"combo": "NC", "P_N": 155.1e3, "Mz_i_Nmm": 4.0e8, "Mz_j_Nmm": 4.0e8}):
+        r = I8.member_check_is800(mem, [cf])
+        pds.append(r["capacities"]["compression"]["Pdz_N"])
+        if cf["combo"] == "NC":
+            assert r["per_combo"][0]["section_class"] == "semi-compact"          # Md on the combination's class
+            assert r["per_combo"][0]["table2"]["web_row"].startswith("generally")
+    pe = I8.effective_props_3_7_2d(I8._props(lab), 350.0, welded=True)
+    ref = I8.compression_capacity(pe, 350.0, KLz_mm=3000.0, KLy_mm=3000.0, welded=True, section_class="slender")
+    assert pds[0] == pytest.approx(pds[1], rel=1e-12) == pytest.approx(pds[2], rel=1e-12)
+    assert pds[0] == pytest.approx(ref["Pdz_N"], rel=1e-9)
+    gross = I8.compression_capacity(I8._props(lab), 350.0, KLz_mm=3000.0, KLy_mm=3000.0, welded=True,
                                     section_class="semi-compact")
-    assert r["capacities"]["compression"]["Pd_N"] == pytest.approx(gross["Pd_N"], rel=1e-9)
-    r2 = I8.member_check_is800(mem, [{"combo": "N", "P_N": 155.1e3}])
-    t2 = r2["per_combo"][0]["table2"]
-    assert t2["web_row"] == "axial compression" and t2["section_class"] == "slender"
-    assert r2["capacities"]["compression"]["Pd_N"] < 0.9 * gross["Pd_N"]
-    assert r2["Pd_basis"] == I8.PD_BASIS_3_7_2D
+    assert pds[0] < 0.9 * gross["Pdz_N"]                                         # Ae / Ag = 0.857
+
+
+def test_R_axial_only_checks_take_the_axial_compression_row_too():
+    """Finding 8 with ruling 1: compression_capacity's own classification (the truss route, the Section 12 axial
+    checks) puts an I web on the 'axial compression' row -- WI475X220X16X5 is slender there (Ae) -- and a welded box
+    with plates beyond 42 eps gets its 3.7.2(d) effective area instead of 'not coded'."""
+    import india_is800 as I8
+    import sections as S
+    lab = "WI475X220X16X5"
+    S.register_welded_I(lab, 475, 220, 16, 5)
+    c = I8.compression_capacity(lab, 350.0, KLz_mm=3000.0, KLy_mm=3000.0, welded=True)
+    assert c["section_class_axial"] == "slender" and c["effective_section"]["web_d_eff_axial_mm"] == pytest.approx(
+        42.0 * math.sqrt(250.0 / 350.0) * 5.0)
+    box = "BOX600X400X10"
+    S.register_box(box, 400, 600, 10, 10)                       # B 400, D 600: web 580 / 10, flange 380 / 10
+    try:
+        pb = I8._props(box)
+    except Exception:
+        pytest.skip("box registration not available")
+    cb = I8.compression_capacity(box, 250.0, KLz_mm=4000.0, KLy_mm=4000.0)
+    assert cb["found"] and cb["section_class_axial"] == "slender"
+    eb = cb["effective_section"]
+    assert eb["web_d_eff_mm"] == pytest.approx(420.0) and eb["flange_b_eff_mm"] == pytest.approx(380.0)
+    assert eb["A_eff_mm2"] == pytest.approx(pb["A"] - 2 * (580 - 420) * 10, rel=1e-6)
 
 
 # ====================================================================================================== 1 (S12 classes)
@@ -347,3 +366,113 @@ def test_3_e2e_IN_Ex21_gable_posts_keep_their_own_width_under_the_along_ridge_wi
     assert {w["tag"] for w in rec["own_wall_width"]} == set(UPPER)
     _, _, got_old, _ = _in_ex21_scan(pattern, 1.0, envelope=False)
     assert all(got_old[t][2] == pytest.approx(3000.0) for t in UPPER)
+
+
+# ====================================================================================================== D-T11 (ruling 2)
+def _corner(P=5.0e4, Mz=0.0, My=5.0e6):
+    import sections as S
+    lab = "WI200X190X12X4"                                    # IN_Ex3 corner column: d/tw 44 > 42 eps = 35.5 (E350)
+    S.register_welded_I(lab, 200, 190, 12, 4)
+    mem = {"id": "c", "section": lab, "grade": "E350", "role": "column", "L_mm": 3000.0, "Kz": 1.0, "Ky": 1.0,
+           "LLT_sag_mm": 3000.0, "LLT_hog_mm": 3000.0}
+    return lab, mem, {"combo": "c", "P_N": P, "Mz_i_Nmm": Mz, "Mz_j_Nmm": Mz, "My_i_Nmm": My, "My_j_Nmm": My}
+
+
+@pytest.mark.parametrize("mz_ratio,row", [(0.0, "axial compression"), (0.04, "axial compression"),
+                                          (0.06, "generally")])
+def test_DT11_web_row_by_the_major_axis_moment(mz_ratio, row):
+    """Steltic ruling D-T11: with axial compression the web takes the 'axial compression' row when |Mz| <= 0.05 Mdz
+    (Mdz: the section's 8.2.1.2 strength without axial force), whatever My -- N + My only, N + My + Mz = 0.04 Mdz;
+    N + My + Mz = 0.06 Mdz takes the 'generally' rows."""
+    import india_is800 as I8
+    lab, mem, cf = _corner()
+    Mdz = I8.mdz_without_axial_force(lab, 350.0, welded=True)
+    cf.update(Mz_i_Nmm=mz_ratio * Mdz, Mz_j_Nmm=mz_ratio * Mdz)
+    r = I8.member_check_is800(mem, [cf])
+    t2 = r["per_combo"][0]["table2"]
+    assert t2["web_row"].startswith(row), t2
+    assert ("D-T11" in r["web_class_basis"]) and ("3.7.1" in r["web_class_basis"])
+    if row == "axial compression":
+        assert t2["section_class"] == "slender" and t2["web_row_basis"].startswith("D-T11")
+
+
+def test_DT11_tiny_compression_is_not_axial_compression():
+    """The 'axial compression' row needs compression above the Table 3 tolerance (p_comp_tol): 0.5 N with My is not."""
+    import india_is800 as I8
+    lab, mem, cf = _corner(P=0.5)
+    assert I8.member_check_is800(mem, [cf])["per_combo"][0]["table2"]["web_row"].startswith("generally")
+
+
+def test_DT11_section12_gate_and_sizer_screen_use_the_same_rule():
+    import india_is800_s12 as S12
+    import sections as S
+    lab, mem, cf = _corner()
+    m = {"id": "C1", "role": "column", "section": lab, "grade": "E350BR", "L_mm": 3000.0}
+    md = {"members": [m], "forces": {"C1": [dict(cf, combo="1.2DL+0.5LL+2.5EL", family="12.2.3")]}}
+    sc, rec = S12.table2_class_by_combination(m, S.props(lab), 350.0, md)
+    assert rec["web_row"] == "axial compression" and sc["section_class"] == "slender"
+    assert "D-T11" in rec["web_class_basis"]
+    import peb_autosize as PA
+
+    class _Stub:                                            # the sizer's record access, two records of one element
+        mem_of_const = {"c": ["m"]}
+        el_of_mem = {"m": [1]}
+        envt = {1: {"records": {"g": (-5.0e4, 0.0) + (0.0,) * 15, "b": (-5.0e4, 2.0e8) + (0.0,) * 15}}}
+    import india_is800 as I8
+    cls = PA.LocalModel._class_with_N(_Stub(), "c", S.props(lab), 350.0)
+    assert cls == "slender"                                   # the axial-only record (N, no Mz) governs
+
+
+# ====================================================================================================== review findings
+def test_F4_beam_in_span_hogging_reaches_the_member_check():
+    """Finding 4: a pinned roof beam under uplift -- ends 0, a sagging peak of 10 kN-m, an in-span hogging peak of
+    -80 kN-m: the record carries Mmaj_hog_min and the check takes the hogging sign with LLT_hog (fly braces)."""
+    import static_model as SM
+    import india_is800 as I8
+    import sections as S
+    r = [0.0] * len(SM.REC_FIELDS)
+    for k, v in (("Mmaj", 80e6), ("Mmaj_sag_max", 10e6), ("Mmaj_hog_min", -80e6), ("Vmaj", 30e3)):
+        r[SM.REC_FIELDS.index(k)] = v
+    cf = SM.combo_forces_for_member_check({"0.9DL+1.5WM0+": tuple(r)}, "beam")
+    assert cf[0]["Mz_mid_hog_Nmm"] == -80e6 and cf[0]["Mz_mid_Nmm"] == 10e6
+    lab = "WI450X200X10X6"
+    S.register_welded_I(lab, 450, 200, 10, 6)
+    mem = {"id": "b", "section": lab, "grade": "E350", "role": "beam", "L_mm": 9000.0, "Kz": 1.0, "Ky": 1.0,
+           "LLT_sag_mm": 1500.0, "LLT_hog_mm": 4500.0}
+    res = I8.member_check_is800(mem, cf)
+    chk = {c["moment_sign"]: c for c in res["per_combo"][0]["checks"] if c.get("moment_sign")}
+    assert res["per_combo"][0]["Mz_hog_Nmm"] == pytest.approx(80e6) and chk["hogging"]["LLT_mm"] == 4500.0
+    assert chk["hogging"]["dc"] > chk["sagging"]["dc"]
+
+
+def test_F5_web_strip_with_a_doubler_at_its_own_fy():
+    import peb_checks as PC
+    f = PC.column_web_strip_fy({"tw": 8.0}, 350.0, 6.0, {})
+    assert f == pytest.approx((8.0 * 350.0 + 6.0 * 250.0) / 14.0)
+    assert PC.column_web_strip_fy({"tw": 8.0}, 350.0, 0.0, {}) == 350.0
+
+
+def test_F6_rod_and_sizer_web_fy_from_the_band():
+    import peb_levers as PL
+    import peb_autosize as PA
+    import sections as S
+    assert PL.rod_fy(16) == 250.0 and PL.rod_fy(20) == 240.0 and PL.rod_fy(36) == 240.0
+    assert PL.rod_tension_check(24, 1.0)["Tdg_N"] == pytest.approx(math.pi * 24 ** 2 / 4 * 240.0 / 1.1, rel=1e-9)
+    S.register_welded_I("WI600X250X20X8", 600, 250, 20, 8)
+    assert PA.member_web_fy("WI600X250X20X8") == 330.0           # E350, 20 mm flange: the > 16 - 40 mm band
+    assert PA.member_web_fy("WI600X250X20X8", "E250") == 240.0
+
+
+def test_F12_different_column_LLT_sag_and_hog_are_rejected():
+    import design_pipeline as DP
+    cfg = {"member_overrides": {"col:WI400X200X12X6": {"LLT_sag_mm": 1500.0, "LLT_hog_mm": 3000.0}}}
+    with pytest.raises(ValueError, match="not a flange"):
+        DP.member_override(cfg, 7, "col", "WI400X200X12X6", "lateral_col")
+    ok, _ = DP.member_override({"member_overrides": {"col:WI400X200X12X6": {"LLT_sag_mm": 2000.0,
+                                                                            "LLT_hog_mm": 2000.0}}},
+                               7, "col", "WI400X200X12X6", "lateral_col")
+    assert ok["LLT_sag_mm"] == 2000.0
+    beam, _ = DP.member_override({"member_overrides": {"beam:WI400X200X12X6": {"LLT_sag_mm": 1500.0,
+                                                                              "LLT_hog_mm": 3000.0}}},
+                                 7, "beam", "WI400X200X12X6", "roof")
+    assert beam["LLT_hog_mm"] == 3000.0                          # beams keep their two flanges

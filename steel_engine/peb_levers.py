@@ -469,7 +469,8 @@ def base_shear_note(cfg):
 
 
 # ------------------------------------------------------------------------------------------- tension rods
-ROD_FY, ROD_FU = 250.0, 410.0          # IS 2062 E250 round bar (assumption: rod grade declared by the job)
+ROD_FY, ROD_FU = 250.0, 410.0          # IS 2062 E250 round bar (assumption: rod grade declared by the job); the
+#                                        yield used is the IS 2062:2025 Table 3 band by diameter (rod_fy, finding 6)
 ROD_SIZES_MM = (16, 20, 24, 30, 36)     # threaded rods with an IS 4000 Table 2 stress area in india_connections
 
 
@@ -505,7 +506,7 @@ def rod_diameter(sec):
     return float(str(sec).upper().replace(" ", "")[3:])
 
 
-def register_rod(label, fy=ROD_FY, fu=ROD_FU):
+def register_rod(label, fy=None, fu=ROD_FU):
     """Register a tension-rod X-bracing diagonal 'ROD<d>' for the ANALYSIS model: each diagonal of the X pair is a
     half-area bar (a solid round of diameter d / sqrt 2), so that the pair with both diagonals active has the lateral
     stiffness of the single tension rod that really acts; the rod force is then 2 |N| of the model bar
@@ -514,6 +515,8 @@ def register_rod(label, fy=ROD_FY, fu=ROD_FU):
     a rod (KL/r, compression), which is the non-compliance the study reports."""
     import sections as S
     d = rod_diameter(label)
+    if fy is None:
+        fy = rod_fy(d)                  # finding 6: the IS 2062:2025 band of the real rod's diameter
     De = d / math.sqrt(2.0)
     A = math.pi * De ** 2 / 4.0
     I = math.pi * De ** 4 / 64.0
@@ -555,10 +558,20 @@ def rod_member_result(mem, recs):
                                         "with IS 800 12.7.2.1 / 12.7.2.3)"]}
 
 
-def rod_tension_check(d_mm, T_N, *, fy=ROD_FY, fu=ROD_FU, gamma_m0=1.10, gamma_m1=1.25):
+def rod_fy(d_mm, grade="E250"):
+    """Review finding 6 (2026-11-06): the yield stress of a round bar of diameter d -- IS 2062:2025 Table 3 is by
+    'Thickness/Diameter' (india_is800.fy_is2062): E250 250 MPa up to 16 mm, 240 above."""
+    import india_is800 as I8
+    return float(I8.fy_is2062(grade, float(d_mm)))
+
+
+def rod_tension_check(d_mm, T_N, *, fy=None, fu=ROD_FU, gamma_m0=1.10, gamma_m1=1.25):
     """Round bar in tension: gross yielding of the shank 6.2 (Ag fy / gamma_m0) and rupture at the thread 6.3
-    (0.9 An fu / gamma_m1, An = the IS 4000 Table 2 tensile stress area, as IS 800 10.3.5 takes it for threads)."""
+    (0.9 An fu / gamma_m1, An = the IS 4000 Table 2 tensile stress area, as IS 800 10.3.5 takes it for threads).
+    fy None: the IS 2062:2025 band of E250 for the diameter (rod_fy)."""
     import india_connections as C
+    if fy is None:
+        fy = rod_fy(d_mm)
     Ag = rod_area_mm2(d_mm)
     An = (C.IS4000_STRESS_AREA_MM2.get(int(d_mm)) or (None, None))[1]
     if An is None:

@@ -1280,6 +1280,11 @@ def member_wind_loads(cfg, model, pat, f):
                          min(c1[2], c2[2]), max(c1[2], c2[2])))
         if cols and all(c.get("transf") in (1, 2) for (c, *_r) in cols):
             posts = _wind_post_columns(cols)
+            if not posts:
+                # review finding 9 (2026-11-06): say why no wind post Ka was applied
+                model["wind_post_note"] = ("no wind post found: no wall column line has a pinned top piece (rel 'J' / "
+                                           "'both', engine3d.add_column releases); the pattern pressures (frame Ka) "
+                                           "are kept on every wall column")
             ws_ = ((cfg.get("load_plan") or {}).get("wind_summary") or {})
             loads_, area_, seen_ = [], {}, set()
             # engine checks (2026-11): the face / width scan is wall_wind_pieces (roof members as envelope, the own
@@ -1316,6 +1321,9 @@ def member_wind_loads(cfg, model, pat, f):
                 ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
                 tot["wall_N"] += F * abs(c2[2] - c1[2])
         else:
+            model["wind_post_note"] = ("parametric model: the wall wind is applied as storey forces at the grid nodes "
+                                       "(nodal fallback), no column carries a span load, so no wind post Ka applies "
+                                       "(a column pinned through a beam release is not detected as a post)")
             alln = set(ops.getNodeTags())
             for k in range(1, NF + 1):
                 h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
@@ -1663,7 +1671,10 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
 
 
 REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin",
-              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free", "Mmaj_hog_min")
+# Mmaj_hog_min (review finding 4, 2026-11-06): BEAMS only -- the most hogging (smallest, sagging +) bending moment along
+# the span, min(sag), as Mmaj_sag_max is the largest: a beam's in-span hogging peak (a pinned roof beam under uplift)
+# reaches the member check (Mz_mid_hog_Nmm) and is checked with LLT_hog.  0.0 for columns and braces.
 # Mmaj_span / Mmin_span (third wave, 2026-10-30): COLUMNS only -- the signed extreme bending moment INSIDE the element
 # span (major / minor axis, same sign convention as Mmaj_i / Mmin_i) under a span load (the member wind on a wall
 # column), 0.0 when the extreme is at an end.  Before this a pinned-pinned gable wind column under the wall wind was
@@ -1790,6 +1801,18 @@ def member_records(model, R, cfg, case_grav, floor_system):
     return out
 
 
+def beam_hog_minima(model, R):
+    """{fset: min(sag)} of every beam from a response dict R (the member_records sign convention, sagging +)."""
+    out = {}
+    for b in model["beams"]:
+        sag = []
+        for t in b["segs"]:
+            lf = R[t]
+            sag += [lf[4], -lf[10]]
+        out[frozenset((b["A"], b["B"]))] = min(sag) if sag else 0.0
+    return out
+
+
 def free_from_span_extreme(m_i, m_j, m_ext):
     """The free mid-length moment M_free of the parabola M(t) = M_i (1 - t) + M_j t + 4 M_free t (1 - t) whose extreme
     INSIDE the span is m_ext (0.0 when m_ext is 0.0: no interior extreme recorded).  The extreme of that parabola is
@@ -1824,6 +1847,8 @@ def combo_forces_for_member_check(records, kind):
               "P_LAT_N": -d["N_LAT"], "V_LAT_N": d["V_LAT"]}
         if kind == "beam":
             cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
+            if d["Mmaj_hog_min"] < 0.0:
+                cf["Mz_mid_hog_Nmm"] = d["Mmaj_hog_min"]          # review finding 4: the in-span hogging extreme
         elif kind == "col":
             # span-moment fix (2026-11-01): a column carrying a span load (the member wind on a wall or gable wind
             # column) hands the free moment of that load to the member check, which rebuilds the moment diagram from
@@ -2097,6 +2122,8 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     member_wind_loads(cfg, model, mw, float(m.get("fWM") or 0.0))
                     info.setdefault("wind_post_Ka", {}).update(model.get("wind_post_Ka") or {})
                     info.setdefault("member_wind_wall", {}).update(model.get("member_wind_wall") or {})
+                    if model.get("wind_post_note"):
+                        info["wind_post_note"] = model["wind_post_note"]
                 ops.analyze(1)
                 R1 = _responses(model)
                 ops.remove("loadPattern", ptag)
@@ -2124,8 +2151,9 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             # third wave (2026-10-30): column span moments from the static part of the combination (gravity + member
             # wind; the RSA part has no span load and its end forces are peak values)
             spn = column_span_moments(model, RC_static)
+            hog = beam_hog_minima(model, RC)
             recs = {fs: tuple(list(r) + [0.0] * (13 - len(r)))[:13] + spn.get(fs, (0.0, 0.0, 0.0, 0.0))
-                    for fs, r in recs.items()}
+                    + (hog.get(fs, 0.0),) for fs, r in recs.items()}
             _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
                         or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
             if N_LL and not _eq_case:
@@ -2143,7 +2171,7 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
     return per_case, kinds or {}, info
 
 
-ENVELOPE_LAYOUT = "2026-11-01: Mz / My end moments; Mz_span / My_span column span extremes"
+ENVELOPE_LAYOUT = "2026-11-06: Mz / My end moments; Mz_span / My_span column span extremes; beam Mmaj_hog_min"
 
 
 def envelope_from_records(per_case, kinds, cases):

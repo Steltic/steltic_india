@@ -243,13 +243,25 @@ def plate_fy(t, grade):
     return float(I8.fy_is2062(grade or "E250", float(t)))
 
 
+def member_web_fy(sec, member_grade="E350"):
+    """Review finding 6 (2026-11-06): the member web fy of a sizer end-plate proposal -- the IS 2062:2025 Table 3 band
+    of the member's grade for its governing thickness (fy_is2062; E350, the PEB member grade, when not given), not a
+    fixed 350 MPa."""
+    import india_is800 as I8
+    import sections as S
+    p = S.props(sec)
+    return float(I8.fy_is2062(member_grade or "E350", I8.governing_thickness_mm(p)))
+
+
 def ep_dict(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_grade="E250", ext=60.0, weld=8.0,
-            gauge=None, web_doubler=0.0, member_fy=350.0):
+            gauge=None, web_doubler=0.0, member_fy=None):
     """The extended end plate of the PEB golds (their bolted_end_plate helper, identical arithmetic): n_out rows
     beyond the tension flange, n_in rows inside it (only rows in the tension half), be = min(pitch, b/2), lv to the
     weld toe, le = min(50, (b - g)/2), plate fy by thickness."""
     import sections as S
     p = S.props(sec)
+    if member_fy is None:
+        member_fy = member_web_fy(sec)
     hf = p["d"] - p["tf"]
     g = gauge or (120.0 if d_bolt >= 30 else 110.0)
     lv = max(ext - p["tf"] / 2.0 - weld, g / 2.0 - p["tw"] / 2.0 - weld)
@@ -317,7 +329,7 @@ def ep_params(spec, sec):
     return {"t": float(ep.get("t_plate_mm")), "d": int(ep.get("d_mm")), "grade": ep.get("grade", "10.9"),
             "plate_grade": ep.get("plate_grade") or "E250", "n_out": len(out), "n_in": len(inn), "pitch_rule": rule,
             "b_plate": b_plate, "web_doubler": round(float(ep.get("web_t_mm") or p["tw"]) - float(p["tw"]), 3),
-            "member_fy": float(ep.get("web_fy_MPa") or 350.0), "gauge": float(g) if g else None}
+            "member_fy": float(ep.get("web_fy_MPa") or member_web_fy(sec)), "gauge": float(g) if g else None}
 
 
 def pitch_of(par, sec):
@@ -1320,6 +1332,8 @@ class LocalModel:
                 out = (False, "depth outside the fabrication range")
             elif bf > float(fab.get("bf_max", 400.0)) + 1e-9 or bf < float(fab.get("bf_min", 120.0)) - 1e-9:
                 out = (False, "flange width outside the fabrication range")
+            elif self._base_outline_fails(c, lab):
+                out = (False, self._base_outline_fails(c, lab))
             if out[0] and self.is18 and self.spec["members"][c].get("sfrs", True):
                 import india_is18168 as I18
                 import india_is800_s12 as S12
@@ -1544,6 +1558,41 @@ class LocalModel:
         fb = eb["f"][0] if int(self.dump[k["tb"]]["member"]["node_i"]) == k["node"] else eb["f"][1]
         return PB.section_at(labc, ec["f"][1]), PB.section_at(labb, fb)
 
+    def _base_outline_fails(self, c, lab):
+        """A column constituent whose base section does not fit its declared base plate (the full run's
+        geometry_plate_outline gates: L >= 0.95 d and B >= 0.95 bf about the two axes, india_connections
+        base_plate_design / _biaxial).  The sizer keeps the declared plates, so such a section cannot pass; it is
+        screened out here instead of failing the next full run (2026-11-06).  Returns the reason or None."""
+        import peb_build as PB
+        import sections as S
+        if c not in (self.spec.get("base_consts") or []):
+            return None
+        conn = self.cfg.get("connections") or {}
+        specs = [v for v in (conn.get("column_base") or {}).values()
+                 if isinstance(v, dict) and v.get("B_mm") and v.get("L_mm")]
+        if not specs:
+            return None
+        # the declared plates the bases of this constituent can take (by the member's old section key, else all)
+        els = {t for mid in self.mem_of_const.get(c) or [] for t in self.el_of_mem[mid]}
+        for t in self.base_info:
+            if t not in els:
+                continue
+            pe = self.dump[t].get("peb") or {}
+            f0 = min(pe.get("f") or [0.0])
+            sec_b = PB.section_at(lab, f0) if pe else lab
+            PB.ensure(sec_b)
+            p = S.props(sec_b)
+            old = self.reg[t][1]
+            mlab = (self.members.get(pe.get("member")) or {}).get("section")
+            cand = [v for k, v in (conn.get("column_base") or {}).items() if isinstance(v, dict) and v.get("B_mm")
+                    and v.get("L_mm") and (k.split(":", 1)[-1] in (old, mlab))] or specs
+            B = max(float(v["B_mm"]) for v in cand)
+            L = max(float(v["L_mm"]) for v in cand)
+            if L < 0.95 * float(p["d"]) - 1e-6 or B < 0.95 * float(p["bf"]) - 1e-6:
+                return ("base section %s outside the declared base plate %g x %g mm (L >= 0.95 d, B >= 0.95 bf)"
+                        % (sec_b, B, L))
+        return None
+
     def _bases(self):
         out = []
         for t, e in self.dump.items():
@@ -1653,7 +1702,7 @@ def knee_rows(lm, cfg_c, dem, kspec, kp):
         grade_c = (kspec.get("column_flange_grade") or (cfg_c.get("grade_by_section") or {}).get(csec)
                    or cfg_c.get("steel_grade"))
         cf = dict(kep, t_plate_mm=t_cfl, fy_plate_MPa=fyc, lv_mm=lv_cf, plate_grade=grade_c, web_t_mm=tw_c,
-                  web_fy_MPa=fyc, hf_mm=lay["hf_mm"])
+                  web_fy_MPa=(float(pc["tw"]) * fyc + dbl * fy_dbl) / tw_c, hf_mm=lay["hf_mm"])   # finding 5
         caps = [(PC.end_plate_capacity(cf, cfg_c) or {}).get("capacity_Nmm")]
         if not sym and lay["reverse_rows"]:
             caps.append((PC.end_plate_capacity(cf, cfg_c, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
@@ -1945,7 +1994,8 @@ def splice_fixed(lm, key, dem, face, par, margin=1.0):
                    or lm.cfg.get("steel_grade"))
         cf = dict(ep, t_plate_mm=t_cf, fy_plate_MPa=PC._fy_plate(csec_, lm.cfg), lv_mm=lv_cf, plate_grade=grade_c,
                   web_t_mm=float(pcol["tw"]) + float(sp.get("column_web_doubler_mm") or 0.0),
-                  web_fy_MPa=PC._fy_plate(csec_, lm.cfg), hf_mm=lay["hf_mm"])
+                  web_fy_MPa=PC.column_web_strip_fy(pcol, PC._fy_plate(csec_, lm.cfg), sp.get("column_web_doubler_mm"),
+                                                    lm.cfg), hf_mm=lay["hf_mm"])               # finding 5
         caps_cf = [(PC.end_plate_capacity(cf, lm.cfg) or {}).get("capacity_Nmm")]
         if not sym and lay["reverse_rows"]:
             caps_cf.append((PC.end_plate_capacity(cf, lm.cfg, rows=lay["reverse_rows"]) or {}).get("capacity_Nmm"))
