@@ -1317,12 +1317,13 @@ BOLT_GEOM = {20: (40.0, 70.0, 22.0), 24: (45.0, 75.0, 26.0), 30: (55.0, 90.0, 33
 
 
 def plate_fy(t, grade="E250"):
-    """IS 2062 Table 3 yield stress by thickness (the values the golds' helpers use): E250 250 / 240 / 230 (<= 20,
-    20-40, 40-100 mm) and 210 above 100 mm; E350 350 / 330 / 320 / 290."""
-    t = float(t)
-    if "350" in str(grade):
-        return 350.0 if t <= 20 else (330.0 if t <= 40 else (320.0 if t <= 100 else 290.0))
-    return 250.0 if t <= 20 else (240.0 if t <= 40 else (230.0 if t <= 100 else 210.0))
+    """IS 2062 Table 3 yield stress of a plate of thickness t: the engine's own band function
+    (india_is800.fy_is2062, IS 2062:2025 bands <= 16 / > 16-40 / > 40-100 / > 100 mm), so the sizer and the checks
+    use one rule.  grade: an IS 2062 designation; anything else is read as E250 (E350 when it says 350)."""
+    import india_is800 as I8
+    key, _q = I8.parse_is2062_grade(str(grade or ""))
+    g = key if key in I8.IS2062_TABLE3 else ("E350" if "350" in str(grade) else "E250")
+    return float(I8.fy_is2062(g, float(t)))
 
 
 def _plate_up(t, factor=1.0):
@@ -1539,7 +1540,7 @@ def cover_plate_joint_spec(beam, col=None, *, doubler_t=0.0, template=None, fact
     (Zp fy + b t (d + t) fyp)/gamma_m0 >= factor x Zp fy (1.32 = 1.2 Mp x 1.1, with margin), fillet welds for the plate
     force, and a bolted HSFG fin plate for the shear; continuity plates; doubler (panel zone) as given."""
     p = props(beam)
-    fy = 250.0 if max(float(p["tf"]), float(p["tw"])) <= 20 else 240.0
+    fy = plate_fy(max(float(p["tf"]), float(p["tw"])), "E250")         # the beam's governing thickness band
     b = float(p["bf"])
     t = 10.0 if cp_t is None else float(cp_t)
     while cp_t is None and (p["Zx"] * fy + b * t * (p["d"] + t) * plate_fy(t)) / 1.1 < factor * p["Zx"] * fy and t < 50:

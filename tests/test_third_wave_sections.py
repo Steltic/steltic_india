@@ -198,7 +198,9 @@ def test_chs_brace_end_spec_geometry():
     assert sp["An_mm2"] == pytest.approx(p["A"] - 2 * 8.0 * 22.0, abs=0.1)
     assert sp["gusset"]["Avg_mm2"] == 2 * 400.0 * 20.0 and sp["gusset"]["w_start_mm"] == pytest.approx(219.1)
     bw = 219.1 + 2 * 400.0 * math.tan(math.radians(30))
-    assert sp["moment_capacity_Nmm"] == pytest.approx(20.0 * bw ** 2 / 4 * 250.0 / 1.1)
+    # a 20 mm gusset is in the IS 2062:2025 > 16-40 mm band: fy 240 (the engine's fy_is2062)
+    assert sp["moment_capacity_Nmm"] == pytest.approx(20.0 * bw ** 2 / 4 * 240.0 / 1.1)
+    assert AZ.plate_fy(16.0) == 250.0 and AZ.plate_fy(16.5) == 240.0 and AZ.plate_fy(45.0, "E350 B0") == 320.0
     assert sp["welds"]["n_sides"] == 4 and sp["weld_type"] == "cjp"
 
 
