@@ -754,6 +754,8 @@ PONDING_SLOPE_BASIS = (
 def _declared_roof_slope(cfg):
     """(slope as rise / run, source) declared outside the roof planes: the ponding input's roof_slope, else
     cfg['roof_pitch_deg']; (None, None) when neither is declared."""
+    if not isinstance(cfg, dict):
+        return None, None
     try:
         sl = (cfg.get("ponding") or {}).get("roof_slope") if isinstance(cfg.get("ponding"), dict) else None
         if sl is not None:
@@ -771,6 +773,7 @@ def _roofs_for_ponding(cfg, pkg, roof_el_m=()):
     flatter slope.  The roof outside the planes (a flat roof, a lean-to): the longest roof element and, on an N-mm job
     without planes, the longest grid bay (the span of the roof beams between the column lines), with the declared
     slope (_declared_roof_slope) or None."""
+    cfg = cfg if isinstance(cfg, dict) else {}
     out = []
     try:
         import roof_geometry as RG
