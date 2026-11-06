@@ -2022,15 +2022,18 @@ def key_catalogue():
 _KEYCAT = None
 
 
-def size_key(need_N, fck, margin=1.0, b_max=None):
+def size_key(need_N, fck, margin=1.0, b_max=None, floor=None):
     """Lightest cruciform key with capacity >= need (None: no key needed); the key plates fit under the base plate
-    (b <= the smaller plan dimension of the base plate)."""
+    (b <= the smaller plan dimension of the base plate).  floor = [b, t, h] of a floor design (strengthen-only): no
+    key dimension below it (a shorter key can be stronger in bending, so the lightest passing key may be shorter)."""
     global _KEYCAT
     if need_N <= 0.0:
         return None, 0.0
     _KEYCAT = _KEYCAT or key_catalogue()
     for kg, b, t, h in _KEYCAT:
         if b_max and b > b_max + 1e-9:
+            continue
+        if floor and any(v < f - 1e-9 for v, f in zip((b, t, h), floor)):
             continue
         if shear_key(b, t, h, plate_fy(t, "E250"), fck)["capacity_N"] * margin >= need_N:
             return [b, t, h], kg
@@ -2180,9 +2183,9 @@ class Evaluator:
         for slot, need in bd.items():
             if slot not in cp:
                 continue
-            dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
-                                 b_max=cp[slot].get("b_max"))
             fk = (fl.get(slot) or {}).get("key")
+            dims, kgk = size_key(need, cp[slot].get("fck", 30.0), margin=self.margin("conn:base"),
+                                 b_max=cp[slot].get("b_max"), floor=fk)
             if fk and shear_key(fk[0], fk[1], fk[2], plate_fy(fk[1], "E250"),
                                 cp[slot].get("fck", 30.0))["capacity_N"] * self.margin("conn:base") >= need:
                 dims, kgk = list(fk), 2 * fk[0] * fk[1] * (fk[2] + 50.0) * STEEL
