@@ -294,12 +294,13 @@ connections are not included.
 | IN_Ex16 | 74.49 → 58.19 | -21.9 % | 0.774 → 0.937 (floor-WI550X225X18X14, IS 800 9.3 interaction / mem) | 0.848 / 0.784 | complete → complete |
 | IN_Ex17 | 62.43 → 50.72 | -18.8 % | 0.932 → 0.945 (gravity_col-BOX350X350X10, IS 800 9.3 interaction / mem) | 0.536 / 0.154 | complete → complete |
 | IN_Ex18 | 79.91 → 82.70 | +3.5 % | 0.889 → 0.918 (gravity_col-WB600X145.06, IS 800 9.3 interaction / mem) | 0.897 / 0.542 | complete → complete |
-| IN_Ex19 | 87.98 → 87.98 | +0.0 % | 0.972 → 0.972 (floor-WPB400X300X155.26, IS 800 9.3 interaction / mem) | 0.362 / 0.080 | complete → complete |
+| IN_Ex19 | 87.98 → 73.34 | -16.6 % | 0.972 → 0.997 (floor-WI550X300X20X14, IS 800 9.3 interaction / mem) | 0.423 / 0.087 | complete → complete |
 | IN_Ex19 stem | 105.29 → 79.68 | -24.3 % | 0.947 → 0.983 (floor-WI550X275X18X14, IS 800 9.3 interaction / mem) | 0.332 / 0.137 | complete → complete |
 | IN_Ex20 | 88.29 → 91.00 | +3.1 % | 0.967 → 0.942 (lateral_col-BOX250X250X22, IS 800 9.3 interaction / mem) | 0.307 / 0.470 | complete → complete |
 
 Reading the table:
-- **Every job and unit is COMPLETE with 0 reasons** on the fixed engine.
+- **Every job and unit is COMPLETE with 0 reasons** on the fixed engine, and every consistency list is empty
+  (PR #34's ponding guard included).
 - **IN_Ex6** keeps its sections. Its cfg now takes `fy_is2062` and it stays COMPLETE.
 - **Lighter:** the Indian families save weight on most jobs, between 3 % and 30 %.
 - **Heavier:**
@@ -309,7 +310,15 @@ Reading the table:
   - IN_Ex13 (+27.0 %): the SCBF braces. The lightest IS 808 rolled E250 brace that meets the IS 18168 brace limits
     (owner decision 1) is HB450X92.19, in place of WPB200X200X50.92, in every bay and storey.
   - IN_Ex18 (+3.5 %) and IN_Ex20 (+3.1 %).
-- **IN_Ex19**: see below.
+- **IN_Ex19** is re-sized in the final pass (87.98 → 73.34 kg/m², worst member strength 0.997). The first pass had
+  found no passing design. The final pass started from the published sections, which pass on the fixed engine, and
+  passed at its 21st run after these sizer changes:
+  - the least-overstrength link rule;
+  - the three- and four-line fin plates;
+  - the link-rotation rule;
+  - the search caps and speed-ups (above).
+
+  Its perimeter gravity-column and edge-girder groups are not used by the model, and they keep their labels.
 
 **Final-pass moves.** Each job's SOLUTION.md lists its own moves under "Final pass on the fixed engine". Tags are those
 of `CHANGES_2026-11-engine-checks.md`.
@@ -319,8 +328,8 @@ of `CHANGES_2026-11-engine-checks.md`.
   - IN_Ex14 storey 6–8 braced-bay columns and IN_Ex20 cl_5 / ch_5 (G: SCBF columns plastic in the hinge state of
     the earthquake combinations, 4 and 6 rows). On IN_Ex20 the monotone-stack and soft-storey rules carry the move
     down to cl_4 / cl_3 and brace_1.
-- Moved for weight, with nothing failing (re-size): IN_Ex12, IN_Ex14 (beams and braces), IN_Ex15 and the IN_Ex19
-  stem, through the least-overstrength link rule and the three- or four-line fin plates.
+- Moved for weight, with nothing failing (re-size): IN_Ex12, IN_Ex14 (beams and braces), IN_Ex15, the IN_Ex19 stem
+  and IN_Ex19, through the least-overstrength link rule and the three- or four-line fin plates.
 - Moved for a connection that cannot fit: the IN_Ex8 eave strut WB150 → MB225 (a sizer rule, not an engine move).
 - Rose but still pass: IN_Ex7 end-frame columns 0.687 → 0.928 (SW, with the gable triangle); gravity WB600 columns of
   IN_Ex17 / Ex18 / Ex19 stem (R1); the IN_Ex8 ordinary frame's roof 0.743 → 0.988 (B / R1).
@@ -343,4 +352,4 @@ difference of 13.71 kg/m² (+32.8 %). Wind governs the shed.
 **Reports.** The leak scan (`report_public.leaks`) finds nothing in the 19 SECT reports (IN_Ex6–Ex20 and the four
 units). The published set has one hit, the IN_Ex17 raw dict, which is fixed here.
 
-**HR suite** (this branch, merged main 8cc56ec): (pending the last run).
+**HR suite** (this branch, merged main 8cc56ec): **1,386 passed, 5 skipped** (`pytest -q tests/`, 6 min 42 s).
