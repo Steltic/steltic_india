@@ -712,7 +712,7 @@ def torsion_groups(lm, d):
     for m in lm.s12[1].get("members") or []:
         t = int(m.get("tag") or str(m["id"]).lstrip("e"))
         g = lm.groups_of.get(t)
-        if g is None or (lm.specs.get(g) or {}).get("role") == "fixed":
+        if g is None or (lm.specs.get(g) or {}).get("role") in ("fixed", "link"):
             continue
         sp = lm.specs.get(g) or {}
         if m.get("frame_dir") == other and (sp.get("lateral") or m.get("role") == "brace"):
@@ -787,7 +787,7 @@ def torsion_requirements(lm, ev, x, st):
         st["kl_fail"] = int(st.get("kl_fail") or 0) + 1
         f = min(max(max(r["dc"] for r in kl) ** 2, 1.1), 1.6)
         for g, sp in sorted(lm.specs.items()):
-            if sp.get("role") in ("beam", "link") and sp.get("lateral") and lm.by_group.get(g):
+            if sp.get("role") == "beam" and sp.get("lateral") and lm.by_group.get(g):
                 need = stiffness(x[g][0], "I") * f
                 if need > req.get(g, 0.0):
                     req[g] = round(need, 1)
@@ -2234,7 +2234,12 @@ def stiffness_requirements(lm, ev, x_run, specs, target=0.95, floor=0.5):
             continue
         lateral = spec.get("lateral")
         if lateral is None:
-            lateral = any(r in ("lateral_col", "brace") for r in roles.get(g, [])) or spec.get("role") == "link"
+            lateral = any(r in ("lateral_col", "brace") for r in roles.get(g, []))
+        if spec.get("role") == "link":
+            # EBF links are sized for their shear and the IS 18168 link rules only: a link made stiffer than its
+            # demand raises the link overstrength (1.1 Ry Vp / V) that every brace and column must then carry
+            # (12.3.2.2 / 12.3.4.5) -- the stiffness comes from the braces and columns
+            lateral = False
         need = 0.0
         if lateral:
             need = stiffness(lab, kind) * f_lat
@@ -2415,6 +2420,10 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
             # a beam whose end shear connection (V + N) does not fit its section: the next section up in the group's
             # order that passes the frozen member checks and takes a fin plate for that demand
             for g, Vd, tpl in infeas:
+                if specs[g].get("role") == "link":
+                    log_fn("    %s: no fin plate fits %s for %.0f kN -- an EBF link is not made larger for its end "
+                           "connection (overstrength); the template connection is kept" % (g, x1[g][0], Vd / 1e3))
+                    continue
                 prev = (st.setdefault("conn_req", {}).get(g) or [0.0, None])[0]
                 st["conn_req"][g] = [max(float(Vd), float(prev)), tpl]      # kept: size_groups honours it from now on
                 cur = x1[g]
