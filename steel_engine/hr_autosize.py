@@ -1262,7 +1262,7 @@ def _substitute(m, lab, grade, cfg):
 
 def s12_local(lm, x, *, tags_changed=None, margins=None):
     """Section 12 checks of the model with the proposed sections (frozen forces).  Returns the failing member-level
-    rows [(row, group)]; margins {group: m}: a row of that group with a ratio above m also counts (a row the full run
+    rows [(row, group)]; margins {"group::row id": m}: a row of that kind and group with a ratio above m also counts (a row the full run
     failed although the frozen forces passed it -- IS 18168 12.3.2.2 brace axial at the link overstrength)."""
     import india_is800_s12 as S12
     if lm.s12 is None:
@@ -1297,7 +1297,8 @@ def s12_local(lm, x, *, tags_changed=None, margins=None):
         mid = c.get("member")
         g = lm.groups_of.get(mem_tag.get(mid)) if mid in mem_tag else None
         dc = c.get("dc")
-        if c.get("ok") is False or (g in (margins or {}) and isinstance(dc, (int, float)) and dc > margins[g] + 1e-9):
+        mk = "%s::%s" % (g, re.sub(r"@.*$", "", str(c.get("id"))))
+        if c.get("ok") is False or (mk in (margins or {}) and isinstance(dc, (int, float)) and dc > margins[mk] + 1e-9):
             out.append((c, g))
     return out
 
@@ -2367,8 +2368,9 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
             g_ = lm.groups_of.get(mem_tag_.get(r_.get("member")))
             if g_ is not None and isinstance(r_.get("dc"), (int, float)) and r_["dc"] > 1.0 and \
                     not S12_CONNECTION_ROWS.search(str(r_.get("id"))):
-                m0 = st.setdefault("s12_margin", {}).get(g_, 1.0)
-                st["s12_margin"][g_] = round(max(0.8, min(m0, 1.0) - 0.04), 3)
+                mk = "%s::%s" % (g_, re.sub(r"@.*$", "", str(r_.get("id"))))      # per group and row kind
+                m0 = st.setdefault("s12_margin", {}).get(mk, 1.0)
+                st["s12_margin"][mk] = round(max(0.8, min(m0, 1.0) - 0.04), 3)
         for k in range(8):
             rows = s12_local(lm, x1, margins=st.get("s12_margin"))
             bumped = set()
