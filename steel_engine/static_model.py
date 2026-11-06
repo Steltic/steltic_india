@@ -1725,11 +1725,15 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
                         g = 0.0
                     elif (fn < xa - 1.0) if up else (fn > xa + 1.0):
                         # review R2-2: every piece of the re-entrant line takes width x the height it shares with
-                        # this piece (area), so lines split at different heights load the wall once
+                        # this piece within the step band (the heights where the neighbour's wall stands in front),
+                        # so lines split at different heights load the wall once
+                        outer = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - fn) < 1.0]
+                        b0 = max(z0, min(r[5] for r in outer))
+                        b1 = min(z1, max(r[6] for r in outer))
                         rc = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - xa) < 1.0
-                              and min(z1, r[6]) - max(z0, r[5]) > 1.0]
+                              and min(b1, r[6]) - max(b0, r[5]) > 1.0]
                         for r in rc:
-                            ov = min(z1, r[6]) - max(z0, r[5])
+                            ov = min(b1, r[6]) - max(b0, r[5])
                             ex = extra.setdefault((r[0]["tag"], face), {"row": r, "q": q, "fs": fs,
                                                                        "area": [0.0, 0.0]})
                             ex["area"][0 if side > 0 else 1] += g * ov

@@ -456,3 +456,25 @@ def test_R2_4_derived_side_wall_warns_when_the_pattern_matches_neither_angle():
     assert r["applied"] and r["warning"].startswith("WARN") and "neither Table 5 wind angle" in r["warning"]
     ok = dict(odd, wall_windward_kNm2=(0.7 - cpi) * pd, wall_leeward_kNm2=(-0.25 - cpi) * pd)
     assert "warning" not in SM.side_wall_pressure({}, ok, cols, 0)
+
+
+def test_R2_2_IN_Ex9_across_the_lean_to_each_wall_once():
+    """IN_Ex9 scanned along X (the across-ridge wind): the -X face is the lean-to's outer wall (30 x 5 m), wall B above
+    the lean-to roof (30 x 3 m) and wall B beyond the lean-to (30 x 8 m) = 480 m2; the +X face is wall D, 60 x 8 m.
+    At the step (y = 30 m) the hall column (12, 37.5), one piece 0-8 m, gives the re-entrant column at (12, 30) its half
+    only over the step band (0-5 m, where the lean-to's wall stands in front); above it the line's own piece carries
+    the wall -- each wall once."""
+    import static_model as SM
+    fx = _fixture("IN_Ex9_wall_wind_geometry.json")
+    cols = []
+    for c in fx["cols"]:
+        c1, c2 = c["c1"], c["c2"]
+        cols.append((c, c1, c2, 0.5 * (c1[0] + c2[0]), round(0.5 * (c1[1] + c2[1]), 3), min(c1[2], c2[2]),
+                     max(c1[2], c2[2])))
+    env = [tuple(map(tuple, e)) for e in fx["envelope"]]
+    scan = SM.wall_wind_pieces(cols, env, 0, 1.0, (("up", 1.0, 1.0), ("down", 1.0, -1.0)), fx["SY"])
+    res = SM.envelope_residuals(scan["pieces"], scan["halves"], env, 0)
+    tot = {}
+    for i, (c, c1, c2, face, q, fs, w) in enumerate(scan["pieces"]):
+        tot[face] = tot.get(face, 0.0) + w * abs(c2[2] - c1[2]) + res.get(i, 0.0)
+    assert tot["up"] / 1e6 == pytest.approx(480.0, abs=0.01) and tot["down"] / 1e6 == pytest.approx(480.0, abs=0.01)
