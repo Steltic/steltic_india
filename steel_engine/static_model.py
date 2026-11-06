@@ -1433,7 +1433,9 @@ WALL_SCAN_BASIS = (
     "extent of its columns as the envelope: a piece under the roof (a gable post above the eave under the across-ridge "
     "wind, an interior column above the eave) is not on a wall.  Its width is half the distance to the neighbouring "
     "strips at that height, and to the neighbouring column lines of its own wall where a roof member of that wall "
-    "rises over them (the gable triangle above the eave: the post keeps its own tributary width).  The two side walls "
+    "rises over them (the gable triangle above the eave: the post keeps its own tributary width).  At a facade step "
+    "(a lean-to's end wall) a wall ends at its corner line, and a column at the re-entrant corner carries the other "
+    "half of the wall that runs into it.  The two side walls "
     "(parallel to the wind) are scanned the same way across the wind and take the Table 5 side-wall Cpe "
     "(SIDE_WALL_CITE).  Every wall area reaches a member: where the wall plane has a sloping envelope member (gable "
     "rafter, truss top chord) each column line carries the wall area of its tributary strip up to that member, the "
@@ -1673,7 +1675,7 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
             wall_c[k] = [(e1, e2) for (e1, e2) in env if abs(e1[ax] - xa) < 1.0 and abs(e2[ax] - xa) < 1.0]
         return wall_c[k]
 
-    pieces, sheltered, widened, halves = [], [], [], []
+    pieces, sheltered, widened, halves, steps, extra = [], [], [], [], [], {}
     for (c, c1, c2, xa, yo, z0, z1) in cols:
         zm = 0.5 * (z0 + z1)
         same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
@@ -1696,6 +1698,28 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
                 nb = [y for y in ys if side * (y - yo) > 1.0]
                 cur = (min(nb, key=lambda y: abs(y - yo)) if nb else None)
                 g = abs(cur - yo) / 2.0 if cur is not None else 0.0
+                if cur is not None:
+                    # a facade step (follow-up 3, 2026-11-06: IN_Ex9's lean-to): the neighbouring strip's exposed wall
+                    # at this height lies on another plane.  Behind this one: this plane's wall ends at this line (its
+                    # corner) -- no width toward the neighbour.  In front, with a column of this plane at the
+                    # neighbour's line (the re-entrant corner): that column carries the other half of this wall.
+                    nbr = [r for r in same_h if abs(r[4] - cur) < 1.0]
+                    fn = (min if up else max)(r[3] for r in nbr)
+                    if (fn > xa + 1.0) if up else (fn < xa - 1.0):
+                        steps.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1), "side": side,
+                                      "width_mm": 0.0, "basis": "the neighbouring strip's wall lies behind: this wall "
+                                                                "ends at this line"})
+                        g = 0.0
+                    elif (fn < xa - 1.0) if up else (fn > xa + 1.0):
+                        rc = [r for r in nbr if abs(r[3] - xa) < 1.0]
+                        if rc:
+                            ex = extra.setdefault((rc[0][0]["tag"], face), {"row": rc[0], "q": q, "fs": fs,
+                                                                           "half": [0.0, 0.0]})
+                            ex["half"][0 if side > 0 else 1] += g
+                            steps.append({"tag": rc[0][0]["tag"], "face": face, "z_mid_mm": round(zm, 1),
+                                          "side": -side, "width_mm": round(g, 1),
+                                          "basis": "re-entrant corner column: the other half of the wall of tag %s"
+                                                   % c["tag"]})
                 # the own wall: the nearest column line of the same wall plane on this side that ends below this
                 # height, where a roof member of the wall rises over it (gable triangle) -- the wall goes on to it
                 own = [k_[1] for k_, (zb, zt) in lines.items() if abs(k_[0] - xa) < 1.0 and side * (k_[1] - yo) > 1.0
@@ -1714,8 +1738,13 @@ def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
                                 "width_at_height_mm": round(w_old, 1)})
             pieces.append((c, c1, c2, face, q, fs, wtrib))
             halves.append((half[0], half[1]))
+    for (tag, face), ex in sorted(extra.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
+        r = ex["row"]
+        if sum(ex["half"]) > 0.0:
+            pieces.append((r[0], r[1], r[2], face, ex["q"], ex["fs"], sum(ex["half"])))
+            halves.append((ex["half"][0], ex["half"][1]))
     return {"pieces": pieces, "halves": halves, "record": {"sheltered": sheltered, "own_wall_width": widened,
-                                                           "basis": WALL_SCAN_BASIS}}
+                                                           "stepped_facade": steps, "basis": WALL_SCAN_BASIS}}
 
 
 WIND_POST_KA_CITE = ("IS 875 (Part 3):2015 7.2.2.1 (b):'For beam type elements, purlins, etc, the tributary area shall be "

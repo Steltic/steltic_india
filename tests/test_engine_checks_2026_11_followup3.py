@@ -243,3 +243,37 @@ def test_integration_mini_PEB_side_wall_post_takes_the_Ka_of_its_own_side_area()
     assert post[0]["factor"] == pytest.approx(max(ka, 0.7) / 0.8, rel=1e-3)
     f = tot["faces"]["side_lo"]
     assert f["N"] != pytest.approx(f["N_pattern_pd"])                   # the post's Ka moves the side-wall total
+
+
+# ====================================================================================================== facade steps
+def test_e2e_IN_Ex9_lean_to_facade_step():
+    """IN_Ex9: a 24 x 60 m hall (x 12-36 m, eave 8 m, ridge 11 m along Y) with a flat lean-to x 0-12 m, y 0-30 m, 5 m
+    high.  The +Y face is the hall's gable at y = 60 (x 12-36) and the lean-to's end wall at y = 30 (x 0-12, 5 m).
+    Before, the hall's corner column (12, 60) took half the strip toward x = 0 over its 8 m (a wall that does not exist
+    at y = 60) and the lean-to end wall's half next to wall B (x 6-12) had no member: 270 m2 against 252 below the
+    eave line.  Now the corner's wall ends at its line and the re-entrant column (12, 30) carries that half: 252 m2,
+    the same as the -Y face; with the gable triangle (residual) each face is 288 m2."""
+    import static_model as SM
+    fx = _fixture("IN_Ex9_wall_wind_geometry.json")
+    cols = []
+    for c in fx["cols"]:
+        c1, c2 = c["c1"], c["c2"]
+        cols.append((c, c1, c2, 0.5 * (c1[1] + c2[1]), round(0.5 * (c1[0] + c2[0]), 3), min(c1[2], c2[2]),
+                     max(c1[2], c2[2])))
+    env = [tuple(map(tuple, e)) for e in fx["envelope"]]
+    scan = SM.wall_wind_pieces(cols, env, 1, 1.0, (("up", 1.0, 1.0), ("down", 1.0, -1.0)), fx["SX"])
+    res = SM.envelope_residuals(scan["pieces"], scan["halves"], env, 1)
+    tot = {}
+    by = {}
+    for i, p in enumerate(scan["pieces"]):
+        c, c1, c2, face, q, fs, w = p
+        tot[face] = tot.get(face, 0.0) + w * abs(c2[2] - c1[2]) + res.get(i, 0.0)
+        by[(face, round(c1[0]), round(c1[1]), round(c1[2]))] = w
+    assert tot["up"] / 1e6 == pytest.approx(288.0, abs=0.01) and tot["down"] / 1e6 == pytest.approx(288.0, abs=0.01)
+    assert by[("down", 12000, 60000, 0)] == pytest.approx(12000.0)                 # the hall's corner: its own wall only
+    assert by[("down", 12000, 30000, 0)] == pytest.approx(6000.0)                  # the re-entrant corner column
+    assert by[("down", 0, 30000, 0)] == pytest.approx(6000.0)
+    st = scan["record"]["stepped_facade"]
+    assert any(s["width_mm"] == 0.0 for s in st) and any("re-entrant" in s["basis"] for s in st)
+    # the -Y face (no step: the lean-to's end wall is in the gable's plane) is unchanged
+    assert by[("up", 12000, 0, 0)] == pytest.approx(18000.0)
