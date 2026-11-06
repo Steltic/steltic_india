@@ -873,7 +873,34 @@ class Local:
 
     def member_dc(self, t, label, grade):
         """Strength and Table 3 ratios of element t with a candidate section: the governing of every member check the
-        run made for it (the strength check and, for a gravity column, the IS 1893 7.11.2 check)."""
+        run made for it (the strength check and, for a gravity column, the IS 1893 7.11.2 check).  Memoised per
+        (element, label, grade) for the run."""
+        memo = self.__dict__.setdefault("_dc_memo", {})
+        key = (t, label, grade)
+        if key not in memo:
+            memo[key] = self._member_dc0(t, label, grade)
+        return memo[key]
+
+    def _group_order(self, g):
+        """The group's elements, the most loaded first (strength ratio with the run's own section), so that a candidate
+        that fails is rejected after its first elements."""
+        cache = self.__dict__.setdefault("_order", {})
+        if g not in cache:
+            tags = list(self.by_group.get(g, []))
+            lab = (self.sections or {}).get(g)
+
+            def cur(t):
+                sec = lab or ((self.elems.get(t) or {}).get("member") or {}).get("section")
+                if not sec:
+                    return 0.0
+                try:
+                    return self.member_dc(t, sec, None)[0]
+                except Exception:
+                    return 0.0
+            cache[g] = sorted(tags, key=lambda t: (-cur(t), tags.index(t)))
+        return cache[g]
+
+    def _member_dc0(self, t, label, grade):
         calls = self._calls.get(t)
         if calls:
             st = t3 = 0.0
@@ -979,7 +1006,7 @@ class Local:
 
     def group_ok(self, g, label, grade, margin):
         worst = (0.0, 0.0)
-        for t in self.by_group.get(g, []):
+        for t in self._group_order(g):
             st, t3, err = self.member_dc(t, label, grade)
             if err or st > margin + 1e-9 or t3 > 1.0 + 1e-9:
                 return False, (st, t3)
