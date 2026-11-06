@@ -119,9 +119,11 @@ D8).
     - a candidate is checked on its group's elements most loaded first, so a failing candidate is rejected early;
     - the member ratios are memoised per (element, label, grade), and Section 12 candidates use a copy of the model
       data that shares the forces (a deep copy of the IN_Ex19 data took 2.8 s);
-  - a group's search stops after 400 full evaluations. When no stiffness is asked, it also skips candidates above
-    2.5 × the current mass. A row that no section answers (an IN_Ex19 link group whose candidates all passed the
-    member checks and failed a Section 12 link row) no longer scans the whole welded catalogue.
+  - for a group whose own section passes, the search for a lighter one stops after 400 full evaluations and, when
+    no stiffness is asked, skips candidates above 2.5 × the current mass. A group that must change searches up to
+    4,000. Before this, an IN_Ex19 link group scanned the whole welded catalogue on a row that no section answers.
+    One IN_Ex19 link group's margin, which had been tightened while that cap held it back (0.70), was reset to the
+    default in the sizing state.
 - **Groups without frame elements** are sized from their own checks: the IN_Ex7 gantry girder
   (`design_pipeline.gantry_girder_checks`, with its MC cap) and groups used only by declared secondary members.
   No IS 808 MB / WB section passes the IN_Ex7 gantry (WB600 × 145 kg/m: vertical deflection 1.40 of the Table 6
