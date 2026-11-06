@@ -437,6 +437,28 @@ def test_d_t10_recorded_with_its_meaning_in_the_rulings_register():
         assert must in row[0], must
 
 
+def test_short_vertical_sentence_in_plain_english_everywhere():
+    """Re-check 2: the brace-yields-first sentence covers the knee and heel connections checked; the short vertical at
+    the knee-brace node yields, or its end bolts reach their capacity, before the brace could (no 'bolts ... yields')."""
+    import ast
+    import inspect
+    from steel_engine import peb_report, truss_design
+
+    def texts(mod):     # the parser joins adjacent literals, so each sentence is one constant
+        return [n.value for n in ast.walk(ast.parse(inspect.getsource(mod)))
+                if isinstance(n, ast.Constant) and isinstance(n.value, str) and "short vertical at the knee-brace" in n.value]
+
+    d_t10 = dict(peb_report.TRUSS_RULINGS)["D-T10"]
+    paragraph = [t for t in texts(peb_report) if "is not part of that order" in t]
+    note = [t for t in texts(truss_design) if "connections checked are designed" in t]
+    assert len(paragraph) == 1 and len(note) == 1
+    for t in (d_t10, paragraph[0], note[0]):
+        assert "yields, or its end bolts reach their capacity, before the brace could" in t, t[:120]
+    for t in texts(peb_report) + texts(truss_design):
+        for bad in ("it, or its end bolts, yields", "bolts yields", "knee-brace node yields first"):
+            assert bad not in t, bad
+
+
 # ------------------------------------------------------------------------------------------------ review 2026-11
 def _knee_case(n_bolts=8):
     sec = "ISA90X90X8"

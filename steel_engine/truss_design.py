@@ -836,8 +836,8 @@ def knee_checks(knee, model_data, cfg, *, nodes, member_capacity):
     note = ("%s: the knee reaches the column through the knee-brace / heel couple; N_del = max(Ag fy %s, characteristic "
             "buckling Pd gamma_m0 %s) = %.1f kN; M_del = N_del e = %.1f kN x %.0f mm = %.1f kN-m%s; each knee-brace "
             "connection for 1.2 N_del = %.1f kN; the knee and heel connections checked are designed so that the brace "
-            "yields (gross section) before they fail (the short vertical at the knee-brace node yields before the brace "
-            "could deliver its vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame); "
+            "yields (gross section) before they fail (the short vertical at the knee-brace node yields, or its end "
+            "bolts reach their capacity, before the brace could deliver its vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame); "
             "a single angle bolted through one leg cannot develop 1.2 x its yield at its end (shear lag), so the knee "
             "connection is designed for more than the brace can transmit"
             % (D_T10_TEXT, "-" if Ty is None else "%.1f" % (Ty / 1e3), "-" if Pc is None else "%.1f" % (Pc / 1e3),

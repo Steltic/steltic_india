@@ -181,9 +181,9 @@ Knee-braced truss portal, IS 800 12.10.2.1:
   length tends to infinity), so the knee connection is designed for more than the brace can transmit.
 - So the knee and heel connections checked are designed so that the brace yields (gross section) before they fail.
   The short vertical at the knee-brace node is not part of that order: at the brace's yield its vertical component
-  (245.7 kN) exceeds the ISA60X60X6 vertical's Ag fy (173 kN) and its 3 end bolts (about 153 kN), so the vertical or
-  its bolts yield before the brace could deliver it. IS 800 12.10 asks no member hierarchy of an ordinary moment frame;
-  the report records it as a ductility-order note, not a check.
+  (245.7 kN) exceeds the ISA60X60X6 vertical's Ag fy (173 kN) and its 3 end bolts (about 153 kN), so the vertical
+  yields, or its bolts reach their capacity, before the brace could deliver it. IS 800 12.10 asks no member hierarchy
+  of an ordinary moment frame; the report records it as a ductility-order note, not a check.
 - M_del is about twice the column's plastic moment (368.6 kN-m against 163 kN-m for MB300), so the rule is
   conservative for the knee: the column hinges first. The demand is not capped.
 - The truss joints use fully tensioned HSFG 8.8 bolts (12.4.1). The welds to the column are CJP (12.4.2).
@@ -236,7 +236,7 @@ Knee-braced truss portal, IS 800 12.10.2.1:
     capacity 0.21 and buckling 0.35, column web shear knee to heel 0.97, heel cap-plate CJP weld 0.39;
   - at the bottom chord: both bolt lines and 6 chord bolts fit the node gusset; gusset-to-chord bolts (6 M16 8.8 in
     double shear) 0.72 for the 295 kN horizontal component; the gusset section along the chord 0.48; the short vertical
-    is recorded as yielding first (its bolts 153 kN, its Ag fy 173 kN, against 246 kN);
+    is recorded as giving way first (its bolts 153 kN, its Ag fy 173 kN, against 246 kN);
   - the brace yields first (design values): its bolted end (rupture 348.8 kN) against its gross yield 315.9 kN, 0.91;
   - heel seats (12.10.2.4) 0.85.
   So the knee and heel connections are designed so that the brace yields (gross section) before they fail. With the

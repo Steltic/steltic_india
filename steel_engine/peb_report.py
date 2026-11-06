@@ -40,7 +40,8 @@ TRUSS_RULINGS = [
               "complete-penetration weld, the column web at the knee and the heel cap-plate weld for the same couple; "
               "the brace's own bolted end is not weaker than its gross-section yield (design values), so the knee and "
               "heel connections checked are designed so that the brace yields (gross section) before they fail (the "
-              "short vertical at the knee-brace node yields first; IS 800 12.10 asks no member hierarchy); the truss "
+              "short vertical at the knee-brace node yields, or its end bolts reach their capacity, before the brace "
+              "could; IS 800 12.10 asks no member hierarchy); the truss "
               "joints use fully tensioned HSFG 8.8 bolts (12.4.1) and the welds to the column are complete-penetration "
               "welds (12.4.2)"),
 ]
@@ -209,8 +210,8 @@ def _truss_head(cfg, pkg):
                    "develop 1.2 times its yield at its end, because of shear lag, so the knee connection is designed "
                    "for more than the brace can transmit). So the knee and heel connections checked here are designed "
                    "so that the brace yields (gross section) before they fail. The short vertical at the knee-brace "
-                   "node is not part of that order: it, or its end bolts, yields before the brace could deliver its "
-                   "vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame. One row per "
+                   "node is not part of that order: it yields, or its end bolts reach their capacity, before the brace "
+                   "could deliver its vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame. One row per "
                    "check, the governing knee shown; stresses in MPa where marked.</p>" % mp_txt)
         out.append(_tab(["check", "governing knee", "knee brace Ag fy / Pd &gamma;m0 (kN)", "N_del (kN)",
                          "lever arm (mm)", "M_del (kN-m)", "demand (kN or MPa)", "capacity (kN or MPa)", "D/C",
