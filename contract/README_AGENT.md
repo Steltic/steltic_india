@@ -95,7 +95,8 @@ Every optional key is backward compatible; AGENT_START explains the ones with en
   `secondary_members`, `composite_scope`, `composite_floor` / `composite` (declares a composite floor: the
   bare-steel scope record is then required), `construction_stage`.
 * **Serviceability (IS 800 Table 6):** `building_type` ('industrial' selects the industrial rows),
-  `cladding_brittle` (H/500 instead of H/300), `finishes_susceptible_to_cracking` (default True: span/360),
+  `cladding_brittle` (H/500 instead of H/300), `cladding_basis` (one sentence on why the cladding is elastic or
+  brittle; printed with the wind limits), `finishes_susceptible_to_cracking` (default True: span/360),
   `deflection_key_roof` (a Table 6 row key for roof members, e.g. 'rafter_profiled_sheeting' = span/180).
 * **Connections and Section 12:** `connections` (AGENT_START), `section12_inputs` (the pipeline adds zone, I,
   `height_m`, occupancy ...), `apply_is18168`, `is18168_table2`, `scwb_pu_basis`, `eor_weld_exception`,
@@ -105,6 +106,10 @@ Every optional key is backward compatible; AGENT_START explains the ones with en
 * **Cranes and erection:** `crane` / `cranes`, `roof_bracing`, `braces_after_dead_load`,
   `braces_after_superimposed_dead`.
 * **QA records:** `delegated_design`, `vibration_screen`, `eor_assumptions`, `load_plan` (section 6).
+* **Report context boxes** (printed after the framing box, third wave 2026-11): `practice_context` (text: how the
+  example relates to usual Indian practice), `section_families` ({statement, cite}: the IS 808 / IS 1161 section
+  families and the brace-material basis), `fire_resistance` ({statement, cite}: the fire resistance basis, IS 800
+  Section 16).
 * **Optional report figures** (off by default; set, then re-render with `report.build_report`):
   `force_diagrams`, `force_summary`, `mode_figures`, `deformed_shape_figure`, `section_color_figure`,
   `appendix_case_figures`.
