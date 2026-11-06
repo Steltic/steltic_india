@@ -114,7 +114,11 @@ D8).
 
     The list is computed once per run, and the full run still checks every combination. On IN_Ex19, the local step
     had grown past 40 minutes a pass with 93–141 combinations per element. On 60 IN_Ex19 elements the short list gives
-    the same ratio as the full one.
+    the same ratio as the full one;
+  - two more changes for speed, neither of which alters a result:
+    - a candidate is checked on its group's elements most loaded first, so a failing candidate is rejected early;
+    - the member ratios are memoised per (element, label, grade), and Section 12 candidates use a copy of the model
+      data that shares the forces (a deep copy of the IN_Ex19 data took 2.8 s).
 - **Groups without frame elements** are sized from their own checks: the IN_Ex7 gantry girder
   (`design_pipeline.gantry_girder_checks`, with its MC cap) and groups used only by declared secondary members.
   No IS 808 MB / WB section passes the IN_Ex7 gantry (WB600 × 145 kg/m: vertical deflection 1.40 of the Table 6
