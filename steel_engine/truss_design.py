@@ -785,12 +785,12 @@ def knee_chord_node_rows(knee, cfg, F_N, geo):
         Vv = float(knee.get("Ty_N") or 0.0) * math.sin(th)
         bgv = bolt_group(sp_v, v_sec) if sp_v else {}
         capb = bgv.get("capacity_N")
-        first = "its end bolts" if (capb and capb < Ty_v) else "the vertical"
+        first = ("its end bolts reach their capacity" if (capb and capb < Ty_v) else "the vertical yields")
         rows.append(dict(base, id="12.10.2.1_short_vertical_order", value=Vv, limit=min(Ty_v, capb or Ty_v), dc=None,
                          ok=True, gate=True, advisory=True, clause="IS 800:2007 12.10 (ductility order, a record)",
                          cite="the short vertical %s at the knee-brace node takes the brace's vertical component: at the "
                               "brace's yield Ag fy sin(theta) = %.1f kN against the vertical's Ag fy %.1f kN and its "
-                              "end bolts %s kN -- %s yields before the brace could deliver it; the brace-yields-first "
+                              "end bolts %s kN -- %s before the brace could deliver it; the brace-yields-first "
                               "hierarchy covers the knee and heel connections checked, not this vertical (IS 800 12.10 "
                               "asks no member hierarchy of an ordinary moment frame)"
                               % (v_sec, Vv / 1e3, Ty_v / 1e3, "%.1f" % (capb / 1e3) if capb else "-", first)))

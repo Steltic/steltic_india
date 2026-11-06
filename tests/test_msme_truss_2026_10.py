@@ -850,7 +850,7 @@ def test_knee_chord_node_gusset_bolts_and_short_vertical():
     assert gs["dc"] == pytest.approx(max(H / (A_ * 250 / (math.sqrt(3) * GM0)), H / (A_ * 250 / GM0)))
     sv = rows["12.10.2.1_short_vertical_order"]
     assert sv["advisory"] and sv["dc"] is None and sv["value"] == pytest.approx(Ty / math.sqrt(2.0))
-    assert sv["limit"] < sv["value"] and "yields before the brace could deliver it" in sv["cite"]
+    assert sv["limit"] < sv["value"] and "its end bolts reach their capacity before the brace could deliver it" in sv["cite"]
 
 
 def test_table3_small_real_gravity_compression_stays_on_row_i():
