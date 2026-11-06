@@ -422,7 +422,7 @@ Existing tests changed, each because a review finding changes the value it pins:
 
 **Setup.**
 - Engines:
-  - main e927f35 (`/home/claude/wt/ENG/base`);
+  - main e927f35 (a worktree at `/home/claude/wt/ENG/base`, removed after the A/B; the digests stay in `results/main`);
   - the branch at three points, to tag each move with its fix: 1414ba4 (round 1, `results/eng`), c23c056
     (follow-up 1, `results/eng3`) and 8b2ffbf (the head's code, `results/eng4`; the later commits change only tests
     and docs). Each was run from `/home/claude/wt/ENG/engrun` with the CFS repo symlinked.
@@ -491,12 +491,13 @@ Reading it:
     WI712 now over 1.0; IN_Ex1 WI788 0.967 → 0.998.
   - F5 puts the published IN_Ex1 / Ex5 knee (an 8 mm E250 doubler on a 6 mm E350 web) at 1.033.
 - **IN_Ex21** stays COMPLETE.
-  - The truss bottom chord falls from 0.956 to 0.782. Its governing check becomes the Table 3 slenderness.
+  - The truss bottom chord falls from 0.956 to 0.782 (main e927f35 0.950; round 1 0.956, the review's figure, from
+    fix A's extra combinations; follow-up 1 and the head 0.782). Its governing check becomes the Table 3 slenderness.
   - Why: on main, under the across-ridge wind, the four 1.5 m upper gable-post pieces (inside the end truss) took
     the long-wall pressure over an 18 m strip, 22 kN of wall load that is not there (member-wind totals below).
   - That load reached the frames' knee-braced trusses through the roof. Interior truss e134, the bottom chord next
     to the eave at X = 12 m, carried 82.5 kN of compression under 1.5DL+1.5WM0−R on main and 62.9 kN on the branch.
-  - Its 9.3 ratio 0.950 came from that compression. Without the artefact, the chord's worst strength ratio is 0.19
+  - Its 9.3 ratio (0.950 on main, 0.956 at round 1) came from that compression. Without the artefact, the chord's worst strength ratio is 0.19
     (element e44), and its Table 3 ratio 0.782 governs.
   - The diagonal ISA80 (0.686 → 0.583), the vertical (0.708 → 0.685) and the knee brace (0.826 → 0.798) fall for the
     same reason. The governing case moves from WM0 to W_Y.
