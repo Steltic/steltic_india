@@ -1778,9 +1778,10 @@ def _bump_base(sp, failing, col=None):
         out = ring_base(col, sp, d=d, n=n, t=t, proj=proj)
         if sp.get("stiffeners"):
             out["stiffeners"] = copy.deepcopy(sp["stiffeners"])        # a stiffened ring base stays stiffened
-            dcg = _dc_of(rows, r"gusset")
-            if dcg:
-                out["stiffeners"] = _step_stiffeners(out["stiffeners"], dcg)
+            if _dc_of(rows, r"gusset"):
+                out["stiffeners"] = _step_stiffeners(out["stiffeners"], rows)
+            else:
+                out["stiffeners"] = _step_stiffeners(out["stiffeners"], [])      # height within the outstand limit
         dcp = _dc_of(rows, r"plate_thickness")
         if dcp and float(sp.get("t_plate_mm") or 0.0) >= BASE_T_MM[-1] - 1e-9:
             out["stiffeners"] = _base_stiffeners(out.get("stiffeners"), out, col)
@@ -1824,23 +1825,46 @@ def _bump_base(sp, failing, col=None):
         elif isinstance(emb, dict) and emb.get("capacity_N"):
             pass                                  # an asserted capacity is not the sizer's to raise
     st = sp.get("stiffeners")
-    dc = _dc_of(rows, r"gusset") if isinstance(st, dict) else None
-    if dc:
-        sp["stiffeners"] = _step_stiffeners(st, dc)
+    if isinstance(st, dict) and st:
+        sp["stiffeners"] = _step_stiffeners(st, rows if _dc_of(rows, r"gusset") else [])
     return sp
 
 
-def _step_stiffeners(st, dc):
-    """Base gussets stepped up for their worst row ratio dc: the thickness first (stresses ~ 1 / t; IS 2062 fy falls
-    with t, so one more step), then -- at the thickest plate (63 mm) -- the height (bending and the CJP weld to the
-    column ~ 1 / h^2).  The note is re-stated."""
+def _gusset_h_max(t, fy):
+    """The semi-compact limit of a gusset as an outstanding welded element, h / t <= 13.6 eps (IS 800 Table 2, the
+    engine's gusset_outstand_table2 row), with a small margin, to 50 mm."""
+    return float(math.floor(13.0 * math.sqrt(250.0 / float(fy)) * float(t) / 50.0) * 50.0)
+
+
+def _step_stiffeners(st, rows):
+    """Base gussets stepped up from their failing rows: the thickness first (stresses ~ 1 / t; IS 2062 fy falls with t,
+    so one more step); at the thickest plate (63 mm) the height (bending and the CJP weld to the column ~ 1 / h^2), but
+    never above the outstand limit (_gusset_h_max), and past it one more gusset on each face.  The height is always
+    brought within the outstand limit.  rows: [(name, dc)] or a bare ratio.  The note is re-stated."""
     st = dict(st)
+    rows = [("gusset", float(rows))] if isinstance(rows, (int, float)) else _rows(rows)
+    dc = max([d for n, d in rows if "gusset" in n and "outstand" not in n] + [0.0])
     t0 = float(st.get("t_mm") or 12.0)
-    if t0 < 63.0 - 1e-9:
-        st["t_mm"] = min(_plate_up(max(t0 * dc * 1.05, t0 + 1.0), 1.0), 63.0)
-    else:
-        st["h_mm"] = float(math.ceil(float(st.get("h_mm") or 300.0) * max(math.sqrt(dc) * 1.05, 1.1) / 50.0) * 50.0)
+    if dc > 1.0:
+        if t0 < 63.0 - 1e-9:
+            st["t_mm"] = min(_plate_up(max(t0 * dc * 1.05, t0 + 1.0), 1.0), 63.0)
+        else:
+            h_new = float(math.ceil(float(st.get("h_mm") or 300.0) * max(math.sqrt(dc) * 1.05, 1.1) / 50.0) * 50.0)
+            hmax = _gusset_h_max(st["t_mm"], plate_fy(st["t_mm"], st.get("grade") or "E250"))
+            if h_new > hmax:
+                h_new = hmax
+                if int(st.get("n_per_side") or 2) < 6:
+                    st["n_per_side"] = int(st.get("n_per_side") or 2) + 1
+                    st["n_per_side_y"] = int(st.get("n_per_side_y") or st["n_per_side"] - 1) + 1
+            st["h_mm"] = h_new
     st["fy_MPa"] = plate_fy(st["t_mm"], st.get("grade") or "E250")
+    hmax = _gusset_h_max(st["t_mm"], st["fy_MPa"])
+    if float(st.get("h_mm") or 0.0) > hmax:
+        st["h_mm"] = hmax
+    if isinstance(st.get("note"), str):
+        st["note"] = re.sub(r"^\d+ gussets", "%d gussets" % (2 * (int(st.get("n_per_side") or 3) +
+                                                                  int(st.get("n_per_side_y") or st.get("n_per_side") or 3))),
+                            st["note"])
     if isinstance(st.get("note"), str):
         st["note"] = re.sub(r"\b(\d+) gussets [0-9.]+ x [0-9.]+ \(IS 2062 E250, fy [0-9.]+\)",
                             lambda m_: "%s gussets %s x %s (IS 2062 E250, fy %s)" % (

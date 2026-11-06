@@ -441,3 +441,18 @@ def test_frame_build_column_orientation_is_the_same_for_every_hash_seed_and_foll
     assert r["2,2"] == "X"                  # the X-braced bay along y-line 2
     assert r["2,1"] == "X"                  # neither: X
     assert _fb_orient([["X", 0], ["Y", 0]], 5)["0,0"] == "X"   # declared the other way round
+
+
+def test_base_gussets_stay_within_the_outstand_limit_and_add_gussets_past_it():
+    """A gusset is an outstanding welded element (IS 800 Table 2, h / t <= 13.6 eps, the engine's
+    gusset_outstand_table2 row): stepping the height for bending never goes past it; past it a gusset is added on
+    each face.  Before, the height grew without bound at the thickest plate (IN_Ex19 stem: 262 m)."""
+    AZ = _az()
+    st = {"layout": "cross", "n_per_side": 3, "n_per_side_y": 3, "t_mm": 63.0, "h_mm": 262100.0, "fy_MPa": 230.0,
+          "note": "12 gussets 262100 x 63 (IS 2062 E250, fy 230), CJP"}
+    out = AZ._step_stiffeners(st, [])
+    assert out["h_mm"] <= 13.6 * (250.0 / 230.0) ** 0.5 * 63.0 and "262100" not in out["note"]
+    big = AZ._step_stiffeners(dict(st, h_mm=850.0), [("y:gusset_bending", 1.7, False)])
+    assert big["h_mm"] == 850.0 and big["n_per_side"] == 4 and big["note"].startswith("16 gussets")
+    thin = AZ._step_stiffeners(dict(st, t_mm=25.0, h_mm=350.0), [("gusset_weld_to_plate_10_5_7", 1.19, False)])
+    assert thin["t_mm"] == 32.0 and thin["h_mm"] == 350.0
