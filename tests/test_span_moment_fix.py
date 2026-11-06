@@ -537,7 +537,13 @@ def test_e2e_gable_wind_column_is_governed_by_its_span_moment(shed):
     r_ns = DP.member_checks_is800(cfg, {"member": mem, "kind": "col", "records": nospan})
     assert g["interaction_dc"] > 2.0 * r_ns["interaction_dc"]
     rows = [c for c in m["checks"] if "9.3" in str(c.get("name"))]
-    assert rows and rows[0]["dc"] == pytest.approx(g["interaction_dc"]) and rows[0]["combo"] == gr["combo"]
+    # engine checks 2 (G-1): the group's 9.3 line is its worst strength element's -- the governing element's own, or
+    # (here) the mirror-image gable column's, higher by a few parts in 10^5; both carry the span moment
+    sw = m["strength_worst"]
+    assert rows and rows[0]["dc"] == pytest.approx(sw["dc"], abs=1e-4) and rows[0]["dc"] >= g["interaction_dc"] - 1e-12
+    assert rows[0]["dc"] == pytest.approx(g["interaction_dc"], rel=0.01) and "WM" in rows[0]["combo"]
+    if rows[0].get("element") is None:
+        assert rows[0]["combo"] == gr["combo"]
     assert inp["Mz_span_Nmm"] == pytest.approx(M_ref, rel=0.02)
 
 
