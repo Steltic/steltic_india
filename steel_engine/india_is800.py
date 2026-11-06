@@ -2202,7 +2202,8 @@ PD_BASIS_3_7_2D = (
     "section its effective area Ae (7.3.2, as modified in 3.7.2 Class 4) deducts each element's width in excess of its "
     "Table 2 semi-compact limit under axial compression: the web to the 'axial compression' row 42 eps tw (3.7.2(d)); "
     "the same Ae gives Nd = Ae fy / gamma_m0 (9.3.1).  The 'generally' web rows with the combination's r1 / r2 decide "
-    "the class of the combination and the bending resistance Md (Ze_eff with the web kept to 126 eps / (1 + 2 r2) tw).")
+    "the class of the combination and the bending resistance Md (Ze_eff with the web kept to 126 eps / (1 + 2 r2) tw); "
+    "a section semi-compact or better by those rows keeps the gross area for Pd (7.3.2).")
 
 
 def effective_section_3_7_2d(sec, fy_MPa, *, welded=False, gamma_m0=GAMMA_M0_DEFAULT, web_dt_limit=None):
