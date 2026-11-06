@@ -909,9 +909,10 @@ def _activity_section(name):
     h = ["<h2>Appendix C — Activity log</h2>",
          "<p>Every tool call made during the design, recorded by the MCP server, summarised below.</p>"]
     if not recs:
-        h.append("<p class='note'>[no activity_log.jsonl found — call new_activity_log() at the start of "
-                 "the design so the server records the tool calls]</p>")
-        return "".join(h)
+        # MSME (2026-10): plain words in the printed report (it said which log file and server call were missing)
+        return h[0] + ("<p class='note'>No tool-call log was recorded for this design. The standards it relies on "
+                       "are cited clause by clause in the checks of this report and in the grounding table of "
+                       "Chapter 13.</p>")
     counts = {}
     for r in recs: counts[r.get("tool", "?")] = counts.get(r.get("tool", "?"), 0) + 1
     # first wave item 7: the job folder's own name, not a path on the build machine

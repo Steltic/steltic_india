@@ -7,6 +7,7 @@ required_inputs listed. Clause citations travel with every result.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # Table 7 — Imperfection Factor α (Clauses 7.1.1 and 7.1.2.1) — corpus page_041
@@ -2368,8 +2369,13 @@ def section_class_table2(sec, fy_MPa, *, P_N=0.0, welded=False, gamma_m0=GAMMA_M
                            limits=(None, None, 88 * eps ** 2)))
         else:
             el.append(dict(element="CHS wall, moment", ratio=Dt, limits=(42 * eps ** 2, 52 * eps ** 2, 146 * eps ** 2)))
-    elif st == "angle":
-        b, d, t = p["bf"], p["d"], p["tw"]
+    elif st in ("angle", "double_angle"):
+        # MSME (2026-10): a double angle on a gusset is classified by its component angle -- Table 2 'single angle, or
+        # double angles with the components separated' (axial) and 'angle, compression due to bending' (each leg)
+        if st == "double_angle":
+            b, d, t = p["leg_outstanding_mm"], p["leg_connected_mm"], p["t_mm"]
+        else:
+            b, d, t = p["bf"], p["d"], p["tw"]
         if loading == "axial":
             el += [dict(element="angle leg b/t (axial)", ratio=b / t, limits=(None, None, 15.7 * eps)),
                    dict(element="angle leg d/t (axial)", ratio=d / t, limits=(None, None, 15.7 * eps)),
@@ -2479,6 +2485,8 @@ def buckling_class_for_section(sec, axis, *, process=None, welded=False):
         return buckling_class("CHS", axis=axis, process=process or p.get("process"))
     if st == "angle":
         return buckling_class("angle", axis=axis)
+    if st == "double_angle":                       # MSME (2026-10): Table 10 'channel, angle, T ... built-up': c
+        return buckling_class("built-up", axis=axis)
     if st == "channel":
         return buckling_class("channel", axis=axis)
     if st == "box":
@@ -2623,6 +2631,17 @@ def ltb_moment_capacity(sec, LLT_mm, fy_MPa, *, welded=False, section_class=None
         return {"found": False, "Md_Nmm": None, "cite": cite,
                 "note": "%s major-axis LTB: Annex E-1.2 covers sections symmetric about the minor axis only; "
                         "not coded (found:false)" % st}
+    if st == "double_angle":
+        # MSME (2026-10): a double angle bent in the plane of the truss bends about the axis normal to the gusset; when
+        # that is the axis of the smaller second moment of area (Ix <= Iy, always so for equal angles on a gusset) it is
+        # minor-axis bending and IS 800 8.2.2(a) needs no LTB check (Md per 8.2.1.2); otherwise LTB of the T-shape is
+        # not coded (found:false)
+        if p["Ix"] <= p["Iy"]:
+            base.update(ltb="not applicable: 8.2.2(a) bending about the minor axis (double angle in the truss plane, "
+                            "Ix %.3g <= Iy %.3g mm4)" % (p["Ix"], p["Iy"]), lambda_LT=None, chi_LT=1.0, cite=cite)
+            return base
+        return {"found": False, "Md_Nmm": None, "cite": cite,
+                "note": "double angle with Ix > Iy: LTB of the T-shape not coded (found:false)"}
     ch_note = None
     if st == "channel":
         # H38: a channel bent about its major axis (its axis of symmetry) -> IS 800 Annex E-1.1 general Mcr with
@@ -2681,6 +2700,10 @@ def shear_capacity(sec, fy_MPa, *, axis="z", welded=False, stiffener_spacing_mm=
     elif st == "box":
         Av = (2.0 * (p["d"] - 2 * p["tf"]) * p["tw"]) if axis == "z" else (2.0 * p["bf"] * p["tf"])
         basis = "welded box: two webs d tw (major) / two flanges b tf (minor) (8.4.1.1 welded plate elements)"
+    elif st == "double_angle":
+        # MSME (2026-10): the two legs in the plane of the shear (8.4.1.1 by analogy with the web of a rolled section)
+        Av = 2.0 * (p["leg_connected_mm"] if axis == "z" else p["leg_outstanding_mm"]) * p["t_mm"]
+        basis = "double angle: the two legs parallel to the shear, 2 x leg x t"
     elif axis == "z":
         tf = p["tf"]
         Av = (p["d"] * p["tw"]) if not welded else (p["d"] - 2 * tf) * p["tw"]
@@ -2691,7 +2714,7 @@ def shear_capacity(sec, fy_MPa, *, axis="z", welded=False, stiffener_spacing_mm=
     Vp = Av * fy_MPa / math.sqrt(3.0)
     out = {"found": True, "Av_mm2": Av, "Av_basis": basis, "Vp_N": Vp, "eps": eps, "cite": cite}
     Vn = Vp
-    if st not in ("CHS",) and axis == "z":
+    if st not in ("CHS", "double_angle") and axis == "z":
         R1 = p.get("R1") or 0.0
         d = p["d"] - 2 * p["tf"] - (0.0 if (welded or st == "box") else 2 * R1)
         dtw = d / p["tw"]
@@ -3006,7 +3029,13 @@ def interaction_9_3(*, P_N=0.0, Mz_Nmm=0.0, My_Nmm=0.0, Nd_N=None, Pdz_N=None, P
         return out
     n = abs(P) / Nd_N
     # 9.3.1
-    if section_class in ("plastic", "compact"):
+    if section_class in ("plastic", "compact") and section_type in ("angle", "double_angle", "tee", "T"):
+        # MSME (2026-10): 9.3.1.2 gives reduced moments for plates, I/H, boxes and tubes only; for angle sections the
+        # conservative form of 9.3.1.1 (N/Nd + My/Mdy + Mz/Mdz <= 1) is used
+        sec = abs(P) / Nd_N + My / Mdys + Mz / Mdzs
+        out["section_9_3_1"] = {"dc": sec, "method": "9.3.1.1 conservative linear form (angle section)", "n": n,
+                                "P_over_Nd": n}
+    elif section_class in ("plastic", "compact"):
         if section_type == "CHS":
             Mndz = min(1.04 * Mdzs * (1 - n ** 1.7), Mdzs)
             Mndy = min(1.04 * Mdys * (1 - n ** 1.7), Mdys)
@@ -3097,6 +3126,88 @@ def peb_buckling_section(comp, p, bsec, fy, KLz, KLy, *, process=None, welded=Tr
     return out
 
 
+# review 2026-11 (MSME): IS 800 Table 3 row choice -- which combinations are wind / earthquake combinations, and the
+# axial force below which a member is not 'in compression' (analysis noise, e.g. 0.3 N in an eave strut)
+P_COMP_TOL_N = 1.0
+# ... and relative to the member, for the choice between rows (i) and (iii) only: a gravity compression below 0.1 % of
+# the squash load Ag fy, in a member whose wind / earthquake compression is larger, does not make it a member carrying
+# compressive loads from dead and imposed load (engineering basis, stated in the record).  It covers analysis noise
+# (<= 75 N seen in IN_Ex1-9: 2.2 N in an IN_Ex4 CHS168 roof strut, squash load 717 kN) AND small real compression up to
+# 0.1 % Ag fy (IN_Ex19 WPB300 braces 1.2-1.4 kN, an IN_Ex9 brace 553 N).  Row (vi) needs no compression above 1 N.
+P_COMP_TOL_REL = 1.0e-3
+
+
+def p_comp_tol(A_mm2, fy_MPa):
+    """The axial force below which a member is not 'in compression' for the IS 800 Table 3 row choice."""
+    try:
+        return max(P_COMP_TOL_N, P_COMP_TOL_REL * float(A_mm2) * float(fy_MPa))
+    except (TypeError, ValueError):
+        return P_COMP_TOL_N
+_LATERAL_TOKEN = re.compile(r"(?:EQ|EL|WL|WM|W_)")
+_LATERAL_REGISTRY = {}
+
+
+def combination_is_lateral(case):
+    """True when a combination record (india_loads.Case with .meta, or a combination dict) has a wind or earthquake
+    term: kind 'W' / 'EQ', a member-wind pattern (fWM / member_wind), response-spectrum terms (rsa) or vertical
+    earthquake (fEv)."""
+    meta = getattr(case, "meta", None)
+    if meta is None and isinstance(case, dict):
+        meta = case
+    meta = meta or {}
+    return bool(meta.get("kind") in ("EQ", "W") or meta.get("lateral_kind") in ("EQ", "W") or meta.get("fWM")
+                or meta.get("member_wind") or "member_wind" in (meta.get("tags") or []) or meta.get("rsa")
+                or meta.get("fEv") or meta.get("fE") or meta.get("fW"))
+
+
+def register_combinations(cases):
+    """design_india registers its combinations, so is_lateral_combo classifies a label by its combination record
+    (review 2026-11).  The registry is per process (each job runs in its own process)."""
+    _LATERAL_REGISTRY.clear()
+    for c in cases or []:
+        lab = c[0] if isinstance(c, tuple) else (c.get("label") if isinstance(c, dict) else None)
+        if lab is not None:
+            _LATERAL_REGISTRY[str(lab)] = combination_is_lateral(c)
+
+
+def is_lateral_combo(label):
+    """True for a combination with a wind or earthquake action (IS 800 Table 3 row (iii): 'compression forces
+    resulting only from a combination with wind / earthquake actions').  A registered combination is classified by
+    its record (register_combinations: its load terms); otherwise by the label: storey wind W_X / W_Y, member wind
+    WM0+ / WM90-R / WMX+ / ..., WL, EQ_X / EQ_Y and EL.  Notional loads (N_X) and gravity are not lateral."""
+    lab = str(label or "")
+    if lab in _LATERAL_REGISTRY:
+        return _LATERAL_REGISTRY[lab]
+    return bool(_LATERAL_TOKEN.search(lab))
+
+
+def table3_compression_only_lateral(Ps, member, tol_rel):
+    """Re-check 2 (review 2026-11): IS 800 Table 3 row (iii) -- 'compression forces resulting only from a combination
+    with wind / earthquake actions' -- holds when the member's largest wind / earthquake compression exceeds 1 N and
+    its gravity compression (over ALL its records when the pipeline gives it, else over Ps) is below the relative floor
+    tol_rel (0.1 % Ag fy) AND below that wind / earthquake compression.  A member whose only compression is a small
+    gravity force (no wind / earthquake compression above it) stays on row (i): the relative floor only decides between
+    rows (i) and (iii), never sends a member to row (vi)."""
+    lat = max([P for P, lab in Ps if is_lateral_combo(lab)] + [0.0])
+    grav = member.get("t3_gravity_compression_N")
+    if grav is None:
+        grav = max([P for P, lab in Ps if not is_lateral_combo(lab)] + [0.0])
+    grav = float(grav)
+    return lat > P_COMP_TOL_N and lat > grav and grav <= tol_rel
+
+
+def table3_row_combo(Ps, row, member=None):
+    """The combination a Table 3 row names: row (i) the largest compression of a combination without wind or
+    earthquake (the gravity compression that puts the member on row (i)); otherwise the largest compression."""
+    if str(row).startswith("(i)") and (member or {}).get("t3_gravity_combo"):
+        return member["t3_gravity_combo"]
+    if str(row).startswith("(i)"):
+        grav = [t for t in Ps if t[0] > P_COMP_TOL_N and not is_lateral_combo(t[1])]
+        if grav:
+            return max(grav, key=lambda t: t[0])[1]
+    return max(Ps, key=lambda t: t[0])[1] if Ps else None
+
+
 def member_check_is800(member, combo_forces, *, cfg=None):
     """IS 800 member check evaluated PER COMBINATION with concurrent P, Mz, My (HREX1-X-02, HREX2-X-01).
 
@@ -3136,6 +3247,9 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     KLy = Ky * float(member.get("Ly_mm") or L)
     welded = _welded_I(p, member.get("welded"))
     p_gross = p
+    if member.get("axial_only"):
+        # MSME (2026-10): a pin-ended truss member (web, knee brace) -- axial force only (IS 800 6 / 7)
+        return axial_member_check_is800(member, combo_forces, cfg=cfg, _pre=(p, mat, fy, fu, KLz, KLy, res))
     support = member.get("support", "simple")
     bsec = member.get("buckling_section")
     # Engine checks fix B (2026-11): IS 800 Table 2 classifies the cross-section under the forces it carries, so the
@@ -3177,7 +3291,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
         # I / box / channel: the class of the combination; CHS and angles keep their own 'axial compression' rows
         # (compression_capacity classifies them with loading 'axial', as before)
         comp_ = compression_capacity(pp, fy, KLz_mm=KLz, KLy_mm=KLy, process=member.get("process"), welded=welded,
-                                     section_class=(None if p_gross.get("section_type") in ("CHS", "angle") else cls))
+                                     section_class=(None if p_gross.get("section_type") in ("CHS", "angle", "double_angle")
+                                                    else cls), angle_connection=member.get("angle_connection"))
         if bsec and comp_.get("found"):
             comp_ = peb_buckling_section(comp_, pp, bsec, fy, KLz, KLy, process=member.get("process"), welded=welded)
         c = {"p": pp, "sc": scu, "eff": eff_, "comp": comp_, "ltb": {},
@@ -3305,7 +3420,8 @@ def member_check_is800(member, combo_forces, *, cfg=None):
                                  lambda_y=(comp_c.get("axes", {}).get("y") or comp_c.get("axes", {}).get("v") or {}).get("lambda"),
                                  lambda_LT=ltb.get("lambda_LT"), Cmz=cmz["Cm"], Cmy=cmy["Cm"], CmLT=CmLT,
                                  section_class=caps["sc"]["section_class"],
-                                 section_type="CHS" if p_c.get("section_type") == "CHS" else "I",
+                                 section_type=(p_c.get("section_type") if p_c.get("section_type") in ("CHS", "angle", "double_angle")
+                                               else "I"),
                                  Ag_mm2=p_gross["A"], Zec_mm3=p_c["Sx"], Td_N=Td.get("Td_N"))
             ia.update(moment_sign=sign, LLT_mm=LLT, Mdz_LTB_Nmm=ltb["Md_Nmm"], chi_LT=ltb.get("chi_LT"),
                       lambda_LT=ltb.get("lambda_LT"), CmLT=CmLT)
@@ -3352,9 +3468,12 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     if klr is not None:
         Ps = [(r["P_N"], str(r.get("combo") or "")) for r in per]
         Pmax = max([P for P, _ in Ps] or [0.0])
-        is_beam = str(member.get("role") or "").lower() == "beam"
-        comp_only_lat = Pmax > 1e-6 and all(P <= 1e-6 or ("EQ" in lab or "W_" in lab or "WL" in lab or "EL" in lab)
-                                            for P, lab in Ps)
+        # MSME (2026-10): a truss chord is a member carrying axial load (rows i / iii / vi), not a beam (row iv)
+        is_beam = str(member.get("role") or "").lower() == "beam" and not member.get("truss_chord")
+        # review 2026-11 (MSME): one rule for both checks -- the member-wind combinations (WM0+, WM90-R, ...) are wind
+        # combinations, and an axial force below P_COMP_TOL_N (analysis noise) is not compression
+        tol3 = p_comp_tol(p_gross.get("A"), fy)
+        comp_only_lat = table3_compression_only_lateral(Ps, member, tol3)
         # H34: a beam whose axial compression is negligible (<= 0.05 Pd, e.g. a small collector / chord force) is not
         # a 'member carrying compressive loads' in the Table 3 sense and stays on row (iv); the 0.05 threshold is an
         # engineering basis stated in the record (member / cfg 'beam_axial_negligible_ratio' changes it)
@@ -3369,14 +3488,18 @@ def member_check_is800(member, combo_forces, *, cfg=None):
             if Pmax > 1e-6:
                 row += (" (axial compression %.1f kN <= %.2f Pd = %.1f kN treated as negligible; engineering basis, "
                         "H34)" % (Pmax / 1e3, neg_ratio, P_neg / 1e3))
+        elif member.get("truss_chord") and Pmax <= P_COMP_TOL_N:     # row (vi) only without any compression
+            rmin_ = p_gross.get("r_min") or min(v for v in (p_gross.get("rx"), p_gross.get("ry")) if v)
+            v3, lim, row = L / rmin_, TABLE3_LIMITS["tension_only"], "(vi) member always under tension: L / r_min"
         elif comp_only_lat or member.get("compression_only_from_WL_EL"):
             v3, lim, row = klr, TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
         else:
             v3, lim, row = klr, TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"
         if v3 is not None:
             # RR-BUG-5: the Table 3 row carries its own combination -- the one with the largest axial compression
-            # for rows (i) / (iii); none for row (iv) (a geometric LLT / ry limit, no axial compression)
-            gc3 = (max(Ps, key=lambda t: t[0])[1] if (Ps and not row.startswith("(iv)")) else None)
+            # for rows (i) / (iii); none for row (iv) (a geometric LLT / ry limit, no axial compression).  Row (i)
+            # names the largest compression of a combination without wind or earthquake (review 2026-11)
+            gc3 = (table3_row_combo(Ps, row, member) if (Ps and not row.startswith(("(iv)", "(vi)"))) else None)
             res["table3_slenderness"] = {"value": v3, "limit": lim, "dc": v3 / lim, "ok": v3 <= lim,
                                          "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim),
                                          "governing_combo": gc3,
@@ -3404,3 +3527,187 @@ def member_check_is800(member, combo_forces, *, cfg=None):
     res.update(found=True, governing_check="IS 800 9.3 interaction / member resistance",
                governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0, value=dc, limit=1.0, cite=cite93)
     return res
+
+
+# ---------------------------------------------------------------- MSME (2026-10): pin-ended truss members
+def _is_lateral_label(lab):
+    return is_lateral_combo(lab)
+
+
+def axial_member_check_is800(member, combo_forces, *, cfg=None, _pre=None):
+    """MSME (2026-10): IS 800 check of a pin-ended truss member that carries axial force only (truss web, knee brace;
+    an OpenSees truss element).  Per combination: compression P / Pd (7.1.2; a single angle loaded through one leg by
+    the 7.5.1.2 equivalent slenderness with member['angle_connection'] = {n_bolts, fixity}; a double angle on opposite
+    sides of a gusset by 7.5.2.1 -- axial, KL in plane Kz L, out of plane Ky L), tension T / Td (6.2 yield, 6.3.3 /
+    6.3.4 rupture with shear lag and 6.4.1 block shear from member['tension_inputs'] -- the end connection geometry;
+    a missing rupture / block-shear input leaves the check not evaluated), and IS 800 Table 3 slenderness: (i) 180 when
+    the member is in compression under dead + imposed load, (iii) 250 when compression arises only in wind /
+    earthquake combinations, (vi) 400 for a member always in tension (L / r_min).  Returns the member_check_is800
+    record shape."""
+    import sections as _S
+    if _pre is None:
+        sec = member["section"]
+        p = _S.props(sec)
+        mat = material_for_section(p, member.get("grade"))
+        fy = member.get("fy_MPa") or mat.get("fy_MPa")
+        fu = member.get("fu_MPa") or mat.get("fu_MPa")
+        L = float(member.get("L_mm") or 0.0)
+        Kz = 1.0 if member.get("Kz") is None else float(member["Kz"])
+        Ky = 1.0 if member.get("Ky") is None else float(member["Ky"])
+        KLz, KLy = Kz * float(member.get("Lz_mm") or L), Ky * float(member.get("Ly_mm") or L)
+        res = {"id": member.get("id"), "section": sec, "role": member.get("role"), "material": mat, "fy_MPa": fy,
+               "flags": []}
+    else:
+        p, mat, fy, fu, KLz, KLy, res = _pre
+    L = float(member.get("L_mm") or 0.0)
+    res["clause"] = "IS 800:2007 6.2-6.4, 7.1.2, 7.5.1.2 / 7.5.2.1, Table 3 (pin-ended truss member, axial force only)"
+    res["axial_only"] = True
+    st = p.get("section_type")
+    ac = member.get("angle_connection")
+    if st == "angle" and not ac:
+        res.update(found=False, ok=None, dc=None,
+                   reason="single angle truss member: angle_connection {n_bolts, fixity} not declared (IS 800 7.5.1.2)")
+        return res
+    if st == "double_angle":
+        # review 2026-11: 7.5.2.1 applies only with >= 2 bolts in line at each end; its effective lengths are bounded
+        # (in the plane of the end gusset 0.7 - 0.85 x the distance between intersections, normal to it = that
+        # distance).  With one bolt 7.5.2.2 sends the strut to 7.5.1: each angle loaded through one leg.
+        nb = (ac or {}).get("n_bolts")
+        if nb is None:
+            res.update(found=False, ok=None, dc=None,
+                       reason="double angle truss member: the bolts at each end (angle_connection n_bolts) are not "
+                              "declared -- IS 800 7.5.2.1 needs >= 2 in line")
+            return res
+        if int(nb) < 2:
+            pc = _S.props(p["component"])
+            one = compression_capacity(pc, fy, KLz_mm=KLz, KLy_mm=KLy,
+                                       angle_connection={"n_bolts": int(nb), "fixity": (ac or {}).get("fixity", "hinged"),
+                                                         "l_mm": (ac or {}).get("l_mm") or L})
+            comp = dict(one)
+            if one.get("found") and one.get("Pd_N"):
+                comp["Pd_N"] = 2.0 * one["Pd_N"]
+            comp["note"] = ("double angle with %d bolt at each end: IS 800 7.5.2.2 -- designed per 7.5.1, each angle "
+                            "loaded through one leg (7.5.1.2, Table 12 one bolt), Pd = 2 x %.1f kN"
+                            % (int(nb), (one.get("Pd_N") or 0.0) / 1e3))
+            comp["rule"] = "7.5.2.2"
+        else:
+            Lz_ = float(member.get("Lz_mm") or L)
+            Ly_ = float(member.get("Ly_mm") or L)
+            notes_ = []
+            if KLz < 0.7 * Lz_ - 1e-6:
+                notes_.append("KL in the gusset plane raised from %.0f to 0.7 L = %.0f mm" % (KLz, 0.7 * Lz_))
+                KLz = 0.7 * Lz_
+            if KLy < Ly_ - 1e-6:
+                notes_.append("KL normal to the gusset raised from %.0f to L = %.0f mm" % (KLy, Ly_))
+                KLy = Ly_
+            comp = compression_capacity(p, fy, KLz_mm=KLz, KLy_mm=KLy)
+            comp["note"] = ("double angle on opposite sides of the gusset with %d bolts in line at each end: load "
+                            "regarded as axial (IS 800 7.5.2.1), KL in the plane of the gusset %.0f mm (0.7 - 0.85 L), "
+                            "normal to it %.0f mm (= L); buckling class c (Table 10)%s"
+                            % (int(nb), KLz, KLy, ("; " + "; ".join(notes_)) if notes_ else ""))
+            comp["rule"] = "7.5.2.1"
+    else:
+        comp = compression_capacity(p, fy, KLz_mm=KLz, KLy_mm=KLy,
+                                    angle_connection=dict(ac, l_mm=ac.get("l_mm") or L) if (st == "angle" and ac) else None)
+    ti = dict(member.get("tension_inputs") or {})
+    Td = tension_capacity(p["A"], fy, fu, **ti)
+    res["capacities"] = {"compression": comp, "tension": Td}
+    if not comp.get("found"):
+        res.update(found=False, ok=None, dc=None, reason="compression capacity not evaluated: %s" % comp.get("note"))
+        return res
+    per = []
+    for cf in combo_forces or []:
+        P = float(cf.get("P_N") or 0.0)
+        rec = {"combo": cf.get("combo"), "P_N": P}
+        if P > 0:
+            rec.update(dc=P / comp["Pd_N"], ok=P <= comp["Pd_N"], mode="compression",
+                       checks=[{"compression_7_1_2": True, "dc": P / comp["Pd_N"], "found": True,
+                                "Pd_N": comp["Pd_N"]}])
+        elif P < 0:
+            T = -P
+            dct = T / Td["Td_N"] if Td.get("Td_N") else None
+            ok_t = (dct <= 1.0) if (dct is not None and Td.get("complete")) else (False if (dct or 0) > 1.0 else None)
+            rec.update(dc=dct if Td.get("complete") or (dct or 0) > 1.0 else None, ok=ok_t, mode="tension",
+                       checks=[{"tension_6": True, "dc": dct, "found": bool(Td.get("complete")), "Td_N": Td.get("Td_N"),
+                                "governing": Td.get("governing")}])
+        else:
+            rec.update(dc=0.0, ok=True, mode="zero", checks=[])
+        per.append(rec)
+    res["per_combo"] = per
+    Ps = [(r["P_N"], str(r.get("combo") or "")) for r in per]
+    Pmax = max([P_ for P_, _ in Ps] or [0.0])
+    tol3 = p_comp_tol(p.get("A"), fy)
+    if Pmax > P_COMP_TOL_N:                    # row (vi) only when no record has compression above the absolute 1 N
+        klr = comp.get("KL_over_r_max")
+        if table3_compression_only_lateral(Ps, member, tol3):
+            lim, row = TABLE3_LIMITS["compression_WL_EL_only"], "(iii) compression only from WL / EL combinations"
+        else:
+            lim, row = TABLE3_LIMITS["compression_DL_LL"], "(i) compression from DL + LL"
+        gc3 = table3_row_combo(Ps, row, member)
+    else:
+        rmin = p.get("r_min") or min(v for v in (p.get("rx"), p.get("ry"), p.get("rv")) if v)
+        klr = L / rmin
+        lim, row, gc3 = TABLE3_LIMITS["tension_only"], "(vi) member always under tension: L / r_min", None
+    res["table3_slenderness"] = {"value": klr, "limit": lim, "dc": klr / lim, "ok": klr <= lim,
+                                 "clause": "IS 800:2007 3.8 / Table 3", "cite": "Table 3 %s <= %d" % (row, lim),
+                                 "governing_combo": gc3, "name": "IS 800 Table 3 slenderness"}
+    if not per:
+        res.update(found=False, ok=None, dc=None, reason="no combination forces")
+        return res
+    if any(r["dc"] is None for r in per):
+        res.update(found=False, ok=None, dc=None,
+                   reason="tension capacity incomplete (6.3 rupture / 6.4 block-shear inputs of the end connection "
+                          "missing): %s" % [k for k, v in (Td.get("limit_states") or {}).items() if not v.get("found")])
+        return res
+    worst = max(per, key=lambda r: r["dc"])
+    dc = worst["dc"]
+    cite = "IS 800:2007 7.1.2 / 7.5 (compression) and 6.2-6.4 (tension) per combination, axial force only"
+    res.update(interaction_dc=dc, interaction_governing_combo=worst["combo"], interaction_cite=cite)
+    t3 = res["table3_slenderness"]
+    if t3["dc"] > dc:
+        res.update(found=True, governing_check="IS 800 Table 3 slenderness", governing_combo=t3.get("governing_combo"),
+                   dc=t3["dc"], ok=t3["dc"] <= 1.0, value=t3["value"], limit=t3["limit"],
+                   cite="%s (%s); axial %.3f (%s)" % (t3["clause"], t3["cite"], dc, worst["combo"]))
+        return res
+    res.update(found=True, governing_check="IS 800 %s resistance (axial)" % ("7 compression" if worst["mode"] ==
+                                                                              "compression" else "6 tension"),
+               governing_combo=worst["combo"], dc=dc, ok=dc <= 1.0, value=dc, limit=1.0, cite=cite)
+    return res
+
+
+def angle_end_connection_inputs(sec, *, n_bolts, d0_mm, pitch_mm, end_mm, gauge_mm, fy_MPa=None, fu_MPa=None):
+    """MSME (2026-10): tension_inputs for tension_capacity of an angle member bolted through one leg (single line of
+    n_bolts along the member, hole d0, pitch p, end distance e, gauge g = back of the angle to the bolt line):
+      6.3.3 (single angle) / 6.3.4 (double angle, the same equation per component, summed):
+        Anc = (connected leg - t/2 - d0) t, Ago = (outstanding leg - t/2) t per angle (leg areas to the mid-thickness
+        of the other leg); w = outstanding leg; bs = w + g - t (Fig. 6, w1 = g); Lc = (n - 1) p;
+      6.4.1 block shear of the connected leg (Fig. 7B, one bolt line): Avg = (e + (n - 1) p) t,
+        Avn = (e + (n - 1) p - (n - 0.5) d0) t, Atg = (leg - g) t, Atn = (leg - g - d0/2) t, per angle.
+    A double angle doubles every area.  Returns (tension_inputs, record)."""
+    import sections as _S
+    p = _S.props(sec) if isinstance(sec, str) else sec
+    st = p.get("section_type")
+    if st == "double_angle":
+        Dc, Bo, t, m = p["leg_connected_mm"], p["leg_outstanding_mm"], p["t_mm"], 2.0
+    elif st == "angle":
+        Dc, Bo, t, m = p["d"], p["bf"], p["tw"], 1.0
+    else:
+        raise ValueError("angle_end_connection_inputs: %r is not an angle section" % (sec,))
+    n = int(n_bolts)
+    if n < 1:
+        raise ValueError("n_bolts >= 1")
+    d0, pp, e, g = float(d0_mm), float(pitch_mm), float(end_mm), float(gauge_mm)
+    Anc = (Dc - t / 2.0 - d0) * t
+    Ago = (Bo - t / 2.0) * t
+    Lc = (n - 1) * pp
+    Lv = e + (n - 1) * pp
+    blk = {"Avg_mm2": m * Lv * t, "Avn_mm2": m * (Lv - (n - 0.5) * d0) * t,
+           "Atg_mm2": m * (Dc - g) * t, "Atn_mm2": m * (Dc - g - d0 / 2.0) * t}
+    ti = {"member": "angle" if st == "angle" else "other", "Anc_mm2": m * Anc, "Ago_mm2": m * Ago, "w_mm": Bo,
+          "t_mm": t, "bs_mm": Bo + g - t, "Lc_mm": Lc if Lc > 0 else None, "block": blk}
+    rec = {"n_bolts": n, "d0_mm": d0, "pitch_mm": pp, "end_mm": e, "gauge_mm": g, "Lc_mm": Lc,
+           "basis": "IS 800 6.3.3 / 6.3.4 (Fig. 6) and 6.4.1 (Fig. 7B), one bolt line in the connected leg"}
+    if n == 1:
+        ti["Lc_mm"] = None
+        rec["note"] = "one bolt: Lc = 0 -- 6.3.3 beta not defined; rupture by the preliminary alpha = 0.6 is not used"
+    return ti, rec
