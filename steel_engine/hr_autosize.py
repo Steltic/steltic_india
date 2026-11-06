@@ -793,6 +793,25 @@ def torsion_requirements(lm, ev, x, st):
                     req[g] = round(need, 1)
                     log("    IS 18168 7.2 column KL/r %.2f: %s keeps I >= %.4g (K follows the beam stiffness)"
                         % (max(r["dc"] for r in kl), g, need))
+    per = ev.get("periods") or {}
+    if ev.get("modes_fail") and all(v >= 0.65 for v in (ev.get("modes_mass") or {}).values()) and \
+            len(per) == 2 and abs(per["X"] - per["Y"]) / max(per.values()) < 0.10:
+        # IS 1893 Table 6(vii), Zones IV / V: the fundamental Tx and Ty at least 10 % apart -- the frames of the stiffer
+        # direction (beams / braces of that frame direction; the columns stiffen both) are made stiffer still
+        d = "X" if per["X"] < per["Y"] else "Y"
+        f = min(max((min(per.values()) * 1.12 / max(per.values())) ** 2, 1.05), 1.5)
+        gs = set()
+        for m in (lm.s12[1].get("members") or []) if lm.s12 is not None else []:
+            g = lm.groups_of.get(int(m.get("tag") or str(m["id"]).lstrip("e")))
+            if g is not None and m.get("frame_dir") == d and lm.specs.get(g, {}).get("role") in ("beam", "brace") \
+                    and lm.specs[g].get("lateral"):
+                gs.add(g)
+        for g in sorted(gs):
+            kind = lm.specs[g].get("stiff", STIFF_BY_ROLE.get(lm.specs[g].get("role")))
+            need = max(stiffness(x[g][0], kind), req.get(g, 0.0)) * f
+            req[g] = round(need, 1)
+            log("    modes: Tx %.3f / Ty %.3f s less than 10 %% apart: %s (frame %s) keeps %s >= %.4g"
+                % (per["X"], per["Y"], g, d, kind, need))
     if ev.get("modes_fail"):
         # IS 1893 Table 6(vii): the d-direction mass sits in rotation-dominant modes (translation coupled with
         # torsion): a stiffer torsional system for that direction separates them -- the same groups, 25 % up
