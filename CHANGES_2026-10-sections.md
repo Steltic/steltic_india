@@ -113,6 +113,10 @@ D8).
   - Beam groups that share a label get the connection of the largest demand (IN_Ex18).
   - Moment-joint web plates are designed for the IS 800 12.11.2.2 joint shear (1.2DL + 0.5LL + 2 × 1.2 Mp / L') of
     the new beam, and are stepped up from failing rows (IN_Ex16).
+  - Panel-zone doublers declare their grade (`doubler_grade`; the engine checks a doubler at its own grade, E250
+    when none is declared). The grade is E350 B0 when every column that the label's beams frame into is E350, since
+    the doubler is the same plate as the column web it is welded to. Otherwise it is E250 B0. The doubler thickness
+    is stepped up from the engine's own panel-zone rows (IN_Ex12, IN_Ex16, IN_Ex18; IN_Ex9 has no E350 column).
 - **A label that fails Table 3 slenderness in its own full run** is barred for its group. The limit depends on
   whether the member carries compression, which the frozen forces cannot show. On the IN_Ex12 gym, a roof beam
   picks up axial force only in its own run.
@@ -200,6 +204,11 @@ D8).
     16.2 (as prescribed in IS 1641 / 1642 / 1643, or the building specifications or city ordinance; IS 1641–1643 and
     the National Building Code are not in the corpus). The protection must give a period of structural adequacy at
     least equal to it (16.1.1). Fire protection is not in the steel quantities.
+- **IN_Ex7 gable triangles (engine review, 2026-11-06).** The rafters are modelled flat at the eave, so the wall
+  scan loaded each gable only up to the eave (241.5 of 252.5 m²). Each 11.03 m² triangle above the eave is now added
+  in the cfg as member-wind nodal loads at the corner columns' eave nodes, half per corner. This is the engine's own
+  rule for a sloping gable with no posts. The pressures are the pattern's own: windward / leeward gable along the
+  ridge, side wall across it. The roof slope is not modelled. The job's SOLUTION.md records this.
 - **IN_Ex9 lean-to.** Not modelled as a part level: the engine has no part-level model. The IS 1893 Table 6 screens
   read consecutive levels as storeys. The second-wave note stays, and the flags' requirements stay applied (RSA and
   the 0.2 % drift limit), which is conservative.

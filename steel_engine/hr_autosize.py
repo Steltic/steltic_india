@@ -2146,7 +2146,35 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
                 out["column_splice"][key] = sp
                 if cache is not None:
                     cs[key] = copy.deepcopy(sp)
+    doubler_grades(lm, x, out)
     return out
+
+
+def doubler_grades(lm, x, conns):
+    """The IS 2062 grade of the panel-zone doubler on every beam_column spec that has one (the engine checks a doubler
+    at its own grade, E250 when none is declared): E350 B0 when every column that the label's beams frame into is
+    E350 (the doubler is the same plate grade as the column web it is welded to), else E250 B0.  Columns outside the
+    sized groups count as E250."""
+    if lm.s12 is None:
+        return
+    mems = {m["id"]: m for m in lm.s12[1].get("members") or []}
+
+    def grp(m):
+        return lm.groups_of.get(int(str(m["id"]).lstrip("e"))) if m else None
+    at = {}
+    for j in lm.s12[1].get("joints") or []:
+        gr = set()
+        for c in j.get("columns") or []:
+            g = grp(mems.get(c.get("member_id")))
+            gr.add("E350" if g is not None and g in x and "350" in str(x[g][1]) else "E250")
+        for bb in j.get("beams") or []:
+            g = grp(mems.get(bb.get("member_id")))
+            if g is not None and g in x and gr:
+                at.setdefault(x[g][0], set()).update(gr)
+    for lab, sp in (conns.get("beam_column") or {}).items():
+        if lab == "default" or not isinstance(sp, dict) or float(sp.get("doubler_t_mm") or 0.0) <= 0.0:
+            continue
+        sp["doubler_grade"] = "E350 B0" if at.get(lab.split(":", 1)[-1]) == {"E350"} else "E250 B0"
 
 
 def connection_bumps(ev, x, roles):

@@ -497,3 +497,27 @@ def test_local_member_ratio_uses_the_engines_own_calls_when_captured(tmp_path):
         lm = AZ.Local(str(d), {9: "g"}, {"g": {"role": "column"}}, {"g": "HB200"}, {}, {})
         out.append(lm.member_dc(9, "HB200", None)[0])
     assert out[1] > out[0] * 4.0
+
+
+def test_doubler_grade_follows_the_columns_the_beams_frame_into():
+    """Engine checks (2026-11): a panel-zone doubler is checked at its own grade (E250 when none is declared).  The
+    sizer declares E350 B0 on a beam_column spec only when every column that the label's beams frame into is E350,
+    else E250 B0; a spec without a doubler is left alone."""
+    AZ = _az()
+
+    class LM:
+        groups_of = {1: "fb", 2: "fc", 3: "gb", 4: "gc", 5: "fc"}
+        s12 = (None, {"members": [{"id": "e%d" % t} for t in (1, 2, 3, 4, 5)],
+                      "joints": [{"id": "j1", "beams": [{"member_id": "e1"}], "columns": [{"member_id": "e2"},
+                                                                                          {"member_id": "e5"}]},
+                                 {"id": "j2", "beams": [{"member_id": "e3"}], "columns": [{"member_id": "e2"},
+                                                                                          {"member_id": "e4"}]}]})
+    x = {"fb": ("WB500", "E250 B0"), "fc": ("BOX450X450X28", "E350 B0"), "gb": ("MB400", "E250 B0"),
+         "gc": ("HB300", "E250 B0")}
+    conns = {"beam_column": {"WB500": {"doubler_t_mm": 20.0}, "beam:MB400": {"doubler_t_mm": 16.0},
+                             "default": {"doubler_t_mm": 12.0}, "WB600": {"doubler_t_mm": 0.0}}}
+    AZ.doubler_grades(LM(), x, conns)
+    bc = conns["beam_column"]
+    assert bc["WB500"]["doubler_grade"] == "E350 B0"            # both columns at its joint are E350
+    assert bc["beam:MB400"]["doubler_grade"] == "E250 B0"       # one E250 column at its joint
+    assert "doubler_grade" not in bc["default"] and "doubler_grade" not in bc["WB600"]
