@@ -290,6 +290,7 @@ def built_up_catalogue(kind, *, min_depth=None, max_depth=None, square=True):
 _CAND_CACHE = {}
 
 
+MASS_SPAN_MAX, MAX_EVALS = 2.5, 400     # size_groups: candidate mass cap (no stiffness asked) and full evaluations
 SHORT_CF_FROM, SHORT_CF = 48, 24      # Local._short_cf: elements with more combinations are predicted on a short list
 
 
@@ -1207,11 +1208,21 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
         chosen = None
         dem = lm.group_demand(g)
         bar = set((barred or {}).get(g) or ())
+        try:
+            m_cap = MASS_SPAN_MAX * mass_kg_m(x[g][0])
+        except Exception:
+            m_cap = None
+        n_eval = 0
         for lab, grade, tier in candidates(spec):
             if lab in bar:
                 continue
+            if m_cap is not None and need is None and mass_kg_m(lab) > m_cap:
+                continue              # no stiffness asked: a candidate more than MASS_SPAN_MAX x the current mass
             if not _capacity_screen(lab, grade, dem, family_of(lab) == "CHS"):
                 continue
+            n_eval += 1
+            if n_eval > MAX_EVALS:
+                break                 # a row no candidate answers (e.g. a drift-driven link rotation): keep the section
             if spec.get("role") == "gantry":
                 register(lab)
                 if float(props(lab)["Ix"]) < lm.gantry_ix_req(margins.get(g, spec.get("margin", 0.95))) * 0.999:
