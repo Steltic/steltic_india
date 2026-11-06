@@ -1462,6 +1462,14 @@ def design_india(name, cfg, outdir):
     if (sinfo or {}).get("wind_post_Ka"):
         # engine checks (2026-11): the IS 875-3 7.2.2.1 (b) Ka of each wind post (gable wind column), per pattern
         pkg["wind_post_Ka"] = sinfo["wind_post_Ka"]
+    if (sinfo or {}).get("member_wind_wall"):
+        # engine checks (2026-11): the member-wind wall scan per pattern -- column pieces under the roof (not on a wall)
+        # and pieces above an eave split that keep their own wall's tributary width (static_model.WALL_SCAN_BASIS)
+        _mww = sinfo["member_wind_wall"]
+        pkg["member_wind_wall_scan"] = {
+            "basis": next((v.get("basis") for v in _mww.values() if v.get("basis")), None),
+            "patterns": {str(k): {"sheltered": v.get("sheltered") or [], "own_wall_width": v.get("own_wall_width") or []}
+                         for k, v in sorted(_mww.items(), key=lambda kv: str(kv[0]))}}
     elem_results = {}
     # PEB-LEVERS: the switches of cfg['peb_rules'] used by the member checks (peb_levers): the moment-gradient C1 map
     # (ltb_c1 'gradient'), tension-rod braces (bracing 'tension_rods') and the element-input dump of peb_autosize
