@@ -2228,7 +2228,7 @@ D_T11_GATE_CITE = (
     "not in the wind or gravity records.  In each of them the web is classified in the hinge state: for the frame's "
     "beams and columns, major-axis plastic bending with the combination's N present -- the 'generally' web rows with "
     "its r1 / r2 (Table 2 Note 5; the mid-depth row with no axial force), not D-T11's 'axial compression' row.  "
-    "Engine reading for a brace (12.7.2.4 / 12.8.2.5), stated for the lead: its hinge is its buckling hinge, about the "
+    "For a brace (12.7.2.4 / 12.8.2.5; the lead's ruling, 2026-11-06): its hinge is its buckling hinge, about the "
     "axis of the larger KL/r -- about the major axis the same 'generally' rows; about the minor axis (or a tie) the "
     "web lies on the hinge's neutral axis and carries the uniform N, the 'axial compression' row.  The member "
     "resistance checks keep the D-T11 web row in every combination (D_T11_CITE).")
