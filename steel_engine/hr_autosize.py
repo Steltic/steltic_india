@@ -1230,6 +1230,15 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
             m_cap = MASS_SPAN_MAX * mass_kg_m(x[g][0])
         except Exception:
             m_cap = None
+        # the caps are for a group whose own section passes (a lighter one is looked for); a group that must change
+        # searches on
+        try:
+            cur_ok = lm.group_ok(g, x[g][0], x[g][1], margins.get(g, spec.get("margin", 0.95)))[0]
+        except Exception:
+            cur_ok = False
+        if not cur_ok:
+            m_cap = None
+        max_evals = MAX_EVALS if cur_ok else 10 * MAX_EVALS
         n_eval = 0
         for lab, grade, tier in candidates(spec):
             if lab in bar:
@@ -1245,7 +1254,7 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
             if need and kind and stiffness(lab, kind) < need - 1e-6:
                 continue
             n_eval += 1               # full evaluations only
-            if n_eval > MAX_EVALS:
+            if n_eval > max_evals:
                 break                 # a row no candidate answers (e.g. a drift-driven link rotation): keep the section
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
             if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
