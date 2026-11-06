@@ -1219,7 +1219,7 @@ def monotone_columns(x, specs, log_fn=log, lm=None, margins=None, barred=None):
     return x
 
 
-def next_up(spec, current, lm=None, g=None, margin=None):
+def next_up(spec, current, lm=None, g=None, margin=None, min_area=None):
     """The next candidate after `current` (label, grade) in the group's order of preference that is not weaker than
     it (A, Ix, Zx; the same section in a higher grade counts) and passes the frozen member checks (when lm is
     given).  Used to step a group up for a failing Section 12 row that the member checks cannot see (SCWB ...)."""
@@ -1238,6 +1238,8 @@ def next_up(spec, current, lm=None, g=None, margin=None):
         if lab != cur[0] and not (_stronger(lab, cur[0]) and fy >= cur_fy - 1e-9 or
                                   _stronger(lab, cur[0]) and mass_kg_m(lab) > mass_kg_m(cur[0])):
             continue
+        if min_area and stiffness(lab, "A") * fy < min_area * cur_fy * (1.0 - 1e-9):
+            continue                      # an axial row asks for that much more A fy at once
         if lm is not None:
             ok, _ = lm.group_ok(g, lab, grade, margin)
             if not ok:
@@ -2416,7 +2418,7 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                 mk = "%s::%s" % (g_, re.sub(r"@.*$", "", str(r_.get("id"))))      # per group and row kind
                 m0 = st.setdefault("s12_margin", {}).get(mk, 1.0)
                 st["s12_margin"][mk] = round(max(0.8, min(m0, 1.0) - 0.04), 3)
-        for k in range(8):
+        for k in range(12):
             rows = s12_local(lm, x1, margins=st.get("s12_margin"))
             bumped = set()
             for row, g in rows:
@@ -2428,7 +2430,13 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                 for gg in gs:
                     if gg in bumped or gg not in specs or specs[gg].get("role") == "fixed":
                         continue
-                    nu = next_up(specs[gg], x1[gg], lm, gg, st["margins"].get(gg, specs[gg].get("margin", 0.95)))
+                    # an axial capacity-design row (brace / column axial at the link or system overstrength, brace
+                    # tension) asks for A fy x its ratio in one step, not one catalogue entry at a time
+                    ma = None
+                    if gg == g and re.search(r"axial|tension", str(row.get("id"))) and isinstance(row.get("dc"), (int, float)):
+                        ma = stiffness(x1[gg][0], "A") * max(float(row["dc"]), 1.0) * 1.02
+                    nu = next_up(specs[gg], x1[gg], lm, gg, st["margins"].get(gg, specs[gg].get("margin", 0.95)),
+                                 min_area=ma)
                     if nu:
                         log_fn("    s12 %s (%s dc %s) -> %s %s" % (gg, row.get("id"), _r3(row.get("dc")), nu[0], nu[1] or ""))
                         x1[gg] = nu
