@@ -385,7 +385,12 @@ def test_C1_consultancy_guards_read_their_records():
     import india_is800 as I8
     stubs = dict(base, composite_design={"status": "stubs", "chI_worksheet": I8.composite_is11384_worksheet_stubs({})})
     assert not has(comp, stubs, "COMPOSITE")
-    assert not has(dict(comp, composite_scope="bare_steel"), base, "COMPOSITE")
+    # a declared scope clears it with the worksheet built from it, not alone (review N2, engine checks 3)
+    scoped = dict(stubs, composite_design={"status": "evaluated", "chI_worksheet": dict(
+        I8.composite_is11384_worksheet_stubs({"composite_scope": "bare_steel"}), scope="bare_steel")})
+    scoped["composite_design"]["chI_worksheet"]["slots"][2]["found"] = True
+    assert not has(dict(comp, composite_scope="bare_steel"), scoped, "COMPOSITE")
+    assert has(dict(comp, composite_scope="bare_steel"), base, "COMPOSITE")
     # seismic joint: a 7.11.3 separation record (cfg['adjacent_units']) or a designed joining connection
     twin = {"arch": "twin tower offices"}
     assert has(twin, base, "seismic-joint")
