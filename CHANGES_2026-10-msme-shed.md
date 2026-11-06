@@ -218,10 +218,10 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 **Connections:**
 - All truss bolts are M16 8.8 HSFG: 8 per knee-brace end, 4 per chord end (heel and apex), 3 per end diagonal and
   per 60 mm vertical, 2 elsewhere. Angle ends sheared (end distance 35 mm >= 1.7 d0).
-- Gussets: one table of declared outlines (`GUSSETS` in the cfg) feeds both the checks and the plate take-off: panel
-  gussets 300 × 220 / 300 × 200 × 8, heel and apex 450 × 300 × 8, the knee gussets above, heel cap plates
-  250 × 200 × 10; bolt line to the gusset edge 40 mm (60 mm at the knees), free length 150 mm, every gusset held on one
-  edge (K 1.2).
+- Gussets: one table of declared outlines (`GUSSETS` in the cfg) feeds the checks, the layout derivations (the
+  knee-gusset eccentricity, the node-1 fit) and the plate take-off: panel gussets 300 × 220 / 300 × 200 × 8, heel and
+  apex 450 × 300 × 8, the knee gussets above, heel cap plates 250 × 200 × 10; bolt line to the gusset edge 40 mm
+  (60 mm at the knees), free length 150 mm, every gusset held on one edge (K 1.2).
 - The highest connection ratio is 0.96 (the edge distance of the 60 mm vertical). The chord-end gussets carry the full
   chord force (Whitmore yield, block shear, buckling).
 - Knees, under Steltic design ruling D-T10 (the knee designed for 1.2 times the moment the knee brace can deliver in
@@ -229,10 +229,14 @@ Knee-braced truss portal, IS 800 12.10.2.1:
   1.2 N_del = 417.0 kN at each knee-brace end and M_del = 368.6 kN-m (2.2 × the MB300's Mp of 170.3 kN-m: the
   column hinges first).
   - bolts 0.93 (8 M16 8.8 HSFG: 448 kN);
-  - knee gussets (480 × 400 × 8 on the column, 600 × 400 × 8 on the bottom chord; Whitmore capped at the 300 mm
-    width; K 1.2, held on one edge): block shear 0.93, Whitmore yield 0.77, buckling (1.2 × 126.2 kN) 0.45;
-  - knee load path: gusset section at the column face 0.59, its CJP weld 0.77, column web local capacity 0.27 and
-    buckling 0.43, column web shear knee to heel 0.97, heel cap-plate CJP weld 0.44;
+  - knee gussets (660 × 400 × 8 on the column, its weld centred on the brace's line of force, e = 0 derived from the
+    outline; 580 × 620 × 8 on the bottom chord; Whitmore capped at the 300 mm width; K 1.2, held on one edge): block
+    shear 0.93, Whitmore yield 0.77, buckling (1.2 × 126.2 kN) 0.45;
+  - knee load path: gusset section at the column face 0.43, its CJP weld 0.49 (parent metal), column web local
+    capacity 0.21 and buckling 0.35, column web shear knee to heel 0.97, heel cap-plate CJP weld 0.39;
+  - at the bottom chord: both bolt lines and 6 chord bolts fit the node gusset; gusset-to-chord bolts (6 M16 8.8 in
+    double shear) 0.72 for the 295 kN horizontal component; the gusset section along the chord 0.48; the short vertical
+    is recorded as yielding first (its bolts 153 kN, its Ag fy 173 kN, against 246 kN);
   - the brace yields first (design values): its bolted end (rupture 348.8 kN) against its gross yield 315.9 kN, 0.91;
   - heel seats (12.10.2.4) 0.85.
   So the knee and heel connections are designed so that the brace yields (gross section) before they fail. With the
@@ -245,20 +249,20 @@ Knee-braced truss portal, IS 800 12.10.2.1:
 0.20 of the 0.004 limit (Zone II; wind governs).
 
 **Steel:**
-- Total 20,096 kg on 648 m², which is **31.0 kg/m²** of plan:
+- Total 20,264 kg on 648 m², which is **31.3 kg/m²** of plan:
 
   | Group | kg/m² |
   |---|---|
   | Primary | 15.8 |
   | Bracing | 5.65 |
   | Secondary | 5.0 |
-  | Connections | 4.6 (the declared gusset outlines, the knee gussets and the chord-end bolts after the reviews) |
+  | Connections | 4.8 (the declared gusset outlines, the knee gussets and the chord-end bolts after the reviews) |
 
 - A published comparison of conventional hot-rolled steel sheds gives 27.7 kg/m² at 15 m span and 35.8 kg/m² at
   20 m (N. Kumar and K. S. Grover, IJRASET, June 2022, Table 4). The 18 m shed sits inside that range. The report
   prints the range with its source next to the take-off. That study is for Delhi (Vb 47 m/s, about twice Hosur's
   wind pressure), so a mid-range position is on the heavy side: this design is not lean (the Table 3 180 rows, the
-  ISA90 roof-girder angles at KL/r 242 / 250, and 4.6 kg/m² of connections including the shear keys of ruling O1).
+  ISA90 roof-girder angles at KL/r 242 / 250, and 4.8 kg/m² of connections including the shear keys of ruling O1).
 
 **Outputs:**
 - STAAD export (`model.std`), as for the PEB jobs: the double angles as `TABLE D ISA70X70X6 SP 8.0`, webs and braces as
