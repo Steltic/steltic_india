@@ -400,3 +400,21 @@ def test_study_page_says_base_plates_and_anchors_are_sized():
     h = L.html_page([])
     assert "plate thickness and the anchor diameter are sized" in h
     assert "keep the gold sizes" not in h and "gold" not in h.lower()
+
+
+def test_end_plate_web_strip_takes_the_doubler_at_its_own_band():
+    """PEB golds (2026-11): the rows inside the flange are fed through the member web plus a web doubler; the strip's
+    fy is the thickness-weighted mean of the web at the member's band and the doubler at its own (E250) band, as the
+    engine's knee web strip, and ep_params / make_ep reproduce the declared end plate (the sizer and the gold cfg
+    helper have the same arithmetic)."""
+    import peb_autosize as A
+    import peb_build as PB
+    sec = "WI575X260X22X16"
+    PB.ensure(sec)
+    ep = A.ep_dict(sec, t=45.0, d_bolt=30, n_out=1, n_in=4, pitch=90.0, b_plate=280.0, web_doubler=8.0)
+    assert ep["web_t_mm"] == 24.0
+    assert ep["web_fy_MPa"] == pytest.approx((16.0 * 330.0 + 8.0 * 250.0) / 24.0, abs=0.01)   # E350 22 mm: 330
+    assert A.ep_dict(sec, t=45.0, d_bolt=30, n_out=1, n_in=4, pitch=90.0, b_plate=280.0)["web_fy_MPa"] == 330.0
+    par = A.ep_params({"end_plate": ep, "plate_b_mm": 280.0}, sec)
+    assert par["member_fy"] == 330.0 and par["web_doubler"] == 8.0
+    assert A.make_ep(par, sec)["web_fy_MPa"] == ep["web_fy_MPa"]

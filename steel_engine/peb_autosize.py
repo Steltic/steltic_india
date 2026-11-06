@@ -254,14 +254,19 @@ def member_web_fy(sec, member_grade="E350"):
 
 
 def ep_dict(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_grade="E250", ext=60.0, weld=8.0,
-            gauge=None, web_doubler=0.0, member_fy=None):
+            gauge=None, web_doubler=0.0, member_fy=None, doubler_grade="E250"):
     """The extended end plate of the PEB golds (their bolted_end_plate helper, identical arithmetic): n_out rows
     beyond the tension flange, n_in rows inside it (only rows in the tension half), be = min(pitch, b/2), lv to the
-    weld toe, le = min(50, (b - g)/2), plate fy by thickness."""
+    weld toe, le = min(50, (b - g)/2), plate fy by thickness.  The web strip (rows inside the flange): the member web
+    at member_fy (the band of the member, member_web_fy) and a web doubler at its own band (E250 unless declared),
+    thickness-weighted, as the engine takes the knee web strip (PEB golds, 2026-11)."""
     import sections as S
     p = S.props(sec)
     if member_fy is None:
         member_fy = member_web_fy(sec)
+    if web_doubler:
+        member_fy = ((float(p["tw"]) * float(member_fy) + float(web_doubler) * plate_fy(float(web_doubler), doubler_grade))
+                     / (float(p["tw"]) + float(web_doubler)))
     hf = p["d"] - p["tf"]
     g = gauge or (120.0 if d_bolt >= 30 else 110.0)
     lv = max(ext - p["tf"] / 2.0 - weld, g / 2.0 - p["tw"] / 2.0 - weld)
@@ -271,7 +276,7 @@ def ep_dict(sec, *, t, d_bolt, n_out, n_in, pitch, b_plate, grade="10.9", plate_
     return {"rows": rows, "d_mm": d_bolt, "grade": grade, "t_plate_mm": t, "fy_plate_MPa": plate_fy(t, plate_grade),
             "plate_grade": plate_grade, "be_mm": round(min(pitch, b_plate / 2.0), 1), "lv_mm": round(lv, 1),
             "le_mm": min(50.0, (b_plate - g) / 2.0), "pretensioned": True, "bolt_type": "HSFG",
-            "web_t_mm": float(p["tw"]) + float(web_doubler), "web_fy_MPa": member_fy, "hf_mm": hf}
+            "web_t_mm": float(p["tw"]) + float(web_doubler), "web_fy_MPa": round(float(member_fy), 2), "hf_mm": hf}
 
 
 def ep_height(sec, n_out, pitch, ext=60.0, edge=60.0):
@@ -329,7 +334,8 @@ def ep_params(spec, sec):
     return {"t": float(ep.get("t_plate_mm")), "d": int(ep.get("d_mm")), "grade": ep.get("grade", "10.9"),
             "plate_grade": ep.get("plate_grade") or "E250", "n_out": len(out), "n_in": len(inn), "pitch_rule": rule,
             "b_plate": b_plate, "web_doubler": round(float(ep.get("web_t_mm") or p["tw"]) - float(p["tw"]), 3),
-            "member_fy": float(ep.get("web_fy_MPa") or member_web_fy(sec)), "gauge": float(g) if g else None}
+            # the member's own web fy (the declared web_fy_MPa is the strip's, doubler included: ep_dict weights it)
+            "member_fy": member_web_fy(sec), "gauge": float(g) if g else None}
 
 
 def pitch_of(par, sec):
