@@ -473,3 +473,27 @@ def test_monotone_column_stacks_keep_lower_storeys_at_least_as_stiff():
     y = AZ.monotone_columns(x, specs, log_fn=lambda *a: None)
     assert y["fc_4_6"] == ("HB350", "E350 B0") and y["fc_1_3"] == ("HB350", "E350 B0")
     assert y["col_lo"] == ("HB400", None) and y["gc_1_3"] == ("HB150", None)
+
+
+def test_local_member_ratio_uses_the_engines_own_calls_when_captured(tmp_path):
+    """The worker records the exact (member, combination forces) of every engine call to member_check_is800 for an
+    element; the local check then evaluates those (whatever combination filter the pipeline applies) and ignores
+    its own reconstruction from the records."""
+    AZ = _az()
+    import pickle
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+    mem = {"id": "e9", "tag": 9, "section": "HB200", "grade": "E250 B0", "role": "column", "L_mm": 6000.0,
+           "Kz": 1.0, "Ky": 1.0}
+    small = {"c1": [-50e3] + [0.0] * (n - 1)}
+    cf_big = [{"combo": "c2", "P_N": 400e3, "Mz_i_Nmm": 0.0, "Mz_j_Nmm": 0.0, "My_i_Nmm": 0.0, "My_j_Nmm": 0.0,
+               "Vy_N": 0.0, "Vz_N": 0.0}]
+    out = []
+    for calls in ({}, {9: [{"member": mem, "cf": cf_big}]}):
+        d = tmp_path / ("c%d" % len(out))
+        d.mkdir()
+        pickle.dump({"elems": {9: {"member": mem, "kind": "col", "records": small}}, "s12": None, "calls": calls},
+                    open(d / "capture.pkl", "wb"))
+        lm = AZ.Local(str(d), {9: "g"}, {"g": {"role": "column"}}, {"g": "HB200"}, {}, {})
+        out.append(lm.member_dc(9, "HB200", None)[0])
+    assert out[1] > out[0] * 4.0

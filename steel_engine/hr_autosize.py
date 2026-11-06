@@ -548,7 +548,7 @@ def worker(run_dir):
     t0 = time.time()
     res = {"run_dir": run_dir, "ok": False}
     buf = io.StringIO()
-    cap = {"elems": {}, "s12": None}
+    cap = {"elems": {}, "s12": None, "calls": {}}
     try:
         with contextlib.redirect_stdout(buf):
             import engine3d as E
@@ -576,6 +576,17 @@ def worker(run_dir):
                 return _s12(system, md, s12cfg)
             DP.member_checks_is800 = mc
             S12.section12_checks = s12
+            # the exact (member, combination forces) of every member check the engine makes for a model element --
+            # whatever combination filter the pipeline applies, the local check sees the same list
+            import india_is800 as I8m
+            _mci = I8m.member_check_is800
+
+            def mci(member, combo_forces, *, cfg=None):
+                if isinstance(member, dict) and member.get("tag") is not None:
+                    cap["calls"].setdefault(int(member["tag"]), []).append(
+                        {"member": copy.deepcopy(member), "cf": copy.deepcopy(combo_forces)})
+                return _mci(member, combo_forces, cfg=cfg)
+            I8m.member_check_is800 = mci
             import india_seismic as ISM
             _irr = ISM.irregularity_screens
 
@@ -824,6 +835,8 @@ class Local:
         self._cf = {t: SM.combo_forces_for_member_check(e["records"], e["kind"]) for t, e in self.elems.items()}
         self._more = {t: [(x["member"], SM.combo_forces_for_member_check(x["records"], x["kind"]))
                           for x in e.get("more") or []] for t, e in self.elems.items() if e.get("more")}
+        # captures from 2026-11-06: the engine's own calls (member, combination forces) per element
+        self._calls = {t: [(c["member"], c["cf"]) for c in v] for t, v in (cap.get("calls") or {}).items() if v}
         self.by_group = {}
         self._dem = {}
         self._md_cache = {}
@@ -837,6 +850,15 @@ class Local:
     def member_dc(self, t, label, grade):
         """Strength and Table 3 ratios of element t with a candidate section: the governing of every member check the
         run made for it (the strength check and, for a gravity column, the IS 1893 7.11.2 check)."""
+        calls = self._calls.get(t)
+        if calls:
+            st = t3 = 0.0
+            for mem, cf in calls:
+                st2, t32, err = self._member_dc1(t, mem, cf, label, grade)
+                if err:
+                    return st2, t32, err
+                st, t3 = max(st, st2), max(t3, t32)
+            return st, t3, None
         st, t3, err = self._member_dc1(t, self.elems[t]["member"], self._cf[t], label, grade)
         for mem, cf in self._more.get(t, ()):
             if err:
