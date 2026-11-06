@@ -253,16 +253,19 @@ What changed, per job (from → to):
   TI975-625X250X14X8, main shear keys 2 × 400 × 36, 300 deep, knee column flange plate 28 → 32 mm and flange
   stiffeners 25 → 28 mm, apex end plates 36 → 40 mm, purlins LZ230X75X20X2 → LZ230X75X20X2.3. October (from the old
   IN_Ex1): +2.34 kg/m² (5.25 t).
-- **IN_Ex4 `compliance_comparison.json`**: as designed = the published auto-sized SMRF (57.11 kg/m²); the SMRF
-  re-sized by the current sizer 56.46; the ordinary frame (OMRF R 3 / OCBF R 4, no IS 18168, the Zone IV ban set
-  aside for the comparison) auto-sized from it 50.68; **difference 5.78 kg/m² (11.4 % of the ordinary frame)**, 6.43
-  against the published design (October: 6.09, 12.3 %).
-- **IN_Ex2 `compliance_comparison.json`**: as designed = the published auto-sized SMRF (52.71 kg/m²); the SMRF
-  re-sized by the current sizer 51.37; the ordinary frame **not resolved**: in 8 full runs every lighter ordinary
-  frame failed (the lightest, 505 t against 535 t, on a rafter splice end plate at 1.20; others on the eave sway,
-  1.02 to 1.07, a frame column and the splices), so the row is the SMRF's frame sizes run as an ordinary frame with
-  ordinary braced frame braces (51.63, +0.26 heavier by those braces), and the file says the cost of compliance here
-  is below what the sizer resolves, not zero (as in October: +0.26 then too).
+- **IN_Ex4 `compliance_comparison.json`** (final engine, final gold): as designed = the published auto-sized SMRF
+  (57.26 kg/m²); the SMRF re-sized by the current sizer 56.61; the ordinary frame (OMRF R 3 / OCBF R 4, no IS 18168,
+  the Zone IV ban set aside for the comparison) auto-sized from it 51.93; **difference 4.68 kg/m² (9.0 % of the
+  ordinary frame)**, 5.33 against the published design (before the engine-check pass: 5.78, 11.4 %; October: 6.09,
+  12.3 %). The re-sized rows say "every check passes" (design runs without the report) instead of COMPLETE.
+- **IN_Ex2 `compliance_comparison.json`** (final engine, final gold): as designed = the published auto-sized SMRF
+  (52.77 kg/m²); the SMRF re-sized by the current sizer 51.46; the ordinary frame **still not resolved**: in 7 full
+  runs (the sizer's new relax rule included) every lighter ordinary frame failed -- 519 t on the eave sway (1.09),
+  508 t on a rafter splice end plate (1.15), 530 t on the eave sway by 0.5 % -- and the proposals after them, with the
+  sway margin tightened, passed but were heavier than the strict sizes run as an ordinary frame (536 t). The row is
+  those sizes with ordinary braced frame braces (51.72, +0.26 heavier by the braces), and the file says the cost of
+  compliance here is below what the sizer resolves, not zero. The limit is the sizer's sway prediction for the
+  continuous multi-span ordinary frame (its proposals miss by up to 9 %), not the code checks.
 - The files are written by the item-13 script of the second wave (adapted: the rows above; public wording, no
   constant names in the change list). IN_Ex8 is the SECT agent's.
 

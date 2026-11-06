@@ -503,3 +503,19 @@ def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_
     assert out["best"]["total_kg"] == 97.0 and out["n_full_runs"] == 5
     sway = [m.get("sway") for m in seen if "sway" in m]
     assert sway[:4] == [pytest.approx(0.98), pytest.approx(0.93), pytest.approx(0.955), pytest.approx(0.955)]
+
+
+def test_difference_text_prints_a_bracket_when_no_lighter_design_was_found():
+    """PEB final review (2026-11-07): IN_Ex2's cost of compliance is a bracket (no ordinary frame lighter than the
+    re-sized SMRF was found), so the report prints the two bounds, not a signed figure that reads as a saving."""
+    from steel_engine import report_second_wave as RS
+    cc = {"rows": [{"variant": "SMRF", "R": 5.0, "kg_m2": 51.46}, {"variant": "OMRF", "R": 3.0, "kg_m2": 51.72}],
+          "difference": {"kg_m2": 0.0, "percent": 0.0, "range_kg_m2": [0.33, -0.26],
+                         "between": "no lighter ordinary frame was found", "caveat": "Nil at the sizer's resolution."}}
+    t = RS.difference_text(cc)
+    assert "between −0.26 and +0.33 kg/m²" in t
+    assert "no lighter ordinary frame was found" in t and "Nil at the sizer" in t
+    assert "less steel" not in t and "more steel" not in t
+    # a malformed range falls back to the signed figure
+    cc["difference"]["range_kg_m2"] = [0.33]
+    assert "between" not in RS.difference_text(cc).split("(")[0]
