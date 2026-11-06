@@ -444,3 +444,62 @@ def test_local_records_keep_both_signs_and_the_compression():
     assert "1.2DL+1.2LL+1.2WM0+" in keep and "compressive" in keep and "uplift39" in keep
     small = {k: recs[k] for k in list(recs)[:10]}
     assert A.local_records(small) == small
+
+
+def test_feedback_reports_its_steps():
+    import peb_autosize as A
+    m, st = {"sway": 0.98}, {}
+    A.feedback(m, {"fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]}, None,
+               log_fn=lambda *a: None, steps=st)
+    assert st == {"sway": pytest.approx(0.05)} and m["sway"] == pytest.approx(0.93)
+
+
+def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_path):
+    """IN_Ex2 R = 3 (2026-11-07): a near miss (sway 1.05) tightened the sway margin, the next proposal passed but was
+    heavier than the best design, and the sizer stopped.  Now it relaxes the margins of the last failed run by half
+    their step and proposes again from the best design (at most twice)."""
+    import peb_autosize as A
+    runs = iter([
+        {"ok_run": True, "passed": True, "kg": 100.0},                       # 0: the start design
+        {"ok_run": True, "passed": False, "kg": 95.0,                        # 1: lighter, sway 1.05
+         "fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]},
+        {"ok_run": True, "passed": True, "kg": 104.0},                       # 2: passes, heavier: relax
+        {"ok_run": True, "passed": True, "kg": 97.0},                        # 3: passes, lighter: the best
+        {"ok_run": True, "passed": True, "kg": 99.0}])                       # 4: not lighter again: relax / stop
+    seen = []
+
+    def full_run(run_dir, spec, x, rules, **k):
+        r = next(runs)
+        seen.append(dict(k.get("margins_seen") or {}))
+        return dict(r, tonnage_kg={"primary": r["kg"]}, governing=None, blocking=[], elapsed_s=0.0)
+
+    class LM:
+        x0 = {}
+
+        def __init__(self, *a, **k):
+            pass
+
+    class EV:
+        def __init__(self, lm, spec, conn_prev, margins, x_gold):
+            seen.append(dict(margins))
+            self.n_eval = 1
+
+    props = iter([{"C": "a"}, {"C": "b"}, {"C": "c"}, {"C": "d"}])
+    def prep(job_dir, run_dir):
+        os_ = __import__("os")
+        os_.makedirs(run_dir, exist_ok=True)
+        open(os_.path.join(run_dir, "result.json"), "w").write("{}")
+    monkeypatch.setattr(A, "prepare_run_dir", prep)
+    monkeypatch.setattr(A, "read_constants", lambda *a, **k: {"C": "g"})
+    monkeypatch.setattr(A, "dim_groups", lambda *a, **k: [])
+    monkeypatch.setattr(A, "LocalModel", LM)
+    monkeypatch.setattr(A, "Evaluator", EV)
+    monkeypatch.setattr(A, "local_optimize", lambda ev, x, g, s, **k: (next(props), {"feasible": True, "mass": 1.0}))
+    monkeypatch.setattr(A, "full_run", full_run)
+    monkeypatch.setattr(A, "save_best", lambda *a, **k: None)
+    monkeypatch.setattr(A, "evaluate_run", lambda *a, **k: {}, raising=False)
+    out = A.autosize(str(tmp_path), {"members": {"C": {}}, "job": "t"}, {}, str(tmp_path / "w"), name="v",
+                     cfs_root="", resize_secondary=False, max_full_runs=5, log_fn=lambda *a: None)
+    assert out["best"]["total_kg"] == 97.0 and out["n_full_runs"] == 5
+    sway = [m.get("sway") for m in seen if "sway" in m]
+    assert sway[:4] == [pytest.approx(0.98), pytest.approx(0.93), pytest.approx(0.955), pytest.approx(0.955)]

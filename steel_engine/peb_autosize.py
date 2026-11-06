@@ -2961,8 +2961,10 @@ def evaluate_run(run_dir, waivers=()):
     return out
 
 
-def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
-    """Tighten the local margins of what a failed full run says failed (each margin at most once per run)."""
+def feedback(margins, ev_run, lm, log_fn=log, x_run=None, steps=None):
+    """Tighten the local margins of what a failed full run says failed (each margin at most once per run).  steps
+    (a dict, optional) receives {margin key: step} of this run's tightening (autosize relaxes them by half when a
+    later passing design is not lighter)."""
     hit = False
     done = set()
 
@@ -2971,6 +2973,8 @@ def feedback(margins, ev_run, lm, log_fn=log, x_run=None):
             return
         done.add(key)
         margins[key] = round(float(margins.get(key, default)) - by, 4)
+        if steps is not None:
+            steps[key] = by
         log_fn("    feedback: margin %s -> %.3f" % (key, margins[key]))
 
     sec2cl = {}
@@ -3169,6 +3173,7 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
     margins = {"member": 1.0, "sway": 0.98, "defl": 0.98, "lambda": 0.98}
     margins.update({k: float(v) for k, v in (init_margins or {}).items()})   # second wave: e.g. a multi-span frame
     best, lm = None, None
+    last_steps, relaxes = {}, 0
     groups = dim_groups(spec, x_last)
     for it in range(max_full_runs):
         if it > 0:
@@ -3215,10 +3220,23 @@ def autosize(job_dir, spec, rules, work_dir, *, name, cfs_root, extra_overrides=
                 best = {"x": dict(x_run), "conn": R.get("design_connections"), "total_kg": tot, "run": R, "it": it}
                 save_best(run_dir, os.path.join(vdir, "best"))
             elif it > 0:
-                log_fn("    passing but not lighter (%.0f >= %.0f kg): stop" % (tot, best["total_kg"]))
-                break
+                if relaxes < 2 and last_steps and it < max_full_runs - 1:
+                    # third wave (IN_Ex2 R = 3): the margins tightened by the last failed run made this proposal
+                    # heavier than the best design; relax them by half the step and try again from the best design
+                    # (at most twice) instead of stopping -- the failed run just before can be a near miss (1.005)
+                    for k_, by_ in last_steps.items():
+                        margins[k_] = round(float(margins.get(k_, 1.0)) + by_ / 2.0, 4)
+                    log_fn("    passing but not lighter (%.0f >= %.0f kg): margins relaxed by half the last step (%s)"
+                           % (tot, best["total_kg"], ", ".join("%s %.3f" % (k_, margins[k_]) for k_ in last_steps)))
+                    last_steps = {k_: by_ / 2.0 for k_, by_ in last_steps.items()}
+                    relaxes += 1
+                else:
+                    log_fn("    passing but not lighter (%.0f >= %.0f kg): stop" % (tot, best["total_kg"]))
+                    break
         elif it > 0:
-            feedback(margins, R, lm, log_fn=log_fn, x_run=x_run)   # the start design was not proposed by the sizer
+            last_steps = {}
+            feedback(margins, R, lm, log_fn=log_fn, x_run=x_run, steps=last_steps)   # (the start design was not
+            #                                                                          proposed by the sizer)
         x_last = x_run
     out.update(best=best, calib=calib, elapsed_s=round(time.time() - t0, 1), n_full_runs=len(out["history"]))
     json.dump(out, open(os.path.join(vdir, "autosize.json"), "w"), indent=1, default=str)
