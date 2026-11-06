@@ -1476,7 +1476,10 @@ def brace_end_chs_spec(sec, tg, Lw, *, grade_plate="E250", template=None):
         detail = "%s flanges CJP-welded to a %s mm gusset over %s mm" % (sec, _fmt(tg), _fmt(Lw))
     bw = w0 + 2.0 * Lw * math.tan(math.radians(30.0))
     return {"weld_type": "cjp",
-            "welds": {"cjp": {"t_mm": tw_}, "length_mm": float(Lw), "fy_MPa": 250.0, "n_sides": 4, "site": False},
+            # CJP = parent metal of the weaker part joined: the brace wall / flange (IS 1161 tube: 250 taken, below
+            # YSt 310) or the gusset, each at its IS 2062 thickness band
+            "welds": {"cjp": {"t_mm": tw_}, "length_mm": float(Lw),
+                      "fy_MPa": min(250.0 if chs else plate_fy(tw_), fyg), "n_sides": 4, "site": False},
             "gusset": {"t_mm": float(tg), "fy_MPa": fyg, "fu_MPa": 410.0, "w_start_mm": w0, "L_conn_mm": float(Lw),
                        "L_unbraced_mm": float(tpl.get("L_unbraced_mm", 250.0)), "K": 0.65,
                        "Avg_mm2": 2.0 * Lw * tg, "Avn_mm2": 2.0 * Lw * tg, "Atg_mm2": w0 * tg, "Atn_mm2": w0 * tg},
