@@ -1388,12 +1388,16 @@ class LocalModel:
         return worst or I8.section_class_table2(p, fy, welded=True)["section_class"]
 
     def _Ca(self, c, sec, fy):
+        """IS 18168 Table 2 (ii) Ca of the screen, as the full run (india_is800_s12._ca_governing, CA_EQ_BASIS): the
+        largest |P| of the earthquake records of constituent c over Py / gamma_m0."""
         import sections as S
+        eq = self._eq_labels()
         P = 0.0
         for mid in self.mem_of_const.get(c) or []:
             for t in self.el_of_mem[mid]:
-                for r in (self.envt.get(t, {}).get("records") or {}).values():
-                    P = max(P, abs(float(r[0])))
+                for lab, r in (self.envt.get(t, {}).get("records") or {}).items():
+                    if lab in eq:
+                        P = max(P, abs(float(r[0])))
         return P / (fy * float(S.props(sec)["A"]) / 1.10)
 
     # ------------------------------------------------------------------ global predictors

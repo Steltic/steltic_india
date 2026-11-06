@@ -277,3 +277,73 @@ def test_e2e_IN_Ex9_lean_to_facade_step():
     assert any(s["width_mm"] == 0.0 for s in st) and any("re-entrant" in s["basis"] for s in st)
     # the -Y face (no step: the lean-to's end wall is in the gable's plane) is unchanged
     assert by[("up", 12000, 0, 0)] == pytest.approx(18000.0)
+
+
+# ====================================================================================================== IS 18168 Ca
+def _ca_md(rows):
+    import sections as SS
+    sec = "NPB600X220X107.57"
+    p = SS.props(sec)
+    Py = p["A"] * 250.0 / 1.1
+    m = {"id": "C1", "role": "column", "section": sec, "grade": "E250BR", "L_mm": 4000.0}
+    fs = [{"combo": c, "family": fam, "lateral_kind": lk, "P_N": r * Py} for r, fam, lk, c in rows]
+    return m, p, {"members": [m], "forces": {"C1": fs}}
+
+
+def test_Ca_from_the_earthquake_records_only():
+    """Lead ruling (2026-11-06): IS 18168 Table 2 (ii) Ca = Pu / (Py / gamma_m0) is the axial ratio at the seismic
+    ductility demand -- taken from the earthquake records only (the Table 4 EL rows and the 12.2.3 rows), as the
+    Section 12 gates.  A member whose largest Pu (0.6 Py) is a wind record: Ca 0.3, from its Table 4 EL row; with
+    wind and gravity records only, Ca = 0, stated."""
+    import india_is800_s12 as S12
+    m, p, md = _ca_md([(0.6, "table4", "W", "1.5(DL+WL)"), (0.3, "table4", "EQ", "1.2(DL+LL+EL)"),
+                       (0.2, "12.2.3", "EQ", "1.2DL+0.5LL+2.5EL"), (0.5, "table4", None, "1.5(DL+LL)")])
+    Ca, rec = S12._ca_governing(m, p, 250.0, md)
+    assert Ca == pytest.approx(0.3) and rec["governing_combo"] == "1.2(DL+LL+EL)"
+    assert (rec["n_records"], rec["n_records_judged"], rec["n_records_not_judged"]) == (4, 2, 2)
+    assert rec["Ca_basis"] == S12.CA_EQ_BASIS and "ductility" in rec["Ca_basis"]
+    m2, p2, md2 = _ca_md([(0.6, "table4", "W", "1.5(DL+WL)"), (0.5, "table4", None, "1.5(DL+LL)")])
+    Ca2, rec2 = S12._ca_governing(m2, p2, 250.0, md2)
+    assert Ca2 == 0.0 and "no earthquake combination" in rec2["Ca_basis"]
+
+
+def test_Ca_e2e_IN_Ex20_column_whose_largest_Pu_is_a_wind_record():
+    """IN_Ex20 (SCBF, 18 levels) column e126, WPB320X300X126.66 E250 B0: its largest Pu is the wind record
+    1.5DL-1.5W_Y+1.5W_Y_across (243.5 kN; at 0482f9a that gave Ca 0.0693 and the Table 2 (ii) web limit 58.19).  Ca
+    now comes from its 104 earthquake records -- the 12.2.3 / EL row with the largest Pu (228 kN) -- so Ca is lower
+    and the web limit (which falls with Ca) is higher; the row's dc stays on the flange b/tf (7.32 / 7.76)."""
+    import india_is800_s12 as S12
+    import india_is18168 as I18
+    fx = _fixture("IN_Ex20_scbf_column_e126_s12.json")
+    m = fx["member"]
+    p = S12._props(m)
+    fy, _ = S12._fy(m, p)
+    Ca, rec = S12._ca_governing(m, p, fy, {"forces": fx["forces"]})
+    old = fx["branch_0482f9a_row"]
+    eq = [f for f in fx["forces"]["e126"] if S12.earthquake_record(f)]
+    assert rec["n_records_judged"] == len(eq) == 104 and rec["n_records_not_judged"] == 53
+    gov = next(f for f in eq if f["combo"] == rec["governing_combo"])
+    assert gov["lateral_kind"] == "EQ" and abs(gov["P_N"]) == pytest.approx(max(abs(f["P_N"]) for f in eq))
+    assert abs(rec["governing_P_N"]) < old["governing_P_N"] and Ca < old["Ca"]
+    assert Ca == pytest.approx(abs(rec["governing_P_N"]) * 1.1 / (fy * p["A"]), rel=1e-9)
+    ry = S12._ry(m, p)[0]
+    new_row = I18.table2_check("column", p, fy, ry, Ca=Ca)
+    old_row = I18.table2_check("column", p, fy, ry, Ca=old["Ca"])
+    assert old_row["limit"]["d/tw"] == pytest.approx(old["limit_d_tw"], abs=0.01)
+    assert new_row["limit"]["d/tw"] > old_row["limit"]["d/tw"] and new_row["dc"] == pytest.approx(old["dc"], rel=1e-9)
+
+
+def test_Ca_sizer_screen_from_the_earthquake_records_only():
+    """The sizer's IS 18168 Table 2 screen takes Ca as the full run does (earthquake labels of the run)."""
+    import peb_autosize as PA
+    import sections as S
+
+    class _Stub:
+        mem_of_const = {"c": ["m"]}
+        el_of_mem = {"m": [1]}
+        envt = {1: {"records": {"w": (-4.0e5,) + (0.0,) * 16, "e": (-5.0e4,) + (0.0,) * 16}}}
+        pkg = {"load_combinations": [{"label": "w", "lateral_kind": "W"}, {"label": "e", "lateral_kind": "EQ"}]}
+        _eq_labels = PA.LocalModel._eq_labels
+    sec = "NPB600X220X107.57"
+    A = float(S.props(sec)["A"])
+    assert PA.LocalModel._Ca(_Stub(), "c", sec, 250.0) == pytest.approx(5.0e4 / (250.0 * A / 1.10))

@@ -321,19 +321,30 @@ def brace_hinge_axis(m, p):
                "hinge_basis": "brace buckling hinge about the axis of the larger KL/r (a tie: minor)"}
 
 
+CA_EQ_BASIS = ("Ca = Pu / (Py / gamma_m0) of each earthquake combination (the Table 4 EL rows and the 12.2.3 rows; lead "
+               "ruling 2026-11-06, as the Section 12 gates: Ca is the axial ratio at the seismic ductility demand); the "
+               "wind, gravity and service records are not judged; the largest Ca governs")
+
+
 def _ca_governing(m, p, fy, model_data):
-    """IS 18168:2023 Table 2 (ii) column web: Ca = Pu / (Py / gamma_m0) of each force record (Pu 'maximum factored
-    axial load demand', the notation of IS 18168 -- |P|, as before); the web limit falls with Ca, so the record with the
-    largest Ca governs (engine checks 2026-11: the governing combination is reported).  Returns (Ca, record)."""
+    """IS 18168:2023 Table 2 (ii) column web: Ca = Pu / (Py / gamma_m0) (Pu 'maximum factored axial load demand', the
+    notation of IS 18168 -- |P|, as before) of each EARTHQUAKE record (earthquake_record: the Table 4 EL rows and the
+    12.2.3 rows; lead ruling 2026-11-06, CA_EQ_BASIS); the web limit falls with Ca, so the record with the largest Ca
+    governs (the governing combination is reported).  No earthquake record: Ca = 0, stated.  Returns (Ca, record)."""
     Py = fy * p["A"] / I8.GAMMA_M0_DEFAULT
-    fs = _forces(model_data, m.get("id"))
-    if not fs:
+    fs_all = _forces(model_data, m.get("id"))
+    if not fs_all:
         return 0.0, {"Ca_basis": "no force records: Ca = 0"}
+    fs = [r for r in fs_all if earthquake_record(r)]            # CA_EQ_BASIS: the earthquake records only
+    if not fs:
+        return 0.0, {"Ca_basis": "no earthquake combination among the %d force records: Ca = 0" % len(fs_all),
+                     "n_records": len(fs_all), "n_records_judged": 0, "n_records_not_judged": len(fs_all)}
     f = max(fs, key=lambda f_: abs(float(f_.get("P_N") or 0.0)))
     Ca = abs(float(f.get("P_N") or 0.0)) / Py
-    return Ca, {"Ca_basis": "Ca = Pu/(Py/gamma_m0) of each combination; the largest governs",
+    return Ca, {"Ca_basis": CA_EQ_BASIS,
                 "governing_combo": f.get("combo"), "governing_family": f.get("family") or "table4",
-                "governing_P_N": float(f.get("P_N") or 0.0), "n_records": len(fs)}
+                "governing_P_N": float(f.get("P_N") or 0.0), "n_records": len(fs_all), "n_records_judged": len(fs),
+                "n_records_not_judged": len(fs_all) - len(fs)}
 
 
 def _per_axis_KL(m, p):
