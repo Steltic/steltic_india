@@ -233,6 +233,68 @@ def _brace_compression(model_data, m, families=None):
     return max([f.get("P_N", 0.0) for f in fs] + [0.0]) if fs else None
 
 
+_N_DEPENDENT_TYPES = ("I", "box")          # Table 2 web rows that take the axial force (r1 / r2, axial compression)
+_BENDING_KEYS = ("Mz_i_Nmm", "Mz_j_Nmm", "My_i_Nmm", "My_j_Nmm", "Mz_mid_Nmm", "My_mid_Nmm", "Mz_free_Nmm",
+                 "My_free_Nmm")
+
+
+def table2_class_by_combination(m, p, fy, model_data, *, families=None, loading="bending"):
+    """Engine checks (2026-11, fix B applied to the Section 12 class gates): the IS 800 Table 2 class of a member
+    with the axial force of EACH of its force records (india_is800.section_class_table2: the 'generally' web rows with
+    r1 / r2 of Note 5, the 'axial compression' row for a record with compression and no bending, the mid-depth row with
+    no axial force), as india_is800.member_check_is800 does.  The least favourable class governs (Note 4 / 3.7.2:
+    the section must meet the class under every combination it carries); the governing record is the one with that
+    class and the largest compression.  families: restrict the records (e.g. ('table4',) for a brace).  Sections whose
+    Table 2 rows do not take the axial force (CHS, angles, channels) are classified once, as before.
+    Returns (section_class record of the governing record, basis record for the check row)."""
+    welded = m.get("welded")
+    st = p.get("section_type")
+    fs = _forces(model_data, m.get("id"))
+    if families is not None:
+        fs = [f for f in fs if (f.get("family") or "table4") in families]
+    if st not in _N_DEPENDENT_TYPES or not fs:
+        sc = I8.section_class_table2(p, fy, welded=welded, loading=loading)
+        return sc, {"class_basis": ("Table 2 rows of this section type do not take the axial force" if fs else
+                                    "no force records: classified without axial force (mid-depth web row)"),
+                    "n_records": len(fs)}
+    by, worst = {}, None
+    for f in fs:
+        P = float(f.get("P_N") or 0.0)
+        bending = any(abs(float(f.get(k) or 0.0)) > 1.0e3 for k in _BENDING_KEYS)
+        sc = I8.section_class_table2(p, fy, P_N=P, welded=welded, loading=loading,
+                                     axial_only=(P > 0.0 and not bending))
+        cls = sc.get("section_class")
+        by[cls] = by.get(cls, 0) + 1
+        key = (I8._ORDER.get(cls, 0), P)
+        if worst is None or key > worst[0]:
+            worst = (key, sc, f)
+    sc, f = worst[1], worst[2]
+    sc0 = I8.section_class_table2(p, fy, welded=welded, loading=loading)
+    rec = {"class_basis": "IS 800 Table 2 with the axial force of each force record (engine checks 2026-11, as the "
+                          "member check); least favourable class governs",
+           "governing_combo": f.get("combo"), "governing_family": f.get("family") or "table4",
+           "governing_P_N": float(f.get("P_N") or 0.0), "web_row": sc.get("web_row"), "r1": sc.get("r1"),
+           "r2": sc.get("r2"), "web_d_tw": sc.get("web_d_tw"), "web_limits": sc.get("web_limits"),
+           "governing_element": sc.get("governing_element"), "classes_by_combination": by, "n_records": len(fs),
+           "class_without_axial_force": sc0.get("section_class")}
+    return sc, rec
+
+
+def _ca_governing(m, p, fy, model_data):
+    """IS 18168:2023 Table 2 (ii) column web: Ca = Pu / (Py / gamma_m0) of each force record (Pu 'maximum factored
+    axial load demand', the notation of IS 18168 -- |P|, as before); the web limit falls with Ca, so the record with the
+    largest Ca governs (engine checks 2026-11: the governing combination is reported).  Returns (Ca, record)."""
+    Py = fy * p["A"] / I8.GAMMA_M0_DEFAULT
+    fs = _forces(model_data, m.get("id"))
+    if not fs:
+        return 0.0, {"Ca_basis": "no force records: Ca = 0"}
+    f = max(fs, key=lambda f_: abs(float(f_.get("P_N") or 0.0)))
+    Ca = abs(float(f.get("P_N") or 0.0)) / Py
+    return Ca, {"Ca_basis": "Ca = Pu/(Py/gamma_m0) of each combination; the largest governs",
+                "governing_combo": f.get("combo"), "governing_family": f.get("family") or "table4",
+                "governing_P_N": float(f.get("P_N") or 0.0), "n_records": len(fs)}
+
+
 def _per_axis_KL(m, p):
     """(KLz, KLy, KL/r max, basis) with the member's own K per axis (H07): Kz L on rz (rx, major) and Ky L on ry;
     angles: max(Kz, Ky) L on the minimum radius r_vv."""
@@ -293,16 +355,19 @@ def brace_member_checks(system, m, model_data, cfg):
     else:
         out.append(_na("brace_compression", clause=cl, cite="P <= %.1f Pd" % fac, member=m["id"],
                        reason="Pd or brace forces missing (%s)" % (comp.get("note") or "")))
-    sc = I8.section_class_table2(p, fy, loading="axial" if p.get("section_type") in ("CHS", "angle") else "bending")
-    sc_m = I8.section_class_table2(p, fy)
+    # engine checks (2026-11): an I / box brace is classified with the axial force of each Table 4 combination (the
+    # 'axial compression' web row for a pin-ended brace in compression); CHS / angles keep their rows, as before
+    sc, bas = table2_class_by_combination(m, p, fy, model_data, families=("table4",),
+                                          loading="axial" if p.get("section_type") in ("CHS", "angle") else "bending")
+    sc_m, bas_m = table2_class_by_combination(m, p, fy, model_data, families=("table4",))
     if sysn == "OCBF":
         out.append(_chk("brace_not_slender", sc["section_class"], "not slender", clause="IS 800:2007 12.7.2.4",
                         cite="plastic, compact or semi-compact, not slender", member=m["id"],
-                        ok=sc["section_class"] != "slender"))
+                        ok=sc["section_class"] != "slender", **bas))
     else:
         out.append(_chk("brace_plastic", sc_m["section_class"], "plastic", clause="IS 800:2007 12.8.2.5",
                         cite="braced cross-section shall be plastic (3.7.2)", member=m["id"],
-                        ok=sc_m["section_class"] == "plastic"))
+                        ok=sc_m["section_class"] == "plastic", **bas_m))
     An = m.get("An_mm2")
     gy_cl = "IS 800:2007 12.7.2.6" if sysn == "OCBF" else "IS 800:2007 12.8.2.7"
     if An and fu:
@@ -599,18 +664,20 @@ def column_checks(system, model_data, cfg):
                            reason=str(e)))
             continue
         fy, _ = _fy(m, p)
+        # engine checks (2026-11): the class gates with the axial force of each combination the column carries (the
+        # Table 4 rows and the 12.2.3 rows it is designed for, 12.5.1.1 / 12.11.3.4); the governing record is reported
         if sysn == "SCBF":
-            sc = I8.section_class_table2(p, fy) if fy else {"section_class": None}
+            sc, bas = table2_class_by_combination(m, p, fy, model_data) if fy else ({"section_class": None}, {})
             out.append(_chk("scbf_column_plastic", sc["section_class"], "plastic", clause="IS 800:2007 12.8.4.1",
                             cite="column sections used in SCBF shall be plastic (3.7.2)", member=m["id"],
-                            ok=(sc["section_class"] == "plastic") if sc["section_class"] else None))
+                            ok=(sc["section_class"] == "plastic") if sc["section_class"] else None, **bas))
         if sysn == "SMF":
             out.append(material_gate(m, clause="12.11.1", props=p, cfg=cfg, system=sysn))
-            sc = I8.section_class_table2(p, fy) if fy else {"section_class": None}
+            sc, bas = table2_class_by_combination(m, p, fy, model_data) if fy else ({"section_class": None}, {})
             out.append(_chk("smf_column_class", sc["section_class"], "plastic or compact",
                             clause="IS 800:2007 12.11.3.1", member=m["id"],
                             cite="beam and column sections plastic or compact (plastic at hinge locations)",
-                            ok=(sc["section_class"] in ("plastic", "compact")) if sc["section_class"] else None))
+                            ok=(sc["section_class"] in ("plastic", "compact")) if sc["section_class"] else None, **bas))
         if sysn == "SMF":
             f1223_all = [f for f in _forces(model_data, m["id"]) if f.get("family") == "12.2.3"]
             if f1223_all and fy and m.get("L_mm"):
@@ -1102,10 +1169,11 @@ def smf_joint_checks(joint, model_data, cfg, *, system="SMF"):
         Mp_list.append((b, m, p, fy, Mp))
         if sysn == "SMF":
             out.append(material_gate(m, clause="12.11.1", props=p, cfg=cfg, system=sysn))
-            sc = I8.section_class_table2(p, fy)
+            # engine checks (2026-11): with the axial force of each of the beam's combinations
+            sc, bas = table2_class_by_combination(m, p, fy, model_data)
             out.append(_chk("smf_beam_class", sc["section_class"], "plastic (hinge) / compact",
                             clause="IS 800:2007 12.11.3.1", cite="plastic or compact; plastic at hinge locations",
-                            member=m["id"], ok=sc["section_class"] in ("plastic", "compact")))
+                            member=m["id"], ok=sc["section_class"] in ("plastic", "compact"), **bas))
         Mdem = 1.2 * Mp
         cl = "IS 800:2007 12.11.2.1" if sysn == "SMF" else "IS 800:2007 12.10.2.1"
         if sysn == "OMF" and conn.get("max_deliverable_moment_Nmm"):
@@ -1563,13 +1631,12 @@ def section12_checks(system, model_data, cfg=None):
                 t2_skipped.append("%s (%s, %s)" % (m.get("id"), m.get("section"), pm.get("section_type")))
                 continue
             comp = {"brace": "brace", "column": "column", "beam": "beam"}[m["role"]]
-            Ca = None
+            Ca, ca_rec = None, {}
             if comp == "column":
-                Py = fym * pm["A"] / I8.GAMMA_M0_DEFAULT
-                Ca = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, m["id"])] + [0.0]) / Py
+                Ca, ca_rec = _ca_governing(m, pm, fym, model_data)
             checks.append(dict(I18.table2_check(comp, pm, fym, _ry(m, pm)[0], Ca=Ca, member=m["id"]),
                                cite="IS 18168:2023 5.3: sections of the lateral load resisting system within Table 2 (%s)"
-                                    % {"brace": "iii", "column": "ii", "beam": "i"}[comp]))
+                                    % {"brace": "iii", "column": "ii", "beam": "i"}[comp], **ca_rec))
             t2_done.add(m["id"])
     if t2_skipped:
         advisories.append({"clause": "IS 18168:2023 5.3 / Table 2", "applies": True,
@@ -1622,10 +1689,9 @@ def section12_checks(system, model_data, cfg=None):
                 continue
             pc = _props(mc); fyc, _ = _fy(mc, pc)
             if fyc and pc.get("section_type") in I18.TABLE2_SECTION_TYPES:
-                Py = fyc * pc["A"] / I8.GAMMA_M0_DEFAULT
-                Pu = max([abs(f.get("P_N", 0.0)) for f in _forces(model_data, mc["id"])] + [0.0])
-                checks.append(dict(I18.table2_check("column", pc, fyc, _ry(mc, pc)[0], Ca=Pu / Py, member=mc["id"]),
-                                   cite="12.3.4.1: columns satisfy Table 2 (ii), Ca = Pu/(Py/gamma_m0)"))
+                Ca, ca_rec = _ca_governing(mc, pc, fyc, model_data)
+                checks.append(dict(I18.table2_check("column", pc, fyc, _ry(mc, pc)[0], Ca=Ca, member=mc["id"]),
+                                   cite="12.3.4.1: columns satisfy Table 2 (ii), Ca = Pu/(Py/gamma_m0)", **ca_rec))
         for m in _members(model_data, "brace"):
             checks += ebf_brace_checks(m, model_data, cfg)
             checks += brace_connection_checks("EBF", m, conns.get(m["id"]), model_data, cfg)
