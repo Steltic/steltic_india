@@ -1027,6 +1027,51 @@ def fy_of(sec, grade):
     return float(m.get("fy_MPa") or I8.fy_is2062("E250", I8.governing_thickness_mm(p) or 1.0))
 
 
+LOCAL_RECORDS_K = 3
+
+
+def local_records(recs, k=LOCAL_RECORDS_K):
+    """The combinations the LOCAL model checks for one element (third wave, after engine fix A, 2026-11-06): the full
+    run checks every combination (design_pipeline.member_check_records), which made each local evaluation 8 times
+    slower; the local model is a proposal aid only (every proposal is verified by a full run), so it keeps a
+    sign-aware subset -- the k largest and the k smallest of every signed record field (N, both end moments and the
+    in-span moments of both axes, their free span moments, the in-span hogging minimum), the k largest |V| / |Vmaj| /
+    |Vmin|, and the k largest of the combined proxy |N|/max|N| + |Mmaj|/max|Mmaj| + |Mmin|/max|Mmin| for each sign of
+    the major-axis end moment -- so the governing hogging and sagging cases (engine fix A) and the compression that
+    sets the web class (fix B) are both kept.  A miss is caught by the full run and fed back through the margins."""
+    import static_model as SM
+    if len(recs) <= 4 * k:
+        return dict(recs)
+    F = SM.REC_FIELDS
+    keep = set()
+    labs = list(recs)
+
+    def val(l, f):
+        r = recs[l]
+        i = F.index(f)
+        try:
+            return float(r[i]) if len(r) > i and r[i] is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+    for f in ("N", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Mmaj_span", "Mmin_span", "Mmaj_free",
+              "Mmin_free", "Mmaj_hog_min"):
+        if f not in F:
+            continue
+        vs = sorted(labs, key=lambda l: val(l, f))
+        if any(val(l, f) for l in vs):
+            keep |= set(vs[:k]) | set(vs[-k:])
+    for f in ("V", "Vmaj", "Vmin"):
+        if f in F:
+            keep |= set(sorted(labs, key=lambda l: -abs(val(l, f)))[:k])
+    mx = {f: max([abs(val(l, f)) for l in labs] or [0.0]) or 1.0 for f in ("N", "Mmaj", "Mmin")}
+    for sgn in (1.0, -1.0):
+        def score(l):
+            mm = max(sgn * val(l, "Mmaj_i"), sgn * val(l, "Mmaj_j"), 0.0)
+            return abs(val(l, "N")) / mx["N"] + mm / mx["Mmaj"] + abs(val(l, "Mmin")) / mx["Mmin"]
+        keep |= set(sorted(labs, key=lambda l: -score(l))[:k])
+    return {l: recs[l] for l in labs if l in keep}
+
+
 class LocalModel:
     """The frozen-force model of one full run: exact member / station checks, the PEB knee and splice checks and the
     base shear keys for candidate sections, and the predicted sway / lambda_cr of a typical frame."""
@@ -1063,7 +1108,7 @@ class LocalModel:
         self.recs = {}
         for t, e in self.dump.items():
             allr = self.envt.get(t, {}).get("records") or {}
-            self.recs[t] = {l: allr[l] for l in e["records"] if l in allr}
+            self.recs[t] = local_records({l: allr[l] for l in e["records"] if l in allr})
         # const -> members / elements; clusters (consts that share a chain)
         self.const_of_label = {}
         for c, lab in self.x0.items():

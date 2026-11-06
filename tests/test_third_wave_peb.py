@@ -418,3 +418,29 @@ def test_end_plate_web_strip_takes_the_doubler_at_its_own_band():
     par = A.ep_params({"end_plate": ep, "plate_b_mm": 280.0}, sec)
     assert par["member_fy"] == 330.0 and par["web_doubler"] == 8.0
     assert A.make_ep(par, sec)["web_fy_MPa"] == ep["web_fy_MPa"]
+
+
+def test_local_records_keep_both_signs_and_the_compression():
+    """The local model's sign-aware subset (proposals only; the full run checks every combination): with many
+    sagging uplift cases of larger magnitude, the largest hogging case and the most compressive case are kept (the
+    review's IN_Ex2 canopy root: the hogging 1.2DL+1.2LL+1.2WM0+ case was dropped by a magnitude ranking)."""
+    import peb_autosize as A
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+
+    def rec(N=0.0, mi=0.0, mj=0.0):
+        r = [0.0] * n
+        r[SM.REC_FIELDS.index("N")] = N
+        r[SM.REC_FIELDS.index("Mmaj")] = max(abs(mi), abs(mj))
+        r[SM.REC_FIELDS.index("Mmaj_i")] = mi
+        r[SM.REC_FIELDS.index("Mmaj_j")] = mj
+        return r
+    recs = {"uplift%02d" % i: rec(N=10e3, mi=300e6 + i * 1e6, mj=0.0) for i in range(40)}
+    recs.update({"grav%02d" % i: rec(N=-5e3, mi=-200e6 - i * 1e6, mj=0.0) for i in range(5)})
+    recs["1.2DL+1.2LL+1.2WM0+"] = rec(N=0.0, mi=-285e6, mj=0.0)      # the largest hogging case
+    recs["compressive"] = rec(N=-400e3, mi=50e6, mj=0.0)
+    keep = A.local_records(recs)
+    assert len(keep) < len(recs) / 2
+    assert "1.2DL+1.2LL+1.2WM0+" in keep and "compressive" in keep and "uplift39" in keep
+    small = {k: recs[k] for k in list(recs)[:10]}
+    assert A.local_records(small) == small
