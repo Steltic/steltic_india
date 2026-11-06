@@ -2398,7 +2398,10 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         # them up): every brace and column force follows the link overstrength 1.1 Ry Vp / V, so links that keep
         # moving keep the braces and columns from converging (IN_Ex15 / IN_Ex19)
         links = [g for g, sp in specs.items() if sp.get("role") == "link"]
-        hold = list(fixed) + (links if links and it >= 2 else [])
+        failing_labels = {m.get("section") for m in (ev.get("members") or {}).values()
+                          if (m.get("strength") or 0.0) > 1.0 + 1e-9 or (m.get("slender") or 0.0) > 1.0 + 1e-9}
+        # a held link group whose own members fail in the run (the beam outside the link) is sized again
+        hold = list(fixed) + ([g for g in links if x[g][0] not in failing_labels] if links and it >= 2 else [])
         x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=hold, barred=st.get("barred"),
                                 conn_req=st.get("conn_req"))
         # Section 12 rows the full run failed although the frozen forces passed them: that group's rows get a margin
