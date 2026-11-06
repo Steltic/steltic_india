@@ -386,12 +386,14 @@ def test_C1_consultancy_guards_read_their_records():
     stubs = dict(base, composite_design={"status": "stubs", "chI_worksheet": I8.composite_is11384_worksheet_stubs({})})
     assert not has(comp, stubs, "COMPOSITE")
     assert not has(dict(comp, composite_scope="bare_steel"), base, "COMPOSITE")
-    # seismic joint: a 7.11.3 separation record or a recorded decision
+    # seismic joint: a 7.11.3 separation record (cfg['adjacent_units']) or a designed joining connection
     twin = {"arch": "twin tower offices"}
     assert has(twin, base, "seismic-joint")
     assert not has(twin, dict(base, deformation_compatibility={"separation": [{"unit": "A", "value": 80.0,
                                                                                 "limit": 100.0}]}), "seismic-joint")
-    assert not has(dict(twin, seismic_joint={"decision": "connected", "basis": "one diaphragm"}), base, "seismic-joint")
+    joined = dict(base, connections=base["connections"] + [{"id": "seismic joint tie A-B", "type": "drag_strut",
+                                                              "DC": 0.42, "checks": [{"name": "tie", "dc": 0.42}]}])
+    assert not has(twin, joined, "seismic-joint")
     # snow drift at a step: the snow summary's drift record (IN_Ex9's form), not the storey-drift rows
     snow = {"arch": "stepped roof hall", "snow": 1.2}
     assert has(snow, base, "DRIFT surcharge")

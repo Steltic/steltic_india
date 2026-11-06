@@ -703,17 +703,17 @@ def _consultancy_issues(cfg, pkg):
                        "record the scope (bare-steel design per IS 800 8.2 + construction stage, or delegated)")
     # A8 seismic joint / pounding: multi-wing keywords and no joint decision
     dcomp = pkg.get("deformation_compatibility") if isinstance(pkg.get("deformation_compatibility"), dict) else {}
-    joint = bool(dcomp.get("separation") or cfg.get("seismic_joint")
+    joint = bool(dcomp.get("separation")             # the 7.11.3 separation of cfg['adjacent_units']
                  or lab("seismic joint", "seismic_joint", "pounding", "joint width", "joint_width", "separation"))
     if any(k in arch for k in ("twin", "two tower", "wings", "wing ")) and not joint:
         out.append("multi-wing/tower configuration and NO seismic-joint decision recorded -- either "
                    "size the joint per IS 1893 7.11.3 (R x (D1 + D2), or (R1 D1 + R2 D2)/2 at equal floor "
-                   "levels, Amd 1) or record why the wings are intentionally connected (cfg['seismic_joint'] = "
-                   "{'decision', 'basis'})")
+                   "levels, Amd 1: cfg['adjacent_units']) or design the connection that joins them (a designed "
+                   "connection / check labelled seismic joint)")
     # B6 snow drift at steps/parapets
     stepish = any(k in arch for k in ("step", "setback", "parapet", "penthouse", "tier", "wedding"))
     ss = ((pkg.get("load_plan") or {}).get("snow_summary") or {}) if isinstance(pkg.get("load_plan"), dict) else {}
-    sdrift = bool((isinstance(ss, dict) and (ss.get("drift") or ss.get("drift_nodal_kN"))) or cfg.get("snow_drift")
+    sdrift = bool((isinstance(ss, dict) and (ss.get("drift") or ss.get("drift_nodal_kN")))
                   or any("snow" in l and "drift" in l for l in labels))
     if float(cfg.get("snow", 0) or 0) > 0 and stepish and not sdrift:
         out.append("snow present with roof steps/parapets/setbacks and no DRIFT surcharge in the "
