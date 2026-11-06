@@ -1031,7 +1031,7 @@ class Local:
         bad = self._table2_screen(g, label, grade)
         if bad:
             return bad
-        md = copy.deepcopy(sub)
+        md = md_copy(sub)
         register(label)
         for m in md["members"]:
             _substitute(m, label, grade, self.cfg)
@@ -1353,6 +1353,16 @@ SELF_S12_ROWS = re.compile(r"(table2|smf_beam_class|smf_column_class|brace_KL_r|
                            r"link_section|link_length|link_shear|link_rotation)")
 
 
+def md_copy(md):
+    """A copy of Section 12 model data that a candidate may change: the member records (the sizer sets section and
+    grade on them) and the links (section12_checks writes into them) are copied; the forces and the other records,
+    which neither changes, are shared.  A deep copy of IN_Ex19's model data took 2.8 s, more than the checks."""
+    out = dict(md)
+    out["members"] = [dict(m) for m in md.get("members") or []]
+    out["links"] = copy.deepcopy(md.get("links") or [])
+    return out
+
+
 def _substitute(m, lab, grade, cfg):
     """Put a candidate section (and grade) into a Section 12 member record."""
     if lab == m.get("section") and grade is None:
@@ -1381,7 +1391,7 @@ def s12_local(lm, x, *, tags_changed=None, margins=None):
     if lm.s12 is None:
         return []
     system, md0, sc = lm.s12
-    md = copy.deepcopy(md0)
+    md = md_copy(md0)
     for m in md.get("members") or []:
         t = int(m.get("tag") or str(m["id"]).lstrip("e"))
         g = lm.groups_of.get(t)
@@ -2544,8 +2554,10 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         # the last pass found too small (conn_req), is sized again
         hold = list(fixed) + ([g for g in links if x[g][0] not in failing_labels and
                                g not in (st.get("conn_req") or {})] if links and it >= 2 else [])
+        _t0 = time.time()
         x1, notes = size_groups(lm, x, st["margins"], req, log_fn=log_fn, fixed=hold, barred=st.get("barred"),
                                 conn_req=st.get("conn_req"))
+        _t1 = time.time()
         # Section 12 rows the full run failed although the frozen forces passed them: that group's rows get a margin
         mem_tag_ = {m["id"]: int(m.get("tag") or str(m["id"]).lstrip("e")) for m in (lm.s12[1].get("members") or [])} \
             if lm.s12 is not None else {}
@@ -2587,7 +2599,9 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         for g in sorted(lm.specs):
             if lm.specs[g].get("same_as"):
                 x1[g] = x1[lm.specs[g]["same_as"]]
+        _t2 = time.time()
         x1 = monotone_columns(x1, specs, log_fn=log_fn, lm=lm, margins=st["margins"], barred=st.get("barred"))
+        _t3 = time.time()
         gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
                                                                        if ":" not in k and k not in _labels_in_use(x)})
         bumps = connection_bumps(ev, x, roles)
@@ -2620,6 +2634,8 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
                                                                            if ":" not in k and k not in _labels_in_use(x)})
             conns1 = design_connections(lm, ev, x1, x, st["conns"], roles, specs, bumps=bumps,
                                         cache=st.setdefault("conn_cache", {}))
+        log_fn("    local step: sizing %.0f s, Section 12 loop %.0f s, stacks %.0f s, connections %.0f s"
+               % (_t1 - _t0, _t2 - _t1, _t3 - _t2, time.time() - _t3))
         rec["proposal"] = {g: list(v) for g, v in x1.items()}
         rec["notes"] = notes
         rec["stiffness"] = info
