@@ -749,6 +749,30 @@ def _member_moment(e, q):
     return max(float(e.get(q) or 0.0), float(e.get(q + "_span") or 0.0))
 
 
+def none_splice_open_row(sec, reg, upper):
+    """SECT review (2026-11-07): a column splice declared 'none' means the column is continuous over its length -- it
+    holds for a column that starts at the base and is the same section all the way down.  A piece of this section
+    (upper: its element tags above the base; reg: tag -> (kind, section, node_i, node_j)) that sits on another section,
+    or on no column, has a splice at that change, which must be designed.  Returns the open row (ok None, a plain
+    reason) or None."""
+    step = []
+    for t in upper:
+        bel = [tb for tb in reg if reg[tb][0] == "col" and reg[tb][3] == reg[t][2]]
+        if not bel or any(reg[tb][1] != sec for tb in bel):
+            step.append((t, sorted({reg[tb][1] for tb in bel})))
+    if not step:
+        return None
+    t0, lows = min(step, key=lambda s_: int(reg[s_[0]][2]) // 100000)
+    return {"name": "declared 'none' at a section change on %s, level %d -- splice not designed"
+                    % (" / ".join(lows) if lows else "no column", int(reg[t0][2]) // 100000),
+            "ok": None, "value": None, "limit": None, "dc": None,
+            "clause": "IS 800:2007 12.5.2 / 10; IS 18168:2023 7.5",
+            "reason": "the splice of %s is declared 'none' (column continuous), but %d piece(s) of this column sit on %s "
+                      "(the lowest at level %d): the splice at that section change is not designed -- declare it in "
+                      "cfg['connections']['column_splice']"
+                      % (sec, len(step), " / ".join(lows) if lows else "no column below", int(reg[t0][2]) // 100000)}
+
+
 def member_check_records(recs):
     """The combinations a member check sees: EVERY combination of the member, in the order of the records (engine
     checks fix A, 2026-11).
@@ -1971,7 +1995,9 @@ def design_india(name, cfg, outdir):
                 rel_ = info0.get("beam_rel") or {}
                 if any((rel_.get(t) or ("none",))[0] in ("I", "J") for t in sfrs_tags):
                     Vpin, pfx_ = _vp_demand(tags, g["V"], dem, notes)
-                    r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vpin)
+                    r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vpin,
+                                                        V_shear_N=dem.get("V_concurrent_N") if pfx_ else None,
+                                                        N_axial_N=dem.get("P_end_N") if pfx_ else None)
                     if r is None:
                         checks.append(_row("IS 800 10 shear connection (pinned end)", {
                             "ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
@@ -1983,7 +2009,9 @@ def design_india(name, cfg, outdir):
                 # braced-bay / gravity beam: shear connection under the governing V; a beam end carrying axial force
                 # (collector / chord / flexible deck) is checked for the V + N resultant per combination (GOLD-5)
                 Vd, pfx_ = _vp_demand(tags, g["V"], dem, notes)
-                r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vd)
+                r = CD.beam_shear_connection_checks(cfg, {"section": sec, "role": "beam"}, Vd,
+                                                    V_shear_N=dem.get("V_concurrent_N") if pfx_ else None,
+                                                    N_axial_N=dem.get("P_end_N") if pfx_ else None)
                 if r is None:
                     checks.append(_row("IS 800 10 shear connection", {"ok": None, "clause": "IS 800:2007 10.3 / 8.4.1 / 6.4.1",
                                                                        "reason": "cfg['connections']['beam_shear'] not declared for %s" % sec}))
@@ -2099,6 +2127,14 @@ def design_india(name, cfg, outdir):
                     Hc_u = hc if Hc_u is None else min(Hc_u, hc)
                 spl = CD.column_splice(cfg, m0, p0, fy0, recs_u, sfrs=(role == "lateral_col"), tags_of=tagof,
                                        seismic_cfg=s12_cfg, tie_force_N=tie_N, Hc_mm=Hc_u, Zx_lower_mm3=Zlow)
+                # SECT review (2026-11-07): a 'none' splice means the column is continuous over its length -- it holds
+                # for a column that starts at the base and is the same section all the way down.  A piece of this
+                # section that sits on another section (or on no column) has a splice at that change, which must be
+                # designed: an open item, not a pass.
+                if spl is not None and spl.get("none"):
+                    open_ = none_splice_open_row(sec, reg, upper)
+                    if open_ is not None:
+                        spl = {"checks": {open_.pop("name"): open_}}
                 if spl is None:
                     checks.append(_row("IS 800 12.5.2 column splice", {"ok": None, "clause": "IS 800:2007 12.5.2 / 10",
                                                                         "reason": "cfg['connections']['column_splice'] not declared for %s" % sec}))

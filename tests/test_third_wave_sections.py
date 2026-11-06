@@ -525,14 +525,44 @@ def test_doubler_grade_follows_the_columns_the_beams_frame_into():
 
 def test_fin_plate_takes_three_or_four_bolt_lines_only_when_two_do_not_fit():
     """A beam-end shear connection tries one and two bolt lines first; three or four lines (the published IN_Ex19
-    collector fins, 4 x 3 M24 in double shear) only when no one- or two-line plate passes."""
+    collector fins, 4 x 3 M24 in double shear) only when no one- or two-line plate passes.  A multi-line group is
+    checked with its eccentricity (SECT review 2026-11-07): a collector force (axial share 0.95 of the V + N resultant)
+    takes a 3-4 line fin; the same resultant as a pure shear does not fit."""
     AZ = _az()
     AZ.register("WI550X325X22X14")
     small = AZ.design_fin_plate("WI550X325X22X14", 300e3, {})
     assert small is not None and int(small.get("bolt_lines") or 1) <= 2
-    big = AZ.design_fin_plate("WI550X325X22X14", 1730e3, {})
+    big = AZ.design_fin_plate("WI550X325X22X14", 1730e3, {}, n_frac=0.95)
     assert big is not None and int(big.get("bolt_lines") or 1) >= 3
-    assert AZ._fin_plate_tier("WI550X325X22X14", 1730e3, 1730e3 / 1.5, {}, "clean_mill_scale", (1, 2), 0.9) is None
+    assert AZ._fin_plate_tier("WI550X325X22X14", 1730e3, 1730e3 / 1.5, {}, "clean_mill_scale", (1, 2), 0.9,
+                              n_frac=0.95) is None
+    assert AZ.design_fin_plate("WI550X325X22X14", 1730e3, {}, n_frac=0.0) is None
+
+
+def test_fin_plate_multi_line_bolt_group_is_checked_with_its_eccentricity():
+    """IS 800 10.3 by the elastic method for a fin plate with 2+ bolt lines: the reviewer's IN_Ex19 4 x 4 M24 group
+    (pitch 75, gauge 70, first line 50 mm from the support) under N 1,025.5 kN and V 96.9 kN gives a corner bolt of
+    72.1 kN across and 13.5 kN down (73.4 kN); a single line keeps the direct-shear check."""
+    import india_connections as C
+    r = C.fin_bolt_group_eccentricity(n_bolts=16, n_lines=4, pitch_mm=75.0, gauge_mm=70.0, a1_mm=50.0, V_N=96.9e3,
+                                      N_N=1025.5e3)
+    assert abs(r["e_mm"] - 155.0) < 1e-9 and abs(r["Ip_mm2"] - 210500.0) < 1e-6
+    assert abs(r["Fx_N"] / 1e3 - 72.1) < 0.05 and abs(r["Fy_N"] / 1e3 - 13.5) < 0.05 and abs(r["R_bolt_N"] / 1e3 - 73.4) < 0.05
+    kw = dict(t_plate_mm=100.0, h_plate_mm=320.0, fy_plate_MPa=240.0, fu_plate_MPa=410.0, n_plates=2,
+              bolts={"n_bolts": 16, "d_mm": 24, "grade": "8.8", "t_mm": 10.0, "fu_plate_MPa": 410.0, "e_mm": 50.0,
+                     "p_mm": 75.0, "d0_mm": 26.0, "nn": 0, "ns": 2},
+              cjp={"t_mm": 50.0, "length_mm": 320.0, "fy_MPa": 240.0, "n_sides": 2, "site": False})
+    one = C.fin_plate_shear_checks(V_N=1030e3, **kw)
+    four = C.fin_plate_shear_checks(V_N=1030e3, bolt_lines=4, gauge_mm=70.0, V_shear_N=96.9e3, N_axial_N=1025.5e3, **kw)
+    assert "bolt_group_eccentric_10_3" not in one["checks"]
+    ecc = four["checks"]["bolt_group_eccentric_10_3"]
+    vdb = ecc["limit"]
+    assert abs(ecc["value"] - r["R_bolt_N"]) < 1.0 and four["dc"] >= one["dc"]
+    assert "plate_moment_at_support" in four["checks"]
+    # a shear-governed group: the eccentric corner bolt carries far more than V / n
+    sh = C.fin_plate_shear_checks(V_N=400e3, bolt_lines=4, gauge_mm=70.0, **kw)
+    assert sh["checks"]["bolt_group_eccentric_10_3"]["value"] > 2.0 * 400e3 / 16
+    assert sh["capacity_N"] < one["capacity_N"]
 
 
 def test_ebf_link_takes_the_least_overstrength_within_the_mass_span():
@@ -601,3 +631,65 @@ def test_link_rotation_stiffens_the_braces_of_its_storey():
     A = AZ.stiffness("HB300", "A")
     assert abs(req["br"] - round(A * 1.032 ** 2 * 1.03, 1)) < 0.2 and "lk" not in req
     assert st["tor_req"]["br"] == req["br"]
+
+
+def test_none_splice_on_a_column_that_sits_on_another_section_is_an_open_item():
+    """SECT review SECT-1: 'none' (continuous column) holds for a column that starts at the base and keeps its section;
+    a piece of the section that sits on another section (a band starting above the base) has an undesigned splice --
+    the engine reports an open row with a plain name, not a pass."""
+    import design_pipeline as DP
+    reg = {1: ("col", "BOX500X500X16", 1, 100001), 2: ("col", "BOX500X500X16", 100001, 200001),
+           3: ("col", "BOX450X450X14", 200001, 300001), 4: ("col", "BOX450X450X14", 300001, 400001)}
+    assert DP.none_splice_open_row("BOX500X500X16", reg, [2]) is None          # base band, same section below
+    row = DP.none_splice_open_row("BOX450X450X14", reg, [3, 4])
+    assert row is not None and row["ok"] is None and "BOX500X500X16" in row["name"] and "level 2" in row["name"]
+    assert "not designed" in row["reason"]
+
+
+def test_division_plate_transition_between_box_columns_of_different_size():
+    """A splice between boxes of different outer size: both shafts CJP-welded to a division plate; the plate carries
+    the upper wall's line force over the offset (plastic strip, IS 800 8.2.1.2) and in shear (8.4.1)."""
+    import india_connections as C
+    sp = {"type": "cjp", "bearing": True, "weld": {"matching_electrode": True, "electrode": "E5518", "t_mm": 14.0},
+          "transition": {"type": "division_plate", "t_mm": 50.0, "grade": "E250 B0", "offset_mm": 25.0}}
+    A, Z = 4 * 450.0 * 14.0, 2.6e6
+    cases = [{"combo": "c", "P_N": 3.0e6, "Mz_Nmm": 50e6, "My_Nmm": 0.0}]
+    r = C.column_splice_checks(sfrs=False, Af_mm2=450 * 14.0, fy_MPa=330.0, P_N=3.0e6, M_Nmm=50e6, Zx_mm3=Z, A_mm2=A,
+                               d_mm=450.0, splice=sp, cases=cases, bf_mm=450.0, tf_mm=14.0, tw_mm=14.0, Zy_mm3=Z)
+    q = (3.0e6 / A + 50e6 / Z) * 14.0
+    b = r["checks"]["division_plate_bending"]
+    assert abs(b["value"] - q * 25.0) < 1e-6 and abs(b["limit"] - 230.0 * 50.0 ** 2 / 4.0 / 1.1) < 1e-6
+    assert r["checks"]["division_plate_shear"]["ok"] and r["checks"]["cjp_parent_metal"]["ok"]
+    assert r["capacity_N"] != b["limit"]                                     # the per-mm rows are not a capacity
+
+
+def test_sizer_designs_the_splice_where_a_none_label_sits_on_another_section(tmp_path):
+    """The sizer keeps 'none' only where every piece of the label sits on the same label or on the base; otherwise
+    it designs the splice: CJP for equal outer sizes, CJP to a division plate between boxes of different size."""
+    AZ = _az()
+    import pickle
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+    for l in ("BOX500X500X16", "BOX450X450X14", "BOX500X500X12"):
+        AZ.register(l)
+
+    def el(t, sec, ni, nj):
+        return {"member": {"id": "e%d" % t, "tag": t, "section": sec, "grade": "E350 B0", "role": "column",
+                           "role_group": "gravity_col", "L_mm": 3500.0, "node_i": ni, "node_j": nj, "Kz": 1.0,
+                           "Ky": 1.0},
+                "kind": "col", "records": {"c1": [-2.0e6] + [0.0] * (n - 1)}}
+    elems = {1: el(1, "BOX500X500X16", 1, 100001), 2: el(2, "BOX500X500X16", 100001, 200001),
+             3: el(3, "BOX450X450X14", 200001, 300001), 4: el(4, "BOX450X450X14", 300001, 400001)}
+    pickle.dump({"elems": elems, "s12": None, "calls": {}}, open(tmp_path / "capture.pkl", "wb"))
+    groups_of = {1: "gi_0", 2: "gi_0", 3: "gi_1", 4: "gi_1"}
+    specs = {"gi_0": {"role": "column"}, "gi_1": {"role": "column"}}
+    x = {"gi_0": ("BOX500X500X16", "E350 B0"), "gi_1": ("BOX450X450X14", "E350 B0")}
+    lm = AZ.Local(str(tmp_path), groups_of, specs, {g: v[0] for g, v in x.items()}, {}, {})
+    assert AZ.splice_section_changes(lm, x, "BOX500X500X16", "gravity_col") == []
+    lows = AZ.splice_section_changes(lm, x, "BOX450X450X14", "gravity_col")
+    assert lows == ["BOX500X500X16"]
+    sp = AZ.designed_splice(lm, x, "gi_1", "BOX450X450X14", "E350 B0", lows)
+    assert sp["type"] == "cjp" and sp["transition"]["type"] == "division_plate" and sp["transition"]["offset_mm"] == 25.0
+    x2 = dict(x, gi_0=("BOX500X500X12", "E350 B0"), gi_1=("BOX500X500X16", "E350 B0"))
+    sp2 = AZ.designed_splice(lm, x2, "gi_1", "BOX500X500X16", "E350 B0", ["BOX500X500X12"])
+    assert sp2["type"] == "cjp" and "transition" not in sp2 and sp2["weld"]["matching_electrode"]

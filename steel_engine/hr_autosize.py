@@ -1257,7 +1257,8 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
             if n_eval > max_evals:
                 break                 # a row no candidate answers (e.g. a drift-driven link rotation): keep the section
             ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
-            if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
+            if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1],
+                                                                          n_frac=(conn_req[g][2:3] or [0.0])[0]) is None:
                 ok = False                    # the beam-end connection (V + N) of an earlier run does not fit
             if ok:
                 chosen = (lab, grade)
@@ -1309,7 +1310,8 @@ def _least_overstrength_link(lm, g, spec, first, dem, margins, bar, conn_req, *,
         if n > max_evals:
             break
         ok, worst = lm.group_ok(g, lab, grade, margins.get(g, spec.get("margin", 0.95)))
-        if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1]) is None:
+        if ok and (conn_req or {}).get(g) and design_fin_plate(lab, conn_req[g][0], conn_req[g][1],
+                                                                          n_frac=(conn_req[g][2:3] or [0.0])[0]) is None:
             ok = False
         if ok:
             best, best_vp = (lab, grade), vp
@@ -1607,25 +1609,28 @@ def double_fin(sp, sec):
     return out
 
 
-def design_fin_plate(sec, V_N, template=None, *, V_service_N=None, margin=0.9):
+def design_fin_plate(sec, V_N, template=None, *, V_service_N=None, margin=0.9, n_frac=0.0):
     """Lightest fin plate whose IS 800 checks (bolts 10.3, plate 8.4.1, block shear 6.4.1, CJP weld, HSFG slip 10.4.3
     at the service shear) pass at V_N within the margin, in this order: one fin plate with one bolt line, then two
     lines; then two fin plates (double shear); each with the template's faying surface, then sand-blasted (IS 800
     Table 20, mu 0.48).  Within a tier: fewest bolts, then the thinnest plate.  When none passes, the same search
-    with three or four bolt lines.  The service shear is the run's (V_service_N), else V_N / 1.5."""
+    with three or four bolt lines.  The service shear is the run's (V_service_N), else V_N / 1.5.  n_frac = the
+    axial share N / R of a V + N resultant demand (the eccentric check of a multi-line group takes V and N apart)."""
     Vs = V_service_N if V_service_N is not None else V_N / 1.5
     surf0 = (template or {}).get("slip_surface", "clean_mill_scale")
     for lines in ((1, 2), (3, 4)):
         # three or four bolt lines (the IN_Ex19 collector fins of the published gold: 4 lines x 3 rows of M24 in
         # double shear) only when no one- or two-line plate takes the demand
-        sp = _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin)
+        sp = _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin, n_frac=n_frac)
         if sp is not None:
             return sp
     return None
 
 
-def _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin):
+def _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin, n_frac=0.0):
     """design_fin_plate over the given bolt-line counts."""
+    nf = min(max(float(n_frac or 0.0), 0.0), 1.0)
+    comp = {"V_shear_N": max(float(V_N), 1.0) * math.sqrt(1.0 - nf * nf), "N_axial_N": max(float(V_N), 1.0) * nf}
     import india_connections as C
     import india_connection_design as CD
     trials = []
@@ -1644,9 +1649,9 @@ def _fin_plate_tier(sec, V_N, Vs, template, surf0, lines, margin):
                         sp = double_fin(sp, sec)
                     kw = {k: v for k, v in sp.items() if k in ("t_plate_mm", "h_plate_mm", "fy_plate_MPa",
                                                                 "fu_plate_MPa", "block_shear_areas", "cjp",
-                                                                "n_plates")}
+                                                                "n_plates", "bolt_lines", "gauge_mm")}
                     kw["bolts"] = dict(sp["bolts"])
-                    r = C.fin_plate_shear_checks(V_N=max(float(V_N), 1.0), **kw)
+                    r = C.fin_plate_shear_checks(V_N=max(float(V_N), 1.0), **kw, **comp)
                     if r.get("dc") is None or r["dc"] > margin:
                         continue
                     sl = CD.hsfg_slip_checks(kw["bolts"], sp["bolt_type"], Vs, V_N, slip_surface=sp.get("slip_surface"))
@@ -1977,6 +1982,95 @@ def bump_base(sp, failing, col=None):
     return _restate_base_texts(_minor_axis_anchors(_bump_base(sp, failing, col=col)))
 
 
+def _col_pieces(lm):
+    """{tag: (section in x, node_i, node_j, role_group)} of the column elements of the run (captured member records)."""
+    out = {}
+    for t, e in (lm.elems or {}).items():
+        m = e.get("member") or {}
+        if e.get("kind") not in ("col", "column") and m.get("role") not in ("column", "lateral_col", "gravity_col"):
+            continue
+        if m.get("node_i") is None or m.get("node_j") is None:
+            continue
+        out[t] = (m.get("section"), int(m["node_i"]), int(m["node_j"]), m.get("role_group"))
+    return out
+
+
+def splice_section_changes(lm, x, lab, role):
+    """The sections (in the proposal x) that pieces of label `lab` (role group `role`) sit on where they change
+    section, or [] when every piece sits on the same label or on the base: where a 'none' splice is not allowed."""
+    pcs = _col_pieces(lm)
+    if not pcs:
+        return []
+    cur = {t: (x[lm.groups_of[t]][0] if lm.groups_of.get(t) in x else v[0]) for t, v in pcs.items()}
+    below = {}
+    for t, v in pcs.items():
+        below.setdefault(v[2], []).append(t)
+    lows = set()
+    for t, v in pcs.items():
+        if cur[t] != lab or (role and v[3] and v[3] != role):
+            continue
+        if v[1] // 100000 == 0:
+            continue                                   # on the base
+        bl = below.get(v[1]) or []
+        if not bl:
+            lows.add("no column")
+        for tb in bl:
+            if cur[tb] != lab:
+                lows.add(cur[tb])
+    return sorted(lows)
+
+
+ELECTRODE = {"E250": "IS 814 low-hydrogen E4918 (matching IS 2062 E250)",
+             "E350": "IS 814 low-hydrogen E5518 (matching IS 2062 E350)"}
+DIVISION_PLATE_T = (20.0, 25.0, 32.0, 40.0, 50.0, 56.0, 63.0, 75.0, 80.0, 90.0, 100.0)
+
+
+def designed_splice(lm, x, g, lab, grade, lows):
+    """A column splice at a section change (the upper label `lab` on the sections `lows`): a site CJP butt splice
+    with matching electrode when the outer sizes agree (the thicker wall / flange tapered 1 in 4 to the thinner, IS 800
+    10.5), else both shafts CJP-welded to a division plate (bearing), its thickness from the upper wall's line force
+    q = (N/A + Mz/Zz + My/Zy) t_wall (the group's largest forces) carried over the offset between the walls."""
+    register(lab)
+    pu = props(lab)
+    gkey = "E350" if "350" in str(grade or "") else "E250"
+    elec = ELECTRODE[gkey]
+    dims = []
+    for lw in lows:
+        if lw == "no column":
+            continue
+        register(lw)
+        pl_ = props(lw)
+        dims.append((lw, float(pl_["d"]), float(pl_["bf"]), max(float(pl_["tf"]), float(pl_["tw"]))))
+    tu = max(float(pu["tf"]), float(pu["tw"]))
+    same = all(abs(d - float(pu["d"])) < 1.0 and abs(b - float(pu["bf"])) < 1.0 for _, d, b, _t in dims)
+    if same:
+        tmax = max([t_ for *_, t_ in dims] + [tu])
+        return {"type": "cjp", "weld": {"matching_electrode": True, "electrode": elec, "t_mm": tu},
+                "note": "site CJP butt splice of %s on %s, matching electrode, 100 %% UT; the thicker wall (%s mm) "
+                        "tapered 1 in 4 on its inner face to %s mm (equal outer faces)"
+                        % (lab, " / ".join(d[0] for d in dims) or "the column below", _fmt(tmax), _fmt(tu))}
+    a = max([max(d - float(pu["d"]), b - float(pu["bf"])) / 2.0 for _, d, b, _t in dims] + [0.0])
+    dem = lm.group_demand(g) if g is not None else {"N": 0.0, "Mz": 0.0, "My": 0.0}
+    A, Zz, Zy = plastic_props(lab)
+    p_ = props(lab)
+    Zz, Zy = float(p_.get("Zx") or Zz), float(p_.get("Zy") or Zy)
+    q = (float(dem.get("N") or 0.0) / float(p_["A"]) + float(dem.get("Mz") or 0.0) / Zz
+         + float(dem.get("My") or 0.0) / Zy) * min(float(pu["tf"]), float(pu["tw"]))
+    import india_is800 as I8
+    tp = DIVISION_PLATE_T[-1]
+    for t_ in DIVISION_PLATE_T:
+        fy = float(I8.fy_is2062("E250", t_))
+        if q * a <= 0.95 * fy * t_ * t_ / 4.0 / 1.1 and q <= 0.95 * fy * t_ / (math.sqrt(3.0) * 1.1):
+            tp = t_
+            break
+    return {"type": "cjp", "bearing": True,
+            "weld": {"matching_electrode": True, "electrode": elec, "t_mm": tu},
+            "transition": {"type": "division_plate", "t_mm": tp, "grade": "E250 B0", "offset_mm": round(a, 1)},
+            "note": "%s on %s: both shafts CJP-welded (matching electrode, 100 %% UT) to a %s mm E250 B0 division plate, "
+                    "UT-tested for laminations; ends bearing on the plate; the walls %s mm apart"
+                    % (lab, " / ".join(d[0] for d in dims), _fmt(tp), _fmt(a))}
+
+
 def adapt_splice(template, old_col, new_col):
     """A column splice for a new upper column: flange plates resized to the new flange width (area b t, the bolts'
     bearing thickness the thinner of the flange and the plate), web plates kept; a 'none' or CJP splice is kept."""
@@ -2211,19 +2305,20 @@ def _labels_in_use(x):
     return {v[0] for v in x.values()}
 
 
-def _group_conn_demand(ev, roles, label):
+def _group_conn_demand(ev, roles, label, with_frac=False):
     """The run's beam-end shear demand of a beam group: the largest V (or V + N resultant) of its connection
-    records ('conn-<role>-<label>')."""
-    best = 0.0
+    records ('conn-<role>-<label>').  with_frac: also the axial share N / R of that demand (0 for a shear)."""
+    best, frac = 0.0, 0.0
     for c in ev.get("connections") or []:
         cid = str(c.get("id"))
         if not any(cid == "conn-%s-%s" % (r, label) for r in roles):
             continue
         d = c.get("demand") or {}
         for k in ("V_P_resultant_N", "V_N"):
-            if isinstance(d.get(k), (int, float)):
-                best = max(best, float(d[k]))
-    return best
+            if isinstance(d.get(k), (int, float)) and float(d[k]) > best:
+                best = float(d[k])
+                frac = (float(d.get("P_end_N") or 0.0) / best) if (k == "V_P_resultant_N" and best > 0) else 0.0
+    return (best, min(frac, 1.0)) if with_frac else best
 
 
 def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, infeasible=None, cache=None):
@@ -2253,15 +2348,15 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
         # beam-end shear connection (gravity beams, braced-bay beams, struts)
         if any(r in ("floor", "roof") for r in rl) and family_of(lab) not in ("CHS", "ISA"):
             tpl = CD.spec_for(conn_cfg, "beam_shear", lab0, "beam") or {}
-            V = _group_conn_demand(ev, rl, lab0)
+            V, nfr = _group_conn_demand(ev, rl, lab0, with_frac=True)
             if (V > 0 or lab != lab0) and max(1.2 * V, 30.0e3) > shear_done.get(lab, 0.0):
                 Vd = max(1.2 * V, 30.0e3)
-                sp = design_fin_plate(lab, Vd, tpl)
+                sp = design_fin_plate(lab, Vd, tpl, n_frac=nfr)
                 if sp is not None:
                     out["beam_shear"][lab] = sp
                     shear_done[lab] = Vd
                 elif infeasible is not None:
-                    infeasible.append((g, Vd, tpl))
+                    infeasible.append((g, Vd, tpl, nfr))
         # moment joints
         tplj = CD.spec_for(conn_cfg, "beam_column", lab0, "beam")
         if tplj and (lab != lab0 or g in bumps.get("beam_column", {})):
@@ -2310,6 +2405,13 @@ def design_connections(lm, ev, x, x_run, conn_run, roles, specs, *, bumps=None, 
             ts = CD.spec_for(conn_cfg, "column_splice", lab0, r)
             if ts is not None:
                 sp = copy.deepcopy(cs[key]) if (lab != lab0 and key in cs) else adapt_splice(ts, lab0, lab)
+                # SECT review (2026-11-07): 'none' (continuous column) only where every piece of this label sits on
+                # the same label or on the base; at a section change the splice is designed (CJP, or CJP to a
+                # division plate between boxes of different outer size)
+                if isinstance(sp, dict) and sp.get("none"):
+                    lows = splice_section_changes(lm, x, lab, r)
+                    if lows:
+                        sp = designed_splice(lm, x, g, lab, grade, lows)
                 fs = (bumps.get("column_splice") or {}).get(key) or (bumps.get("column_splice") or {}).get("%s:%s" % (r, lab0))
                 if fs:
                     sp = bump_splice(sp, fs)
@@ -2389,7 +2491,7 @@ def _joint_shear_spec(lab, V):
     if sh is None:
         return None
     return {k: v for k, v in sh.items() if k in ("t_plate_mm", "h_plate_mm", "fy_plate_MPa", "fu_plate_MPa", "bolts",
-                                                 "block_shear_areas", "cjp", "n_plates")}
+                                                 "block_shear_areas", "cjp", "n_plates", "bolt_lines", "gauge_mm")}
 
 
 def joint_bumps(lm, ev, x, conns):
@@ -2679,18 +2781,18 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         if infeas:
             # a beam whose end shear connection (V + N) does not fit its section: the next section up in the group's
             # order that passes the frozen member checks and takes a fin plate for that demand
-            for g, Vd, tpl in infeas:
+            for g, Vd, tpl, nfr in infeas:
                 # an EBF link too is stepped up for its end connection (the smallest that takes it): without it the
                 # design cannot pass; its stiffness is not asked for (stiffness_requirements), which kept the link
                 # overstrength low enough in the IN_Ex15 / IN_Ex19 first passes
                 prev = (st.setdefault("conn_req", {}).get(g) or [0.0, None])[0]
-                st["conn_req"][g] = [max(float(Vd), float(prev)), tpl]      # kept: size_groups honours it from now on
+                st["conn_req"][g] = [max(float(Vd), float(prev)), tpl, nfr]  # kept: size_groups honours it from now on
                 cur = x1[g]
                 for _ in range(80):
                     nu = next_up(specs[g], cur, lm, g, st["margins"].get(g, specs[g].get("margin", 0.95)))
                     if not nu:
                         break
-                    if design_fin_plate(nu[0], Vd, tpl) is not None:
+                    if design_fin_plate(nu[0], Vd, tpl, n_frac=nfr) is not None:
                         log_fn("    %s: no fin plate fits %s for %.0f kN -> %s" % (g, x1[g][0], Vd / 1e3, nu[0]))
                         x1[g] = nu
                         break
