@@ -456,3 +456,18 @@ def test_base_gussets_stay_within_the_outstand_limit_and_add_gussets_past_it():
     assert big["h_mm"] == 850.0 and big["n_per_side"] == 4 and big["note"].startswith("16 gussets")
     thin = AZ._step_stiffeners(dict(st, t_mm=25.0, h_mm=350.0), [("gusset_weld_to_plate_10_5_7", 1.19, False)])
     assert thin["t_mm"] == 32.0 and thin["h_mm"] == 350.0
+
+
+def test_monotone_column_stacks_keep_lower_storeys_at_least_as_stiff():
+    """IS 1893 Table 6(i): K_i < K_i+1 is a soft storey.  A lateral column group never ends up less stiff than the
+    same columns above it (stacks from the group names: _1_3 / _4_6, _0 / _1, _lo / _hi)."""
+    AZ = _az()
+    specs = {"fc_1_3": {"role": "column", "lateral": True}, "fc_4_6": {"role": "column", "lateral": True},
+             "fc_7_9": {"role": "column", "lateral": True}, "gc_1_3": {"role": "column"},
+             "col_lo": {"role": "column", "lateral": True}, "col_hi": {"role": "column", "lateral": True}}
+    assert AZ.column_stacks(specs) == {"fc": ["fc_1_3", "fc_4_6", "fc_7_9"], "col": ["col_lo", "col_hi"]}
+    x = {"fc_1_3": ("HB300", None), "fc_4_6": ("HB250", None), "fc_7_9": ("HB350", "E350 B0"),
+         "gc_1_3": ("HB150", None), "col_lo": ("HB400", None), "col_hi": ("HB300", None)}
+    y = AZ.monotone_columns(x, specs, log_fn=lambda *a: None)
+    assert y["fc_4_6"] == ("HB350", "E350 B0") and y["fc_1_3"] == ("HB350", "E350 B0")
+    assert y["col_lo"] == ("HB400", None) and y["gc_1_3"] == ("HB150", None)

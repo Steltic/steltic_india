@@ -1127,6 +1127,38 @@ def size_groups(lm, x, margins, stiff_req, *, log_fn=log, fixed=(), barred=None,
     return new, notes
 
 
+_STACK_RX = re.compile(r"^(?P<base>.+?)_(?:(?P<a>\d+)(?:_(?P<b>\d+))?|(?P<w>lo|hi|roof))$")
+
+
+def column_stacks(specs):
+    """Lateral column groups that are the same frame columns over storey ranges, bottom first, from the group names:
+    '<base>_<i>_<j>' / '<base>_<i>' (storeys from i), '<base>_lo' / '<base>_hi'.  {base: [group, ...]}."""
+    st = {}
+    for g, sp in specs.items():
+        if sp.get("role") != "column" or not sp.get("lateral"):
+            continue
+        m = _STACK_RX.match(g)
+        if not m:
+            continue
+        key = int(m.group("a")) if m.group("a") is not None else {"lo": 0, "hi": 1000, "roof": 2000}[m.group("w")]
+        st.setdefault(m.group("base"), []).append((key, g))
+    return {b: [g for _, g in sorted(v)] for b, v in st.items() if len(v) > 1}
+
+
+def monotone_columns(x, specs, log_fn=log):
+    """IS 1893 Table 6(i) soft storey (K_i < K_i+1): a lateral column group is never less stiff (Ix) than the same
+    columns in the storeys above it -- where the sizing made it so, it takes the upper group's section and grade."""
+    x = dict(x)
+    for base, gs in sorted(column_stacks(specs).items()):
+        for k in range(len(gs) - 2, -1, -1):
+            lo, up = gs[k], gs[k + 1]
+            if stiffness(x[up][0], "I") > stiffness(x[lo][0], "I") * 1.0001:
+                log_fn("    stack %s: %s %s is stiffer than %s %s below it -> %s takes it"
+                       % (base, up, x[up][0], lo, x[lo][0], lo))
+                x[lo] = x[up]
+    return x
+
+
 def next_up(spec, current, lm=None, g=None, margin=None):
     """The next candidate after `current` (label, grade) in the group's order of preference that is not weaker than
     it (A, Ix, Zx; the same section in a higher grade counts) and passes the frozen member checks (when lm is
@@ -2328,6 +2360,7 @@ def size_job(job_dir, work, *, max_iter=14, waivers=(), time_cap_s=6600, log_fn=
         for g in sorted(lm.specs):
             if lm.specs[g].get("same_as"):
                 x1[g] = x1[lm.specs[g]["same_as"]]
+        x1 = monotone_columns(x1, specs, log_fn=log_fn)
         gbs1 = grade_map(x1, roles, mod.cfg.get("steel_grade"), base={k: v for k, v in (st["gbs"] or {}).items()
                                                                        if ":" not in k and k not in _labels_in_use(x)})
         bumps = connection_bumps(ev, x, roles)
