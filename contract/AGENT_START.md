@@ -88,6 +88,11 @@ Before `pipeline.design_and_report`:
      pattern's own `sign` fixes it); walls load the first exposed facade per strip by tributary width, the
      along-ridge patterns carry the gable walls, the roof pressure reaches every roof level and splits at
      `cfg['ridge']` = {axis, coord_mm} (default: plan mid-line). `member_wind_not_required` needs a reason.
+     The two side walls (parallel to the wind) are loaded too, with their Table 5 Cpe (C / D at theta 0, A / B at
+     theta 90; one coefficient per wall, the 0.25 w local strip is for cladding only): the generator writes
+     `wall_side_kNm2`, `wall_cpe` and `pd_kNm2` on every pattern. A hand-built pattern without `wall_side_kNm2`
+     must carry `Cpi` and `pd_kNm2` (or the wind summary's `pd_kNm2`): the engine then takes the side-wall Cpe
+     from Table 5 at the model geometry, and a pattern it cannot load fails the package check.
    * Tall or flexible buildings (IS 875-3 9.1: h/b > 5 or f1 < 1 Hz): the along-wind forces from the
      10.2 gust factor (`wind_summary.gust_factor`) and the across-wind response (10.3) in
      `wind_summary.across_wind` (ruling R10 — it counts only when evaluated): `{found: True, Mc_kNm}` (or

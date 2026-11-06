@@ -8,13 +8,16 @@ checks that let auto-sized members at 0.99–1.00 pass when they are overstresse
 affect every HR job, not only the PEB ones. This branch closes them and two small items. Gold cfgs are not edited: the
 job owners re-size their golds on this engine (the gold-impact table below says what moves).
 
-Two follow-ups are plain commits on top of the round-1 head 711cc38:
+Three follow-ups are plain commits on top of the round-1 head 711cc38:
 - **Follow-up 1:** the lead's first ruling, the Section 12 class gates with N, the panel-zone doubler fy and the
   member-wind artefact.
 - **Follow-up 2:** the independent review (`briefs/ENG_REVIEW.md`), the lead's two rulings (Pd under axial
   compression alone; Steltic ruling D-T11 for the web under N + My) and review findings 4–13.
+- **Follow-up 3:** the lead's rulings on open points 1 (side walls) and 2 (the Section 12 gates in the hinge state of
+  the earthquake combinations), the review's R-1 (the PEB buckling section's area) and its gable-triangle note (every
+  wall area reaches a member), and a facade-step fix the per-wall totals found.
 
-The code is final at 8b2ffbf, the commit the final gold A/B ran on. Later commits add tests and docs only. Nothing is
+The code is final at 0482f9a, the commit the final gold A/B ran on. Later commits add tests and docs only. Nothing is
 pushed.
 
 ## Why
@@ -316,10 +319,10 @@ the docs after them.
   - the web sits on the neutral axis of My, so under N + My it carries the uniform N / A;
   - Table 2 has no biaxial row. This follows the element's stress state and matches common practice.
 - Where the rule applies:
-  - the member check (`d_t11_axial_row`, `:2234`, called in `member_check_is800`);
-  - the Section 12 gates (`table2_class_by_combination`, `india_is800_s12.py:240`);
-  - the PEB sizer's 12.11.3.1 screen, which now classifies with each record's N (`LocalModel._class_with_N`,
-    `peb_autosize.py:1361`; finding 7).
+  - the member check (`d_t11_axial_row`, `:2234`, called in `member_check_is800`), in every combination;
+  - not in the Section 12 gates or the sizer's 12.11.3.1 screen since follow-up 3: they judge the hinge state of the
+    earthquake combinations (the lead's ruling on open point 2, `D_T11_GATE_CITE`; Follow-up 3 (b) below). Between
+    8b2ffbf and follow-up 3 they used this rule, which made the PEB SMRF columns fail 12.11.3.1 in wind records.
 - It replaces this branch's first reading. Its first cut of the strict reading measured IN_Ex3 corner column
   0.911 → 1.179 and IN_Ex2 0.990 → 1.085; the gold A/B below has the final numbers.
 
@@ -333,7 +336,7 @@ the docs after them.
 | 4 | A beam's in-span hogging peak never reached the check | `member_records` keeps `Mmaj_hog_min` = min(sag) (`REC_FIELDS`, `static_model.py:1673`; `beam_hog_minima` `:1804`); the check takes `Mz_mid_hog_Nmm` (`:1851`; `india_is800.py:3496`) with LLT_hog; station checks clear it; envelope layout bumped | `static_model.py`, `india_is800.py`, `design_pipeline.py:810` | `test_F4_beam_in_span_hogging_reaches_the_member_check`; mutation F4 |
 | 5 | Knee / canopy-root web strip with the doubler at the column fy | Thickness-weighted fy, the doubler at its own band (`peb_checks.column_web_strip_fy` `:65`, knee `:839`; the sizer the same) | `peb_checks.py`, `peb_autosize.py` | `test_F5_web_strip_…`; mutation F5 |
 | 6 | Hard-coded IS 2062 values | Rods at the band of their diameter (`peb_levers.rod_fy` `:561`; the existing rod test's expected Td updated: 240 MPa at 20 mm); the sizer's end-plate web fy from the member grade's band (`peb_autosize.member_web_fy` `:246`); the D-T10 note's fallback through `fy_is2062` (`design_pipeline.py:1143`) | as listed | `test_F6_rod_and_sizer_web_fy_from_the_band` |
-| 7 | Sizer 12.11.3.1 screen at N = 0 | Classified with each record's N and D-T11 | `peb_autosize.py:1361` | `test_DT11_section12_gate_and_sizer_screen_…` |
+| 7 | Sizer 12.11.3.1 screen at N = 0 | Classified with each record's N and D-T11 | `peb_autosize.py:1370` | `test_DT11_section12_gate_and_sizer_screen_…` |
 | 8 | Other Pd paths on the mid-depth row | Ruling 1's default in `compression_capacity` | `india_is800.py:2949` | `test_R_axial_only_checks_take_the_axial_compression_row_too`; mutation R1b |
 | 9 | Wind posts only in custom builds, silently | The package says why none was found (`wind_post_Ka_note`: parametric storey forces, or no wall column with a pinned top) | `static_model.py:1285`, `design_pipeline.py:1479` | gold packages (A/B) |
 | 10 | Doc figures / Ka tag / stale comment | Fixed: the "only two ratios move" sentence, the IN_Ex2 wind column tag (B only: its own Ka factor is 1.000), the `member_check_is800` comment | this file, ENG_RESULT4, `india_is800.py` | — |
@@ -341,6 +344,143 @@ the docs after them.
 | 12 | Column LLT_sag / LLT_hog | A cfg giving a column different lengths is rejected with a plain message | `design_pipeline.member_override` `:634` | `test_F12_…`; mutation F12 |
 | 13 | Suite red on the contract lint | `panel_zone_doubler_grade` / `_fy_MPa` named in the contract | `contract/README_AGENT.md:103` | `test_fix_D05_contract_lint.py` |
 | — | (found by the suite after the rulings) The sizer proposed a column base section that did not fit the declared base plate, so the full run failed the plate-outline gate | `LocalModel._base_outline_fails` screens such sections (L ≥ 0.95 d, B ≥ 0.95 bf) | `peb_autosize.py:1561` | `test_peb_levers_2026_10.py::test_autosize_passes_and_is_deterministic` |
+
+## Follow-up 3 (2026-11-06): the lead's rulings on open points 1 and 2, review R-1 and the gable triangle
+
+Plain commits on 557a8d9: 845ffb3 (b), d901ba2 (R-1), 14a707a (a and the gable triangle), 0482f9a (the facade step the
+per-wall totals found), c837ac6 (a test). The code is final at 0482f9a; the final A/B and the suite ran on it.
+
+### (a) The side walls take their IS 875-3 Table 5 Cpe (open point 1)
+
+- **The rule, as ruled.** Every member-wind pattern loads the columns and posts of the two side walls (the walls
+  parallel to the wind) with:
+  - the side-wall Cpe of Table 5 with each ±Cpi of the pattern, F = (Cpe − Cpi) A pd (7.3.1);
+  - the tributary width of the member's own wall;
+  - the Ka of a wind post's own side-wall area (7.2.2.1 (b)), as for the windward and leeward walls; frame columns
+    keep the pattern's frame Ka.
+- **Zones: what the corpus's Table 5 says.**
+  - The table (`documents/standards/IS_875_Part_3_2015/markdown/pages_recovered/page_015.md`, clause 7.3.3.1) gives
+    one average Cpe for each of the four walls: "the wind at θ = 0° blows onto wall **A**; **B** is the opposite wall;
+    **C** and **D** are the two side walls (at θ = 90° the wind blows onto **C**)."
+  - It has no zones by distance from the windward edge. Its only edge band is the local Cpe strip of width 0.25 w,
+    and 7.3.1 keeps local coefficients off members: "Coefficients for the local effects should only be used for
+    calculation of forces on these local areas affecting roof sheeting, glass panels, and individual cladding units
+    including their fixtures. They should not be used for calculating force on entire structural elements such as
+    roof, walls or structure as a whole."
+  - So each side-wall member takes its wall's Cpe over its whole tributary, and no tributary spans two zones. Zones
+    A / B / C by distance from the windward edge are the EN 1991-1-4 scheme; they are not in IS 875-3:2015, and the
+    engine does not introduce them.
+  - Table 5 has C = D at θ = 0 and A = B at θ = 90 in every row. In the golds: C / D −0.5 to −0.7, A / B −0.5.
+- **Where.**
+  - `india_wind_tables.lowrise_member_wind` writes `wall_side_kNm2` = (Cpe − Cpi) pd, `wall_cpe` (the Table 5
+    surface and Cpe of each wall) and `pd_kNm2` on every pattern; `india_combos` carries them to the static model.
+  - `static_model.side_wall_pressure` takes the pattern's value. For a pattern without it (IN_Ex6's hand-built
+    patterns) it derives the Cpe from Table 5 at the model geometry: θ = 0 for wind onto the longer face, checked
+    against the windward / leeward Cpe the pattern's own pressures imply. A pattern whose side walls cannot be loaded
+    is a FAIL in the package check (`consistency.member_wind_side_wall_issues`), never silent.
+  - The side walls are found by the same wall scan as the windward and leeward walls, run across the wind
+    (`wall_wind_pieces`: first exposed line per strip, the roof envelope, the own wall's width). The parametric
+    nodal fallback loads them too. Text: `SIDE_WALL_CITE`.
+  - Record: `member_wind_wall_scan.patterns[p]` lists every loaded member with its wall (windward / leeward / side_lo
+    / side_hi), Table 5 surface, Cpe, Cpi, q and width; the side-wall pressure record and its source; the side
+    walls' sheltered pieces. `wind_post_Ka` has one record per post and wall.
+- **Girts** are designed by the CFS engine (owner decision D-T5) on the worst of all four walls' Table 5 Cpe at θ 0 and
+  90 plus the local strips (`steltic_CFS_india` `india_cfs_members.member_pd`, face 'wall', zone 'all'). Side walls
+  were already covered there; nothing changes.
+- **The frame-level wind cases** (the static replay of the storey forces W_X / W_Y) apply the net along-wind force
+  per level (Cf, or the windward − leeward Cpe difference). The two side walls' forces are equal and opposite
+  (C = D, A = B), so they add no net force and no torsion; nothing is left out there. The totals table below shows
+  side_N = 0.000 kN for every gold and pattern. The side walls' member effects (the columns bending under the suction)
+  are in the member-wind cases.
+
+### (b) The Section 12 gates in the earthquake combinations, in the hinge state (open point 2)
+
+- **As ruled, part of D-T11** (`D_T11_GATE_CITE`, `india_is800.py:2224`; `table2_class_by_combination`,
+  `india_is800_s12.py:245`):
+  - 12.11.3.1 and the other Section 12 class requirements (12.7.2.4, 12.8.2.5, 12.8.4.1) are about the plastic hinge
+    that forms under earthquake. The gate is judged in the earthquake combinations only: the Table 4 rows with EL and
+    the 12.2.3 rows (`earthquake_record`; `section12_model_data` now writes each record's `lateral_kind`). The wind,
+    gravity and service records are not judged; the record counts both.
+  - In each earthquake record the web is classified in the hinge state, major-axis plastic bending with that
+    combination's N: the "generally" rows with its r1 / r2 (the mid-depth row with no N). D-T11's "axial compression"
+    row is not used there; it stays for the member resistance checks in every combination.
+  - A member with no earthquake record is classified without N, stated in the record.
+- **Engine reading for braces, for the lead to confirm.** A brace's plastic hinge is its buckling hinge, about the axis
+  of the larger KL/r (`brace_hinge_axis`).
+  - About the major axis the brace takes the same "generally" rows.
+  - About the minor axis (or on a tie) the web lies on that hinge's neutral axis and carries the uniform N, so it
+    keeps the axial row. Reading major-axis bending into a minor-axis buckling hinge would be unconservative.
+  - No gold brace moves: every gold I / box brace passes on either row (the generally rows are never stricter than
+    the axial row, with the 42ε floor).
+- **The sizer's 12.11.3.1 screen** does the same (`LocalModel._class_with_N`, `peb_autosize.py:1370`): earthquake labels
+  from the run's `load_combinations`, the generally rows.
+- **Not changed, flagged:** the IS 18168 Table 2 (ii) column web limit takes Ca = Pu / (Py / γm0) from the largest |P|
+  of every combination (`_ca_governing`). It is not an IS 800 Section 12 class gate, does not use the D-T11 row and is
+  the stricter side. Say if it should be the earthquake records only.
+
+### R-1: the PEB buckling section takes the segment's effective area (review, blocking)
+
+- `peb_buckling_section` scaled the buckling section's Pd by the area of the segment it was given. The Section 12
+  tapered-column path passes the gross segment. So Pdz was Ag fcd,z even for a segment slender on the 42ε row.
+- On IN_Ex1's main column WI862X225X12X8 that was 2,696 kN, against the member check's 1,709 kN (Ae 7,672 of 12,104
+  mm²).
+- It now takes the area from `comp["effective_section"]["A_eff_mm2"]` when present, so every caller gets Ae; the
+  record states it (`A_segment_mm2`, `buckling_basis`). The member check is unchanged: it passed the 42ε props already.
+- No gold row moves. The largest PEB 12.5.1 trigger P/Pd at the head is 0.16 (the IN_Ex3 sandbox), under 0.4, so no
+  12.5.1.1 row switches on.
+
+### Every wall area reaches a member (the review's gable-triangle note)
+
+- **What was missing.** The wall scan loads each column piece over its tributary width × its own length. Where a
+  wall's top follows a sloping member, three kinds of area went wrong:
+  - the wall above a line's top within its strip carried nothing: the corner columns end at the eave below the gable
+    rafter, and IN_Ex21's posts end at 8.0 m below the end truss's top chord;
+  - a post's rectangle reached above the rafter on its down-slope side;
+  - on IN_Ex9 (end frames with no posts) the whole gable triangle above the eave carried nothing.
+- **The rule** (`static_model.envelope_residuals`, `ENVELOPE_RESIDUAL_BASIS`). In a wall plane with a sloping envelope
+  member (gable rafter, end-truss top chord):
+  - the wall at each point along it runs up to that member, and the column line whose tributary strip holds the
+    point carries it;
+  - the strip's area above or below the line's loaded height goes to the line's upper end, as a nodal force at the
+    top node of its top piece;
+  - a wind post's Ka area includes it.
+- **IN_Ex21.** The gable is 137.25 m², and 135.00 was loaded before.
+  - The review's triangle over the posts' tops (y 6–12 m, 8.0 to 8.75 m, 2.25 m²) is balanced inside the posts'
+    strips: each post's 3–9 m strip holds 48 m² of wall, exactly its 6 m × 8.0 m rectangle.
+  - What was really missing is the two triangles above the eave next to the corners, 1.125 m² each. Each corner column
+    now carries its triangle at its eave node: up to 0.58 kN (1.125 m² × 0.515 kN/m², the windward gable
+    of WM90−) and 0.53 kN as a side wall (× 0.4721, WM0+).
+- **The PEB golds** have posts up to the rafter.
+  - Their residuals net to zero on every gable (each corner +, the posts −), so their totals equal the hand total as
+    before.
+  - The posts give up the part of their rectangle above the rafter, and the corner columns take their triangles.
+- **IN_Ex9.** Each corner column of the two portal gables takes half of the 36 m² triangle above the eave
+  (18 m² at its eave node).
+
+### A facade step (found by the per-wall totals)
+
+- On IN_Ex9 (a flat lean-to beside the hall) the scan gave a piece half the distance to the next strip at its height,
+  even where that strip's wall stands on another plane.
+  - The hall's corner column (12, 60) took 6 m toward the lean-to over its 8 m, a wall that does not exist at y = 60.
+  - The lean-to's end wall next to wall B (x 6–12 m at y = 30) had no member.
+  - The +Y face carried 270 m² below the eave line against 252.
+- `wall_wind_pieces` now ends a wall at its line when the neighbouring strip's wall lies behind it. When the
+  neighbouring wall stands in front and a column of this plane stands at the neighbour's line (the re-entrant corner),
+  that column carries the other half. The record lists the steps (`stepped_facade`).
+- No other gold has a step.
+
+### D-T11: the lead's acceptance of the two readings (stated as rulings)
+
+- "Compression" in D-T11 means P > `p_comp_tol` = max(1 N, 10⁻³ Ag fy).
+- "Mdz" in the 0.05 Mdz threshold is the section's 8.2.1.2 bending strength without axial force
+  (`mdz_without_axial_force`), not the LTB Mdz of 9.3.2.2. It is the larger value, so more combinations go to the axial
+  row: the stricter side.
+
+### Known limits
+
+- A slender welded box now has a Pd (`effective_area_box_axial`), but its bending capacity is not coded. So its member
+  check is "not evaluable" in any combination where it is slender: a visible failure, the lead's ruling to keep. No
+  gold has one.
 
 ## Tests
 
@@ -376,7 +516,7 @@ Mutation check (`/home/claude/wt/ENG/tools/mutate.py`: each fix reverted in a sc
 Rerun at the head 8b2ffbf (`logs/mutation_round1_head.txt`): the same counts (A 2, B 4, B' 2, C 1, C' 2, C'' 1, Ka 1,
 gate 1).
 
-`tests/test_engine_checks_2026_11_followup.py` (the follow-ups; 28 tests):
+`tests/test_engine_checks_2026_11_followup.py` (follow-ups 1 and 2, and the follow-up 3 gate and R-1 tests; 34 tests):
 
 | Item | Unit tests | End-to-end on a real gold piece |
 |---|---|---|
@@ -403,37 +543,75 @@ Mutation check of the follow-ups (`/home/claude/wt/ENG/tools/mutate2.py`, log `l
 | F5: the web strip back to the column fy | 1 |
 | F12: different column LLT_sag / LLT_hog accepted | 1 |
 
+Follow-up 3 (`tests/test_engine_checks_2026_11_followup3.py`, 9 tests, and in `test_engine_checks_2026_11_followup.py`;
+new fixtures `IN_Ex4_smf_column_e13_s12.json` (an IN_Ex4 SMRF column piece and its 189 records from the eng4 run),
+`IN_Ex9_wall_wind_geometry.json`; the IN_Ex13 fixture gains each record's `lateral_kind`):
+
+| Item | Unit tests | End-to-end on a real gold piece |
+|---|---|---|
+| (b) Section 12 gates | `test_DT11_gate_web_beyond_the_generally_limit_at_an_EL_combination_still_fails` (NPB600 at 0.45 Py in a Table 4 EL row: semi-compact, fails; wind / gravity records only: not judged), `test_1_class_by_combination_takes_each_axial_force` / `…_smf_and_scbf_column_gates_…` (updated: judged / not-judged counts), `test_1_brace_gates_judge_the_buckling_hinge_in_the_table4_EL_records` (minor-axis hinge: axial row, slender; major-axis hinge: generally rows, plastic), `test_DT11_section12_gate_and_sizer_screen_use_the_same_rule` (the member check slender on D-T11's row; the gate compact in the hinge state; the sizer skips a wind record and classifies an earthquake one on the generally rows) | `test_DT11_gate_e2e_IN_Ex4_column_failing_only_in_a_wind_record_now_passes`: IN_Ex4 WI636X250X20X14 (d/tw 42.57 > 42ε = 36.56), slender at 8b2ffbf in 0.9DL+1.5W_Y; plastic in all 136 earthquake records; `test_1_e2e_IN_Ex13_…` (updated: 104 earthquake records judged, the generally rows) |
+| R-1 | — | `test_R1_e2e_IN_Ex1_section12_tapered_segment_takes_its_effective_area`: both paths give the member check's Pdz 1,709 kN (was 2,696 on the Section 12 path); the 12.5.1 trigger uses it |
+| (a) side walls | `test_side_wall_pressure_from_the_generator_IN_Ex21` (C / D −0.6 at θ 0, A / B −0.5 at θ 90, q = (Cpe − Cpi) pd), `test_side_wall_pressure_derived_for_a_pattern_without_it_IN_Ex6` (2 cases: θ from the plan, checked against the pattern's own Cpe), `test_side_walls_not_loadable_is_a_consistency_failure` | `test_integration_mini_PEB_side_walls_and_gable_residual` (member_wind_loads on the PEB test shed: both gables 75.6 m² as side walls, equal and opposite; every side member loaded along X with its surface and Cpe recorded), `test_integration_mini_PEB_side_wall_post_takes_the_Ka_of_its_own_side_area`, `test_e2e_IN_Ex21_long_walls_as_side_walls_under_the_along_ridge_wind` (IN_Ex21's geometry: 234 m² each, the gable posts above the eave not on the long wall) |
+| Every wall area | (the mini-shed test: corners +0.45 m², the post −0.9 m² at their top nodes) | `test_e2e_IN_Ex21_every_gable_area_reaches_a_member`: IN_Ex21's gables 135.00 → 137.25 m², each corner column's 1.125 m² triangle at its top |
+| Facade step | — | `test_e2e_IN_Ex9_lean_to_facade_step`: both gable faces 288 m², the hall's corner 12 m wide, the re-entrant column 6 m |
+
+Mutation check of follow-up 3 (`/home/claude/wt/ENG/tools/mutate3.py`, log `logs/mutation3.txt`, at c837ac6): every
+reverted fix fails its tests.
+
+| Mutation (reverted in a scratch copy) | Tests that fail |
+|---|---|
+| G1: the gates judge every record again (no earthquake filter) | 3 |
+| G2: the gates back to D-T11's axial row | 1 |
+| G3: a brace's hinge always major | 1 |
+| G4: the sizer screen judges every record again | 1 |
+| G5: the sizer screen back to D-T11's axial row | 1 |
+| R-1: the PEB buckling section back to the gross segment area | 1 |
+| S1: no side-wall scan | 2 |
+| S2: the generator's side walls take A / B at θ 0 | 1 |
+| S3: the derived side-wall Cpe from the windward surface | 2 |
+| S4: a side wall that cannot be loaded passes the package check | 1 |
+| S5: a side-wall post keeps the frame Ka | 1 |
+| E1: the envelope residual not computed | 3 |
+| E2: the residual computed but not applied | 1 |
+| F1: a wall runs on past its corner at a facade step | 1 |
+| F2: no re-entrant corner column | 1 |
+
 Full HR suite, under heavy:
 - the merged head 1414ba4: 1,281 passed, 5 skipped, 0 failed (main e927f35: 1,258 / 5 as the lead reports; main
   41fb2f7, run here before any change: 1,200 / 5);
 - 1ddb6d1 (the reviewer's run): 1 failed, the contract lint (finding 13);
 - 8b2ffbf: 1,306 passed, 3 failed, 5 skipped (`logs/suite_eng_review.txt`). The three failures were record-layout
   assertions that pinned 17 fields (finding 4 adds `Mmaj_hog_min`); eccfc95 extends them;
-- **the final code head eccfc95: 1,312 passed, 5 skipped, 0 failed, 1 warning (a third-party starlette/httpx deprecation), 445.6 s under heavy** (`logs/suite_eng_final2.txt`).
+- eccfc95 (the follow-up 2 head): 1,312 passed, 5 skipped, 0 failed (`logs/suite_eng_final2.txt`);
+- **the final head c837ac6 (code 0482f9a): 1,324 passed, 5 skipped, 0 failed, 1 warning (a third-party starlette/httpx
+  deprecation), 420.8 s under heavy** (`logs/suite_eng_f3.txt`).
 
 Existing tests changed, each because a review finding changes the value it pins:
 - `test_peb_levers_2026_10.py::test_rods_refused_outside_zone_II_ocbf`: rod Td at 240 MPa (finding 6);
 - `test_span_moment_fix.py::test_record_layout_and_combo_forces` and the two `test_third_wave_peb.py` layout tests:
   REC_FIELDS[13:17] plus `Mmaj_hog_min` (finding 4);
 - this branch's own round-1 `test_B_axial_row_only_without_any_bending_in_the_member_check`: rewritten to D-T11
-  (ruling 2).
+  (ruling 2);
+- follow-up 3: this branch's own Section 12 gate tests in `test_engine_checks_2026_11_followup.py` (the gates now judge
+  the earthquake records in the hinge state: the records carry `lateral_kind`, the expected rows and counts follow).
 
-## Gold impact (final A/B: main e927f35 against the head 8b2ffbf; every HR gold run once per engine)
+## Gold impact (final A/B: main e927f35 against the head 0482f9a; every HR gold run once per engine)
 
 **Setup.**
 - Engines:
-  - main e927f35 (a worktree at `/home/claude/wt/ENG/base`, removed after the A/B; the digests stay in `results/main`);
-  - the branch at three points, to tag each move with its fix: 1414ba4 (round 1, `results/eng`), c23c056
-    (follow-up 1, `results/eng3`) and 8b2ffbf (the head's code, `results/eng4`; the later commits change only tests
-    and docs). Each was run from `/home/claude/wt/ENG/engrun` with the CFS repo symlinked.
+  - main e927f35 (a worktree at `/home/claude/wt/ENG/base`; the digests are in `results/main`);
+  - the branch at four points, to tag each move with its fix: 1414ba4 (round 1, `results/eng`), c23c056
+    (follow-up 1, `results/eng3`), 8b2ffbf (follow-up 2, `results/eng4`) and 0482f9a (the head's code, follow-up 3,
+    `results/eng5`; c837ac6 changes only tests and docs). Each was run from `/home/claude/wt/ENG/engrun` with the CFS
+    repo symlinked.
 - Harness: a copy of the gold harness with `W` / `RR` from the environment (`/home/claude/wt/ENG/gold/harness`).
 - Jobs: copies of every job folder, run under heavy with `PYTHONHASHSEED=0`, one slot at a time:
   - `/home/claude/gold/jobs_hr`: all 20 jobs and the units IN_Ex11/workshop, IN_Ex12/unitB_link, IN_Ex12/unitC_gym,
     IN_Ex19/stem;
   - the PEB sandbox golds `/home/claude/wt/PEB/gold/jobs_hr` IN_Ex1–Ex5 (snapshot 2026-11-06 10:35);
   - IN_Ex21 `/home/claude/wt/MSME/gold/jobs_hr` (snapshot 13:11).
-- Results: `/home/claude/wt/ENG/gold/results/{main,eng,eng3,eng4}/<set>/<job>.digest.json`; the table below is
-  `results/compose_final.md` (`gold/tools/compose_final.py`).
+- Results: `/home/claude/wt/ENG/gold/results/{main,eng,eng3,eng4,eng5}/<set>/<job>.digest.json`; the table below is
+  `results/compose_f3.md` (`gold/tools/compose_f3.py`). All 30 runs ended rc 0.
 
 **Tags** (the stage that moved the item and why):
 - Round 1:
@@ -448,41 +626,65 @@ Existing tests changed, each because a review finding changes the value it pins:
   - **R1**: Pd from the class under axial compression alone;
   - **D-T11**: N with no meaningful Mz on the axial web row;
   - **F5**: the knee web strip with the doubler at its own fy.
+- Follow-up 3:
+  - **SW**: member wind on every wall: the side walls' Table 5 Cpe, every wall area reaching a member, the facade step;
+  - **G**: D-T11 for the Section 12 gates (the earthquake records, in the hinge state);
+  - **R-1**: the PEB buckling section's area on the Section 12 path (no row moves).
 
-| Set | Job | Status main → head | Worst member main → head (check) | Worst connection main → head | Above 1.0 at the head (main → head; tags) |
+| Set | Job | Status main → 8b2ffbf → head | Worst member main → head (check) | Worst connection main → head | Above 1.0 at the head (main → 8b2ffbf → head; tags), and follow-up 3's moves |
 |---|---|---|---|---|---|
-| PEB sandbox | IN_Ex1 | COMPLETE → PARTIAL (8) | lateral_col-WI862X225X12X8 0.996 → 1.063 (9.3) | 0.991 → 1.062 knee-WI975X225X12X8-WI975X250X14X6 | WI862X225X12X8 0.996 → 1.063 (B); WI938X225X12X8 0.958 → 1.002 (B); knee 0.991 → 1.062 (C) |
-| PEB sandbox | IN_Ex2 | COMPLETE → PARTIAL (62) | roof-WI408X190X12X5 0.999 → 1.211 (9.3) | 0.994 → 1.076 knee-WI725X230X22X14-WI575X260X22X16 | WI408X190X12X5 (canopy root) 0.999 → 1.211 (A); WI225X280X18X4 (corner post) 0.990 → 1.060 → 1.085 (Ka ×1.080; D-T11); WI400X220X20X4 (wind column) 0.993 → 1.050 → 1.052 (B; R1); knee 0.973 → 1.076 (C); 52 Section 12 `smf_column_class` rows (12.11.3.1) now fail (D-T11) |
-| PEB sandbox | IN_Ex3 | PARTIAL (2) → PARTIAL (6) | lateral_col-WI475X220X16X5 0.994 → gravity_col-WI200X190X12X4 1.179 (9.3) | 1.024 → 1.096 knee-WI475X220X16X5-WI675X225X12X6 | WI200X190X12X4 (corner post) 0.911 → 0.977 → 1.179 (Ka; D-T11); WI475X220X16X5 0.994 → 1.075 → 1.083 (B; R1); knee 1.024 → 1.096 (C) |
-| PEB sandbox | IN_Ex4 | COMPLETE → PARTIAL (92) | gravity_col-WI475X190X12X4 0.994 → gravity_col-WI200X220X16X4 1.243 (9.3) | 0.984 → 1.083 knee-WI650X250X20X14-WI575X250X18X16 | WI200X220X16X4 (corner post) 0.970 → 1.032 → 1.243 (Ka ×1.063; D-T11); knee 0.973 → 1.083 (C); 88 Section 12 `smf_column_class` rows now fail (D-T11) |
-| PEB sandbox | IN_Ex5 | PARTIAL (59) → PARTIAL (61) | lateral_col-WI862X225X12X8 1.132 → 1.214 (9.3) | 1.091 → 1.091 (rafter splice) | WI575X190X10X5 1.048 → 1.083 (B); WI950X250X14X6 1.077 → 1.101 (B); WI562X225X12X8 1.081 → 1.109 (R1); WI638X225X12X8 0.982 → 1.016 (R1); WI712X225X12X8 1.054 → 1.090 (R1); WI788X225X12X8 1.099 → 1.139 (B); WI862X225X12X8 1.132 → 1.214 (B); WI938X225X12X8 1.093 → 1.147 (B); knee 0.991 → 1.062 (C); 18 rafter splices 1.090–1.091 (unchanged) |
-| MSME sandbox | IN_Ex21 | COMPLETE → COMPLETE | truss_diagonal-ISA70X70X6 0.960 → 0.960 (Table 3) | 0.964 → 0.964 truss_vertical-ISA60X60X6 | none; the bottom chord 0.950 → 0.956 → 0.782 (Ka; MW) |
-| published | IN_Ex1 | PARTIAL (2) → PARTIAL (4) | lateral_col-WI300X180X8X5 1.301 → 1.378 (9.3) | 0.969 → 1.033 knee-WI1000X250X14X6-WI1000X250X14X6 | WI300X180X8X5 1.301 → 1.378 (Ka ×1.060); knee 0.969 → 1.033 (F5: the column-flange T-stub row, the web strip with its 8 mm E250 doubler) |
-| published | IN_Ex2 | COMPLETE → PARTIAL (52) | roof-WI500X300X25X14 0.930 → roof-WI500X200X12X6 0.937 (9.3) | 0.974 → 0.974 lateral_col-WI700X300X22X14 | 52 Section 12 `smf_column_class` rows now fail (D-T11); the canopy beam 0.776 → 0.937 (A) |
-| published | IN_Ex3 | PARTIAL (2) → PARTIAL (2) | gravity_col-WI300X200X10X6 1.190 → 1.276 (9.3) | 0.948 → 0.948 lateral_col-WI550X250X16X8 | WI300X200X10X6 1.190 → 1.276 (Ka ×1.072) |
-| published | IN_Ex4 | PARTIAL (4) → PARTIAL (70) | gravity_col-WI350X250X12X6 1.207 → 1.284 (9.3) | 0.984 → 0.984 brace-WPB180X180X51.22 | WI350X250X12X6 1.207 → 1.284 (Ka ×1.063); WI450X200X10X6 1.091 → 1.072 → 1.076 (Ka < 1; R1); 66 Section 12 `smf_column_class` rows now fail (D-T11) |
-| published | IN_Ex5 | PARTIAL (13) → PARTIAL (17) | lateral_col-WI300X180X8X5 1.301 → 1.378 (9.3) | 0.969 → 1.033 knee-WI1000X250X14X6-WI1000X250X14X6 | WI972X250X14X6 1.072 → 1.096 (B); WI300X180X8X5 1.301 → 1.378 (Ka); WI781X250X14X6 1.000 → 1.031 (B); WI869X250X14X6 1.052 → 1.088 (B); WI956X250X14X6 1.102 → 1.142 (B); knee 0.969 → 1.033 (F5) |
-| published | IN_Ex6 | COMPLETE → COMPLETE | floor-NPB600X220X122.45 0.887 → 0.887 | 0.919 → 0.919 | none |
-| published | IN_Ex7 | COMPLETE → COMPLETE | lateral_col-WPB600X300X211.92 0.953 → lateral_col-NPB750X270X202.49 0.956 | 0.838 → 0.838 | none (NPB750 0.941 → 0.954 → 0.956: A, then R1) |
-| published | IN_Ex8 | COMPLETE → COMPLETE | roof-WPB500X300X155.08 0.804 → 0.804 | 0.893 → 0.893 | none |
-| published | IN_Ex9 | PARTIAL (4) → PARTIAL (4) | gravity_col-WPB200X200X42.26 2.081 → 2.081 | 0.897 → 0.897 | WPB200X200X42.26 2.081, WPB200X200X61.3 1.120 (unchanged) |
-| published | IN_Ex10, Ex11 (+ workshop), Ex13–Ex17, Ex19 (+ stem), Ex20 | COMPLETE → COMPLETE | unchanged | unchanged | none |
-| published | IN_Ex12 (+ unitB_link, unitC_gym) | COMPLETE → COMPLETE | floor-NPB700X250X143.42 0.983 → 0.983 | 0.979 → 0.979 | none; 8 panel zones 0.926 → 0.946 (PZ: the 48 mm doublers at the E250 > 40 mm band, 230 MPa) |
-| published | IN_Ex18 | COMPLETE → COMPLETE | floor-NPB750X270X174.54 0.889 → 0.889 | 0.930 → 0.930 | none; 6 panel zones 0.932 → 0.923 (PZ: 15 mm doublers at 250 MPa beside 45 mm column plates at 230) |
+| PEB sandbox | IN_Ex1 | COMPLETE → PARTIAL (8) → PARTIAL (10) | lateral_col-WI862X225X12X8 0.996 → lateral_col-WI200X160X12X4 1.133 (9.3) | 0.991 → 1.062 knee-WI975X225X12X8-WI975X250X14X6 | WI200X160X12X4 (gable corner column) 0.911 → 0.965 → 1.133 (round 1; SW); WI862X225X12X8 0.996 → 1.063 (B); WI938X225X12X8 0.958 → 1.002 (B); knee 0.991 → 1.062 (C) |
+| PEB sandbox | IN_Ex2 | COMPLETE → PARTIAL (62) → PARTIAL (10) | roof-WI408X190X12X5 0.999 → gravity_col-WI225X280X18X4 1.285 (9.3) | 0.994 → 1.076 knee-WI725X230X22X14-WI575X260X22X16 | WI225X280X18X4 (corner post) 0.990 → 1.085 → 1.285 (Ka ×1.080; D-T11; SW); canopy root WI408X190X12X5 0.999 → 1.211 (A); wind column WI400X220X20X4 0.993 → 1.052 (B; R1); knee 0.973 → 1.076 (C); **the 52 `smf_column_class` rows that failed at 8b2ffbf pass (G)**; 16 column bases 0.93 → 0.936 (SW) |
+| PEB sandbox | IN_Ex3 | PARTIAL (2) → PARTIAL (6) → PARTIAL (6) | lateral_col-WI475X220X16X5 0.994 → gravity_col-WI200X190X12X4 1.178 (9.3) | 1.024 → 1.096 knee-WI475X220X16X5-WI675X225X12X6 | WI200X190X12X4 (corner post) 0.911 → 1.179 → 1.178 (Ka; D-T11); WI475X220X16X5 0.994 → 1.083 (B; R1); knee 1.024 → 1.096 (C) |
+| PEB sandbox | IN_Ex4 | COMPLETE → PARTIAL (92) → PARTIAL (4) | gravity_col-WI475X190X12X4 0.994 → gravity_col-WI200X220X16X4 1.242 (9.3) | 0.984 → 1.083 knee-WI650X250X20X14-WI575X250X18X16 | WI200X220X16X4 (corner post) 0.970 → 1.243 → 1.242 (Ka ×1.063; D-T11); knee 0.973 → 1.083 (C); **the 88 `smf_column_class` rows that failed at 8b2ffbf pass (G)**; 4 column bases 0.911 → 0.917 (SW) |
+| PEB sandbox | IN_Ex5 | PARTIAL (59) → PARTIAL (61) → PARTIAL (63) | lateral_col-WI862X225X12X8 1.132 → 1.214 (9.3) | 1.091 → 1.091 (rafter splice) | WI200X160X12X4 (gable corner column) 0.911 → 0.965 → 1.158 (round 1; SW); tapered columns / rafters up to 1.214 (B; R1, as at 8b2ffbf); knee 0.991 → 1.062 (C); 18 rafter splices 1.090–1.091 (unchanged) |
+| MSME sandbox | IN_Ex21 | COMPLETE → COMPLETE → COMPLETE | truss_diagonal-ISA70X70X6 0.960 → 0.960 (Table 3) | 0.964 → 0.964 truss_vertical-ISA60X60X6 | none; the eave column MB300 0.731 → 0.815 (SW: the gable's side-wall suction on the corner columns under the across-ridge wind) |
+| published | IN_Ex1 | PARTIAL (2) → PARTIAL (4) → PARTIAL (4) | lateral_col-WI300X180X8X5 1.301 → 1.450 (9.3) | 0.969 → 1.033 knee-WI1000X250X14X6-WI1000X250X14X6 | WI300X180X8X5 (gable corner column) 1.301 → 1.378 → 1.450 (Ka ×1.060; SW); knee 0.969 → 1.033 (F5) |
+| published | IN_Ex2 | COMPLETE → PARTIAL (52) → **COMPLETE** | roof-WI500X300X25X14 0.930 → roof-WI500X200X12X6 0.937 (9.3) | 0.974 → 0.974 lateral_col-WI700X300X22X14 | none; **the 52 `smf_column_class` rows pass (G)**; the canopy beam 0.776 → 0.937 (A); gravity column WI450X350X20X10 0.679 → 0.702 (SW) |
+| published | IN_Ex3 | PARTIAL (2) → PARTIAL (2) → PARTIAL (2) | gravity_col-WI300X200X10X6 1.190 → 1.371 (9.3) | 0.948 → 0.948 lateral_col-WI550X250X16X8 | WI300X200X10X6 (corner post) 1.190 → 1.276 → 1.371 (Ka ×1.072; SW) |
+| published | IN_Ex4 | PARTIAL (4) → PARTIAL (70) → PARTIAL (4) | gravity_col-WI350X250X12X6 1.207 → 1.359 (9.3) | 0.984 → 0.984 brace-WPB180X180X51.22 | WI350X250X12X6 (corner post) 1.207 → 1.284 → 1.359 (Ka ×1.063; SW); WI450X200X10X6 1.091 → 1.076 → 1.078 (Ka < 1; R1; SW); **the 66 `smf_column_class` rows pass (G)** |
+| published | IN_Ex5 | PARTIAL (13) → PARTIAL (17) → PARTIAL (17) | lateral_col-WI300X180X8X5 1.301 → 1.473 (9.3) | 0.969 → 1.033 knee-WI1000X250X14X6-WI1000X250X14X6 | WI300X180X8X5 (gable corner column) 1.301 → 1.378 → 1.473 (Ka; SW); WI972 / WI781 / WI869 / WI956 rafters 1.03–1.14 (B, as at 8b2ffbf); knee 0.969 → 1.033 (F5) |
+| published | IN_Ex6 | COMPLETE → COMPLETE → COMPLETE | floor-NPB600X220X122.45 0.887 → 0.887 | 0.919 → 0.919 | none (the side walls derived from Table 5 for its hand-built patterns move no ratio by more than 0.002) |
+| published | IN_Ex7 | COMPLETE → COMPLETE → **PARTIAL (2)** | lateral_col-WPB600X300X211.92 0.953 → 1.154 (9.3) | 0.838 → 0.838 lateral_col-NPB750X270X202.49 | **WPB600X300X211.92 0.953 → 0.953 → 1.154 (SW)**: 1.5DL+1.5WM0+R, P 191 kN, Mz 482 kN·m, My 219 kN·m (the gable's side-wall suction, (−0.7 − 0.5) pd = −2.0 kN/m², on the end frames' columns about their minor axis); NPB750 0.941 → 0.956 (A; R1, as at 8b2ffbf) |
+| published | IN_Ex8 | COMPLETE → COMPLETE → COMPLETE | roof-WPB500X300X155.08 0.804 → 0.818 (9.3) | 0.893 → 0.893 | none; the roof beam 0.804 → 0.818 and BOX400 column 0.584 → 0.594 (SW) |
+| published | IN_Ex9 | PARTIAL (4) → PARTIAL (4) → PARTIAL (4) | gravity_col-WPB200X200X42.26 2.081 → 2.081 | 0.897 → 0.897 | WPB200X200X42.26 2.081, WPB200X200X61.3 1.120 (unchanged); the BOX450X400 column 0.404 → 0.353 (SW: the facade step, the hall's corner no longer loaded over the lean-to's width) |
+| published | IN_Ex10 | COMPLETE → COMPLETE → COMPLETE | roof-WPB450X300X139.76 0.920 → 0.920 | 0.786 → 0.786 | none; the WPB320 column 0.446 → 0.494 (SW) |
+| published | IN_Ex11 (+ workshop), Ex13–Ex17, Ex19 (+ stem), Ex20 | COMPLETE → COMPLETE → COMPLETE | unchanged | unchanged | none |
+| published | IN_Ex12 (+ unitB_link, unitC_gym) | COMPLETE → COMPLETE → COMPLETE | floor-NPB700X250X143.42 0.983 → 0.983 | 0.979 → 0.979 | none; 8 panel zones 0.926 → 0.946 (PZ, as at 8b2ffbf) |
+| published | IN_Ex18 | COMPLETE → COMPLETE → COMPLETE | floor-NPB750X270X174.54 0.889 → 0.889 | 0.930 → 0.930 | none; 6 panel zones 0.932 → 0.923 (PZ, as at 8b2ffbf) |
 
-Reading it:
-- **IN_Ex6–Ex20 and the units** keep their status and their worst ratios.
+Follow-up 3 in short:
+- **(b), G:** every Section 12 class-gate failure of 8b2ffbf is gone. That is 52 + 88 rows in the PEB sandbox IN_Ex2 / Ex4
+  and 52 + 66 in the published ones; all were wind records on D-T11's axial row. The published IN_Ex2 is COMPLETE
+  again, and the published IN_Ex4 is back to main's 4 open items (its corner posts). No gate fails at the head.
+- **(a), SW:** the side walls load the columns and posts on the gables under the across-ridge wind and on the eave
+  walls under the along-ridge wind:
+  - the PEB corner posts and gable corner columns rise 5–20 %: IN_Ex2 1.085 → 1.285; IN_Ex1 / Ex5 WI200X160X12X4
+    0.965 → 1.133 / 1.158; published IN_Ex1 / Ex3 / Ex4 / Ex5 posts to 1.450 / 1.371 / 1.359 / 1.473 (+5 to +7 %);
+  - IN_Ex7 newly fails (WPB600 end-frame columns 1.154);
+  - smaller moves on IN_Ex8, IN_Ex10, IN_Ex21 (its corner columns 0.731 → 0.815, a minor-axis moment of 12.4 kN·m
+    from the gable's suction) and the PEB bases (+0.3 to +0.8 %).
+  - The IN_Ex3 / Ex4 sandbox corner posts stay at 1.178 / 1.242: their governing case is still the along-ridge wind
+    on their own gable (N + My on D-T11's axial row), which the side walls do not change.
+- **R-1:** no row moves. The Section 12 path's PEB Pd is lower now; the largest PEB 12.5.1 trigger P/Pd is 0.16 (the
+  IN_Ex3 sandbox), under 0.4, so no 12.5.1.1 row switches on.
+
+Reading it (the moves of rounds 1–2, up to 8b2ffbf; follow-up 3's are above):
+- **IN_Ex6–Ex20 and the units** kept their status and their worst ratios up to 8b2ffbf (at the head, IN_Ex7 fails on
+  the side walls, above).
   - The moves above 0.5 % are IN_Ex7's NPB750 crane column (A, then R1), the published IN_Ex2 canopy beam (A) and
     the IN_Ex12 / IN_Ex18 panel zones (PZ).
   - Several gravity columns and one floor beam move by 0.01–0.6 %: IN_Ex12 WPB300X300X117.03 0.8212 → 0.8233,
     IN_Ex13 WPB300X300X88.34 0.9567 → 0.9579, IN_Ex15 floor NPB750X270X145.29 0.6058 → 0.6094 (finding 4: an in-span
     hogging case), and IN_Ex15 / Ex16 / Ex18 / Ex19-stem box and WPB gravity columns by 1e-4 to 1e-3.
   - No Section 12 class gate moves on these golds: their rolled and box sections stay stocky under every record's N.
-    For example, IN_Ex13 SCBF column e1 is governed by a 12.2.3 record on the axial row and is still plastic.
-- **The PEB golds (sandbox and published)** all fail now.
+    For example, IN_Ex13 SCBF column e1 is governed by a 12.2.3 record (at the head on the "generally" rows, G) and is
+    still plastic.
+- **The PEB golds (sandbox and published)** all failed at 8b2ffbf (at the head the published IN_Ex2 is COMPLETE again).
   - D-T11 moves the corner posts: IN_Ex3 0.977 → 1.179, IN_Ex4 1.032 → 1.243, IN_Ex2 1.060 → 1.085. These are
     welded posts with d/tw just above 42ε, carrying N and My with little Mz.
-  - D-T11 also makes the SMRF columns of IN_Ex2 and IN_Ex4 fail 12.11.3.1 "plastic or compact" (open point 2):
+  - D-T11 also made the SMRF columns of IN_Ex2 and IN_Ex4 fail 12.11.3.1 "plastic or compact" at 8b2ffbf; the lead's
+    ruling on open point 2 (G) clears them all:
     - IN_Ex2 WI725X230X22X14 has d/tw 48.6 against 42ε = 36.6. Its interior columns are on the axial row in most
       records.
     - IN_Ex4 WI552X250X20X14 has d/tw 36.6 against 36.56. It fails by a hair in 1–3 wind records where the column
@@ -490,7 +692,7 @@ Reading it:
   - R1 adds 2–4 % to the tapered columns whose webs are above 42ε: IN_Ex3 1.075 → 1.083; IN_Ex5 WI562 / WI638 /
     WI712 now over 1.0; IN_Ex1 WI788 0.967 → 0.998.
   - F5 puts the published IN_Ex1 / Ex5 knee (an 8 mm E250 doubler on a 6 mm E350 web) at 1.033.
-- **IN_Ex21** stays COMPLETE.
+- **IN_Ex21** stays COMPLETE (the truss is unchanged at the head).
   - The truss bottom chord falls from 0.956 to 0.782 (main e927f35 0.950; round 1 0.956, the review's figure, from
     fix A's extra combinations; follow-up 1 and the head 0.782). Its governing check becomes the Table 3 slenderness.
   - Why: on main, under the across-ridge wind, the four 1.5 m upper gable-post pieces (inside the end truss) took
@@ -525,82 +727,87 @@ The follow-ups add arithmetic only:
 The later A/B runs had the other heavy slot busy, so their elapsed times are not comparable: IN_Ex2 PEB 345 / 321 s,
 IN_Ex19 105 / 109 s, IN_Ex12 13 / 11 s at c23c056 / 8b2ffbf.
 
-## Member-wind totals: c23c056 takes no wind load a member should carry
+## Member-wind totals: every wall, side walls included, against the hand total (follow-up 3)
 
-For every gold with member wind (16 jobs) and every pattern in both directions, `gold/tools/wind_totals.py` builds
-the job's static model and sums what `static_model.member_wind_loads` applies, on main e927f35 and on the branch
-(`results/wind_totals/`):
-- the wall force along the wind axis;
-- the roof force, positive towards the roof.
+For every gold with member wind (17 jobs, the IN_Ex12 gym unit included) and every pattern in both directions,
+`gold/tools/wind_totals.py` builds the job's static model and sums what `static_model.member_wind_loads` applies, wall
+by wall, on main e927f35 and on the branch at 0482f9a (`gold/tools/wind_totals_batch.sh`; results
+`gold/results/wind_totals2/`, full table `compose_wind3.md`).
 
-The hand total is IS 875-3 7.3.1 F = (Cpe − Cpi) A pd with the pattern pressures. The areas come from the declared
-roof planes (or from the grid for a model without them):
-- across the ridge: two eave walls, length × eave height, and the two slopes;
-- along the ridge: two gables, span × eave height + span × rise / 2, and half the roof each side.
+**The hand total** is IS 875-3 7.3.1 F = (Cpe − Cpi) A pd with the pattern's pressures, wall by wall:
+- across the ridge: the windward and leeward eave walls (length × eave height, the outer planes of a multi-span roof)
+  and the two gables as side walls;
+- along the ridge: the two gables as windward and leeward walls (span × eave height + span × rise / 2 per plane) and
+  the eave walls as side walls;
+- a flat-roof model from its grid (width × height);
+- IN_Ex9 plus its lean-to's end walls, 12 × 5 m at y = 0 and y = 30 m (60 m² on each gable face).
 
-The reverse direction gives the same totals with the opposite sign everywhere.
+**Check:** every wall of every gold and pattern, 144 pattern rows × 4 walls. The branch's loaded area equals the hand
+area, and its force at the pattern pd equals the hand force: the largest difference is 0.0000 %
+(`compose_wind3.py`). The branch's own force differs from the pattern-pd figure only by the wind posts' own Ka
+(7.2.2.1 (b)).
 
-| Set | Job | Wind | Wall force, kN: main / branch / hand | Roof, Cpi +, kN: main = branch / hand | Roof, Cpi −: main = branch / hand |
-|---|---|---|---|---|---|
-| MSME sandbox | IN_Ex21 | across ridge (Y) | 117.4 / 95.4 / 95.4 | -326.4 / -326.4 | -39.7 / -39.7 |
-| MSME sandbox | IN_Ex21 | along ridge (X) | 43.3 / 45.9 / 47.1 | -342.0 / -338.2 | -55.4 / -51.5 |
-| PEB sandbox | IN_Ex1 | across ridge (Y) | 300.7 / 302.5 / 300.7 | -1117.8 / -1117.8 | -163.5 / -163.5 |
-| PEB sandbox | IN_Ex1 | along ridge (X) | 108.9 / 109.4 / 108.9 | -1081.0 / -1063.3 | -126.7 / -109.0 |
-| PEB sandbox | IN_Ex2 | across ridge (Y) | 1487.6 / 1496.2 / 1487.6 | -10836.2 / -10836.2 | -1235.0 / -1235.0 |
-| PEB sandbox | IN_Ex2 | along ridge (X) | 1134.7 / 1141.7 / 1134.7 | -10721.4 / -10561.4 | -1120.1 / -960.1 |
-| PEB sandbox | IN_Ex3 | across ridge (Y) | 424.3 / 427.5 / 424.3 | -1261.9 / -1261.9 | -184.6 / -184.6 |
-| PEB sandbox | IN_Ex3 | along ridge (X) | 151.5 / 156.0 / 151.5 | -1225.4 / -1200.4 | -148.1 / -123.0 |
-| PEB sandbox | IN_Ex4 | across ridge (Y) | 922.9 / 927.8 / 922.9 | -3267.3 / -3267.3 | -477.9 / -477.9 |
-| PEB sandbox | IN_Ex4 | along ridge (X) | 277.6 / 279.1 / 277.6 | -3151.2 / -3108.0 | -361.8 / -318.6 |
-| PEB sandbox | IN_Ex5 | across ridge (Y) | 367.1 / 369.3 / 367.1 | -1117.8 / -1117.8 | -163.5 / -163.5 |
-| PEB sandbox | IN_Ex5 | along ridge (X) | 108.9 / 109.4 / 108.9 | -1081.0 / -1063.3 | -126.7 / -109.0 |
-| published | IN_Ex1 | across ridge (Y) | 300.7 / 302.5 / 300.7 | -1117.8 / -1117.8 | -163.5 / -163.5 |
-| published | IN_Ex1 | along ridge (X) | 108.9 / 109.4 / 108.9 | -1081.0 / -1063.3 | -126.7 / -109.0 |
-| published | IN_Ex2 | across ridge (Y) | 1485.4 / 1494.0 / 1485.4 | -10836.2 / -10836.2 | -1235.0 / -1235.0 |
-| published | IN_Ex2 | along ridge (X) | 1134.7 / 1141.7 / 1134.7 | -10721.4 / -10561.4 | -1120.1 / -960.1 |
-| published | IN_Ex3 | across ridge (Y) | 424.3 / 427.5 / 424.3 | -1261.9 / -1261.9 | -184.6 / -184.6 |
-| published | IN_Ex3 | along ridge (X) | 151.5 / 156.0 / 151.5 | -1225.4 / -1200.4 | -148.1 / -123.0 |
-| published | IN_Ex4 | across ridge (Y) | 922.9 / 927.8 / 922.9 | -3267.3 / -3267.3 | -477.9 / -477.9 |
-| published | IN_Ex4 | along ridge (X) | 277.6 / 279.1 / 277.6 | -3151.2 / -3108.0 | -361.8 / -318.6 |
-| published | IN_Ex5 | across ridge (Y) | 367.0 / 369.2 / 367.0 | -1117.8 / -1117.8 | -163.5 / -163.5 |
-| published | IN_Ex5 | along ridge (X) | 108.9 / 109.4 / 108.9 | -1081.0 / -1063.3 | -126.7 / -109.0 |
-| published | IN_Ex6 | along X (WMX) | 253.2 / 253.2 / 253.2 | -586.4 / -586.4 | -53.3 / -53.3 |
-| published | IN_Ex6 | along Y (WMY) | 121.6 / 121.6 / 121.6 | -594.4 / -594.4 | -54.0 / -54.0 |
-| published | IN_Ex7 | across ridge (X) | 1381.9 / 1381.9 / 1381.9 | -3190.2 / -3190.2 | -666.7 / -666.7 |
-| published | IN_Ex7 | along ridge (Y) | 322.4 / 322.4 / 322.4 | -3181.5 / -3136.4 | -658.0 / -612.9 |
-| published | IN_Ex8 | across ridge (Y) | 447.0 / 447.0 / 447.0 | -1745.3 / -1745.3 | -255.3 / -255.3 |
-| published | IN_Ex8 | along ridge (X) | 298.0 / 298.0 / 298.0 | -1706.3 / -1660.2 | -216.3 / -170.2 |
-| published | IN_Ex9 | across ridge (X) | 603.0 / 603.0 / 603.0 | -2890.4 / -2234.8 | -451.5 / -272.0 |
-| published | IN_Ex9 | along ridge (Y) | Cpi + 280.9 / 280.9 / 241.2; Cpi − 257.1 / 257.1 / 241.2 | -2935.1 / -2315.8 | -496.1 / -353.0 |
-| published | IN_Ex10 | across ridge (Y) | 460.6 / 460.6 / 460.6 | -2585.7 / -2585.7 | -1292.8 / -1292.8 |
-| published | IN_Ex10 | along ridge (X) | 307.0 / 307.0 / 307.0 | -2693.4 / -2585.7 | -1400.6 / -1292.8 |
+The table gives the Cpi + patterns of one direction (the reverse direction is the mirror, the Cpi − patterns differ
+only in q). The kN figures are signed along the axis; one side wall is shown, the other is equal and opposite.
+
+| Set | Job | Pattern (axis) | Along-wind walls, kN: main / branch / hand | One side wall, kN: branch / at the pattern pd / hand (main 0) | Areas, m²: windward / leeward / side / side (branch = hand) | Envelope residual, m² (lines) | Net side force, kN | Roof, kN: main / branch |
+|---|---|---|---|---|---|---|---|---|
+| MSME sandbox | IN_Ex21 | WM0+ (Y) | 117.4 / 95.4 / 95.4 | -64.2 / -64.8 / -64.8 | 234.00 / 234.00 / 137.25 / 137.25 | 4.500 (4) | 0.000 | -326.4 / -326.4 |
+| MSME sandbox | IN_Ex21 | WM90+ (X) | 43.3 / 46.7 / 47.1 | -100.4 / -100.4 / -100.4 | 137.25 / 137.25 / 234.00 / 234.00 | 4.500 (4) | 0.000 | -342.0 / -342.0 |
+| PEB sandbox | IN_Ex1 | WM0+ (Y) | 300.7 / 302.5 / 300.7 | -150.5 / -149.7 / -149.7 | 750.00 / 750.00 / 322.50 / 322.50 | 0.000 (6) | 0.000 | -1117.8 / -1117.8 |
+| PEB sandbox | IN_Ex1 | WM90+ (X) | 108.9 / 109.5 / 108.9 | -318.4 / -316.5 / -316.5 | 322.50 / 322.50 / 750.00 / 750.00 | 0.000 (6) | -0.000 | -1081.0 / -1081.0 |
+| PEB sandbox | IN_Ex2 | WM0+ (Y) | 1484.8 / 1493.4 / 1484.8 | -1268.5 / -1260.8 / -1260.8 | 1404.00 / 1404.00 / 1363.20 / 1363.20 | 0.000 (6) | 0.000 | -10836.2 / -10836.2 |
+| PEB sandbox | IN_Ex2 | WM90+ (X) | 1134.7 / 1141.7 / 1134.7 | -1306.0 / -1298.5 / -1298.5 | 1363.20 / 1363.20 / 1404.00 / 1404.00 | 0.000 (6) | -0.000 | -10721.4 / -10721.4 |
+| PEB sandbox | IN_Ex3 | WM0+ (Y) | 424.3 / 427.5 / 424.3 | -214.5 / -208.3 / -208.3 | 600.00 / 600.00 / 254.40 / 254.40 | 0.000 (6) | -0.000 | -1261.9 / -1261.9 |
+| PEB sandbox | IN_Ex3 | WM90+ (X) | 151.5 / 156.0 / 151.5 | -450.0 / -446.7 / -446.7 | 254.40 / 254.40 / 600.00 / 600.00 | 0.000 (6) | 0.000 | -1225.4 / -1225.4 |
+| PEB sandbox | IN_Ex4 | WM0+ (Y) | 922.9 / 927.8 / 922.9 | -384.0 / -381.6 / -381.6 | 945.00 / 945.00 / 337.50 / 337.50 | 0.000 (6) | 0.000 | -3267.3 / -3267.3 |
+| PEB sandbox | IN_Ex4 | WM90+ (X) | 277.6 / 279.3 / 277.6 | -976.6 / -971.5 / -971.5 | 337.50 / 337.50 / 945.00 / 945.00 | 0.000 (6) | 0.000 | -3151.2 / -3151.2 |
+| PEB sandbox | IN_Ex5 | WM0+ (Y) | 367.1 / 369.3 / 367.1 | -150.5 / -149.7 / -149.7 | 750.00 / 750.00 / 322.50 / 322.50 | 0.000 (6) | 0.000 | -1117.8 / -1117.8 |
+| PEB sandbox | IN_Ex5 | WM90+ (X) | 108.9 / 109.5 / 108.9 | -318.4 / -316.5 / -316.5 | 322.50 / 322.50 / 750.00 / 750.00 | 0.000 (6) | -0.000 | -1081.0 / -1081.0 |
+| published | IN_Ex1 | WM0+ (Y) | 300.7 / 302.5 / 300.7 | -150.5 / -149.7 / -149.7 | 750.00 / 750.00 / 322.50 / 322.50 | 0.000 (6) | 0.000 | -1117.8 / -1117.8 |
+| published | IN_Ex1 | WM90+ (X) | 108.9 / 109.5 / 108.9 | -318.4 / -316.5 / -316.5 | 322.50 / 322.50 / 750.00 / 750.00 | 0.000 (6) | -0.000 | -1081.0 / -1081.0 |
+| published | IN_Ex2 | WM0+ (Y) | 1481.1 / 1489.6 / 1481.1 | -1268.5 / -1260.8 / -1260.8 | 1404.00 / 1404.00 / 1363.20 / 1363.20 | 0.000 (6) | 0.000 | -10836.2 / -10836.2 |
+| published | IN_Ex2 | WM90+ (X) | 1134.7 / 1141.7 / 1134.7 | -1306.0 / -1298.5 / -1298.5 | 1363.20 / 1363.20 / 1404.00 / 1404.00 | 0.000 (6) | -0.000 | -10721.4 / -10721.4 |
+| published | IN_Ex3 | WM0+ (Y) | 424.3 / 427.5 / 424.3 | -214.5 / -208.3 / -208.3 | 600.00 / 600.00 / 254.40 / 254.40 | 0.000 (6) | -0.000 | -1261.9 / -1261.9 |
+| published | IN_Ex3 | WM90+ (X) | 151.5 / 156.0 / 151.5 | -450.0 / -446.7 / -446.7 | 254.40 / 254.40 / 600.00 / 600.00 | 0.000 (6) | 0.000 | -1225.4 / -1225.4 |
+| published | IN_Ex4 | WM0+ (Y) | 922.9 / 927.8 / 922.9 | -384.0 / -381.6 / -381.6 | 945.00 / 945.00 / 337.50 / 337.50 | 0.000 (6) | 0.000 | -3267.3 / -3267.3 |
+| published | IN_Ex4 | WM90+ (X) | 277.6 / 279.3 / 277.6 | -976.6 / -971.5 / -971.5 | 337.50 / 337.50 / 945.00 / 945.00 | 0.000 (6) | 0.000 | -3151.2 / -3151.2 |
+| published | IN_Ex5 | WM0+ (Y) | 367.0 / 369.2 / 367.0 | -150.5 / -149.7 / -149.7 | 750.00 / 750.00 / 322.50 / 322.50 | 0.000 (6) | 0.000 | -1117.8 / -1117.8 |
+| published | IN_Ex5 | WM90+ (X) | 108.9 / 109.5 / 108.9 | -318.4 / -316.5 / -316.5 | 322.50 / 322.50 / 750.00 / 750.00 | 0.000 (6) | -0.000 | -1081.0 / -1081.0 |
+| published | IN_Ex6 | WMX+ (X) | 253.2 / 253.2 / 253.2 | -164.9 / -164.9 / -164.9 | 288.00 / 288.00 / 162.00 / 162.00 | 0.000 (0) | 0.000 | -586.4 / -586.4 |
+| published | IN_Ex6 | WMY+ (Y) | 121.6 / 121.6 / 121.6 | -270.2 / -270.2 / -270.2 | 162.00 / 162.00 / 288.00 / 288.00 | 0.000 (0) | -0.000 | -594.4 / -594.4 |
+| published | IN_Ex7 | WM0+ (X) | 1381.9 / 1381.9 / 1381.9 | -483.7 / -483.7 / -483.7 | 828.00 / 828.00 / 241.50 / 241.50 | 0.000 (0) | 0.000 | -3190.2 / -3190.2 |
+| published | IN_Ex7 | WM90+ (Y) | 322.4 / 322.4 / 322.4 | -1381.9 / -1381.9 / -1381.9 | 241.50 / 241.50 / 828.00 / 828.00 | 0.000 (0) | -0.000 | -3181.5 / -3181.5 |
+| published | IN_Ex8 | WM0+ (Y) | 447.0 / 447.0 / 447.0 | -331.1 / -331.1 / -331.1 | 288.00 / 288.00 / 192.00 / 192.00 | 0.000 (0) | 0.000 | -1745.3 / -1745.3 |
+| published | IN_Ex8 | WM90+ (X) | 298.0 / 298.0 / 298.0 | -496.7 / -496.7 / -496.7 | 192.00 / 192.00 / 288.00 / 288.00 | 0.000 (0) | 0.000 | -1706.3 / -1706.3 |
+| published | IN_Ex9 | WM0+ (X) | 603.0 / 603.0 / 603.0 | -418.9 / -418.9 / -418.9 | 480.00 / 480.00 / 288.00 / 288.00 | 72.000 (4) | -0.000 | -2890.4 / -2890.4 |
+| published | IN_Ex9 | WM90+ (Y) | 280.9 / 304.7 / 304.7 | -634.8 / -634.8 / -634.8 | 288.00 / 288.00 / 480.00 / 480.00 | 72.000 (4) | 0.000 | -2935.1 / -2935.1 |
+| published | IN_Ex10 | WM0+ (Y) | 460.6 / 460.6 / 460.6 | -238.8 / -238.8 / -238.8 | 855.00 / 855.00 / 570.00 / 570.00 | 0.000 (0) | -0.000 | -2585.7 / -2585.7 |
+| published | IN_Ex10 | WM90+ (X) | 307.0 / 307.0 / 307.0 | -358.2 / -358.2 / -358.2 | 570.00 / 570.00 / 855.00 / 855.00 | 0.000 (0) | 0.000 | -2693.4 / -2693.4 |
+| published | IN_Ex12/unitC_gym | WM0+ (Y) | 107.0 / 107.0 / 107.0 | -83.2 / -83.2 / -83.2 | 136.00 / 136.00 / 136.00 / 136.00 | 0.000 (0) | 0.000 | -227.4 / -227.4 |
+| published | IN_Ex12/unitC_gym | WM90+ (X) | 107.0 / 107.0 / 107.0 | -83.2 / -83.2 / -83.2 | 136.00 / 136.00 / 136.00 / 136.00 | 0.000 (0) | 0.000 | -202.2 / -202.2 |
 
 Reading it:
-- **Roof:** main = branch for every job and pattern. c23c056 does not touch roof wind.
-  - Across the ridge the roof equals the hand total.
-  - Along the ridge the scheme splits the E/G and F/H zones per rafter segment, not at half the roof, so it is
-    within a few percent of the half-and-half hand split.
-  - IN_Ex9 has a lean-to roof outside its one declared plane.
-- **Walls, IN_Ex21:** the only job whose wall total drops.
-  - Across the ridge, main loaded 117.4 kN against a hand total of 95.4 kN. The 22.0 kN surplus is the artefact:
-    the four 1.5 m upper gable-post pieces took the long-wall pressure over an 18 m strip. The branch carries
-    exactly the hand total.
-  - Along the ridge, the branch carries 45.9 kN against 43.3 on main (the upper pieces keep the posts' own 6 m width)
-    and a hand total of 47.1. The rest of the gable above the posts' tops (2.25 m² per gable, between 8.0 m and the
-    8.75 m ridge) is carried by the end truss's top chord, which takes no wall wind in this scheme. The posts' own
-    Ka (0.986) accounts for the rest.
-- **Walls, the PEB golds:** the branch is 0.3–1.0 % above main and main = hand.
-  - This is the round-1 wind-post Ka (7.2.2.1 (b)): factors up to ×1.080 on the corner posts, some below 1 on the
-    large posts.
-  - It is not c23c056: the package scan record lists no sheltered and no widened piece in any PEB gold.
-- **Walls, IN_Ex6 / IN_Ex7 / IN_Ex8 / IN_Ex9 / IN_Ex10:** main = branch.
-  - IN_Ex6, IN_Ex7, IN_Ex8 and IN_Ex10 equal the hand total (IN_Ex6, IN_Ex7, IN_Ex8 and IN_Ex10 declare no roof
-    planes, so their hand areas come from the grid).
-  - IN_Ex9's along-ridge wall is above the single-plane hand area because the lean-to's end wall (12 m wide) is
-    loaded too. Its two Cpi signs differ because the lean-to wall is on one side.
-- **Members that lost load:** only the four IN_Ex21 upper gable-post pieces e355 / e357 / e359 / e361, under the
-  across-ridge patterns. Their own wall, the gable, is a side wall for that wind, and the engine applies side-wall
-  pressure to no column (open point 1).
+- **Side walls.** They now carry (Cpe − Cpi) pd × their full area on every gold. Main loaded none. The two side walls
+  balance in every pattern (net 0.000 kN), so no storey force changes.
+- **IN_Ex21.**
+  - Across the ridge the walls stay at the hand total, 95.4 kN (main 117.4: the c23c056 artefact).
+  - Along the ridge they carry 46.7 kN against a hand total of 47.1. The 0.4 kN is the posts' own Ka (×0.986); at the
+    pattern pd the branch is exactly 47.1. The gable is 137.25 m² with the corner triangles now loaded (envelope
+    residual 4 × 1.125 m², of which the review's triangle above the posts' tops is the balancing part).
+- **IN_Ex9.** Along the ridge it is now 304.7 kN (hand 304.7), against 280.9 / 271.4 on main for the two directions:
+  - main left out both 36 m² gable triangles above the eave (end portals without posts; now 18 m² at each corner's
+    eave node);
+  - main mis-loaded the lean-to step (the hall's corner over-wide, the lean-to's end wall half unloaded; Follow-up 3,
+    "A facade step").
+- **The PEB golds.** The walls along the wind are 0.5–3.0 % above main = hand, from the round-1 wind-post Ka (IN_Ex3
+  along the ridge +3.0 %). The side walls are 0.5–3.0 % above the pattern-pd figure for the same reason: on the gable
+  the posts take the Ka of their own side-wall area (IN_Ex3 +3.0 %). Their gable residuals net to zero.
+- **Roof.** Unchanged by follow-up 3: main = branch for every job and pattern.
+- **Members that lost load against main:** none in follow-up 3. The only pieces with less load than on main are, as
+  before, IN_Ex21's four upper gable-post pieces under the across-ridge wind (not on the long wall), and on IN_Ex9 the
+  hall's corner column at the lean-to step (its 6 m toward the lean-to over the 8 m height, a wall that does not
+  exist there). The PEB posts give up the part of their rectangle above the rafter, which the corner columns carry.
 
 ## Gold cfg helpers that hard-code the IS 2062 band (for the job owners; cfgs not edited here)
 
@@ -642,32 +849,28 @@ The study cfgs that `peb_autosize.apply_plate` wrote before this branch (fy 250 
 
 ## Open points for the lead
 
-1. **Side-wall pressure is applied to no column.** This is not new; it was found while checking the gable posts.
-   - The member-wind patterns carry the windward and leeward wall pressures only. The Table 5 side-wall Cpe (C / D
-     at θ = 0, A / B at θ = 90) is not applied to any column.
-   - For a gable post under the across-ridge wind, its own wall (the gable) is a side wall. IN_Ex21 (h/w 0.36,
-     l/w 2.0) has C / D = −0.6, so the outward net is (−0.6 − 0.5) pd = −1.1 pd, 0.47 kN/m².
-   - The largest outward pressure the engine gives those posts is the leeward gable under the along-ridge wind,
-     (−0.1 − 0.5) pd = −0.6 pd, 0.26 kN/m².
-   - Under the along-ridge wind the long-wall columns of every portal get no side-wall suction, (−0.5 ∓ 0.5) pd.
-   - Adding side walls would move every portal gold. It needs a ruling before the owners re-size.
-2. **D-T11 in the Section 12 gates fails the PEB SMRF columns.**
-   - Ruling 2 applies D-T11 to the gates, and the gate takes the least favourable class over every record.
-   - So 12.11.3.1 "plastic or compact" fails wherever a record carries compression with |Mz| ≤ 0.05 Mdz and the web
-     is above 42ε:
-     - IN_Ex2's WI725X230X22X14 (d/tw 48.6, interior columns on the axial row in most records), 52 rows;
-     - IN_Ex4's WI552X250X20X14 (d/tw 36.6 against 36.56) in 1–3 wind records where the column moment passes through
-       zero, 88 rows;
-     - the published IN_Ex2 / Ex4 the same.
-   - Either the owners thicken the webs (d/tw ≤ 42ε), or the lead rules that 12.11.3.1 is judged in the records
-     that can form hinges (the 12.2.3 / EL combinations), or by the class without the axial row.
-3. **Merging with `fix/2026-10-third-peb-golds`** (trial merge at 711cc38, not committed): one conflict, in
+Open points 1 (side walls) and 2 (D-T11 in the Section 12 gates) of follow-up 2 are closed by the lead's rulings
+(Follow-up 3 (a) and (b)).
+
+1. **The brace hinge (an engine reading to confirm).** The ruling's hinge state is "major-axis plastic bending with
+   the N present". For a brace the engine reads the hinge as the brace's buckling hinge: about the minor axis (or on a
+   tie) its web carries the uniform N and keeps the axial row. No gold brace moves either way.
+2. **IS 18168 Table 2 (ii) Ca** is taken over every combination (the largest |P|), as before. It is not an IS 800
+   Section 12 gate. Say if it should follow the gates to the earthquake records.
+3. **The 10.2 gust ratio of IN_Ex2 / IN_Ex5.** Their cfgs scale the across-ridge windward and leeward wall pressures to
+   the along-wind force after the generator; the side-wall pressure stays at the 7.2 pd. That is the owners' choice to
+   make (their cfgs are not edited here).
+4. **Zones by distance from the windward edge** (the ruling's wording) are not in IS 875-3:2015 Table 5: one Cpe per
+   wall, and the 0.25 w local strip for cladding only (7.3.1). The engine applies the whole-wall Cpe. If the lead
+   wants an EN 1991-1-4 style zoning, it needs a ruling with a source.
+5. **Merging with `fix/2026-10-third-peb-golds`** (trial merge at 711cc38, not committed): one conflict, in
    `india_connections.base_plate_design_biaxial`, where the PEB branch made the same minor-axis outline fix. Keep
-   either side. `peb_autosize.py` merged cleanly then. The sizer has changed since: the base-outline screen, the
-   12.11.3.1 screen with N, the web-strip and member-web fy. A fresh trial merge is advised.
-4. **Gold owners re-size on this engine.**
+   either side. The sizer has changed since (the base-outline screen, the 12.11.3.1 screen, the web-strip and
+   member-web fy), so a fresh trial merge is advised.
+6. **Gold owners re-size on this engine.**
+   - Side walls now load every portal's corner columns and gable posts across the wind (the A/B above).
    - The knee stiffener rows: the web doubler is at its own (E250) fy. A job with E350 doublers declares
      `knee_panel.doubler_grade`; a Section 12 joint declares `doubler_grade` in its `beam_column` spec.
    - The golds with Section 12 doublers declare no doubler grade. They are at E250 now: IN_Ex12 (48 mm, 230 MPa),
      IN_Ex16, IN_Ex18 and IN_Ex9 (20 mm, 240 MPa).
-5. **The cfg band helpers** listed above, to switch to `fy_is2062` (the lead takes this list).
+7. **The cfg band helpers** listed above, to switch to `fy_is2062` (the lead takes this list).
