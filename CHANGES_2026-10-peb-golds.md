@@ -17,9 +17,9 @@ by the engine agent and are on main (56909e3); the golds were re-verified on it 
 (next section), and the IN_Ex5 PV answer, the strengthening option and the IN_Ex2 / IN_Ex4 comparisons re-based.
 
 Done on this branch before the engine fixes landed (no sizing runs):
-- **C in the gold cfgs:** every plate, stiffener and key yield stress of IN_Ex1-Ex4 (`bolted_end_plate`, the base
-  plate and fin plate helpers, the knee shear plates and panel stiffeners, the shear keys) now comes from one
-  function, the engine's IS 2062 (Part 1):2025 Table 3 band function (`india_is800.fy_is2062`, behind a one-line alias
+- **C in the gold cfgs:** the plate, stiffener and key yield stresses that the IN_Ex1-Ex4 helpers compute
+  (`bolted_end_plate`, the base plate and fin plate helpers, the knee shear plates and panel stiffeners, the shear
+  keys) now come from the engine's IS 2062 (Part 1):2025 Table 3 band function (`india_is800.fy_is2062`, behind a one-line alias
   in each cfg). Executing the cfgs before and after (no analysis) changes exactly: IN_Ex1 knee flange stiffeners
   20 mm and gable splice plates 20 mm, IN_Ex3 knee flange stiffeners 18 mm and gable splice plates 20 mm, IN_Ex4
   rafter and gable splice plates 20 mm, all 250 → 240 MPa, and IN_Ex2's 60 mm fixed-base plate 240 → 230 MPa (a case
@@ -39,7 +39,14 @@ earthquake records, the panel-zone doubler at its own fy, member wind) is merged
 this pass: run IN_Ex1–Ex4 on the merged engine and re-size **only what fails**, everything else held (the sizer with
 the failing member constants and joint slots free, `hold_joints` for the rest); no full strict re-size. The gold
 cfgs also changed on this branch before the runs:
-- every plate, stiffener and key fy from the engine's IS 2062 band function (`fy_is2062`, review blocker C);
+- the helper-computed plate, stiffener and key fy from the engine's IS 2062 band function (`fy_is2062`, review
+  blocker C). The literal plate values left in the cfgs were all at or below their band (and the engine caps a
+  declared plate fy at its band): the base gussets (IN_Ex2 37 mm at 230 against a band of 240, its 28 and 25 mm
+  gussets at 240, IN_Ex3 28 mm and IN_Ex4 30 / 28 mm at 240), the 6 mm fly-brace angles and the 10-12 mm fin, gusset
+  and stiffener plates at 250, the IN_Ex3 crane bracket at 250 with its column at 350, and the knee CJP parent metal
+  at 350. After the final review they call the band function too; executing the cfgs before and after changes one
+  value, the IN_Ex2 37 mm base gussets 230 → 240 MPa. The CHS brace end connections keep the tube's 310 MPa (not an
+  IS 2062 plate);
 - the end-plate helper's web strip: the member web at its band, and a web doubler at its own (E250) band,
   thickness-weighted, as the engine takes the knee strip (the sizer's `ep_dict` the same);
 - IN_Ex2 / IN_Ex5: the side walls take the same 10.2 gust ratio as the windward and leeward walls in each pattern;
@@ -55,28 +62,37 @@ with compression and |Mz| ≤ 0.05 Mdz; **C** IS 2062 bands (here: the web doubl
 
 | job | item | before | fixed engine | tags | re-sized (from → to) | final |
 |---|---|---|---|---|---|---|
-| Ex1 | corner columns | 0.911 | **1.133** | SW (in-span moment +6 %), R1 | G_COL WI200X160X12X4 → WI350X160X12X10 | 0.992 |
+| Ex1 | corner columns | 0.911 | **1.133** | SW (side-wall suction, biaxial), Ka (+6 %), R1 | G_COL WI200X160X12X4 → WI350X160X12X10 | 0.992 |
 | Ex1 | main columns (WI862 station) | 0.996 | **1.063** | B, R1 | COL_T TI375-975X225X12X8 → TI325-975X240X12X8 | 0.978 |
 | Ex1 | gable rafter as roof-girder chord | 0.960 | **1.023** | B / R1 (strut) | G_RAF WI250X140X8X4 → WI275X140X8X4 | 0.997 |
 | Ex1 | knee end plate and its 12.10.2.1 rows | 0.991 | **1.091** | C (8 mm web doubler at E250; 20 mm stiffeners at 240) | end plate 280 × 45, 20 M30 → 280 × 36 with two outer rows, 24 M30; column flange plate 32 → 28 mm; flange stiffeners 20 → 25 mm | 0.974 (knee), 0.925 (12.10.2.1) |
 | Ex1 | main shear key (O1, 1.2 Vd of the new column) | — | — | follows the column | 2 × 400 × 28, 250 deep → 2 × 400 × 32, 300 deep | — |
-| Ex2 | corner posts | 0.990 | **1.392** | SW with the gust ratio on the side walls (+51 % loads), R1 | G_COL WI225X280X18X4 → WI300X300X20X4 | 0.996 |
+| Ex2 | corner posts | 0.990 | **1.392** | SW with the gust ratio on the side walls (+51 % loads), Ka (+7 % / +8 %), R1 | G_COL WI225X280X18X4 → WI300X300X20X4 | 0.996 |
 | Ex2 | canopy beam root | 0.9995 | **1.211** | A (1.2DL+1.2LL+1.2WM0+, hogging, was not checked) | CAN_T TI450-200X190X12X5 → TI625-200X190X12X4; root end plate 220 × 32 → 220 × 18 | 0.983 (member), 0.978 (root plate) |
 | Ex2 | gable wind columns | 0.993 | **1.052** | B, R1 | W_COL WI400X220X20X4 → WI450X210X20X4 | 0.996 |
 | Ex2 | gable rafter as roof-girder chord | 0.984 | **1.031** | B / R1 (strut) | G_RAF WI250X220X12X4 → WI200X225X12X4 | 0.995 |
 | Ex2 | knee (column stiffeners at the rafter flanges) | 0.973 | **1.076** | C (16 mm column-web doubler at E250) | flange stiffeners 14 → 20 mm | 0.985 (knee) |
-| Ex3 | corner posts | 0.911 | **1.178** | SW (+7 %), B / D-T11 (compact → semi-compact), R1 | G_COL WI200X190X12X4 → WI200X200X14X4 | 0.925 |
+| Ex3 | corner posts | 0.911 | **1.178** | Ka (+7 %), B / D-T11 (compact → semi-compact), R1 | G_COL WI200X190X12X4 → WI200X200X14X4 | 0.925 |
 | Ex3 | columns | 0.994 | **1.083** | B (compact → semi-compact), R1 | COL WI475X220X16X5 → WI550X220X16X5 | 0.956 |
 | Ex3 | knee (column stiffeners at the rafter flanges) | 1.000 | **1.096** | C (6 mm doubler at E250, 18 mm stiffeners at 240) | flange stiffeners 18 → 22 mm | 0.999 (now the column-flange T-stub row of the deeper column) |
 | Ex3 | rafter haunch and splice (moved by the deeper column) | 0.995 / 0.942 | — | follows the column | RAF_T TI675-375X225X12X6 → TI700-375X230X12X6; rafter splice 240 × 14, 12 M20 → 240 × 20, 8 M20 | 0.971 (haunch), 0.954 (splice) |
-| Ex4 | corner posts | 0.970 | **1.242** | SW (+6 %), B / D-T11 (plastic → semi-compact), R1 | G_COL WI200X220X16X4 → WI200X225X16X5 | 0.985 |
+| Ex4 | corner posts | 0.970 | **1.242** | Ka (+6 %), B / D-T11 (plastic → semi-compact), R1 | G_COL WI200X220X16X4 → WI200X225X16X5 | 0.985 |
 | Ex4 | knee (column stiffeners at the rafter flanges) | 0.973 | **1.083** | C (16 mm column-web doubler at E250) | flange stiffeners 12 → 18 mm | 0.981 |
 
-Ka moved the gable wind columns by −2 to +1 % (none failed). No Section 12 row of the PEB golds failed on the
+Ka (a wind post's own tributary area) raised every corner post's in-span moments by 6-8 % (IN_Ex1 1.06, IN_Ex2
+1.07 / 1.08, IN_Ex3 1.06 / 1.07, IN_Ex4 1.06), which contributed to all four corner failures. The IN_Ex3 and IN_Ex4
+corner posts failed under the 90° wind with negative internal pressure (WM90−), where the side walls carry no net load: their tags are
+Ka, B / D-T11 and R1, not SW (corrected after the final review). The IN_Ex1 and IN_Ex2 corner columns are SW, with Ka
+on top. Ka moved the gable wind columns by −2 to +1 % (none failed). No Section 12 row of the PEB golds failed on the
 fixed engine (G, PZ). The IN_Ex1 and IN_Ex2 gable rafters as roof-girder chords failed in the secondary-member
 list, which my first free list missed: their runs were repeated with G_RAF free. The first IN_Ex3 attempt held the
 haunch and the rafter splice and could not pass (the deeper column draws more moment into the haunch), so both
 were freed.
+
+Main e45a65d (the report's strength lines) and 8cc56ec (the consistency chapter's advisory guards) were merged
+before the final runs (09e3f62, 768ddab); neither changes a design result. The five golds were run once more on the
+final head (2026-11-07, after the merge and the last literal-fy switch below): every figure in this file is from
+those runs and is unchanged from the runs on 73ad473.
 
 **Final kg/m² (gold take-off, all COMPLETE):**
 
@@ -110,7 +126,7 @@ runs: secondary design (CFS engine, main dcda6c2) then the harness, `PYTHONHASHS
 | Ex4 | 63.78 → **57.26** (-6.52) | 0.890 → 0.993 (roof-WI569X250X18X16, IS 800 9.3 interaction / member resistance) | 0.984 → 0.984 (conn-brace-WPB180X180X51.22) | 0.663 → 0.741 | 0.168 → 0.174 | COMPLETE → COMPLETE |
 | Ex5 | 34.55 → **33.11** (-1.44) | 1.102 → 1.127 (lateral_col-WI934X240X12X8, IS 800 9.3 interaction / member resistance) | 0.969 → 1.085 (conn-peb-splice-190702) | 1.155 → 1.206 | 0.363 → 0.377 | PARTIAL (gates failing: wind_defl_Y) → PARTIAL (gates failing: wind_defl_Y) |
 
-Old: the October golds as published; new: the final golds (adopted 2026-10-30, re-sized where the engine-check fixes made them fail, section above), on the final engine (this branch: main 56909e3 plus this branch). kg/m² of plan (the gold take-off). At adoption (before the engine-check pass) the gold figures differed from the sizer's verified runs by at most 0.09 kg/m² (Ex1
+Old: the October golds as published; new: the final golds (adopted 2026-10-30, re-sized where the engine-check fixes made them fail, section above), on the final engine (this branch: main 8cc56ec plus this branch). kg/m² of plan (the gold take-off). At adoption (before the engine-check pass) the gold figures differed from the sizer's verified runs by at most 0.09 kg/m² (Ex1
 32.38 / 32.40, Ex2 52.71 / 52.71, Ex3 51.50 / 51.57, Ex4 57.11 / 57.14): the gold `cfg.py` take-off formulas are the
 gold's own plate list, the sizer's is the October declared take-off corrected by its itemised plates. Against the
 October study figures (31.54 / 50.71 / 50.20 / 55.63) the golds are 0.84 to 2.00 kg/m² heavier: the gable wind and
@@ -224,7 +240,9 @@ What changed, per job (from → to):
   evaluation about 8 times slower; the local model (proposals only) keeps a sign-aware subset -- the largest and
   smallest of every signed record field, the largest shears and a combined N / Mmaj / Mmin proxy for each moment
   sign -- and a miss is caught by the full run and fed back through the margins.
-- Tests: `tests/test_third_wave_peb.py` (22).
+- **History** (final review Low 6): each full run keeps the first 12 blocking reasons and their full count
+  (`n_blocking`), in the sizer and the lever study.
+- Tests: `tests/test_third_wave_peb.py` (29).
 
 ## IN_Ex5: the PV answer on the new IN_Ex1 (final engine, re-sized IN_Ex1)
 - `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection): **capacity 0.00 kN/m²** at H/240, at H/150 (the
@@ -233,6 +251,9 @@ What changed, per job (from → to):
   1 Hz and the gust-factor sway fails H/240; at 0.15 kN/m² the job is PARTIAL (57 reasons; worst member ratio 1.127,
   the main column; wind sway 1.206 of H/240). October (the old IN_Ex1): 0.02 kN/m², limited by the sway once the
   frame drops below 1 Hz. The side walls are now loaded, with the same 10.2 gust ratio as the other walls.
+- The bisection and the strengthening option below ran before main e45a65d was merged; the final gold runs on the
+  merged head (73ad473, and again 252d57f after 8cc56ec) show that the merges change nothing here (IN_Ex5 at 0.15 kN/m² still 1.127; the IN_Ex1
+  roof-girder chord still 0.9973, the bisection's 0.00 kN/m² point).
 - The report's PV answer and the installer note follow (0.00 kN/m²; "a lighter array or a smaller covered area does
   not help: the shed as built has no spare capacity for PV").
 - `design/pv_sensitivity_static_wind.json` (an October sensitivity run with the static wind, not part of the current
@@ -259,13 +280,18 @@ What changed, per job (from → to):
   ordinary frame)**, 5.33 against the published design (before the engine-check pass: 5.78, 11.4 %; October: 6.09,
   12.3 %). The re-sized rows say "every check passes" (design runs without the report) instead of COMPLETE.
 - **IN_Ex2 `compliance_comparison.json`** (final engine, final gold): as designed = the published auto-sized SMRF
-  (52.77 kg/m²); the SMRF re-sized by the current sizer 51.46; the ordinary frame **still not resolved**: in 7 full
-  runs (the sizer's new relax rule included) every lighter ordinary frame failed -- 519 t on the eave sway (1.09),
-  508 t on a rafter splice end plate (1.15), 530 t on the eave sway by 0.5 % -- and the proposals after them, with the
-  sway margin tightened, passed but were heavier than the strict sizes run as an ordinary frame (536 t). The row is
-  those sizes with ordinary braced frame braces (51.72, +0.26 heavier by the braces), and the file says the cost of
-  compliance here is below what the sizer resolves, not zero. The limit is the sizer's sway prediction for the
-  continuous multi-span ordinary frame (its proposals miss by up to 9 %), not the code checks.
+  (52.77 kg/m²); the SMRF re-sized by the current sizer 51.46 (533.5 t); the ordinary frame row is the SMRF's sizes
+  run as an ordinary frame with ordinary braced frame braces, 51.72 (536.2 t), the lightest passing ordinary frame.
+  In 7 full runs (the sizer's relax rule included) every lighter ordinary frame failed: 519 t on the eave sway (1.09),
+  508 t on a rafter splice end plate (1.15), 530.1 t on the eave sway by 0.5 %; the proposals after them, with the
+  sway margin tightened, passed but were heavier. **The cost of compliance is stated as a bracket** (final review):
+  between the lightest passing ordinary frame (0.5 % heavier than the re-sized SMRF, −0.26 kg/m²) and the lightest
+  tried (+0.33 kg/m²), so within about ±0.3 kg/m² (±0.6 %): nil at the sizer's resolution, against 4.68 kg/m²
+  (9.0 %) on IN_Ex4. The file's `difference` carries the bracket (`range_kg_m2` [−0.26, +0.33], printed by the report
+  as "between −0.26 and +0.33 kg/m²"); the signed −0.26 and the +1.05 against the published design are dropped (the
+  latter measured the slack in the partly re-sized published design, not the cost of compliance). The limit is the
+  sizer's sway prediction for the continuous multi-span ordinary frame (its proposals miss by up to 9 %), not the
+  code checks.
 - The files are written by the item-13 script of the second wave (adapted: the rows above; public wording, no
   constant names in the change list). IN_Ex8 is the SECT agent's.
 
@@ -286,5 +312,5 @@ ladder, a second IN_Ex2 R = 3 attempt with the splice feedback above, and `/home
 (the writer is ready; it states that the gold is now the strict design).
 
 ## Tests
-Full suite on this branch (bb295a9, under heavy): **1,208 passed, 5 skipped, 0 failed** (main before the third wave:
-1,121 / 4 skipped).
+Full suite on this branch (252d57f, main 8cc56ec merged, under heavy, 2026-11-07): **1,368 passed, 5 skipped,
+0 failed** (the final review's run on 73ad473: 1,363 / 5 skipped; main before the third wave: 1,121 / 4 skipped).
