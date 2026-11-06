@@ -1,7 +1,7 @@
 """Third wave (2026-10), agent SECT: Indian section families for the hot-rolled golds IN_Ex7 ... IN_Ex20.
 
 P3 (HR side)  a tie between two load combinations is broken by the fixed order of the combination list, whatever
-              PYTHONHASHSEED is (design_pipeline._top_records keeps the list order)
+              PYTHONHASHSEED is (design_pipeline.member_check_records keeps every combination in list order)
 P6 sizer      steel_engine/hr_autosize.py: catalogue by role (IS 808 MB / WB / HB, IS 1161 CHS), the order of
               preference (rolled E250 -> rolled E350 -> built-up), built-up labels, the cfg rewrite, the grade map,
               the connection designers (fin plates and CHS brace ends checked with the engine's own capacity

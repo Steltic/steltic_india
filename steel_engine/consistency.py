@@ -1025,6 +1025,19 @@ def literal_dc_issues(pkg):
     return out
 
 
+def member_wind_side_wall_issues(pkg):
+    """Lead ruling on open point 1 (2026-11-06): every member-wind pattern loads its two side walls (IS 875-3 Table
+    5, static_model.side_wall_pressure); a pattern whose side walls could not be loaded is a FAIL, never silent."""
+    out = []
+    pats = ((pkg or {}).get("member_wind_wall_scan") or {}).get("patterns") or {}
+    for name, v in sorted(pats.items(), key=lambda kv: str(kv[0])):
+        sw = (v or {}).get("side_walls") or {}
+        if sw and sw.get("applied") is False:
+            out.append("member-wind pattern %s: the side walls are not loaded (%s) -- IS 875-3 Table 5 side-wall Cpe "
+                       "is required (declare wall_side_kNm2)" % (name, sw.get("reason")))
+    return out
+
+
 def zero_demand_issues(pkg):
     out = []
     for m in (pkg or {}).get("members") or []:
@@ -1084,6 +1097,7 @@ def india_issues(cfg, pkg, job_dir):
     except Exception as ex:
         out.append("seismic gates unavailable: %s" % ex)
     out += zero_demand_issues(pkg)
+    out += member_wind_side_wall_issues(pkg)
     out += absent_component_issues(cfg, pkg)
     out += literal_dc_issues(pkg)
     out += script_grep_issues(job_dir)

@@ -130,13 +130,19 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
             rec[name].append(a); return real[name](*a)
         return f
     for k in rec: setattr(ops, k, mk(k))
+    _rel_saved = dict(getattr(eng, "_COL_REL", {}))     # pinned column ends of THIS build (engine3d.add_column)
     try:
         _cb = cfg.get("custom_build")
         if _cb is None:                                  # X02: the parametric builder with cfg['roof_planes']
             from example_build import example_build as _cb
+        if hasattr(eng, "_COL_REL"):
+            eng._COL_REL.clear()
         info = _cb(cfg, transf)
+        col_rel = dict(info.get("col_rel") or getattr(eng, "_COL_REL", {}) or {})
     finally:
         for k in rec: setattr(ops, k, real[k])
+        if hasattr(eng, "_COL_REL"):
+            eng._COL_REL.clear(); eng._COL_REL.update(_rel_saved)
 
     ops.wipe(); ops.model("basic", "-ndm", 3, "-ndf", 6)
     coord = {}
@@ -207,9 +213,13 @@ def _staticize_custom(cfg, transf="PDelta", nseg=10):
                                                   "i": i, "j": j, "k": k, "axis": "col",
                                                   "transf": (a[10] if a[0] == "elasticBeamColumn" and len(a) > 10 else None),
                                                   # element length (column_span_moments; span-moment fix 2026-11-01)
-                                                  "L": math.dist(coord[a[2]], coord[a[3]])})
-            elif kind == "brace":
-                braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3]})
+                                                  "L": math.dist(coord[a[2]], coord[a[3]]),
+                                                  # pinned end(s) of the column piece ('I' / 'J' / 'both'; PEB)
+                                                  "rel": col_rel.get(a[1])})
+            elif kind in ("brace", "truss"):
+                # MSME (2026-10): kind 'truss' (pin-ended truss member, engine3d.add_truss) is analysed like a brace
+                # (truss element, self-weight lumped at its end nodes, axial force record)
+                braces.append({"tag": a[1], "sec": sec, "n1": a[2], "n2": a[3], "kind": kind})
     for a in rec["rigidDiaphragm"]:
         master = a[1]; slaves = list(a[2:])
         mz = round(coord[master][2], 6) if master in coord else None
@@ -491,7 +501,7 @@ def _member_kinds(model):
     kinds = {}
     for c in model["cols"]:   kinds[frozenset((c["n1"], c["n2"]))] = ("col", c.get("sec"))
     for b in model["beams"]:  kinds[frozenset((b["A"], b["B"]))]   = ("beam", b.get("sec"))
-    for b in model["braces"]: kinds[frozenset((b["n1"], b["n2"]))] = ("brace", b.get("sec"))
+    for b in model["braces"]: kinds[frozenset((b["n1"], b["n2"]))] = (b.get("kind") or "brace", b.get("sec"))
     return kinds
 
 def _extract(model, cfg, fD, fL, fLr, floor_system):
@@ -534,7 +544,7 @@ def _merge(env, kinds, res, label, col_only):
         e = env.setdefault(fs, dict(comp=0.0, tens=0.0, Mz=0.0, My=0.0, V=0.0, combo="", score=-1.0))
         e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
         e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
-        sc = abs(N) if kind in ("col", "brace") else abs(Mz)
+        sc = abs(N) if kind in ("col", "brace", "truss") else abs(Mz)
         if sc > e["score"]: e["score"] = sc; e["combo"] = label
 
 def _grav_key(cfg, nseg, floor_system, determinate, sec_sig):
@@ -1028,6 +1038,29 @@ def _plane_member_gravity(cfg, b, fD, fLr, fS, fEv, fdead, self_weight, snow_spl
     wy, wz, wx = RG.gravity_components(ca, cb, b.get("vecxz") or (0.0, 0.0, 1.0))
     sp_axis, sp_side, sp_mid = snow_split
     tot = 0.0
+    if role == "rafter" and pl["raw"].get("purlins_at_nodes"):
+        # MSME (2026-10): truss top chord with the purlins at the panel points -- the roof area load (and the gable
+        # cladding on an end truss) reaches the chord as purlin reactions at the element end nodes (lever rule per
+        # segment); the chord's self-weight stays distributed
+        FA = FB = 0.0
+        for s_, tag in enumerate(segs):
+            s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+            pp = p
+            if sp_axis is not None and S and fS:
+                xm = ca[sp_axis] + (cb[sp_axis] - ca[sp_axis]) * (smid / L)
+                mid = pl["ridge"] if sp_axis == ax else sp_mid
+                if not ((xm <= mid + 1e-6) if sp_side == "lo" else (xm >= mid - 1e-6)):
+                    pp = p_ns
+            am = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
+            wcl = fdead * clad * (th + max(RG.surface_z(pl, am) - pl["ez"], 0.0)) / 1000.0 if gable else 0.0
+            Fs = (pp * trib / 1000.0 + wcl) * cos_t * (s1 - s0)          # N, global -Z
+            FA += Fs * (1.0 - smid / L); FB += Fs * smid / L
+            if wsw:
+                ops.eleLoad("-ele", tag, "-type", "-beamUniform", wsw * wy, wsw * wz, wsw * wx)
+            tot += Fs + wsw * (s1 - s0)
+        ops.load(b["A"], 0.0, 0.0, -FA, 0.0, 0.0, 0.0)
+        ops.load(b["B"], 0.0, 0.0, -FB, 0.0, 0.0, 0.0)
+        return tot
     for s_, tag in enumerate(segs):
         s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
         pp = p
@@ -1170,8 +1203,15 @@ def member_wind_loads(cfg, model, pat, f):
       width = the gravity tributary (two-way 45-deg or one-way incl. secondary strips);
     * walls: the first exposed column line met from upwind in each strip normal to the wind (projected-envelope
       scan per column piece, so a main wall above / beyond a lean-to is loaded) takes the windward pressure, the
-      last one the leeward pressure, each over its tributary width (half the distance to the neighbouring lines).
-    Returns {'roof_N': total vertical, 'wall_N': total horizontal} for the record."""
+      last one the leeward pressure, each over its tributary width (half the distance to the neighbouring lines);
+    * side walls (lead ruling on open point 1, 2026-11-06): the same scan across the wind -- the first / last
+      exposed line of each strip along the wind takes the Table 5 side-wall pressure (side_wall_pressure,
+      SIDE_WALL_CITE) over its own wall's width, a wind post with the Ka of its own side-wall area;
+    * every wall area reaches a member: the envelope residual of a gable wall at the line's upper end
+      (envelope_residuals, ENVELOPE_RESIDUAL_BASIS).
+    Returns {'roof_N': total vertical, 'wall_N': total horizontal along the wind, 'side_N': along +the other axis,
+    'faces': {windward | leeward | side_lo | side_hi: {N, N_pattern_pd (before a post's Ka), A_m2}},
+    'side_walls': the side-wall pressure record} for the record."""
     NF = model["NF"]; ax = 0 if pat["wind_axis"] == "X" else 1
     oth = 1 - ax
     ds = _deck_span(cfg)
@@ -1245,47 +1285,544 @@ def member_wind_loads(cfg, model, pat, f):
             c1, c2 = ops.nodeCoord(c["n1"]), ops.nodeCoord(c["n2"])
             cols.append((c, c1, c2, 0.5 * (c1[ax] + c2[ax]), round(0.5 * (c1[oth] + c2[oth]), 3),
                          min(c1[2], c2[2]), max(c1[2], c2[2])))
+        # side walls (lead ruling on open point 1, 2026-11-06): IS 875-3 Table 5 Cpe of the two walls parallel to the
+        # wind, with the pattern's Cpi (side_wall_pressure)
+        side = side_wall_pressure(cfg, pat, cols, ax)
+        tot["side_walls"] = side
+        tot["faces"] = {}
         if cols and all(c.get("transf") in (1, 2) for (c, *_r) in cols):
-            for (c, c1, c2, xa, yo, z0, z1) in cols:
-                zm = 0.5 * (z0 + z1)
-                same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
-                strip = [r[3] for r in same_h if abs(r[4] - yo) < 1.0]
-                widths = _strip_widths({r[4] for r in same_h})
-                wtrib = widths.get(yo) or (cfg["SY"] if ax == 0 else cfg["SX"])
-                for face, q, fs in faces:
-                    upwind_first = (min(strip) if (face == "up") == (sgn_w > 0) else max(strip))
-                    if abs(xa - upwind_first) > 1e-6:
+            posts = _wind_post_columns(cols)
+            if not posts:
+                # review finding 9 (2026-11-06): say why no wind post Ka was applied
+                model["wind_post_note"] = ("no wind post found: no wall column line has a pinned top piece (rel 'J' / "
+                                           "'both', engine3d.add_column releases); the pattern pressures (frame Ka) "
+                                           "are kept on every wall column")
+            ws_ = ((cfg.get("load_plan") or {}).get("wind_summary") or {})
+            env = _envelope_members(model)
+            # engine checks (2026-11): the face / width scan is wall_wind_pieces (roof members as envelope, the own
+            # wall's width of a piece above the eave split); the side walls are the same scan across the wind
+            scan = wall_wind_pieces(cols, env, ax, sgn_w, faces, cfg["SY"] if ax == 0 else cfg["SX"])
+            rec = dict(scan["record"], side_walls=side, members=[], envelope_residual=[])
+            jobs = [("wall", ax, scan)]
+            if side.get("applied"):
+                qs = float(side["q_kNm2"])
+                cols_s = [(c, c1, c2, 0.5 * (c1[oth] + c2[oth]), round(0.5 * (c1[ax] + c2[ax]), 3), z0, z1)
+                          for (c, c1, c2, _xa, _yo, z0, z1) in cols]
+                sscan = wall_wind_pieces(cols_s, env, oth, 1.0, (("up", qs, 1.0), ("down", qs, -1.0)),
+                                         cfg["SX"] if ax == 0 else cfg["SY"])
+                rec.update(side_sheltered=sscan["record"]["sheltered"],
+                           side_own_wall_width=sscan["record"]["own_wall_width"],
+                           side_stepped_facade=sscan["record"]["stepped_facade"])
+                jobs.append(("side", oth, sscan))
+            model.setdefault("member_wind_wall", {})[pat.get("name")] = rec
+            loads_, area_ = [], {}
+            for kind, a_, sc_ in jobs:
+                seen_ = set()
+                for i, (c, c1, c2, face, q, fs, wtrib) in enumerate(sc_["pieces"]):
+                    wall = _face_wall(kind, face)
+                    F = f * float(q) * wtrib / 1000.0 * fs          # N/mm along +axis a_
+                    loads_.append(("ele", c, c1, c2, a_, F, wall, wtrib * abs(c2[2] - c1[2])))
+                    post = posts.get(c["tag"])
+                    if post is not None and c["tag"] not in seen_:
+                        seen_.add(c["tag"])
+                        k_ = (post["line"], kind)
+                        area_[k_] = area_.get(k_, 0.0) + wtrib * abs(c2[2] - c1[2])
+                    sf_, cpe_ = _wall_zone(pat, side, wall)
+                    rec["members"].append({"tag": c["tag"], "wall": wall, "surface": sf_, "Cpe": cpe_,
+                                           "Cpi": pat.get("Cpi"), "q_kNm2": round(float(q), 4),
+                                           "width_mm": round(wtrib, 1), "z_mm": [round(c1[2], 1), round(c2[2], 1)]})
+                # every wall area reaches a member (review 2026-11-06, the gable triangle): envelope_residuals
+                for i, A in sorted(envelope_residuals(sc_["pieces"], sc_["halves"], env, a_).items()):
+                    if abs(A) < 1.0e3:                              # < 0.001 m2: rounding of the sampled strip
                         continue
-                    F = f * float(q) * wtrib / 1000.0 * fs      # N/mm along +axis
-                    # column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y, z_l = +X
-                    if c["transf"] == 2:
-                        Wy, Wz = (F, 0.0) if ax == 0 else (0.0, F)
-                    else:
-                        Wy, Wz = (0.0, F) if ax == 0 else (-F, 0.0)
+                    c, c1, c2, face, q, fs, wtrib = sc_["pieces"][i]
+                    wall = _face_wall(kind, face)
+                    node = c["n2"] if c2[2] >= c1[2] else c["n1"]
+                    loads_.append(("node", c, node, None, a_, f * float(q) * A / 1000.0 * fs, wall, A))
+                    post = posts.get(c["tag"])
+                    if post is not None:
+                        k_ = (post["line"], kind)
+                        area_[k_] = area_.get(k_, 0.0) + A
+                    rec["envelope_residual"].append({"tag": c["tag"], "node": node, "wall": wall,
+                                                     "area_m2": round(A / 1.0e6, 4)})
+            kfs = {}
+            for (ln, kind), A_mm2 in area_.items():
+                # engine checks (2026-11): a wind post (a wall column pinned at its top) is a beam-type element spanning
+                # base to roof -- IS 875-3 7.2.2.1 (b) Ka from its OWN tributary area (span x spacing: the wall area
+                # the pattern loads it with, piece by piece), not the frame's (7.2.2.1 (a)) that the pattern carries;
+                # a side wall's post takes Ka of its side-wall area (lead ruling, open point 1)
+                H = next(p_["H_mm"] for p_ in posts.values() if p_["line"] == ln)
+                kfs[(ln, kind)] = wind_post_ka_factor(ws_, A_mm2 / 1.0e6)
+                key_ = (ln, pat.get("name")) if kind == "wall" else (ln, pat.get("name"), "side")
+                model.setdefault("wind_post_Ka", {})[key_] = dict(
+                    kfs[(ln, kind)], column_line=ln, pattern=pat.get("name"), span_mm=round(H, 1),
+                    wall="windward / leeward" if kind == "wall" else "side",
+                    tributary_width_mm=round(A_mm2 / H, 1) if H else None)
+            for ld in loads_:
+                c, a_, F, wall, A_ = ld[1], ld[4], ld[5], ld[6], ld[7]
+                kind = "side" if wall.startswith("side") else "wall"
+                post = posts.get(c["tag"])
+                F0 = F
+                if post is not None and kfs.get((post["line"], kind), {}).get("applied"):
+                    F *= kfs[(post["line"], kind)]["factor"]
+                if ld[0] == "ele":
+                    c1, c2 = ld[2], ld[3]
+                    Wy, Wz = _column_uniform_components(c, a_, F)
                     ops.eleLoad("-ele", c["tag"], "-type", "-beamUniform", Wy, Wz)
-                    tot["wall_N"] += F * abs(c2[2] - c1[2])
+                    Ft, Ft0 = F * abs(c2[2] - c1[2]), F0 * abs(c2[2] - c1[2])
+                else:
+                    v = [0.0] * 6
+                    v[a_] = F
+                    ops.load(int(ld[2]), *v)
+                    Ft, Ft0 = F, F0
+                fc = tot["faces"].setdefault(wall, {"N": 0.0, "N_pattern_pd": 0.0, "A_m2": 0.0})
+                fc["N"] += Ft
+                fc["N_pattern_pd"] += Ft0
+                fc["A_m2"] += A_ / 1.0e6
+                if kind == "wall":
+                    tot["wall_N"] += Ft
+                else:
+                    tot["side_N"] = tot.get("side_N", 0.0) + Ft
         else:
+            model["wind_post_note"] = ("parametric model: the wall wind is applied as storey forces at the grid nodes "
+                                       "(nodal fallback), no column carries a span load, so no wind post Ka applies "
+                                       "(a column pinned through a beam release is not detected as a post)")
+            model.setdefault("member_wind_wall", {})[pat.get("name")] = {
+                "basis": "parametric model: nodal fallback (storey forces at the first / last grid node of each strip)",
+                "side_walls": side}
             alln = set(ops.getNodeTags())
+            scans = [(ax, oth, faces, sgn_w, cfg["SY"] if ax == 0 else cfg["SX"], "wall")]
+            if side.get("applied"):
+                qs = float(side["q_kNm2"])
+                scans.append((oth, ax, (("up", qs, 1.0), ("down", qs, -1.0)), 1.0,
+                              cfg["SX"] if ax == 0 else cfg["SY"], "side"))
             for k in range(1, NF + 1):
                 h_t = cfg["heights"][k - 1] / 2.0 + (cfg["heights"][k] / 2.0 if k < NF else 0.0)
                 lvl = [ntag(i, j, k) for (i, j) in (model.get("present") or {}).get(k, ())]
                 crd = {n: ops.nodeCoord(n) for n in lvl if n in alln}
                 if not crd:
                     continue
-                strips = {}
-                for n, c in crd.items():
-                    strips.setdefault(round(c[oth], 3), []).append(n)
-                widths = _strip_widths(strips)
-                for yo, ns in strips.items():
-                    wtrib = widths.get(yo) or (cfg["SY"] if ax == 0 else cfg["SX"])
-                    for face, q, fs in faces:
-                        pick = min if (face == "up") == (sgn_w > 0) else max
-                        n = pick(ns, key=lambda nn: crd[nn][ax])
-                        Ftot = f * float(q) * wtrib * h_t / 1000.0 * fs          # N along +axis
-                        v = [0.0] * 6; v[ax] = Ftot
-                        ops.load(n, *v)
-                        tot["wall_N"] += Ftot
+                for (a_, o_, fcs, sg_, dw, kind) in scans:
+                    strips = {}
+                    for n, c in crd.items():
+                        strips.setdefault(round(c[o_], 3), []).append(n)
+                    widths = _strip_widths(strips)
+                    for yo, ns in strips.items():
+                        wtrib = widths.get(yo) or dw
+                        for face, q, fs in fcs:
+                            pick = min if (face == "up") == (sg_ > 0) else max
+                            n = pick(ns, key=lambda nn: crd[nn][a_])
+                            Ftot = f * float(q) * wtrib * h_t / 1000.0 * fs          # N along +axis a_
+                            v = [0.0] * 6; v[a_] = Ftot
+                            ops.load(n, *v)
+                            wall = _face_wall(kind, face)
+                            fc = tot["faces"].setdefault(wall, {"N": 0.0, "N_pattern_pd": 0.0, "A_m2": 0.0})
+                            fc["N"] += Ftot
+                            fc["N_pattern_pd"] += Ftot
+                            fc["A_m2"] += wtrib * h_t / 1.0e6
+                            if kind == "wall":
+                                tot["wall_N"] += Ftot
+                            else:
+                                tot["side_N"] = tot.get("side_N", 0.0) + Ftot
     return tot
+
+
+WALL_SCAN_BASIS = (
+    "member-wind wall scan (engine checks 2026-11): IS 875-3 7.3.1 F = (Cpe - Cpi) A pd on the windward / leeward "
+    "wall.  A column piece takes the wall pressure only where it is the first element of its strip met from upwind "
+    "(downwind) at its mid-height, counting the strip's sloping roof members (rafters, truss chords) inside the plan "
+    "extent of its columns as the envelope: a piece under the roof (a gable post above the eave under the across-ridge "
+    "wind, an interior column above the eave) is not on a wall.  Its width is half the distance to the neighbouring "
+    "strips at that height, and to the neighbouring column lines of its own wall where a roof member of that wall "
+    "rises over them (the gable triangle above the eave: the post keeps its own tributary width).  At a facade step "
+    "(a lean-to's end wall) a wall ends at its corner line, and the column at the re-entrant corner carries the other "
+    "half of the wall that runs into it, piece by piece over the height each piece shares with it.  The two side walls "
+    "(parallel to the wind) are scanned the same way across the wind and take the Table 5 side-wall Cpe "
+    "(SIDE_WALL_CITE).  Every wall area reaches a member: where the wall plane has a sloping envelope member (gable "
+    "rafter, truss top chord) each column line carries the wall area of its tributary strip up to that member, the "
+    "part above or below its loaded height at its upper end (ENVELOPE_RESIDUAL_BASIS).")
+
+
+SIDE_WALL_CITE = (
+    "IS 875 (Part 3):2015 7.3.3.1 / Table 5 (lead ruling on open point 1, 2026-11-06): the side walls -- C and D at "
+    "theta = 0 (wind onto A), A and B at theta = 90 (wind onto C) -- take their Table 5 average Cpe over the whole "
+    "wall, with each +-Cpi of the pattern: F = (Cpe - Cpi) A pd (7.3.1), the width of the member's own wall and the "
+    "Ka of a wind post's own area.  Table 5 gives one coefficient per wall surface (A, B, C, D) and no zones by "
+    "distance from the windward edge; its only edge band, the local Cpe strip of width 0.25 w, is for cladding "
+    "(7.3: 'Coefficients for the local effects should only be used for calculation of forces on these local areas "
+    "affecting roof sheeting, glass panels, and individual cladding units including their fixtures. They should not "
+    "be used for calculating force on entire structural elements such as roof, walls or structure as a whole.'), so no "
+    "member's tributary spans two zones.  The two side walls' suctions are equal and opposite (Table 5 has C = D at "
+    "theta = 0 and A = B at theta = 90), so the frame-level storey forces carry no net side-wall force.")
+ENVELOPE_RESIDUAL_BASIS = (
+    "every wall area reaches a member (review 2026-11-06, the gable triangle): in a wall plane with a sloping envelope "
+    "member (gable rafter, end-truss top chord), the wall at each point s along it runs up to that member; the column "
+    "line whose tributary strip holds s carries it (the line with the highest top there).  The part of the strip's "
+    "wall above that line's loaded height (a corner column ending at the eave, a post ending below the chord), less "
+    "any loaded height above the envelope, is applied at the line's upper end: a nodal force (Cpe - Cpi) pd x area at "
+    "the top node of its top piece.  Strips sampled at 25 mm.")
+
+
+def _face_wall(kind, face):
+    """The wall a scan face loads: windward / leeward (the wind scan) or side_lo / side_hi (the side-wall scan: the
+    side wall at the low / high coordinate across the wind)."""
+    if kind == "side":
+        return "side_lo" if face == "up" else "side_hi"
+    return "windward" if face == "up" else "leeward"
+
+
+def _column_uniform_components(c, a_, F):
+    """(Wy, Wz) local uniform load components of a column element for a force F (N/mm) along global axis a_ (0 X,
+    1 Y).  Column local axes: x up; transf 2 (vecxz 0,1,0): y_l = +X, z_l = +Y; transf 1 (vecxz 1,0,0): y_l = -Y,
+    z_l = +X."""
+    if c["transf"] == 2:
+        return (F, 0.0) if a_ == 0 else (0.0, F)
+    return (0.0, F) if a_ == 0 else (-F, 0.0)
+
+
+_T5_FACES = {0: ("A", "B", ("C", "D")), 90: ("C", "D", ("A", "B"))}
+SIDE_WALL_MATCH_TOL = 0.05       # review R2-4: a derived pattern whose own Cpe is further than this from both angles warns
+
+
+def side_wall_pressure(cfg, pat, cols, ax):
+    """The side-wall pressure of one member-wind pattern (kN/m2, + towards the wall) with its record (SIDE_WALL_CITE).
+    The pattern's own wall_side_kNm2 (india_wind_tables.lowrise_member_wind) when declared; otherwise derived from
+    Table 5 at the model geometry (h = eave height, l / w = the plan extents of the columns; theta = 0 when the wind
+    is normal to the longer face, checked against the pattern's windward / leeward Cpe implied by its pressures, pd
+    and Cpi) with the pattern's Cpi and pd (its pd_kNm2, else the wind summary's).  {'applied': False, 'reason'} when
+    neither is possible -- the pipeline reports it as an ERROR."""
+    rec = {"cite": SIDE_WALL_CITE}
+    wc = pat.get("wall_cpe") or {}
+    if pat.get("wall_side_kNm2") is not None:
+        sd = wc.get("side") or {}
+        rec.update(applied=True, q_kNm2=float(pat["wall_side_kNm2"]), source="pattern (wall_side_kNm2)",
+                   surfaces=sd.get("surfaces"), Cpe=sd.get("Cpe"), Cpi=pat.get("Cpi"), pd_kNm2=pat.get("pd_kNm2"),
+                   theta_deg=wc.get("theta_deg"))
+        return rec
+    try:
+        cpi = float(pat["Cpi"])
+    except (KeyError, TypeError, ValueError):
+        return dict(rec, applied=False, reason="the pattern declares no wall_side_kNm2 and no Cpi: the side walls "
+                                               "cannot be loaded -- declare wall_side_kNm2")
+    ws = (cfg.get("load_plan") or {}).get("wind_summary") or {}
+    pd = pat.get("pd_kNm2") if pat.get("pd_kNm2") is not None else ws.get("pd_kNm2")
+    if pd is None or not cols:
+        return dict(rec, applied=False, reason="the pattern declares no wall_side_kNm2 and no pd (pattern pd_kNm2 / "
+                                               "wind_summary pd_kNm2): the side walls cannot be loaded")
+    pd = float(pd)
+    import india_wind_tables as WT
+    xs = [v for r in cols for v in (r[1][0], r[2][0])]
+    ys = [v for r in cols for v in (r[1][1], r[2][1])]
+    Lx, Ly = max(xs) - min(xs), max(ys) - min(ys)
+    z0 = min(r[5] for r in cols)
+    pls = RG.planes(cfg) if RG.has_planes(cfg) else []
+    h = (min(float(p_["ez"]) for p_ in pls) if pls else max(r[6] for r in cols)) - z0
+    l_, w_ = max(Lx, Ly), min(Lx, Ly)
+    if w_ <= 0.0 or h <= 0.0:
+        return dict(rec, applied=False, reason="no plan / height extent for Table 5")
+    face_len, depth = (Ly, Lx) if ax == 0 else (Lx, Ly)
+    imp = None
+    if pat.get("wall_windward_kNm2") is not None and pat.get("wall_leeward_kNm2") is not None:
+        imp = (float(pat["wall_windward_kNm2"]) / pd + cpi, float(pat["wall_leeward_kNm2"]) / pd + cpi)
+    tried = {}
+    for th in ((0, 90) if face_len >= depth - 1.0 else (90, 0)):
+        r = WT.resolve_cpe_walls(h / w_, l_ / w_, float(th))
+        if r.get("found") and r.get("Cpe"):
+            tried[th] = r
+    if not tried:
+        return dict(rec, applied=False, reason="Table 5 not resolved for h/w = %.3f, l/w = %.3f: declare "
+                                               "wall_side_kNm2" % (h / w_, l_ / w_))
+    order = list(tried)
+    th = order[0]
+    if imp is not None:
+        def miss(t):
+            a_, b_, _s = _T5_FACES[t]
+            cp = tried[t]["Cpe"]
+            return max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
+        best = min(order, key=miss)
+        if miss(best) + 1e-9 < miss(th):
+            th = best
+    cp = tried[th]["Cpe"]
+    a_, b_, sides = _T5_FACES[th]
+    Cs = min(float(cp[k]) for k in sides)
+    warn = None
+    if imp is not None:
+        off = max(abs(float(cp[a_]) - imp[0]), abs(float(cp[b_]) - imp[1]))
+        if off > SIDE_WALL_MATCH_TOL:
+            # review R2-4: the pattern was built on other coefficients -- say so, the Table 5 side walls are an
+            # assumption here
+            warn = ("WARN: the pattern's own windward / leeward Cpe (%.3f / %.3f, from its pressures, pd and Cpi) match "
+                    "neither Table 5 wind angle (closest: theta %d, %s %.2f / %s %.2f, off by %.3f > %.2f); the side "
+                    "walls take that row's Cpe %.2f -- check the pattern or declare wall_side_kNm2"
+                    % (imp[0], imp[1], th, a_, float(cp[a_]), b_, float(cp[b_]), off, SIDE_WALL_MATCH_TOL, Cs))
+    rec.update(applied=True, q_kNm2=(Cs - cpi) * pd, source="derived: Table 5 at the model geometry (the pattern "
+                                                            "declares no wall_side_kNm2)",
+               surfaces=list(sides), Cpe=Cs, Cpi=cpi, pd_kNm2=pd, theta_deg=th, h_over_w=round(h / w_, 4),
+               l_over_w=round(l_ / w_, 4),
+               check={"pattern_windward_Cpe": None if imp is None else round(imp[0], 4),
+                      "pattern_leeward_Cpe": None if imp is None else round(imp[1], 4),
+                      "table5_windward_Cpe": float(cp[a_]), "table5_leeward_Cpe": float(cp[b_])})
+    if warn:
+        rec["warning"] = warn
+    return rec
+
+
+def _wall_zone(pat, side, wall):
+    """(Table 5 surface, Cpe) of the wall a member is on, for the per-member record."""
+    wc = pat.get("wall_cpe") or {}
+    if wall.startswith("side"):
+        return ("/".join(side.get("surfaces") or []) or None), side.get("Cpe")
+    w = wc.get("windward" if wall == "windward" else "leeward") or {}
+    if w:
+        return w.get("surface"), w.get("Cpe")
+    th = side.get("theta_deg")
+    pd, cpi = side.get("pd_kNm2"), pat.get("Cpi")
+    q = pat.get("wall_windward_kNm2" if wall == "windward" else "wall_leeward_kNm2")
+    sf = _T5_FACES[th][0 if wall == "windward" else 1] if th in _T5_FACES else None
+    if pd and cpi is not None and q is not None:
+        return sf, round(float(q) / float(pd) + float(cpi), 4)
+    return sf, None
+
+
+def envelope_residuals(pieces, halves, env, a_, ds_mm=25.0):
+    """ENVELOPE_RESIDUAL_BASIS: {piece index: signed wall area (mm2)} to apply at the top node of that piece.
+    pieces / halves: wall_wind_pieces output of one scan (scan axis a_); env: _envelope_members."""
+    o_ = 1 - a_
+    groups = {}
+    for i, (c, c1, c2, face, q, fs, w) in enumerate(pieces):
+        xa = 0.5 * (c1[a_] + c2[a_])
+        lo, hi = halves[i]
+        if lo + hi <= 0.0:
+            lo = hi = 0.5 * w
+        groups.setdefault((face, int(round(xa))), []).append(
+            (i, xa, 0.5 * (c1[o_] + c2[o_]), max(c1[2], c2[2]), lo, hi))
+    out = {}
+    for (face, _k), rows in groups.items():
+        xa = sum(r[1] for r in rows) / len(rows)
+        em = [(e1, e2) for (e1, e2) in env if abs(e1[a_] - xa) < 1.0 and abs(e2[a_] - xa) < 1.0
+              and abs(e2[o_] - e1[o_]) > 1.0]
+        if not em:
+            continue
+        S0 = min(r[2] - r[4] for r in rows)
+        S1 = max(r[2] + r[5] for r in rows)
+        n = max(int(math.ceil((S1 - S0) / ds_mm)), 1)
+        d = (S1 - S0) / n
+        for k in range(n):
+            s_ = S0 + (k + 0.5) * d
+            zs = [e1[2] + (s_ - e1[o_]) / (e2[o_] - e1[o_]) * (e2[2] - e1[2]) for (e1, e2) in em
+                  if min(e1[o_], e2[o_]) - 1e-6 <= s_ <= max(e1[o_], e2[o_]) + 1e-6]
+            if not zs:
+                continue
+            cov = [(zt, -abs(s_ - s0), i) for (i, _x, s0, zt, lo, hi) in rows if s0 - lo - 1e-6 <= s_ <= s0 + hi + 1e-6]
+            if not cov:
+                continue
+            zt, _d, i = max(cov)
+            out[i] = out.get(i, 0.0) + (max(zs) - zt) * d
+    return out
+
+
+def _envelope_members(model):
+    """Sloping members that bound the building envelope for the wall scan (engine checks 2026-11): beams (rafters,
+    roof-plane members, truss top chords) and pin-ended truss members (kind 'truss') whose ends differ in height by
+    more than 1 mm, as coordinate pairs.  Wall / frame bracing (kind 'brace') is not envelope."""
+    out = []
+    for b in model.get("beams") or []:
+        c1, c2 = ops.nodeCoord(b["A"]), ops.nodeCoord(b["B"])
+        if abs(c2[2] - c1[2]) > 1.0:
+            out.append((tuple(c1), tuple(c2)))
+    for b in model.get("braces") or []:
+        if b.get("kind") == "truss":
+            c1, c2 = ops.nodeCoord(b["n1"]), ops.nodeCoord(b["n2"])
+            if abs(c2[2] - c1[2]) > 1.0:
+                out.append((tuple(c1), tuple(c2)))
+    return out
+
+
+def _crossing(c1, c2, i, z):
+    """Coordinate i of the point where member c1-c2 is at height z (None when it does not reach z or is level)."""
+    za, zb = c1[2], c2[2]
+    if abs(zb - za) <= 1.0 or not (min(za, zb) - 1e-6 <= z <= max(za, zb) + 1e-6):
+        return None
+    return c1[i] + (z - za) / (zb - za) * (c2[i] - c1[i])
+
+
+def _reaches_over(c1, c2, i, a, b, z):
+    """True when member c1-c2 lies over the plan interval [a, b] of coordinate i and reaches height z there."""
+    lo, hi = min(a, b), max(a, b)
+    m0, m1 = min(c1[i], c2[i]), max(c1[i], c2[i])
+    o0, o1 = max(lo, m0), min(hi, m1)
+    if o1 - o0 <= 1.0:
+        return False
+
+    def zat(v):
+        return c1[2] + (v - c1[i]) / (c2[i] - c1[i]) * (c2[2] - c1[2])
+    return max(zat(o0), zat(o1)) >= z - 1e-6
+
+
+def wall_wind_pieces(cols, env, ax, sgn_w, faces, default_width):
+    """The column pieces that take a wall pressure in one member-wind pattern (WALL_SCAN_BASIS).
+    cols = [(c, c1, c2, xa, yo, z0, z1)] (member_wind_loads); env = _envelope_members; ax = wind axis index (0 X,
+    1 Y); faces = ((face, q, force sign), ...).  Returns {'pieces': [(c, c1, c2, face, q, fs, width_mm)], 'halves':
+    [(width below, width above the piece's line along the wall)], 'record': {sheltered, own_wall_width, basis}}."""
+    oth = 1 - ax
+    lines = {}
+    for (c, c1, c2, xa, yo, z0, z1) in cols:
+        k = (round(xa, 3), yo)
+        a_, b_ = lines.get(k, (z0, z1))
+        lines[k] = (min(a_, z0), max(b_, z1))
+    ext_c, env_c, wall_c = {}, {}, {}
+
+    def ext(yo):
+        if yo not in ext_c:
+            xs = [r[3] for r in cols if abs(r[4] - yo) < 1.0]
+            ext_c[yo] = (min(xs), max(xs))
+        return ext_c[yo]
+
+    def env_strip(yo):
+        if yo not in env_c:
+            env_c[yo] = [(e1, e2) for (e1, e2) in env if abs(e1[oth] - yo) < 1.0 and abs(e2[oth] - yo) < 1.0]
+        return env_c[yo]
+
+    def env_wall(xa):
+        k = round(xa, 3)
+        if k not in wall_c:
+            wall_c[k] = [(e1, e2) for (e1, e2) in env if abs(e1[ax] - xa) < 1.0 and abs(e2[ax] - xa) < 1.0]
+        return wall_c[k]
+
+    pieces, sheltered, widened, halves, steps, extra = [], [], [], [], [], {}
+    for (c, c1, c2, xa, yo, z0, z1) in cols:
+        zm = 0.5 * (z0 + z1)
+        same_h = [r for r in cols if r[5] - 1e-6 <= zm <= r[6] + 1e-6]        # pieces at this height
+        strip = [r[3] for r in same_h if abs(r[4] - yo) < 1.0]
+        lo_x, hi_x = ext(yo)
+        env_x = [x for (e1, e2) in env_strip(yo) for x in (_crossing(e1, e2, ax, zm),)
+                 if x is not None and lo_x - 1.0 <= x <= hi_x + 1.0]
+        ys = sorted({r[4] for r in same_h})
+        for face, q, fs in faces:
+            up = (face == "up") == (sgn_w > 0)
+            first = min(strip) if up else max(strip)
+            if abs(xa - first) > 1e-6:
+                continue
+            if any((x < first - 1.0) if up else (x > first + 1.0) for x in env_x):
+                sheltered.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1),
+                                  "at_mm": [round(c1[0], 1), round(c1[1], 1)]})
+                continue
+            half = []
+            for side in (-1, 1):
+                nb = [y for y in ys if side * (y - yo) > 1.0]
+                cur = (min(nb, key=lambda y: abs(y - yo)) if nb else None)
+                g = abs(cur - yo) / 2.0 if cur is not None else 0.0
+                if cur is not None:
+                    # a facade step (follow-up 3, 2026-11-06: IN_Ex9's lean-to): the neighbouring strip's exposed wall
+                    # at this height lies on another plane.  Behind this one: this plane's wall ends at this line (its
+                    # corner) -- no width toward the neighbour.  In front, with a column of this plane at the
+                    # neighbour's line (the re-entrant corner): that column carries the other half of this wall.
+                    nbr = [r for r in same_h if abs(r[4] - cur) < 1.0]
+                    fn = (min if up else max)(r[3] for r in nbr)
+                    if (fn > xa + 1.0) if up else (fn < xa - 1.0):
+                        steps.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1), "side": side,
+                                      "width_mm": 0.0, "basis": "the neighbouring strip's wall lies behind: this wall "
+                                                                "ends at this line"})
+                        g = 0.0
+                    elif (fn < xa - 1.0) if up else (fn > xa + 1.0):
+                        # review R2-2: every piece of the re-entrant line takes width x the height it shares with
+                        # this piece within the step band (the heights where the neighbour's wall stands in front),
+                        # so lines split at different heights load the wall once
+                        outer = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - fn) < 1.0]
+                        b0 = max(z0, min(r[5] for r in outer))
+                        b1 = min(z1, max(r[6] for r in outer))
+                        rc = [r for r in cols if abs(r[4] - cur) < 1.0 and abs(r[3] - xa) < 1.0
+                              and min(b1, r[6]) - max(b0, r[5]) > 1.0]
+                        for r in rc:
+                            ov = min(b1, r[6]) - max(b0, r[5])
+                            ex = extra.setdefault((r[0]["tag"], face), {"row": r, "q": q, "fs": fs,
+                                                                       "area": [0.0, 0.0]})
+                            ex["area"][0 if side > 0 else 1] += g * ov
+                            steps.append({"tag": r[0]["tag"], "face": face, "z_mid_mm": round(zm, 1),
+                                          "side": -side, "width_mm": round(g, 1), "overlap_mm": round(ov, 1),
+                                          "basis": "re-entrant corner column: the other half of the wall of tag %s"
+                                                   % c["tag"]})
+                # the own wall: the nearest column line of the same wall plane on this side that ends below this
+                # height, where a roof member of the wall rises over it (gable triangle) -- the wall goes on to it
+                own = [k_[1] for k_, (zb, zt) in lines.items() if abs(k_[0] - xa) < 1.0 and side * (k_[1] - yo) > 1.0
+                       and zt < zm - 1e-6]
+                if own:
+                    yn = min(own, key=lambda y: abs(y - yo))
+                    if (cur is None or abs(yn - yo) < abs(cur - yo) - 1.0) and any(
+                            _reaches_over(e1, e2, oth, yn, yo, zm) for (e1, e2) in env_wall(xa)):
+                        g = abs(yn - yo) / 2.0
+                half.append(g)
+            w_scan = sum(half)
+            wtrib = w_scan or default_width
+            w_old = (_strip_widths(ys).get(yo) or default_width)          # the width at this height alone
+            if abs(wtrib - w_old) > 1.0:
+                widened.append({"tag": c["tag"], "face": face, "z_mid_mm": round(zm, 1), "width_mm": round(wtrib, 1),
+                                "width_at_height_mm": round(w_old, 1)})
+            pieces.append((c, c1, c2, face, q, fs, wtrib))
+            halves.append((half[0], half[1]))
+    for (tag, face), ex in sorted(extra.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
+        r = ex["row"]
+        L_ = r[6] - r[5]
+        if sum(ex["area"]) > 0.0 and L_ > 0.0:
+            h_ = (ex["area"][0] / L_, ex["area"][1] / L_)             # the area spread over the piece's own length
+            pieces.append((r[0], r[1], r[2], face, ex["q"], ex["fs"], sum(h_)))
+            halves.append(h_)
+    return {"pieces": pieces, "halves": halves, "record": {"sheltered": sheltered, "own_wall_width": widened,
+                                                           "stepped_facade": steps, "basis": WALL_SCAN_BASIS}}
+
+
+WIND_POST_KA_CITE = ("IS 875 (Part 3):2015 7.2.2.1 (b):'For beam type elements, purlins, etc, the tributary area shall be "
+                     "taken as effective span multiplied by spacing' (a wind post: column height x tributary width); "
+                     "7.2.2.1 (a) frames: frame spacing x panel dimension; Table 4 Ka; 7.2 pd = Kd Ka Kc pz >= 0.7 pz")
+
+
+def _wind_post_columns(cols):
+    """{column piece tag: {line, H_mm}} of the wind posts among the wall columns of member_wind_loads: column lines
+    (pieces at one plan position) whose TOP piece is pinned ('J' / 'both' release: a gable wind column, a pinned
+    gravity column in a wall) -- they span base to roof as beam-type elements.  H_mm = the line's height."""
+    lines = {}
+    for (c, c1, c2, xa, yo, z0, z1) in cols:
+        lines.setdefault((round(xa, 3), yo), []).append((c, z0, z1))
+    out = {}
+    for ln, pcs in lines.items():
+        top = max(pcs, key=lambda r: r[2])
+        if top[0].get("rel") not in ("J", "both"):
+            continue
+        H = max(r[2] for r in pcs) - min(r[1] for r in pcs)
+        for (c, z0, z1) in pcs:
+            out[c["tag"]] = {"line": "%s,%s" % ln, "H_mm": H}
+    return out
+
+
+def wind_post_ka_factor(ws, A_m2):
+    """Factor on a member-wind wall pressure for a wind post of tributary area A_m2 (engine checks, 2026-11): the
+    pattern pressures carry pd at the frame's Ka (wind_summary Ka_basis 'frame_tributary', 7.2.2.1 (a)); a wind post
+    takes Ka of its own area (7.2.2.1 (b)): factor = max(Kd Ka(A) Kc pz, 0.7 pz) / max(Kd Ka_frame Kc pz, 0.7 pz).
+    Not applied (factor 1, the reason recorded) unless the wind summary states Kd, Kc, pz, Ka with the frame basis and
+    its pd follows them (within 0.5 %)."""
+    import india_wind_tables as WT
+    out = {"applied": False, "factor": 1.0, "A_m2": round(float(A_m2), 3), "cite": WIND_POST_KA_CITE}
+    try:
+        Kd, Kc, pz, Ka_f = (float(ws[k]) for k in ("Kd", "Kc", "pz_kNm2", "Ka"))
+    except (KeyError, TypeError, ValueError):
+        out["reason"] = "wind_summary without Kd, Kc, pz_kNm2 and Ka: the pattern pressure is kept"
+        return out
+    if ws.get("Ka_basis") != "frame_tributary":
+        out["reason"] = "wind_summary Ka_basis is not 'frame_tributary': the pattern pressure is kept"
+        return out
+    pd_f = max(Kd * Ka_f * Kc * pz, 0.7 * pz)
+    if ws.get("pd_kNm2") is not None and abs(float(ws["pd_kNm2"]) - pd_f) > 0.005 * pd_f:
+        out["reason"] = ("wind_summary pd_kNm2 %.4f does not follow max(Kd Ka Kc pz, 0.7 pz) = %.4f: the pattern "
+                         "pressure is kept" % (float(ws["pd_kNm2"]), pd_f))
+        return out
+    ka = WT.ka_for_area_m2(float(A_m2)).get("Ka")
+    if ka is None:
+        out["reason"] = "Table 4 Ka not resolved"
+        return out
+    pd_c = max(Kd * ka * Kc * pz, 0.7 * pz)
+    out.update(applied=True, factor=pd_c / pd_f, Ka_post=ka, Ka_frame=Ka_f, pd_post_kNm2=round(pd_c, 4),
+               pd_frame_kNm2=round(pd_f, 4), Ka_frame_area_m2=ws.get("Ka_area_m2"))
+    return out
 
 
 def _plane_member_wind(b, pat, f, ax, split, wside, pw, pl_):
@@ -1304,6 +1841,20 @@ def _plane_member_wind(b, pat, f, ax, split, wside, pw, pl_):
     ny_, nz_ = sum(n[i] * y[i] for i in range(3)), sum(n[i] * z[i] for i in range(3))
     sp = pl["ridge"] if ax == pl["ax"] else split
     L = b["L"]; segs = b["segs"]; tot = 0.0
+    if pl["raw"].get("purlins_at_nodes"):
+        # MSME (2026-10): truss top chord, purlins at the panel points -- the normal wind pressure reaches the chord as
+        # purlin reactions at the element end nodes (lever rule per segment), force = -w n (n = upward normal)
+        FA = FB = 0.0
+        for s_, t in enumerate(segs):
+            s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
+            xm = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
+            windward = (xm <= sp + 1e-6) if wside == "lo" else (xm >= sp - 1e-6)
+            Ws = f * float(pw if windward else pl_) * trib / 1000.0 * (s1 - s0)     # N, + = towards the roof
+            FA += Ws * (1.0 - smid / L); FB += Ws * smid / L
+            tot += Ws
+        ops.load(b["A"], *[-FA * v for v in n], 0.0, 0.0, 0.0)
+        ops.load(b["B"], *[-FB * v for v in n], 0.0, 0.0, 0.0)
+        return tot
     for s_, t in enumerate(segs):
         s0 = L * s_ / len(segs); s1 = L * (s_ + 1) / len(segs); smid = 0.5 * (s0 + s1)
         xm = ca[ax] + (cb[ax] - ca[ax]) * (smid / L)
@@ -1421,7 +1972,10 @@ def one_way_gravity(cfg, b, fD, fL, fLr, fS=0.0, fEv=0.0, present=None):
 
 
 REC_FIELDS = ("N", "Mmaj", "Mmin", "V", "Mmaj_i", "Mmaj_j", "Mmin_i", "Mmin_j", "Mmaj_sag_max", "Vmaj", "Vmin",
-              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free")
+              "N_LAT", "V_LAT", "Mmaj_span", "Mmin_span", "Mmaj_free", "Mmin_free", "Mmaj_hog_min")
+# Mmaj_hog_min (review finding 4, 2026-11-06): BEAMS only -- the most hogging (smallest, sagging +) bending moment along
+# the span, min(sag), as Mmaj_sag_max is the largest: a beam's in-span hogging peak (a pinned roof beam under uplift)
+# reaches the member check (Mz_mid_hog_Nmm) and is checked with LLT_hog.  0.0 for columns and braces.
 # Mmaj_span / Mmin_span (third wave, 2026-10-30): COLUMNS only -- the signed extreme bending moment INSIDE the element
 # span (major / minor axis, same sign convention as Mmaj_i / Mmin_i) under a span load (the member wind on a wall
 # column), 0.0 when the extreme is at an end.  Before this a pinned-pinned gable wind column under the wall wind was
@@ -1548,6 +2102,18 @@ def member_records(model, R, cfg, case_grav, floor_system):
     return out
 
 
+def beam_hog_minima(model, R):
+    """{fset: min(sag)} of every beam from a response dict R (the member_records sign convention, sagging +)."""
+    out = {}
+    for b in model["beams"]:
+        sag = []
+        for t in b["segs"]:
+            lf = R[t]
+            sag += [lf[4], -lf[10]]
+        out[frozenset((b["A"], b["B"]))] = min(sag) if sag else 0.0
+    return out
+
+
 def free_from_span_extreme(m_i, m_j, m_ext):
     """The free mid-length moment M_free of the parabola M(t) = M_i (1 - t) + M_j t + 4 M_free t (1 - t) whose extreme
     INSIDE the span is m_ext (0.0 when m_ext is 0.0: no interior extreme recorded).  The extreme of that parabola is
@@ -1582,6 +2148,8 @@ def combo_forces_for_member_check(records, kind):
               "P_LAT_N": -d["N_LAT"], "V_LAT_N": d["V_LAT"]}
         if kind == "beam":
             cf["Mz_mid_Nmm"] = d["Mmaj_sag_max"]
+            if d["Mmaj_hog_min"] < 0.0:
+                cf["Mz_mid_hog_Nmm"] = d["Mmaj_hog_min"]          # review finding 4: the in-span hogging extreme
         elif kind == "col":
             # span-moment fix (2026-11-01): a column carrying a span load (the member wind on a wall or gable wind
             # column) hands the free moment of that load to the member check, which rebuilds the moment diagram from
@@ -1853,6 +2421,10 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     ops.load(int(nd), *v)
                 if mw:
                     member_wind_loads(cfg, model, mw, float(m.get("fWM") or 0.0))
+                    info.setdefault("wind_post_Ka", {}).update(model.get("wind_post_Ka") or {})
+                    info.setdefault("member_wind_wall", {}).update(model.get("member_wind_wall") or {})
+                    if model.get("wind_post_note"):
+                        info["wind_post_note"] = model["wind_post_note"]
                 ops.analyze(1)
                 R1 = _responses(model)
                 ops.remove("loadPattern", ptag)
@@ -1880,8 +2452,9 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
             # third wave (2026-10-30): column span moments from the static part of the combination (gravity + member
             # wind; the RSA part has no span load and its end forces are peak values)
             spn = column_span_moments(model, RC_static)
+            hog = beam_hog_minima(model, RC)
             recs = {fs: tuple(list(r) + [0.0] * (13 - len(r)))[:13] + spn.get(fs, (0.0, 0.0, 0.0, 0.0))
-                    for fs, r in recs.items()}
+                    + (hog.get(fs, 0.0),) for fs, r in recs.items()}
             _eq_case = (str(m.get("kind") or m.get("lateral_kind") or "").upper() == "EQ"
                         or bool({"col_only", "is800_12_2_3", "is18168_5_5"} & set(m.get("tags") or [])))
             if N_LL and not _eq_case:
@@ -1894,10 +2467,12 @@ def solve_cases_si(cfg, cases, nseg=6, floor_system="one-way", rsa=None, keep_re
                     if r_ and fs in recs:
                         rec = list(recs[fs]); rec[0] = rec[0] - r_ * N_LL[col["tag"]]; recs[fs] = tuple(rec)
             per_case[c[0]] = recs
+    if info.get("wind_post_Ka"):                    # JSON-friendly: one record per (column line, pattern)
+        info["wind_post_Ka"] = [info["wind_post_Ka"][k] for k in sorted(info["wind_post_Ka"], key=str)]
     return per_case, kinds or {}, info
 
 
-ENVELOPE_LAYOUT = "2026-11-01: Mz / My end moments; Mz_span / My_span column span extremes"
+ENVELOPE_LAYOUT = "2026-11-06: Mz / My end moments; Mz_span / My_span column span extremes; beam Mmaj_hog_min"
 
 
 def envelope_from_records(per_case, kinds, cases):
@@ -1924,7 +2499,7 @@ def envelope_from_records(per_case, kinds, cases):
                 e["My_span"] = max(e.get("My_span", 0.0), abs(rec[14]))
             e["comp"] = max(e["comp"], max(-N, 0.0)); e["tens"] = max(e["tens"], max(N, 0.0))
             e["Mz"] = max(e["Mz"], abs(Mz)); e["My"] = max(e["My"], abs(My)); e["V"] = max(e["V"], abs(V))
-            sc = abs(N) if kind in ("col", "brace") else abs(Mz)
+            sc = abs(N) if kind in ("col", "brace", "truss") else abs(Mz)
             if sc > e["score"]:
                 e["score"] = sc; e["combo"] = lab
     return env

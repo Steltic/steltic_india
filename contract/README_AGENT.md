@@ -101,7 +101,9 @@ Every optional key is backward compatible; AGENT_START explains the ones with en
 * **Connections and Section 12:** `connections` (AGENT_START), `section12_inputs` (the pipeline adds zone, I,
   `height_m`, occupancy ...), `apply_is18168`, `is18168_table2`, `scwb_pu_basis`, `eor_weld_exception`,
   `column_lateral_support_both_flanges`, `collector_basis`, `panel_zone_doubler_t_mm` (doubler already in the
-  model), `end_plate_capacity_N` / `end_plate_Rn` with `end_plate_cite` / `end_plate_Rn_cite` and
+  model) with `panel_zone_doubler_grade` / `panel_zone_doubler_fy_MPa` (its IS 2062 grade / a declared fy, capped
+  at the IS 2062:2025 Table 3 band for its thickness; neither declared: E250, never the column's fy),
+  `end_plate_capacity_N` / `end_plate_Rn` with `end_plate_cite` / `end_plate_Rn_cite` and
   `end_plate_source` / `end_plate_Rn_source` (an EOR end-plate capacity, cited).
 * **Cranes and erection:** `crane` / `cranes`, `roof_bracing`, `braces_after_dead_load`,
   `braces_after_superimposed_dead`.

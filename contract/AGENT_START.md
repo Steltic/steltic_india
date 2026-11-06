@@ -88,6 +88,11 @@ Before `pipeline.design_and_report`:
      pattern's own `sign` fixes it); walls load the first exposed facade per strip by tributary width, the
      along-ridge patterns carry the gable walls, the roof pressure reaches every roof level and splits at
      `cfg['ridge']` = {axis, coord_mm} (default: plan mid-line). `member_wind_not_required` needs a reason.
+     The two side walls (parallel to the wind) are loaded too, with their Table 5 Cpe (C / D at theta 0, A / B at
+     theta 90; one coefficient per wall, the 0.25 w local strip is for cladding only): the generator writes
+     `wall_side_kNm2`, `wall_cpe` and `pd_kNm2` on every pattern. A hand-built pattern without `wall_side_kNm2`
+     must carry `Cpi` and `pd_kNm2` (or the wind summary's `pd_kNm2`): the engine then takes the side-wall Cpe
+     from Table 5 at the model geometry, and a pattern it cannot load fails the package check.
    * Tall or flexible buildings (IS 875-3 9.1: h/b > 5 or f1 < 1 Hz): the along-wind forces from the
      10.2 gust factor (`wind_summary.gust_factor`) and the across-wind response (10.3) in
      `wind_summary.across_wind` (ruling R10 — it counts only when evaluated): `{found: True, Mc_kNm}` (or
@@ -379,9 +384,11 @@ Before `pipeline.design_and_report`:
       column_flange_grade, column_flange_lv_mm, column_weld_mm, bom_plates. Checked in both signs at 1.2 Mp of the
       face section (D-T7; IS 18168 route B 8.4: 1.1 Ry fy Zpb), with the column flange as a T-stub on the same bolt
       rows and the column web (plus the knee_panel doubler) feeding the inner rows.
-    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa}, flange_stiffener {n, b_mm, t_mm,
-      fy_MPa} (sized for the connection-moment flange force), doubler_t_mm, weld_mm}; the panel shear is checked on
-      the analysis moment.
+    * `connections['knee_panel']` {diagonal_stiffener {n, b_mm, t_mm, fy_MPa, grade}, flange_stiffener {n, b_mm, t_mm,
+      fy_MPa, grade} (sized for the connection-moment flange force), doubler_t_mm, doubler_grade, doubler_fy_MPa,
+      weld_mm}; the panel shear is checked on the analysis moment.  Every stiffener / doubler fy is the IS 2062:2025
+      Table 3 band of its grade (its own, else cfg['plate_grade'], else E250) for its thickness
+      (india_is800.fy_is2062); a declared fy above the band is capped at it (2026-11 engine checks).
   - Secondary members designed by the CFS engine (owner decision D-T5) are imported as `peb_secondary` =
     [{id, kind, section, checks [{name, value, limit, dc, ok, clause}], mass_kg, file, sha256, source}] (the file is
     re-hashed every run). Tonnage groups: `peb_mass_groups` {group: {tags | sections}} (crane, canopy) and
@@ -408,6 +415,38 @@ Before `pipeline.design_and_report`:
     `study_allow_banned_system` = '<why>' (second wave, cost-of-compliance studies only): an ordinary frame in a
     zone where IS 1893 Table 9 Note 1 / IS 800 12.7.1.1 / 12.10.1.1 do not permit it runs past the preflight ban
     (the ERROR becomes a 'STUDY ONLY' warning); the design status keeps the ban, so the run is never COMPLETE.
+* **Angle roof trusses and knee-braced truss portals (2026-10 MSME shed, IN_Ex21, CHANGES_2026-10-msme-shed.md):**
+  - Sections: `custom_sections` type `double_angle` {angle (an IS 808 ISA), gap_mm (the gusset), connected_leg 'D' |
+    'B'} (label `2<ANGLE>-G<gap>`, `sections.double_angle_label(angle, gap_mm)`): two angles back to back, the in-plane axis normal to the
+    gusset.
+  - Members: `engine3d.add_truss(tag, n1, n2, sec, group=..., truss=...)` for pin-ended webs and knee braces (kind
+    'truss', axial only); `engine3d.register_truss_member(tag, group=..., truss=...)` for the chord beams. Roles are
+    `truss_<group>` (top_chord, bottom_chord, vertical, diagonal, knee_brace). The roof plane key `purlins_at_nodes`
+    True brings the roof area loads and the roof wind to the top chord as purlin reactions at its panel points.
+  - Knees: the custom_build returns `info['truss_knees']` = [{id, heel_node, knee_node, chord_node, brace_tag, truss,
+    span_mm, trib_mm}]; the knee lines are moment-frame lines; Section 12 (OMF) checks each knee for IS 800 12.10.2.1
+    / 12.10.2.4 (Steltic design ruling D-T10: owner ruling 2026-11-01, 1.2 x what the knee brace can deliver; lead
+    reading 2026-11-01, N_del = Ag fy characteristic per IS 800 12.7.3.1(a), max over tension and compression; the
+    brace's bolted end not weaker than its gross-section yield on design values; HSFG 8.8 bolts and complete-
+    penetration welds at the column; see docs/PEB_LIMITATIONS.md). The knee load path is checked from
+    `truss_connections['knee_gusset']` = {face_length_mm, t_mm, grade, weld 'cjp', e_face_mm} and
+    `truss_connections['heel']['cap_weld']` = 'cjp'; the knee record carries the column section at the knee. Gusset
+    spec keys also `gusset_width_mm` (caps the Whitmore width) and `gusset_support` ('two_edges' K 0.65 | 'one_edge'
+    K 1.2; a lower declared `gusset_K` is raised).
+  - Connections: `truss_connections` = {'<role>:<SECTION>' | '<role>' | 'default': {n_bolts, d_mm, grade, bolt_type
+    ('HSFG'), slip_surface, d0_mm, pitch_mm, end_mm, gauge_mm, end_cut ('sheared' default, 1.7 d0 | 'sawn' |
+    'machine_flame_cut' | 'planed', 1.5 d0; 10.2.4.2), edge (the toe, 'rolled'), gusset_t_mm, gusset_grade,
+    gusset_end_mm, gusset_edge_mm (bolt line to the gusset edge: gusset block shear), gusset_K and gusset_free_mm
+    (gusset buckling on the Whitmore width), stitch_bolt_d_mm (7.8.4), fixity, member_grade},
+    'heel': {n_bolts, d_mm, grade, d0_mm, pitch_mm, end_mm, t_plate_mm, fu_plate_MPa, nn, ns}} (most specific wins):
+    member end bolts (10.2 / 10.3 / 10.4.3), net-section and block-shear inputs (6.3.3 / 6.3.4 / 6.4.1), single-angle
+    end condition (7.5.1.2), double-angle conditions (7.5.2.1 >= 2 bolts and K bounds, else 7.5.2.2) and
+    interconnection (7.8, 10.2.5.5 <= 600 mm), the gussets (Whitmore yield, block shear, buckling; for a chord the full
+    chord force), the knee and heel checks. Angles only: a non-angle truss member takes the general member check and
+    its end connection is not covered. Double-angle labels carry the gusset: `double_angle_label(angle, gap_mm)` ->
+    `2ISA70X70X6-G8`.
+  - Take-off: `tonnage_benchmark` = {lo_kg_m2, hi_kg_m2, basis, source} prints a sourced typical range for comparable
+    buildings next to the total (printed only with a source).
     Never set it in a design job.
 * **Several seismically separated units (X04):** `pipeline.design_units(name, {unit: cfg, ...}, joints=[{units:
   [u1, u2], direction 'X' | 'Y' (normal to the joint), gap_mm, same_floor_levels None | True | False, levels
@@ -471,7 +510,10 @@ You:
      plate_b_mm, plate_t_mm, fy_plate_MPa, weld{size_mm, length_mm, fu_MPa, n_sides, site}} or 'end_plate'
      {`end_plate`: rows[{h_mm, n_pairs}], d_mm, grade, t_plate_mm, fy_plate_MPa, be_mm, lv_mm, le_mm,
      pretensioned} (10.3.5 + 10.4.7 prying), `shear` (fin/web plate + bolts, 12.11.2.2), `continuity_plates`,
-     `doubler_t_mm`, `weld_type`, `bolt_type`. Checked per joint against 1.2 Mp (12.11.2.1), the 12.11.2.2
+     `doubler_t_mm`, `doubler_grade` / `doubler_fy_MPa` (the panel-zone doubler plate: its fy is the IS 2062:2025
+     Table 3 band of its grade for its thickness, a declared fy capped at it; neither declared -> E250, stated in
+     the record; never the column's fy -- 2026-11 engine checks), `weld_type`, `bolt_type`. Checked per joint
+     against 1.2 Mp (12.11.2.1), the 12.11.2.2
      shear, the panel zone (12.11.2.3/.4) and SCWB (12.11.3.2 >= 1.2; IS 18168 8.2 > 1.4 with Ry).
    * `beam_shear[<beam section>|'default']` (pinned beams, braced-bay beams): t_plate_mm, h_plate_mm,
      fy/fu_plate_MPa, bolts, `block_shear_areas`, `weld` (fillet) or `cjp` {t_mm, length_mm, fy_MPa, site},

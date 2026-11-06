@@ -23,6 +23,35 @@ OWNER_RULINGS = [
 ]
 
 
+# MSME (2026-10): the angle-truss shed (knee-braced truss portals, rolled columns) -- the rulings that apply to it
+TRUSS_RULINGS = [
+    ("D-T4", "OCBF braces KL/r <= 120 and tension share 30-70 % (IS 800 12.7.2): no tension-only rods in the seismic "
+             "bracing; the wall braces are CHS designed for compression (single angles cannot meet KL/r <= 120 over "
+             "the wall diagonals)"),
+    ("D-T5", "Z purlins and girts designed with the CFS engine's IS 801 / IS 811 checks"),
+    ("D-T6", "IS 800 12.4.2 complete-penetration welds for the connection welds of the frames (the knee gussets and "
+             "the truss seat on the column)"),
+    ("D-T10", "knee-braced truss portal (IS 800 12.10.2.1): the truss is pinned on the column cap and reaches the "
+              "column only through the couple of the knee brace and the heel seat, so the maximum moment the beam can "
+              "deliver to the joint is the largest force the knee brace can deliver in either direction, taken as its "
+              "characteristic gross-section yield Ag fy (the basis of IS 800 12.7.3.1(a); its characteristic buckling "
+              "strength is lower), times its lever arm about the heel; the knee is designed for 1.2 times that moment: "
+              "each knee-brace connection (bolts and gussets) for 1.2 Ag fy, the gusset at the column face, its "
+              "complete-penetration weld, the column web at the knee and the heel cap-plate weld for the same couple; "
+              "the brace's own bolted end is not weaker than its gross-section yield (design values), so the knee and "
+              "heel connections checked are designed so that the brace yields (gross section) before they fail (the "
+              "short vertical at the knee-brace node yields, or its end bolts reach their capacity, before the brace "
+              "could; IS 800 12.10 asks no member hierarchy); the truss "
+              "joints use fully tensioned HSFG 8.8 bolts (12.4.1) and the welds to the column are complete-penetration "
+              "welds (12.4.2)"),
+]
+
+
+def is_truss_shed(cfg, pkg=None):
+    """MSME (2026-10): a job with angle roof trusses (declared truss connections)."""
+    return bool((cfg or {}).get("truss_connections"))
+
+
 DT9_OPEN = ("D-T9 (open)", "IS 18168:2023 6.5 splices: placed at least 3 db from the column face and designed for 1.8 "
              "times the required strength (both applied). Its third sentence asks each flange splice plate to develop "
              "1.2 Ry fy Af; an end-plate splice has no flange splice plate, so this is applied to flange-plate splices "
@@ -34,6 +63,8 @@ def rulings_applied(cfg):
     """First wave item 6: list only the rulings that apply to this building, and disclose D-T9 where IS 18168 is
     applied."""
     cfg = cfg or {}
+    if is_truss_shed(cfg):
+        return [list(r) for r in TRUSS_RULINGS]
     is18 = bool(cfg.get("apply_is18168"))
     out = []
     for k, v in OWNER_RULINGS:
@@ -70,10 +101,142 @@ def _f(v, d=1):
         return "\u2014" if v is None else str(v)       # plain dash: _tab escapes text, so no HTML entity here
 
 
+TRUSS_ROLE_NAMES = {"truss_top_chord": "top chord", "truss_bottom_chord": "bottom chord", "truss_vertical": "vertical",
+                    "truss_diagonal": "diagonal", "truss_knee_brace": "knee brace"}
+
+
+def _truss_head(cfg, pkg):
+    """MSME (2026-10): the angle-truss section head -- the truss members, their end connections and the knees."""
+    out = ["<h2>Angle roof trusses and knee-braced portals</h2>",
+           "<p>Pratt angle trusses: double-angle chords continuous through the panel points on the gussets (IS 800 "
+           "7.5.3 / 7.2.4: axial force with the secondary bending of the continuous chord, 9.3), single-angle webs and "
+           "knee braces pin-ended (axial force only: 7.5.1.2 single angle loaded through one leg, Table 12 with two "
+           "or more bolts and a hinged gusset; 6.2 / 6.3.3 / 6.3.4 / 6.4.1 at the bolted end connections; Table 3 "
+           "slenderness). The purlins sit at the top-chord panel points and bring the roof load and the roof wind to "
+           "the truss there. The truss seat on each column cap is pinned; a knee brace from each column to the first "
+           "bottom-chord panel point makes the column and the truss a portal frame (ordinary moment frame, IS 800 "
+           "12.10). Design rulings applied (Steltic India defaults; the design engineer can change each one):</p>",
+           _tab(["Steltic design ruling", "as applied"], rulings_applied(cfg))]
+    rows = []
+    for m in (pkg.get("members") or []):
+        inp = m.get("inputs") or {}
+        role = inp.get("role")
+        if role not in TRUSS_ROLE_NAMES:
+            continue
+        rows.append([TRUSS_ROLE_NAMES[role], inp.get("section"), inp.get("n_elements"),
+                     _f((inp.get("P_comp_N") or 0) / 1e3, 1), _f((inp.get("P_tens_N") or 0) / 1e3, 1),
+                     _f(m.get("DC"), 3), str(m.get("governing_check") or "")[:60]])
+    if rows:
+        out.append("<h3>Truss members (one row per member group)</h3>")
+        out.append(_tab(["member", "section", "elements", "max compression (kN)", "max tension (kN)", "D/C",
+                         "governing check"], rows))
+    crow = []
+    for c in (pkg.get("connections") or []):
+        cid = str(c.get("id") or "")
+        if not cid.startswith("conn-truss_"):
+            continue
+        role = cid[len("conn-"):].split("-", 1)[0]
+        bg = c.get("bolt_group") or {}
+        st = c.get("stitches") or {}
+        crow.append([TRUSS_ROLE_NAMES.get(role, role), c.get("section"),
+                     _f(((c.get("demand") or {}).get("axial_N") or 0) / 1e3, 1),
+                     _f((bg.get("capacity_N") or 0) / 1e3, 1), _f(c.get("DC"), 3),
+                     ("%d at %.0f mm" % (st["n_intermediate"], st["spacing_mm"])) if st else "-",
+                     str(c.get("governing_check") or "")[:60]])
+    if crow:
+        out.append("<h3>Truss member end connections (bolts in shear and bearing, IS 800 10.3; spacing and edge "
+                   "distances 10.2; back-to-back interconnection 7.8)</h3>")
+        out.append(_tab(["member", "section", "axial (kN)", "bolt group (kN)", "D/C", "packed connections",
+                         "governing check"], crow))
+    s12 = ((pkg.get("capacity_design") or {}).get("section12") or {}).get("checks") or []
+    # one row per knee check, the governing knee (review 2026-11: the D-T10 rows -- bolts, gussets, the brace yielding
+    # first, the heel seat)
+    _KNEE_STRESS_ROWS = ("12.10.2.1_knee_gusset_cjp_weld", "12.10.2.4_heel_cap_weld",
+                         "12.10.2.1_knee_gusset_face_section", "12.10.2.1_knee_chord_gusset_section")
+    KNEE_ROWS = (("12.10.2.1_knee_brace_connection", "knee-brace end bolts, for 1.2 N_del"),
+                 ("12.10.2.1_knee_gusset_whitmore_yield", "knee gusset, Whitmore yield, for 1.2 N_del"),
+                 ("12.10.2.1_knee_gusset_block_shear", "knee gusset, block shear, for 1.2 N_del"),
+                 ("12.10.2.1_knee_gusset_buckling", "knee gusset, buckling, for 1.2 x the characteristic buckling "
+                                                    "strength"),
+                 ("12.10.2.1_knee_gusset_face_section", "knee gusset at the column face (8.4.1 / 9.2.2 / 9.3.1.1)"),
+                 ("12.10.2.1_knee_gusset_cjp_weld", "knee gusset CJP weld to the column (10.5.7.1.2)"),
+                 ("12.10.2.1_column_web_bearing", "column web at the knee, local capacity (8.7.4)"),
+                 ("12.10.2.1_column_web_buckling", "column web at the knee, buckling (8.7.3.1)"),
+                 ("12.10.2.4_column_web_shear", "column web shear, knee to heel and column top (8.4.1)"),
+                 ("12.10.2.1_knee_brace_yields_first", "knee brace: bolted end not weaker than gross yield (design "
+                                                       "values)"),
+                 ("12.10.2.4_heel_seat", "heel seat bolts (12.10.2.4)"),
+                 ("12.10.2.4_heel_cap_weld", "heel cap-plate CJP weld to the column top (10.5.7.1.2)"),
+                 ("12.10.2.1_knee_chord_bolts", "knee-brace node: gusset-to-chord bolts, horizontal component"),
+                 ("12.10.2.1_knee_chord_gusset_section", "knee-brace node: gusset section along the chord"),
+                 ("12.10.2.1_short_vertical_order", "short vertical at the knee-brace node (a ductility-order "
+                                                    "record, not a check)"))
+    krow = []
+    for cid, label in KNEE_ROWS:
+        cs = [c for c in s12 if c.get("id") == cid]
+        if not cs:
+            continue
+        ev = [c for c in cs if isinstance(c.get("dc"), (int, float))]
+        c = max(ev, key=lambda c_: c_["dc"]) if ev else cs[0]
+        kn = c.get("knee") or {}
+        krow.append([label, c.get("member"), "%s / %s" % (_f((kn.get("Ty_N") or 0) / 1e3, 1),
+                                                         _f((kn.get("Pd_char_N") or 0) / 1e3, 1)),
+                     _f((kn.get("N_del_N") or kn.get("N_d_N") or 0) / 1e3, 1), _f(kn.get("lever_arm_mm"), 0),
+                     _f((kn.get("M_del_Nmm") or 0) / 1e6, 1),
+                     _f(c.get("value") if cid in _KNEE_STRESS_ROWS else (c.get("value") or 0) / 1e3, 1),
+                     _f(c.get("limit") if cid in _KNEE_STRESS_ROWS else (c.get("limit") or 0) / 1e3, 1),
+                     _f(c.get("dc"), 3), len(cs)])
+    if krow:
+        kn0 = next(((c.get("knee") or {}) for c in s12 if str(c.get("id") or "").startswith("12.10.2.1_knee")), {})
+        mp_txt = ""
+        if kn0.get("column_Mp_Nmm") and kn0.get("M_del_Nmm"):
+            mp_txt = (" M_del is %.1f times the column's plastic moment (%.1f kN-m), so the rule is conservative for "
+                      "the knee; the demand is not capped." % (kn0["M_del_Nmm"] / kn0["column_Mp_Nmm"],
+                                                               kn0["column_Mp_Nmm"] / 1e6))
+        out.append("<h3>Knees (IS 800 12.10.2.1 / 12.10.2.4, Steltic design ruling D-T10: knee-braced truss portal, "
+                   "the knee designed for 1.2 times the moment the knee brace can deliver in either direction)</h3>")
+        out.append("<p>The force the knee brace can deliver, N_del, is taken as its characteristic gross-section yield "
+                   "Ag fy, the basis of IS 800 12.7.3.1(a) for brace connections (its characteristic buckling strength, "
+                   "Pd x &gamma;m0, is lower, so the tension direction governs); M_del = N_del times the lever arm about "
+                   "the heel.%s Each knee-brace connection (bolts and gussets, at the column and at the bottom chord) is "
+                   "designed for 1.2 N_del and the gusset buckling for 1.2 times the characteristic buckling strength; "
+                   "the gusset at the column face, its complete-penetration weld, the column web at the knee (local "
+                   "capacity, buckling and shear), the heel cap-plate weld and, at the bottom chord, the gusset-to-"
+                   "chord bolts and the gusset section take the same couple. The welds are complete-penetration butt "
+                   "welds, checked as parent metal (IS 800 10.5.7.1.2, 10.5.10.2.2), with the moment of the "
+                   "eccentricity that the gusset's outline and the bolt line give. The brace's own bolted end "
+                   "(net-section rupture and block shear) is not weaker than its gross-section yield, both as design "
+                   "values (a ductility-order check, with no 1.2 margin: a single angle bolted through one leg cannot "
+                   "develop 1.2 times its yield at its end, because of shear lag, so the knee connection is designed "
+                   "for more than the brace can transmit). So the knee and heel connections checked here are designed "
+                   "so that the brace yields (gross section) before they fail. The short vertical at the knee-brace "
+                   "node is not part of that order: it yields, or its end bolts reach their capacity, before the brace "
+                   "could deliver its vertical component; IS 800 12.10 asks no member hierarchy of an ordinary moment frame. One row per "
+                   "check, the governing knee shown; stresses in MPa where marked.</p>" % mp_txt)
+        out.append(_tab(["check", "governing knee", "knee brace Ag fy / Pd &gamma;m0 (kN)", "N_del (kN)",
+                         "lever arm (mm)", "M_del (kN-m)", "demand (kN or MPa)", "capacity (kN or MPa)", "D/C",
+                         "knees"], krow))
+    return out
+
+
 def section(cfg, pkg, root):
     peb = (pkg or {}).get("peb")
     if not peb:
         return ""
+    if is_truss_shed(cfg, pkg):
+        return _section_tail(cfg, pkg, root, peb, _truss_head(cfg, pkg), truss=True)
+    return _section_tail(cfg, pkg, root, peb, None)
+
+
+def _section_tail(cfg, pkg, root, peb, head, truss=False):
+    if head is not None:
+        out = list(head)
+    else:
+        out = _peb_head(cfg, pkg, peb)
+    return _common(cfg, pkg, root, peb, out, truss=truss)
+
+
+def _peb_head(cfg, pkg, peb):
     out = ["<h2>PEB &mdash; web-tapered welded portal frames (stepped model)</h2>",
            "<p>Every web-tapered member is modelled as prismatic welded-I segments (depth at each segment's "
            "mid-length); every segment end (station) is checked with the exact local section (IS 800 Table 2 welded "
@@ -110,15 +273,20 @@ def section(cfg, pkg, root):
         out.append("<h3>Station checks (Steltic design ruling D-T1: tapered members checked segment by segment between "
                    "restraints): element at mid-depth, station i, station j</h3>")
         out.append(_tab(["element", "element", "station i", "station j", "governs", "D/C", "check"], srows[:300]))
+    return out
+
+
+def _common(cfg, pkg, root, peb, out, truss=False):
     # restraints
     fb = cfg.get("flange_braces") or {}
     if fb:
         out.append("<h3>Restraints (IS 800 8.3.2; flange braces as declared)</h3>")
-        out.append(_tab(["member", "outer flange (purlins / girts)", "inner flange (fly braces)"], [
+        rrows = [] if truss else [
             ["rafter (plan m from each eave)", ", ".join(_f(x / 1000.0, 2) for x in (fb.get("rafter") or {}).get("purlins_mm") or []),
-             ", ".join(_f(x / 1000.0, 2) for x in (fb.get("rafter") or {}).get("fly_braces_mm") or [])],
-            ["column (m above the base)", ", ".join(_f(x / 1000.0, 2) for x in (fb.get("column") or {}).get("girts_mm") or []),
-             ", ".join(_f(x / 1000.0, 2) for x in (fb.get("column") or {}).get("fly_braces_mm") or [])]]))
+             ", ".join(_f(x / 1000.0, 2) for x in (fb.get("rafter") or {}).get("fly_braces_mm") or [])]]
+        rrows.append(["column (m above the base)", ", ".join(_f(x / 1000.0, 2) for x in (fb.get("column") or {}).get("girts_mm") or []),
+                      ", ".join(_f(x / 1000.0, 2) for x in (fb.get("column") or {}).get("fly_braces_mm") or [])])
+        out.append(_tab(["member", "outer flange (purlins / girts)", "inner flange (fly braces)"], rrows))
     # joints, splices, flange braces, stability
     crow = []
     for c in (pkg.get("connections") or []):
@@ -126,7 +294,8 @@ def section(cfg, pkg, root):
         if cid.startswith(("conn-peb-", "peb-")) or "beam-to-column" in str(c.get("type")):
             crow.append([cid, c.get("type"), c.get("section"), _f(c.get("DC"), 3), str(c.get("governing_check") or "")[:70]])
     if crow:
-        out.append("<h3>Knees, apex joints, splices, flange braces, frame stability</h3>")
+        out.append("<h3>%s</h3>" % ("Column flange braces, frame stability" if truss else
+                                    "Knees, apex joints, splices, flange braces, frame stability"))
         out.append(_tab(["record", "type", "section", "D/C", "governing check"], crow))
     fs = peb.get("frame_stability") or {}
     if fs:
@@ -147,6 +316,16 @@ def section(cfg, pkg, root):
         out.append(_tab(["group", "kg", "kg/m2 of plan"], [[k, _f(v, 0), _f(kgm2.get(k), 2)] for k, v in kg.items()]
                         + [["TOTAL", _f(tn.get("total_kg"), 0), _f(kgm2.get("total"), 2)]]))
         out.append("<p>Plan area %s m2. %s</p>" % (_f(tn.get("plan_area_m2"), 0), _e(tn.get("basis"))))
+        # MSME (2026-10): a sourced typical range for comparable buildings (cfg['tonnage_benchmark'] = {lo_kg_m2,
+        # hi_kg_m2, basis, source}), printed next to this building's total
+        bm = cfg.get("tonnage_benchmark") or {}
+        if bm.get("lo_kg_m2") is not None and bm.get("hi_kg_m2") is not None and bm.get("source"):
+            tot = kgm2.get("total")
+            pos = ("" if tot is None else " This building: %s kg/m2 (%s the range)." % (
+                _f(tot, 1), "within" if bm["lo_kg_m2"] <= tot <= bm["hi_kg_m2"] else
+                "below" if tot < bm["lo_kg_m2"] else "above"))
+            out.append("<p>Typical steel for comparable buildings: %s to %s kg/m2 of plan, %s (%s).%s</p>" % (
+                _f(bm["lo_kg_m2"], 1), _f(bm["hi_kg_m2"], 1), _e(bm.get("basis") or ""), _e(bm["source"]), pos))
     # outputs
     po = peb.get("outputs") or {}
     if po:
@@ -171,5 +350,6 @@ def section(cfg, pkg, root):
         if os.path.exists(svg):
             out.append("<h4>Anchor bolt plan</h4><div style='max-width:100%;overflow:auto'>" + open(svg).read() + "</div>")
     if peb.get("errors"):
-        out.append("<p class='note'><b>PEB post-processing errors:</b> %s</p>" % _e("; ".join(peb["errors"])))
+        out.append("<p class='note'><b>%s post-processing errors:</b> %s</p>" % ("Frame" if truss else "PEB",
+                                                                               _e("; ".join(peb["errors"]))))
     return "".join(out)

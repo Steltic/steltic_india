@@ -563,7 +563,7 @@ def worker(run_dir):
                 # every call is kept: the IS 1893 7.11.2 gravity-column check calls the member check again for the
                 # same element with its own (R x displacement) records, after the strength check
                 rec = {"member": copy.deepcopy(elem["member"]), "kind": elem["kind"],
-                       "records": DP._top_records(elem["records"])}
+                       "records": getattr(DP, "member_check_records", DP._top_records)(elem["records"])}
                 t_ = int(elem["member"]["tag"])
                 if t_ in cap["elems"]:
                     cap["elems"][t_].setdefault("more", []).append(rec)
