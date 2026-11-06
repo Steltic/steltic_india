@@ -895,26 +895,33 @@ class Local:
         """The combinations a candidate section is checked with (the local prediction only; the full run checks every
         one).  Since the engine checks every combination with both signs (2026-11), a tall job's element carries 100+
         of them, and each candidate of each group re-checks them all.  An element with more than SHORT_CF_FROM keeps,
-        in the run's order: the SHORT_CF combinations with the largest ratio at its current section, and for each
-        force the two largest in magnitude.  Computed once per element and run."""
+        in the run's order: the SHORT_CF combinations with the largest linear stress index at its current section,
+        |P|/A + |Mz|/Zz + |My|/Zy (plastic properties, the largest end or mid moment), and for each force the two
+        largest of each sign.  Computed once per element and run."""
         if len(cf) <= SHORT_CF_FROM:
             return cf
         cache = self.__dict__.setdefault("_short_cache", {})
         key = (t, i)
         if key in cache:
             return cache[key]
-        import india_is800 as I8
-        scores = []
-        for k, c in enumerate(cf):
-            try:
-                r = I8.member_check_is800(mem, [c], cfg=self.cfg)
-                d = float(r.get("interaction_dc", r.get("dc")) or 0.0)
-            except Exception:
-                d = 99.0
-            scores.append((d, -k))
-        keep = {-k for _, k in sorted(scores, reverse=True)[:SHORT_CF]}
-        for f in sorted({f for c in cf for f, v in c.items() if isinstance(v, (int, float))}):
-            keep |= set(sorted(range(len(cf)), key=lambda k: -abs(float(cf[k].get(f) or 0.0)))[:2])
+        try:
+            A, Zz, Zy = plastic_props(mem["section"])
+        except Exception:
+            cache[key] = cf
+            return cf
+
+        def f(c, k):
+            return float(c.get(k) or 0.0)
+
+        def idx(c):
+            mz = max(abs(f(c, "Mz_i_Nmm")), abs(f(c, "Mz_j_Nmm")), abs(f(c, "Mz_mid_Nmm")))
+            my = max(abs(f(c, "My_i_Nmm")), abs(f(c, "My_j_Nmm")))
+            return abs(f(c, "P_N")) / max(A, 1.0) + mz / max(Zz, 1.0) + my / max(Zy, 1.0)
+        ks = range(len(cf))
+        keep = set(sorted(ks, key=lambda k: (-idx(cf[k]), k))[:SHORT_CF])
+        for fld in sorted({k for c in cf for k, v in c.items() if isinstance(v, (int, float))}):
+            keep |= set(sorted(ks, key=lambda k: (-f(cf[k], fld), k))[:2])
+            keep |= set(sorted(ks, key=lambda k: (f(cf[k], fld), k))[:2])
         out = [c for k, c in enumerate(cf) if k in keep]
         cache[key] = out
         return out
