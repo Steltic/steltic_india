@@ -39,6 +39,14 @@ D8).
     and IS 1161 Table 2 gives 10–20 % (YSt 210 20 %, YSt 240 17 %, YSt 310 14 %, YSt 355 10 %);
   - the engine already enforces this (`india_is800_s12.material_gate`).
 - The CHANGES tables and the reports state this basis.
+- **Owner's decision of 2026-11-07 (welded braces, review SECT-2).** Welded plate-I braces in IS 2062 E250 B0 are
+  accepted, but only where no IS 808 rolled HB / WB / MB section passes. The rule stays IS 808 rolled first:
+  - the sizer's candidate order is rolled first, then the welded fallback;
+  - a step-up from a welded brace now tries every stronger rolled section before the next welded one
+    (`next_up`, test `test_step_up_from_a_welded_brace_tries_the_rolled_sections_first`).
+
+  Each affected job's section-families box and SOLUTION.md name the welded groups and give the rolled sections
+  tried, each with the first check it fails ("SECT-2" below).
 
 ## P3 (HR side): tied combinations give the same label run to run
 
@@ -336,7 +344,7 @@ of `CHANGES_2026-11-engine-checks.md`.
 - The other jobs pass on the fixed engine as sized in the first pass.
 
 **Panel-zone doublers.** Every doubler states its grade.
-- IN_Ex12: E350 B0 (all three doubler specs sit on E350 box columns).
+- IN_Ex8 and IN_Ex12: E350 B0 (their doublers sit on E350 box columns; review SECT-5 added Ex8 here).
 - IN_Ex9, IN_Ex12 unit B / unit C, IN_Ex16 and IN_Ex18: E250 B0. They pass at their own grade (PZ).
 
 **Gold cfg helpers.** The hand-coded IS 2062 bands now call `fy_is2062` (sandbox tool `tools/fy_helpers.py`):
@@ -353,3 +361,100 @@ difference of 13.71 kg/m² (+32.8 %). Wind governs the shed.
 units). The published set has one hit, the IN_Ex17 raw dict, which is fixed here.
 
 **HR suite** (this branch, merged main 8cc56ec): **1,386 passed, 5 skipped** (`pytest -q tests/`, 6 min 42 s).
+
+## SECT review fixes (2026-11-07, `briefs/SECT_REVIEW.md`)
+
+Plain commits on 3a093f9. The finding numbers are the review's.
+
+**SECT-1, column splices declared "none" at a section change.** Three column groups started above a section change
+with their splice declared "none", so nothing was designed there. The three were IN_Ex20 ch_1 (SFRS), IN_Ex19
+col_gi_1 and the stem's col_gi_1.
+- **Engine** (`design_pipeline.none_splice_open_row`): a "none" splice holds only for a column that starts at the
+  base and keeps its section. A piece of the section that sits on another section, or on no column, is now an open
+  row, named "declared 'none' at a section change on <section below>, level k -- splice not designed". It is not a
+  pass.
+- **Engine** (`india_connections.column_splice_checks`): a new `transition` = {type `division_plate`, t_mm, grade,
+  offset_mm} for boxes of different outer size. Both shafts are CJP-welded to the plate, and the plate carries the
+  upper wall's line force q = (|P|/A + |Mz|/Zz + |My|/Zy) t_wall over the offset:
+  - q a ≤ fy t²/4/γm0 (8.2.1.2);
+  - q ≤ fy t/(√3 γm0) (8.4.1);
+  - fy from the plate's IS 2062 band;
+  - EOR method, VERIFY, with the plate UT-tested for laminations.
+- **Sizer** (`splice_section_changes`, `designed_splice`): "none" is kept only where every piece of the label sits
+  on the same label or on the base. Otherwise the sizer designs the splice:
+  - a site CJP with matching electrode, and a 1 in 4 thickness taper, for equal outer sizes;
+  - CJP to a division plate between boxes of different size.
+- **The three splices:**
+  - IN_Ex20 ch_1 BOX400X400X25 on BOX400X400X36: site CJP, E5518, 36 → 25 mm taper. The IS 800 12.5.2.2 / IS 18168
+    7.5 gate passes.
+  - IN_Ex19 col_gi_1 BOX450X450X14 on BOX500X500X16: a 50 mm E250 B0 division plate, offset 25 mm; bending 0.625,
+    shear 0.541.
+  - The stem's col_gi_1 BOX350X350X16 on BOX500X500X14: a 90 mm plate, offset 75 mm; 0.751 / 0.390.
+- The base bands keep "none" with a corrected note.
+- Tests: `test_none_splice_on_a_column_that_sits_on_another_section_is_an_open_item`,
+  `test_division_plate_transition_between_box_columns_of_different_size`,
+  `test_sizer_designs_the_splice_where_a_none_label_sits_on_another_section`.
+
+**SECT-3, fin-plate bolt-group eccentricity** (`india_connections.fin_plate_shear_checks`,
+`fin_bolt_group_eccentricity`). A fin plate with two or more bolt lines (`bolt_lines`, `gauge_mm`; the first line
+at `a1_mm`, default the end distance) is also checked by the elastic method for M = V e, with
+e = a1 + (lines − 1) g / 2:
+- the corner bolt carries N/n + M y/Ip and V/n + M x/Ip, checked against Vdb (10.3.2);
+- the plate at the support line is checked for N/Nd + M/Mdv, with Md = fy t h²/4/γm0 and the 9.2.2 high-shear
+  reduction. A CJP support weld develops the plate.
+
+The V + N resultant's components reach the check, and the sizer designs multi-line fins with them (the axial share
+N/R).
+- A single bolt line keeps the direct check, as before.
+- The reviewer's IN_Ex19 4 × 4 M24 fin gives 72.1 + 13.5 → 73.4 kN on the corner bolt: the test pins it, and the
+  gold has it at 0.644.
+- Gold fin plates that move: IN_Ex11 MB600 0.642 → 0.822; IN_Ex13; IN_Ex15 (six, up to 0.717 → 0.813); IN_Ex16;
+  IN_Ex17 WI550X325X22X14 0.668 → 0.766; IN_Ex18; IN_Ex19 (eight, up to 0.739 → 0.913); the Ex19 stem (nine, up to
+  0.750 → 0.973); IN_Ex20. All pass. Each job's SOLUTION.md lists its own.
+
+**SECT-6, the IN_Ex8 purlins and girts:**
+- IS 808 MB225 (the MB family) replaces NPB240X120X26.15. Secondary checks: 0.634 / 0.619. LB250, the lighter IS 808
+  light beam, would give 0.706 / 0.686.
+- The ordinary-frame copy takes the same purlins, and was run again at 41.85 kg/m². The cost of compliance is
+  unchanged at +32.8 %.
+
+**SECT-7:** the six unused IN_Ex19 groups are removed, with their connection entries. The stem had only col_gp_0–3
+unused; its edge girders are used and stay. A perimeter gravity column or an edge girder that the model does not
+have now raises an error.
+
+**SECT-5:** Ex8's doublers are E350 B0 (docs).
+
+**SECT-4:** IN_Ex19 link-e958 is at 0.07998 rad against 0.08. Every check passes, so it is left as it is and noted
+in SOLUTION.md.
+
+**SECT-2, welded braces** (owner's decision above). For every welded brace group (`tools/brace_rolled.py`, the
+frozen forces of the final sizing run), each of the 45 rolled IS 808 HB / WB / MB E250 sections is tried in its
+place and listed under the first check it fails:
+- the group's storey-stiffness area;
+- IS 800 member strength;
+- IS 800 Table 3 slenderness;
+- IS 18168 Table 2 brace width-thickness;
+- brace KL/r;
+- the whole frame's capacity-design rows (12.3.2.2 brace axial).
+
+No rolled section passes for any welded group. The pattern:
+- **IN_Ex10** (one group, 17.8 m X-braces):
+  - MB100–MB350 fail the strength;
+  - HB200 to MB600 fail Table 3;
+  - HB225 to WB600X145.06 fail Table 2;
+  - HB450X92.19 fails KL/r.
+- **IN_Ex14** (five groups) and **IN_Ex15 brace_2_3 / brace_4_8:** the strength fails up to the deep WB / MB sizes,
+  and those then fail Table 2 (WB550 / WB600) or KL/r.
+- **IN_Ex15 brace_1, IN_Ex19 (four of eight groups), the stem (most groups) and IN_Ex20 brace_1:** the storey
+  stiffness asks for 13,000–26,000 mm² of area. Only the deepest rolled sections reach it, and those fail Table 2 or
+  the strength.
+- **The stem's brace_x_1:** HB450X92.19 passes its own checks (0.465) but fails the 12.3.2.2 brace axial row at the
+  link overstrength (1.009–1.040).
+
+Each job's section-families box now names its welded groups, with the count and range of rolled sections per failed
+check. SOLUTION.md has the full list.
+
+**Runs.**
+- Every gold ran again on this branch after the fixes (all COMPLETE, 0 reasons).
+- The brace jobs ran once more with the new box text.
+- The 09:48 restart cut the suite off; it was run again.
