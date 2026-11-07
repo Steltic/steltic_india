@@ -1380,7 +1380,11 @@ def next_up(spec, current, lm=None, g=None, margin=None, min_area=None):
     if idx is None:
         idx = next((k for k, (l, gr, tr) in enumerate(cands) if l == cur[0]), -1)
     cur_fy = 350.0 if "350" in str(cur[1] or "") else 250.0
-    for lab, grade, tier in cands[idx + 1:]:
+    # owner decision 2026-11-07 (rolled first): from a built-up section, the rolled candidates of the earlier tiers
+    # are tried before the next built-up one -- a welded section is kept only while no rolled section passes
+    cur_tier = cands[idx][2] if 0 <= idx < len(cands) else None
+    earlier = [c for c in cands[:max(idx, 0)] if cur_tier is not None and c[2] < cur_tier]
+    for lab, grade, tier in earlier + cands[idx + 1:]:
         if (lab, grade) == cur:
             continue
         fy = 350.0 if "350" in str(grade or "") else 250.0

@@ -693,3 +693,17 @@ def test_sizer_designs_the_splice_where_a_none_label_sits_on_another_section(tmp
     x2 = dict(x, gi_0=("BOX500X500X12", "E350 B0"), gi_1=("BOX500X500X16", "E350 B0"))
     sp2 = AZ.designed_splice(lm, x2, "gi_1", "BOX500X500X16", "E350 B0", ["BOX500X500X12"])
     assert sp2["type"] == "cjp" and "transition" not in sp2 and sp2["weld"]["matching_electrode"]
+
+
+def test_step_up_from_a_welded_brace_tries_the_rolled_sections_first():
+    """Owner decision 2026-11-07: IS 808 rolled first; a welded E250 B0 plate-I brace only when no rolled section
+    passes.  A step-up from a welded brace tries every stronger rolled HB / WB / MB section before the next welded one."""
+    AZ = _az()
+    spec = {"role": "brace", "families": ["HB", "WB", "MB"]}
+    cands = AZ.candidates(spec)
+    rolled = [(l, g) for (l, g, t) in cands if t == 0]
+    welded = [(l, g) for (l, g, t) in cands if t > 0]
+    assert rolled and welded and cands.index((rolled[0][0], rolled[0][1], 0)) == 0      # rolled first
+    w = next((l, g) for (l, g) in welded if AZ.stiffness(l, "A") < AZ.stiffness("HB450X92.19", "A") * 0.9)
+    nu = AZ.next_up(spec, w)
+    assert nu is not None and AZ.family_of(nu[0]) in ("HB", "WB", "MB")
