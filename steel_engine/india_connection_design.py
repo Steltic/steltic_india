@@ -149,15 +149,16 @@ def beam_column_connection(cfg, beam_member, p_beam, fy_beam, *, col_props=None)
     return out
 
 
-def beam_shear_connection_checks(cfg, beam_member, V_N, *, sfrs=False):
-    """Simple beam-end (shear) connection of a gravity beam under its governing shear."""
+def beam_shear_connection_checks(cfg, beam_member, V_N, *, sfrs=False, V_shear_N=None, N_axial_N=None):
+    """Simple beam-end (shear) connection of a gravity beam under its governing shear.  V_shear_N / N_axial_N: the
+    concurrent components when V_N is a V + N resultant (the eccentric check of a multi-line bolt group needs them)."""
     sp = spec_for(cfg, "beam_shear", beam_member["section"], "beam")
     if not sp:
         return None
     keys = ("t_plate_mm", "h_plate_mm", "fy_plate_MPa", "fu_plate_MPa", "bolts", "weld", "block_shear_areas", "cjp",
-            "plate_grade", "n_plates")
+            "plate_grade", "n_plates", "bolt_lines", "gauge_mm", "a1_mm")
     sp = _with_grades({k: v for k, v in sp.items() if k in keys}, cfg, sp)
-    r = C.fin_plate_shear_checks(V_N=float(V_N), **sp)
+    r = C.fin_plate_shear_checks(V_N=float(V_N), V_shear_N=V_shear_N, N_axial_N=N_axial_N, **sp)
     return r
 
 
@@ -295,7 +296,7 @@ def column_splice(cfg, col_member, p, fy, records, *, sfrs, tags_of=None, seismi
                                   A_mm2=p["A"], d_mm=p["d"], splice=sp, cases=cases, bf_mm=p["bf"], tf_mm=p["tf"],
                                   tw_mm=p["tw"], is18168=a18, tie_force_N=tie_force_N, Hc_mm=Hc_mm,
                                   Zx_lower_mm3=Zx_lower_mm3,
-                                  job_steel_grade=(cfg or {}).get("steel_grade"))
+                                  job_steel_grade=(cfg or {}).get("steel_grade"), Zy_mm3=p.get("Zy"))
 
 
 # ------------------------------------------------------------------------------------------ HSFG slip (10.4.3)
