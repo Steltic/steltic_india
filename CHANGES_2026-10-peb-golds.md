@@ -240,9 +240,19 @@ What changed, per job (from → to):
   evaluation about 8 times slower; the local model (proposals only) keeps a sign-aware subset -- the largest and
   smallest of every signed record field, the largest shears and a combined N / Mmaj / Mmin proxy for each moment
   sign -- and a miss is caught by the full run and fed back through the margins.
+- **Base shear-key demand** (c66480b, final review): under the analysis-key reading the sizer shrank the IN_Ex4 SMRF
+  base keys (to 200 × 14, 150 deep) and every full run failed the column-base shear key at about 5× (the October
+  study failed the same way). `base_demands` took Hc for the IS 18168 9.3 capacity shear 2.2 Ry Mpc / Hc from the
+  column's buckling length (13 m against a 6 m base element on IN_Ex2), where the engine's base check takes the base
+  spec's Hc_mm, else the base element's length; and it had no IS 18168 9.4 shear 1.1 Ry Mpc / Hc for pinned SFRS bases.
+  Both now follow the engine. On an IN_Ex2 run copy the sizer's demands under the 1.2 Vd reading equal the engine's
+  shear-key rows (2,066.0 and 4,988.3 kN) both before and after the change, so the strict-rule sizing is unchanged. The
+  five golds do not use the changed path: their cfgs are verified by full runs, and the IN_Ex2 / IN_Ex4 base keys were
+  held in the engine-check pass. Under the analysis reading the demands rise from 296.7 / 0.1 kN to 685.8 / 136.7 kN,
+  and the IN_Ex4 key rows now pass their full runs (the lever study below).
 - **History** (final review Low 6): each full run keeps the first 12 blocking reasons and their full count
   (`n_blocking`), in the sizer and the lever study.
-- Tests: `tests/test_third_wave_peb.py` (29).
+- Tests: `tests/test_third_wave_peb.py` (30).
 
 ## IN_Ex5: the PV answer on the new IN_Ex1 (final engine, re-sized IN_Ex1)
 - `pv_check.py --bisect --bisect-readings` (0.01 kN/m² bisection): **capacity 0.00 kN/m²** at H/240, at H/150 (the
