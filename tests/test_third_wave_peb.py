@@ -182,3 +182,397 @@ def test_gable_wind_column_is_checked_for_the_wall_wind(mini_job):
     assert max(max(abs(r[13]), abs(r[14])) for r in el["records"].values() if len(r) > 14) == pytest.approx(M_ref, rel=0.05)
     rows = [c for c in m["checks"] if "9.3" in str(c.get("name"))]
     assert rows and max(c["dc"] for c in rows) > 0.05
+
+
+def test_base_plate_inside_the_column_outline_is_a_geometry_failure_not_a_crash():
+    """IN_Ex1 (sizing the gable wind column for its wall wind): a 425 mm deep column on the declared 400 x 260 plate
+    made base_plate_design divide by a zero bearing length and the whole Section 12 block went unevaluated."""
+    import india_connections as C
+    kw = dict(B_mm=260.0, L_mm=400.0, t_plate_mm=20.0, fy_plate_MPa=250.0, fck_MPa=30.0, col_d_mm=425.0,
+              col_bf_mm=150.0, col_tf_mm=8.0,
+              anchors={"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "8.8", "f_mm": 100.0, "pitch_mm": 160.0,
+                       "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0})
+    r = C.base_plate_design_biaxial(P_N=50e3, Mz_Nmm=5e6, My_Nmm=0.0, V_N=10e3, **kw)
+    assert r["checks"]["geometry_plate_outline"]["ok"] is False
+    assert r["ok"] is False
+    r2 = C.base_plate_design_biaxial(P_N=50e3, Mz_Nmm=5e6, My_Nmm=0.0, V_N=10e3, **dict(kw, col_d_mm=350.0))
+    assert "geometry_plate_outline" not in r2["checks"]
+
+
+def test_biaxial_base_keeps_the_minor_axis_outline_row():
+    """Review 2026-11-06: about the minor axis the plate must also extend beyond 0.95 bf; with B < 0.95 bf (but
+    >= 0.8 bf, so the major-axis outline passes) the minor-axis call has no projection and a zero compression-side
+    moment, so its outline row must stay in the biaxial result as a failing check (it used to be dropped)."""
+    import india_connections as C
+    kw = dict(B_mm=300.0, L_mm=600.0, t_plate_mm=25.0, fy_plate_MPa=240.0, fck_MPa=30.0, col_d_mm=450.0,
+              col_bf_mm=330.0, col_tf_mm=12.0,
+              anchors={"n_total": 4, "n_tension": 2, "d_mm": 24, "grade": "8.8", "f_mm": 200.0, "pitch_mm": 160.0,
+                       "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0, "f_y_mm": 100.0, "n_tension_y": 2,
+                       "embedment": {"method": "bond", "tau_bd_MPa": 1.5, "bar": "plain", "L_mm": 900.0,
+                                     "source": "test input", "cite": "IS 456:2000 26.2.1.1"}})
+    r = C.base_plate_design_biaxial(P_N=100e3, Mz_Nmm=20e6, My_Nmm=5e6, V_N=10e3, **kw)
+    assert "geometry_plate_outline" not in r["checks"]                 # 600 >= 0.95 x 450, 300 >= 0.8 x 330
+    assert r["checks"]["y:geometry_plate_outline"]["ok"] is False      # 300 < 0.95 x 330
+    assert r["ok"] is False
+    r2 = C.base_plate_design_biaxial(P_N=100e3, Mz_Nmm=20e6, My_Nmm=5e6, V_N=10e3, **dict(kw, B_mm=350.0))
+    assert "y:geometry_plate_outline" not in r2["checks"]
+
+
+# ------------------------------------------------------------------------------ the PEB sizer (handoff P12)
+def _lm_stub(members, chains, x, spec, res=None):
+    import peb_autosize as A
+    lm = object.__new__(A.LocalModel)
+    lm.members, lm.chains, lm.spec, lm.res = members, chains, spec, res or {}
+    lm.x0 = dict(x)
+    lm.const_of_label = {lab: c for c, lab in x.items()}
+    return lm
+
+
+def _frame(col_lab, raf_lab, H=13000.0, W=24000.0):
+    """One portal line q = 1: two fixed-base columns and two rafters (eave to ridge), labels as constants COL / RAF."""
+    members = {
+        "C-0": {"kind": "column", "section": col_lab, "line": [1, 0], "chain": "c0", "s0": 0.0, "s1": H},
+        "C-1": {"kind": "column", "section": col_lab, "line": [1, 4], "chain": "c1", "s0": 0.0, "s1": H},
+        "R-0": {"kind": "rafter", "section": raf_lab, "line": 1, "a0": 0.0, "a1": W / 2, "eave_end": "start",
+                "plane": 0},
+        "R-1": {"kind": "rafter", "section": raf_lab, "line": 1, "a0": W / 2, "a1": W, "eave_end": "end", "plane": 0},
+    }
+    chains = {"c0": {"kind": "column", "L_mm": H, "top": 100100}, "c1": {"kind": "column", "L_mm": H, "top": 100104}}
+    return members, chains
+
+
+def test_rafter_sway_weight_single_span_and_props():
+    import peb_autosize as A
+    w = A.LocalModel.rafter_sway_weight
+    # single portal span 0..24 m: 1 at the eaves, 0 at mid-span (the previous index)
+    assert w(0.0, [0.0, 24000.0], []) == pytest.approx(1.0)
+    assert w(6000.0, [0.0, 24000.0], []) == pytest.approx(0.5)
+    assert w(12000.0, [0.0, 24000.0], []) == pytest.approx(0.0)
+    # IN_Ex2: 96 m continuous over pinned props at 24 / 48 / 72 m -- the knee moment dies out at the first prop
+    mom, pin = [0.0, 96000.0], [24000.0, 48000.0, 72000.0]
+    assert w(12000.0, mom, pin) == pytest.approx(0.5)
+    assert w(24000.0, mom, pin) == pytest.approx(0.0)
+    assert w(40000.0, mom, pin) == 0.0 and w(60000.0, mom, pin) == 0.0
+    assert w(90000.0, mom, pin) == pytest.approx(0.75)
+    # interior moment columns: each span is a portal of its own
+    assert w(36000.0, [0.0, 24000.0, 48000.0], []) == pytest.approx(0.0)
+    assert w(30000.0, [0.0, 24000.0, 48000.0], []) == pytest.approx(0.5)
+
+
+def test_dado_index_follows_the_lower_column_not_the_rafter():
+    """A fixed-base frame: the dado-top index changes with the column, not with the rafter; the eave index changes
+    with both (IN_Ex2 H/150 + dado: the eave index sent the sizer to the rafters, which did not move the dado top)."""
+    import peb_autosize as A
+    import peb_build as PB
+    for lab in ("WI700X300X22X14", "WI700X300X32X14", "WI600X250X20X14", "WI600X250X32X14"):
+        PB.ensure(lab)
+    x = {"COL": "WI700X300X22X14", "RAF": "WI600X250X20X14"}
+    members, chains = _frame(x["COL"], x["RAF"])
+    spec = {"frame_line": 1, "base": "fixed", "dado_height_mm": 3000.0}
+    lm = _lm_stub(members, chains, x, spec)
+    Fd0, F0 = lm.flexibility_dado(x), lm.flexibility(x)
+    x_raf = dict(x, RAF="WI600X250X32X14")
+    x_col = dict(x, COL="WI700X300X32X14")
+    assert lm.flexibility_dado(x_raf) == pytest.approx(Fd0)
+    assert lm.flexibility(x_raf) < F0
+    assert lm.flexibility_dado(x_col) < 0.85 * Fd0
+    # pinned bases: the dado top follows the eave index
+    lm_p = _lm_stub(members, chains, x, dict(spec, base="pinned"))
+    assert lm_p.flexibility_dado(x_raf) == pytest.approx(lm_p.flexibility(x_raf))
+    # the prediction: dado by its own index, the eave sway by the frame index
+    lm.global0, lm.F0, lm.Fd0 = {"wind_Y": 0.9, "dado_Y": 1.08}, F0, None
+    pr = lm.predicted(x_col)
+    assert pr["dado_Y"] == pytest.approx(1.08 * lm.flexibility_dado(x_col) / Fd0)
+    assert pr["wind_Y"] == pytest.approx(0.9 * lm.flexibility(x_col) / F0)
+
+
+def test_feedback_tightens_the_dado_margin_alone():
+    import peb_autosize as A
+    m = {"sway": 0.98}
+    run = {"fail_items": [(1.08, "sway", "wind Y dado top", "IS 800 Table 6 H/240 at the dado")],
+           "gates_fail": ["wind_defl_Y"]}
+    A.feedback(m, run, None, log_fn=lambda *a: None)
+    assert m["dado"] == pytest.approx(0.98 - 0.08) and m["sway"] == 0.98
+    m2 = {"sway": 0.98}
+    run2 = {"fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]}
+    A.feedback(m2, run2, None, log_fn=lambda *a: None)
+    assert m2["sway"] == pytest.approx(0.93) and "dado" not in m2
+
+
+def test_feedback_tightens_the_failed_splice_kind_by_its_overshoot():
+    """A rafter splice end plate that failed at 1.20 (frozen splice moments under-predicted on the multi-span frame)
+    takes its margin down by the overshoot, and only the rafter splice margin moves; a splice bolt-slip failure, or a
+    splice check that names no joint kind, keeps the old 0.02 step on every splice kind."""
+    import peb_autosize as A
+    m = {}
+    run = {"fail_items": [(1.20, "connection", "conn-peb-splice-190701", "end-plate moment (rafter splice)"),
+                          (1.10, "connection", "conn-peb-splice-190702", "end-plate moment (rafter splice)")],
+           "gates_fail": []}
+    A.feedback(m, run, None, log_fn=lambda *a: None)
+    assert m == {"conn:splice:rafter_splice": pytest.approx(0.80)}
+    m2 = {}
+    A.feedback(m2, {"fail_items": [(1.03, "connection", "conn-peb-splice-1", "end-plate moment (canopy beam root)")]},
+               None, log_fn=lambda *a: None)
+    assert m2 == {"conn:splice:canopy_root": pytest.approx(0.97)}
+    m3 = {}
+    A.feedback(m3, {"fail_items": [(1.30, "connection", "conn-peb-splice-2", "bolt slip in shear")]}, None,
+               log_fn=lambda *a: None)
+    assert m3 == {k: pytest.approx(0.98) for k in ("conn:splice:apex", "conn:splice:rafter_splice",
+                                                   "conn:splice:canopy_root")}
+
+
+def _slab_spec(L=450.0, B=400.0, t=25.0, d=24):
+    return {"B_mm": B, "L_mm": L, "t_plate_mm": t, "fy_plate_MPa": 240.0, "plate_grade": "E250", "fck_MPa": 30.0,
+            "fixed": False, "anchors": {"n_total": 4, "n_tension": 2, "d_mm": d, "grade": "8.8", "f_mm": 100.0,
+                                        "pitch_mm": 160.0, "edge_mm": 50.0, "n_per_row": 2, "Anb_mm2": 353.0,
+                                        "embedment": {"method": "bond", "tau_bd_MPa": 1.5, "bar": "plain",
+                                                      "L_mm": 900.0, "source": "test input (as the IN_Ex1 gold)",
+                                                      "cite": "IS 456:2000 26.2.1.1"}}}
+
+
+def test_base_plate_sizing_picks_the_thinnest_passing_plate():
+    import peb_autosize as A
+    import peb_build as PB
+    PB.ensure("WI412X225X12X8")
+    cfg = {"plate_grade": "E250", "steel_grade": "E350"}
+    spec = _slab_spec()
+    entries = [{"el": 1, "sec": "WI412X225X12X8", "cases": [(250e3, 0.0, 0.0, 60e3), (-80e3, 0.0, 0.0, 40e3)]}]
+    pl = A.size_base_plate(cfg, spec, entries)
+    assert pl and pl["t"] in A.BASE_PLATE_T_MM and pl["d"] in A.ANCHOR_D_MM
+    assert A.base_plate_ok(cfg, spec, entries, pl)
+    i = A.BASE_PLATE_T_MM.index(pl["t"])
+    if i > 0:
+        assert not any(A.base_plate_ok(cfg, spec, entries, {"t": A.BASE_PLATE_T_MM[i - 1], "d": d})
+                       for d in A.ANCHOR_D_MM)
+    # strengthen-only floor
+    assert A.size_base_plate(cfg, spec, entries, floor={"t": 32.0, "d": 30})["t"] >= 32.0
+    # the plate and anchor values are applied with their IS 2062 fy and IS 4000 stress area
+    sp = A.apply_plate(dict(spec, anchors=dict(spec["anchors"])), {"t": 16.0, "d": 30})
+    assert sp["t_plate_mm"] == 16.0 and sp["fy_plate_MPa"] == 250.0 and sp["anchors"]["Anb_mm2"] == 561.0
+
+
+def test_base_plate_failure_reason_belongs_to_its_own_call():
+    """Review 2026-11-06: the reason a slot has no passing plate is returned per call (the module attribute it used
+    to be named the last slot sized, so a cached result could carry another slot's reason)."""
+    import peb_autosize as A
+    import peb_build as PB
+    PB.ensure("WI412X225X12X8")
+    cfg = {"plate_grade": "E250", "steel_grade": "E350"}
+    spec = _slab_spec()
+    over = [{"el": 1, "sec": "WI412X225X12X8", "cases": [(250e3, 0.0, 0.0, 5e6)]}]       # a base shear no anchors take
+    why = []
+    assert A.size_base_plate(cfg, spec, over, why=why) is None
+    assert len(why) == 1 and why[0].startswith("t ")
+    w2 = []
+    assert A.size_base_plate(cfg, spec, over, floor={"t": 999.0}, why=w2) is None
+    assert w2 == ["no plate thickness at or above the floor"]
+    assert not hasattr(A.size_base_plate, "last_why")
+
+
+def test_base_plate_is_a_design_variable_and_itemised():
+    import peb_autosize as A
+    cfg = {"connections": {"column_base": {"WI412X225X12X8": dict(_slab_spec(), shear_key={
+        "capacity_N": 1e6, "size": "cruciform 2 x 400 x 28, 250 deep", "mass_kg": 52.8}),
+        "default": _slab_spec(400.0, 260.0, 20.0)}}}
+    d = A.read_conn_design(cfg, None)
+    assert d["base#0"]["key"] == [400.0, 28.0, 250.0] and d["base#0"]["plate"] == {"t": 25.0, "d": 24}
+    assert d["base#1"]["key"] is None and d["base#1"]["plate"] == {"t": 20.0, "d": 24}
+    items = A.connection_items(cfg, {"base#0": 18, "base#1": 6}, {})
+    assert items["base plates base#0"] == pytest.approx(18 * 450 * 400 * 25 * A.STEEL, abs=0.01)
+    assert items["base plates base#1"] == pytest.approx(6 * 400 * 260 * 20 * A.STEEL, abs=0.01)
+    # an older calibration (no base plates itemised) keeps its basis
+    old = {"items": {"shear keys base#0": 950.4}}
+    assert set(A.calib_items(old, items)) == {"shear keys base#0"}
+    assert A.calib_items({}, items) == items
+    # patching a slot with a plate changes thickness and anchors, keeps the key
+    A.patch_connections(cfg, {"base#0": {"key": [400.0, 28.0, 250.0], "fck": 30.0, "plate": {"t": 20.0, "d": 30}}},
+                        {})
+    sp = cfg["connections"]["column_base"]["WI412X225X12X8"]
+    assert sp["t_plate_mm"] == 20.0 and sp["anchors"]["d_mm"] == 30 and sp["shear_key"]
+
+
+def test_study_page_says_base_plates_and_anchors_are_sized():
+    """The lever study page footer states the sizer's basis: slab base plates and anchors are sized (third wave), not
+    kept at the published sizes; no 'gold' jargon on the page."""
+    if os.path.join(ROOT, "scripts") not in sys.path:
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import peb_lever_study as L
+    h = L.html_page([])
+    assert "plate thickness and the anchor diameter are sized" in h
+    assert "keep the gold sizes" not in h and "gold" not in h.lower()
+
+
+def test_end_plate_web_strip_takes_the_doubler_at_its_own_band():
+    """PEB golds (2026-11): the rows inside the flange are fed through the member web plus a web doubler; the strip's
+    fy is the thickness-weighted mean of the web at the member's band and the doubler at its own (E250) band, as the
+    engine's knee web strip, and ep_params / make_ep reproduce the declared end plate (the sizer and the gold cfg
+    helper have the same arithmetic)."""
+    import peb_autosize as A
+    import peb_build as PB
+    sec = "WI575X260X22X16"
+    PB.ensure(sec)
+    ep = A.ep_dict(sec, t=45.0, d_bolt=30, n_out=1, n_in=4, pitch=90.0, b_plate=280.0, web_doubler=8.0)
+    assert ep["web_t_mm"] == 24.0
+    assert ep["web_fy_MPa"] == pytest.approx((16.0 * 330.0 + 8.0 * 250.0) / 24.0, abs=0.01)   # E350 22 mm: 330
+    assert A.ep_dict(sec, t=45.0, d_bolt=30, n_out=1, n_in=4, pitch=90.0, b_plate=280.0)["web_fy_MPa"] == 330.0
+    par = A.ep_params({"end_plate": ep, "plate_b_mm": 280.0}, sec)
+    assert par["member_fy"] == 330.0 and par["web_doubler"] == 8.0
+    assert A.make_ep(par, sec)["web_fy_MPa"] == ep["web_fy_MPa"]
+
+
+def test_local_records_keep_both_signs_and_the_compression():
+    """The local model's sign-aware subset (proposals only; the full run checks every combination): with many
+    sagging uplift cases of larger magnitude, the largest hogging case and the most compressive case are kept (the
+    review's IN_Ex2 canopy root: the hogging 1.2DL+1.2LL+1.2WM0+ case was dropped by a magnitude ranking)."""
+    import peb_autosize as A
+    import static_model as SM
+    n = len(SM.REC_FIELDS)
+
+    def rec(N=0.0, mi=0.0, mj=0.0):
+        r = [0.0] * n
+        r[SM.REC_FIELDS.index("N")] = N
+        r[SM.REC_FIELDS.index("Mmaj")] = max(abs(mi), abs(mj))
+        r[SM.REC_FIELDS.index("Mmaj_i")] = mi
+        r[SM.REC_FIELDS.index("Mmaj_j")] = mj
+        return r
+    recs = {"uplift%02d" % i: rec(N=10e3, mi=300e6 + i * 1e6, mj=0.0) for i in range(40)}
+    recs.update({"grav%02d" % i: rec(N=-5e3, mi=-200e6 - i * 1e6, mj=0.0) for i in range(5)})
+    recs["1.2DL+1.2LL+1.2WM0+"] = rec(N=0.0, mi=-285e6, mj=0.0)      # the largest hogging case
+    recs["compressive"] = rec(N=-400e3, mi=50e6, mj=0.0)
+    keep = A.local_records(recs)
+    assert len(keep) < len(recs) / 2
+    assert "1.2DL+1.2LL+1.2WM0+" in keep and "compressive" in keep and "uplift39" in keep
+    small = {k: recs[k] for k in list(recs)[:10]}
+    assert A.local_records(small) == small
+
+
+def test_feedback_reports_its_steps():
+    import peb_autosize as A
+    m, st = {"sway": 0.98}, {}
+    A.feedback(m, {"fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"]}, None,
+               log_fn=lambda *a: None, steps=st)
+    assert st == {"sway": pytest.approx(0.05)} and m["sway"] == pytest.approx(0.93)
+
+
+def test_autosize_relaxes_the_last_margins_instead_of_stopping(monkeypatch, tmp_path):
+    """IN_Ex2 R = 3 (2026-11-07): a near miss (sway 1.05) tightened the sway margin, the next proposal passed but was
+    heavier than the best design, and the sizer stopped.  Now it relaxes the margins of the last failed run by half
+    their step and proposes again from the best design (at most twice)."""
+    import peb_autosize as A
+    runs = iter([
+        {"ok_run": True, "passed": True, "kg": 100.0},                       # 0: the start design
+        {"ok_run": True, "passed": False, "kg": 95.0,                        # 1: lighter, sway 1.05
+         "fail_items": [(1.05, "sway", "wind Y eave", "")], "gates_fail": ["wind_defl_Y"],
+         "blocking": ["reason %d" % i for i in range(20)]},
+        {"ok_run": True, "passed": True, "kg": 104.0},                       # 2: passes, heavier: relax
+        {"ok_run": True, "passed": True, "kg": 97.0},                        # 3: passes, lighter: the best
+        {"ok_run": True, "passed": True, "kg": 99.0}])                       # 4: not lighter again: relax / stop
+    seen = []
+
+    def full_run(run_dir, spec, x, rules, **k):
+        r = next(runs)
+        seen.append(dict(k.get("margins_seen") or {}))
+        return dict(r, tonnage_kg={"primary": r["kg"]}, governing=None, blocking=r.get("blocking", []), elapsed_s=0.0)
+
+    class LM:
+        x0 = {}
+
+        def __init__(self, *a, **k):
+            pass
+
+    class EV:
+        def __init__(self, lm, spec, conn_prev, margins, x_gold):
+            seen.append(dict(margins))
+            self.n_eval = 1
+
+    props = iter([{"C": "a"}, {"C": "b"}, {"C": "c"}, {"C": "d"}])
+    def prep(job_dir, run_dir):
+        os_ = __import__("os")
+        os_.makedirs(run_dir, exist_ok=True)
+        open(os_.path.join(run_dir, "result.json"), "w").write("{}")
+    monkeypatch.setattr(A, "prepare_run_dir", prep)
+    monkeypatch.setattr(A, "read_constants", lambda *a, **k: {"C": "g"})
+    monkeypatch.setattr(A, "dim_groups", lambda *a, **k: [])
+    monkeypatch.setattr(A, "LocalModel", LM)
+    monkeypatch.setattr(A, "Evaluator", EV)
+    monkeypatch.setattr(A, "local_optimize", lambda ev, x, g, s, **k: (next(props), {"feasible": True, "mass": 1.0}))
+    monkeypatch.setattr(A, "full_run", full_run)
+    monkeypatch.setattr(A, "save_best", lambda *a, **k: None)
+    monkeypatch.setattr(A, "evaluate_run", lambda *a, **k: {}, raising=False)
+    out = A.autosize(str(tmp_path), {"members": {"C": {}}, "job": "t"}, {}, str(tmp_path / "w"), name="v",
+                     cfs_root="", resize_secondary=False, max_full_runs=5, log_fn=lambda *a: None)
+    assert out["best"]["total_kg"] == 97.0 and out["n_full_runs"] == 5
+    # review Low 6: the history keeps 12 blocking reasons and the full count
+    h1 = out["history"][1]
+    assert len(h1["blocking"]) == 12 and h1["n_blocking"] == 20 and out["history"][0]["n_blocking"] == 0
+    sway = [m.get("sway") for m in seen if "sway" in m]
+    assert sway[:4] == [pytest.approx(0.98), pytest.approx(0.93), pytest.approx(0.955), pytest.approx(0.955)]
+
+
+def test_difference_text_prints_a_bracket_when_no_lighter_design_was_found():
+    """PEB final review (2026-11-07): IN_Ex2's cost of compliance is a bracket (no ordinary frame lighter than the
+    re-sized SMRF was found), so the report prints the two bounds, not a signed figure that reads as a saving."""
+    from steel_engine import report_second_wave as RS
+    cc = {"rows": [{"variant": "SMRF", "R": 5.0, "kg_m2": 51.46}, {"variant": "OMRF", "R": 3.0, "kg_m2": 51.72}],
+          "difference": {"kg_m2": 0.0, "percent": 0.0, "range_kg_m2": [0.33, -0.26],
+                         "between": "no lighter ordinary frame was found", "caveat": "Nil at the sizer's resolution."}}
+    t = RS.difference_text(cc)
+    assert "between −0.26 and +0.33 kg/m²" in t
+    assert "no lighter ordinary frame was found" in t and "Nil at the sizer" in t
+    assert "less steel" not in t and "more steel" not in t
+    # a malformed range falls back to the signed figure
+    cc["difference"]["range_kg_m2"] = [0.33]
+    assert "between" not in RS.difference_text(cc).split("(")[0]
+
+
+def test_base_key_demand_takes_the_engines_hc_and_the_is18168_9_4_shear():
+    """PEB final review (2026-11-07): under the analysis-key reading the sizer shrank the IN_Ex4 SMRF base keys and every
+    full run failed the IS 18168 9.3 capacity shear at about 5x.  The key demand now takes the engine's Hc (the base
+    element's L_mm, not the column's buckling length Lz_mm) for 2.2 Ry Mpc / Hc on fixed SFRS bases in the seismic
+    cases, and the 9.4 shear 1.1 Ry Mpc / Hc on pinned SFRS bases in every case, as india_is800_s12.base_checks does."""
+    import peb_autosize as A
+    import peb_build as PB
+    import india_is800_s12 as S12
+    import sections as S
+    fx, pn = "WI500X250X16X10", "WI400X200X12X8"
+    for lab in (fx, pn):
+        PB.ensure(lab)
+
+    class LM:
+        pass
+    lm = LM()
+    lm.cfg = {"steel_grade": "E350", "peb_rules": {"base_shear_key": "analysis"},
+              "connections": {"column_base": {"lateral_col:" + fx: {"fixed": True, "shear_key": {"b_mm": 400}},
+                                              "brace_col:" + pn: {"fixed": False, "shear_key": {"b_mm": 300}}}}}
+    lm.pkg = {"capacity_design": {"section12": {"checks": [
+        {"id": "12.12_base", "member": "base-e1", "sfrs": True, "frame_axes": ["z"]},
+        {"id": "12.12_base", "member": "base-e2", "sfrs": True, "frame_axes": ["z"]}]}}}
+    lm.base_info = [1, 2]
+    lm.reg = {1: ("column", fx, 0, 0), 2: ("column", pn, 0, 0)}
+    lm.dump = {1: {"member": {"L_mm": 6000.0, "Lz_mm": 13000.0}}, 2: {"member": {"L_mm": 7700.0, "Lz_mm": 15400.0}}}
+    lm.members = {}
+    lm.is18 = True
+    import static_model as SM
+
+    def rec(N, Vmaj):
+        d = dict.fromkeys(SM.REC_FIELDS, 0.0)
+        d.update(N=N, Vmaj=Vmaj)
+        return [d[f] for f in SM.REC_FIELDS]
+    lm.envt = {1: {"records": {"1.2DL+1.2LL+1.2EQ_X": rec(-100e3, 50e3), "1.5DL+1.5LL": rec(-300e3, 20e3)}},
+               2: {"records": {"1.5DL+1.5LL": rec(-20e3, 10e3)}}}
+    out = A.base_demands(lm, {}, {})
+
+    def cap(sec, P, k, Hc):
+        p = S.props(sec)
+        fy = A.fy_of(sec, "E350")
+        return k * S12._ry({"grade": "E350"}, p)[0] * S12.mpc_9_3_1_2(p, fy, P, "z")[0] / Hc
+    want0 = max(cap(fx, 100e3, 2.2, 6000.0) - 0.45 * 100e3, 20e3 - 0.45 * 300e3)
+    want1 = cap(pn, 20e3, 1.1, 7700.0) - 0.45 * 20e3
+    assert want1 > 10e3 - 0.45 * 20e3                  # the 9.4 shear governs the non-seismic case
+    assert out["base#0"] == pytest.approx(want0, rel=1e-9)
+    assert out["base#1"] == pytest.approx(want1, rel=1e-9)
+    # the buckling length would have more than halved the fixed base's capacity shear
+    assert want0 > 2.0 * (cap(fx, 100e3, 2.2, 13000.0) - 0.45 * 100e3)
+    # the 1.2 Vd reading keeps its floor
+    lm.cfg["peb_rules"] = {}
+    assert A.base_demands(lm, {}, {})["base#1"] >= out["base#1"]

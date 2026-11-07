@@ -768,6 +768,13 @@ def _difference_bases(cc):
     return None, None
 
 
+def _sgn(x, nd=2):
+    """A signed figure for a bracket: '+0.33', '−0.26' (true minus), '0.00'."""
+    x = float(x)
+    v = _f(abs(x), nd)
+    return ("+" + v) if x > 0 else ("\u2212" + v) if x < 0 else v
+
+
 def difference_text(cc):
     """Check fixes (2026-10-23, finding 7): the cost-of-compliance difference with its base said in words, both ways
     ('x % more steel than the ordinary frame; the ordinary frame uses y % less than the compliant design')."""
@@ -778,6 +785,15 @@ def difference_text(cc):
     d = float(d)
     comp, ordi = _difference_bases(cc)
     btw = (" (%s)" % _pt(df["between"])) if df.get("between") else ""
+    rng = df.get("range_kg_m2")
+    if isinstance(rng, (list, tuple)) and len(rng) == 2 and all(_num(x) for x in rng):
+        # a bracket, not a signed figure (PEB final review, 2026-11-07): no lighter compliant-or-ordinary design was
+        # found, so the cost lies between the two bounds
+        lo, hi = sorted(float(x) for x in rng)
+        out = "<p><b>Difference:</b> between %s and %s kg/m²%s.</p>" % (_sgn(lo), _sgn(hi), btw)
+        if df.get("caveat"):
+            out += "<p>%s</p>" % _pt(df["caveat"])
+        return out
     if comp and ordi:
         p_ord = float(df["percent"]) if _num(df.get("percent")) else 100.0 * d / ordi
         p_comp = 100.0 * d / comp
