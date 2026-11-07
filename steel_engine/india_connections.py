@@ -1616,13 +1616,21 @@ def cover_plate_moment_capacity(*, Zp_beam_mm3, fy_beam_MPa, plate_b_mm, plate_t
 
 
 def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plate_MPa, bolts, weld=None,
-                           block_shear_areas=None, cjp=None, plate_grade=None, job_steel_grade=None, n_plates=1):
+                           block_shear_areas=None, cjp=None, plate_grade=None, job_steel_grade=None, n_plates=1,
+                           bolt_lines=None, gauge_mm=None, a1_mm=None, V_shear_N=None, N_axial_N=None):
     """Simple (shear) beam-end connection: bolt group 10.3, plate shear yield 8.4.1 (Av fy/(sqrt3 gamma_m0)),
     block shear 6.4.1 (areas from block_shear_bolted_areas), plate-to-support weld 10.5.7 (fillet) or 10.5.7.1.2
     (CJP).  Returns {checks{}, capacity_N (minimum), ok, dc}.
     AUD-2: the plate fy (and the CJP parent fy at its t_mm) is the IS 2062 Table 3 value for the thickness when the
     declared value is higher (plate_fy_is2062); t_plate_mm is the total of n_plates equal plates (double fin plates:
-    n_plates 2), the band is read at t_plate_mm / n_plates."""
+    n_plates 2), the band is read at t_plate_mm / n_plates.
+    Eccentric bolt group (SECT review, 2026-11-07): a plate with bolt_lines >= 2 vertical lines (gauge_mm apart, the
+    first a1_mm from the support line; a1 defaults to the bolt end distance e_mm) is also checked by the elastic method
+    for the moment V e about the bolt-group centroid (e = a1 + (lines - 1) gauge / 2): the corner bolt's resultant of
+    N/n + M y/Ip and V/n + M x/Ip against Vdb (IS 800 10.3), and the plate at the support line for V, N and M = V e
+    (IS 800 8.2.1.2 plastic plate with the 9.2.2 high-shear reduction, 9.3.1.1 with N).  V_shear_N / N_axial_N are the
+    concurrent shear and axial components of the V + N resultant V_N (default: V_N as shear).  A single bolt line is
+    checked as before (direct shear)."""
     checks = {}
     n_pl = max(int(n_plates or 1), 1)
     fy_plate_MPa, _pfy = plate_fy_is2062(fy_plate_MPa, float(t_plate_mm) / n_pl if _isnum(t_plate_mm) else t_plate_mm,
@@ -1655,15 +1663,70 @@ def fin_plate_shear_checks(*, V_N, t_plate_mm, h_plate_mm, fy_plate_MPa, fu_plat
         checks["support_weld"] = _check(abs(V_N), w["capacity_N"], clause="IS 800:2007 10.5.7", cite=w["cite"]) \
             if w.get("found") else _check(None, None, clause="IS 800:2007 10.5.7", cite="weld", ok=None,
                                           reason=str(w.get("required_inputs")))
-    for k_ in ("plate_shear_8_4_1", "block_shear_6_4_1"):
+    nl = int(bolt_lines or 1)
+    if nl >= 2 and g.get("found") and n and int(n) >= nl:
+        ecc = fin_bolt_group_eccentricity(
+            n_bolts=int(n), n_lines=nl, pitch_mm=float(bolts.get("p_mm") or 0.0), gauge_mm=float(gauge_mm or 70.0),
+            a1_mm=float(a1_mm if a1_mm is not None else (bolts.get("e_mm") or 0.0)),
+            V_N=abs(float(V_shear_N if V_shear_N is not None else V_N)), N_N=abs(float(N_axial_N or 0.0)))
+        vdb = float(g["per_bolt"]["Vdb_N"])
+        checks["bolt_group_eccentric_10_3"] = _check(
+            ecc["R_bolt_N"], vdb, clause="IS 800:2007 10.3.2 (elastic bolt group)",
+            cite="corner bolt of %d lines x %d: N/n + M y/Ip = %.1f kN, V/n + M x/Ip = %.1f kN, M = V e, e = %.0f mm, "
+                 "Ip = %.0f mm2 per bolt" % (nl, ecc["n_rows"], ecc["Fx_N"] / 1e3, ecc["Fy_N"] / 1e3, ecc["e_mm"],
+                                            ecc["Ip_mm2"]))
+        Vv, Nn, M = ecc["V_N"], ecc["N_N"], ecc["M_Nmm"]
+        A_p = float(h_plate_mm) * float(t_plate_mm)
+        Vdp = A_p * float(fy_plate_MPa) / (math.sqrt(3.0) * GAMMA_M0)
+        Md = float(fy_plate_MPa) * float(t_plate_mm) * float(h_plate_mm) ** 2 / 4.0 / GAMMA_M0
+        beta = (2.0 * Vv / Vdp - 1.0) ** 2 if Vv > 0.6 * Vdp else 0.0
+        Mdv = Md * (1.0 - min(beta, 1.0))
+        Nd = A_p * float(fy_plate_MPa) / GAMMA_M0
+        ratio = (Nn / Nd if Nd else 0.0) + (M / Mdv if Mdv > 0 else 99.0)
+        checks["plate_moment_at_support"] = _check(
+            ratio, 1.0, clause="IS 800:2007 8.2.1.2 / 9.2.2 / 9.3.1.1",
+            cite="plate at the support line: N/Nd + M/Mdv with M = V e = %.1f kN-m, Md = fy t h^2/4/gamma_m0 = %.1f kN-m%s"
+                 "; a CJP support weld develops the plate (IS 800 10.5.7.1.2)"
+                 % (M / 1e6, Md / 1e6, (", high shear beta %.2f (9.2.2)" % beta) if beta else ""))
+    for k_ in ("plate_shear_8_4_1", "block_shear_6_4_1", "plate_moment_at_support"):
         tag_plate_fy(checks.get(k_), _pfy)
     tag_plate_fy(checks.get("support_weld") if cjp else None, _cfy)
-    caps = [c["limit"] for c in checks.values() if c.get("limit")]
+    caps = [c["limit"] for k_, c in checks.items() if c.get("limit")
+            and k_ not in ("plate_moment_at_support", "bolt_group_eccentric_10_3")]   # capacity_N: the force rows
+    if "bolt_group_eccentric_10_3" in checks:
+        # the shear capacity of the eccentric group (a joint web plate is evaluated by capacity): the V, with N = 0,
+        # at which the corner bolt reaches Vdb, and at which V e reaches the plate's Md at the support
+        k1 = fin_bolt_group_eccentricity(n_bolts=int(n), n_lines=nl, pitch_mm=float(bolts.get("p_mm") or 0.0),
+                                         gauge_mm=float(gauge_mm or 70.0),
+                                         a1_mm=float(a1_mm if a1_mm is not None else (bolts.get("e_mm") or 0.0)),
+                                         V_N=1.0)
+        caps.append(vdb / k1["R_bolt_N"])
+        caps.append(Md / k1["e_mm"])
     oks = [c.get("ok") for c in checks.values()]
     return {"found": bool(caps), "checks": checks, "capacity_N": min(caps) if caps else None,
             "ok": None if any(o is None for o in oks) else all(oks),
             "dc": max([c["dc"] for c in checks.values() if c.get("dc") is not None] or [None]) if caps else None,
             "cite": "IS 800:2007 10.3 / 8.4.1 / 6.4.1 / 10.5.7 (simple beam-end connection)"}
+
+
+def fin_bolt_group_eccentricity(*, n_bolts, n_lines, pitch_mm, gauge_mm, a1_mm, V_N, N_N=0.0):
+    """Elastic bolt group of a fin plate (SECT review 2026-11-07): n_lines vertical lines of n_bolts / n_lines bolts at
+    pitch_mm, gauge_mm between lines, the first line a1_mm from the support.  The shear V acts at the support line, so
+    about the group centroid M = V e, e = a1 + (n_lines - 1) gauge / 2; the axial N acts along the beam axis through
+    the centroid.  Corner bolt: Fx = N/n + M y_max/Ip, Fy = V/n + M x_max/Ip, R = sqrt(Fx^2 + Fy^2)."""
+    nl = max(int(n_lines), 1)
+    nr = max(int(round(float(n_bolts) / nl)), 1)
+    n = nl * nr
+    xs = [(i - (nl - 1) / 2.0) * gauge_mm for i in range(nl)]
+    ys = [(j - (nr - 1) / 2.0) * pitch_mm for j in range(nr)]
+    Ip = sum(x * x for x in xs) * nr + sum(y * y for y in ys) * nl
+    e = a1_mm + (nl - 1) * gauge_mm / 2.0
+    M = V_N * e
+    xm, ym = max(abs(x) for x in xs), max(abs(y) for y in ys)
+    Fx = N_N / n + (M * ym / Ip if Ip else 0.0)
+    Fy = V_N / n + (M * xm / Ip if Ip else 0.0)
+    return {"n_rows": nr, "e_mm": e, "M_Nmm": M, "Ip_mm2": Ip, "Fx_N": Fx, "Fy_N": Fy,
+            "R_bolt_N": math.hypot(Fx, Fy), "V_N": V_N, "N_N": N_N}
 
 
 def _splice_flange_force(P, Mz, My, *, Af, A, d, bf, axial_share, bearing):
@@ -1680,7 +1743,7 @@ def _splice_flange_force(P, Mz, My, *, Af, A, d, bf, axial_share, bearing):
 
 def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_mm, splice, My_Nmm=0.0, cases=None,
                          bf_mm=None, tf_mm=None, tw_mm=None, is18168=None, tie_force_N=None, Hc_mm=None,
-                         Zx_lower_mm3=None, job_steel_grade=None):
+                         Zx_lower_mm3=None, job_steel_grade=None, Zy_mm3=None):
     """Column splice checks of DECLARED geometry.
     IS 800: SFRS columns 12.5.2.2 (each flange splice >= 1.2 fy Af; PJP welds 200 % of required, 12.5.2.1); gravity
     columns for the member forces, per combination with concurrent P, Mz, My (H10): flange force
@@ -1695,7 +1758,14 @@ def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_m
     12.2.4.6 / 12.3.4.7 (SCBF, EBF): >= 0.5 Mp of the smaller connected member and shear > sum Mp / Hc.
     splice = {type: 'flange_plates'|'cjp'|'pjp', plate: {A_mm2, fy_MPa}, bolts: {...}, weld: {...} (fillet for the
     flange plates; CJP record {matching_electrode: bool, electrode, t_mm?}), web_plate: {A_mm2, fy_MPa, Av_mm2?},
-    web_bolts: {...}, bearing: bool, tie_force_N?, Hc_mm?}.
+    web_bolts: {...}, bearing: bool, tie_force_N?, Hc_mm?, transition?}.
+    Transition between two box sections of different outer size (SECT review 2026-11-07):
+    splice['transition'] = {type: 'division_plate', t_mm, grade?, fy_MPa?, offset_mm} -- a horizontal plate between the
+    two shafts, each CJP-welded to it, the upper wall line offset_mm in from the lower one.  The plate carries the upper
+    wall's line force q = (|P|/A + |Mz|/Zz + |My|/Zy) t_wall per case as a cantilever strip of length offset_mm:
+    q offset <= fy t^2/4 / gamma_m0 (IS 800 8.2.1.2, plastic strip per unit length) and q <= fy t/(sqrt3 gamma_m0)
+    (8.4.1); fy is the IS 2062 band of the plate.  EOR method (VERIFY): the plate is to be ultrasonically tested for
+    laminations (through-thickness loading).
     AUD-2: plate / web_plate {t_mm (or b_mm with A_mm2), grade?} -> fy = IS 2062 Table 3 value for that thickness when
     the declared fy is higher (plate_fy_is2062; splice['plate_grade'] or the job steel_grade otherwise)."""
     _pfy = {}
@@ -1862,10 +1932,42 @@ def column_splice_checks(*, sfrs, Af_mm2, fy_MPa, P_N, M_Nmm, Zx_mm3, A_mm2, d_m
             else:
                 checks["splice_shear_sumMp_Hc"] = _check(Vdem, None, clause=clv, cite="shear > sum Mp / Hc", ok=None,
                                                          reason="web splice plate / web bolts or Hc not declared")
+    tr = splice.get("transition")
+    if isinstance(tr, dict) and str(tr.get("type") or "").lower() == "division_plate":
+        tp, a_ = tr.get("t_mm"), tr.get("offset_mm")
+        tw_ = min([float(v) for v in (tf_mm, tw_mm) if v] or [0.0])
+        if tp and a_ is not None and tw_:
+            import india_is800 as _I8
+            key_, _q = _I8.parse_is2062_grade(str(tr.get("grade") or splice.get("plate_grade") or job_steel_grade
+                                                   or "E250"))
+            fyp = float(_I8.fy_is2062(key_ if key_ in _I8.IS2062_TABLE3 else "E250", float(tp)))
+            if tr.get("fy_MPa"):
+                fyp = min(fyp, float(tr["fy_MPa"]))
+            Zz, Zy_ = float(Zx_mm3), float(Zy_mm3 or Zx_mm3)
+            qs = [(abs(float(c.get("P_N") or 0.0)) / A + abs(float(c.get("Mz_Nmm", c.get("M_Nmm")) or 0.0)) / Zz
+                   + abs(float(c.get("My_Nmm") or 0.0)) / Zy_) * tw_ for c in cases]
+            q = max(qs + [0.0])
+            a_ = float(a_)
+            md = fyp * float(tp) ** 2 / 4.0 / GAMMA_M0
+            vd = fyp * float(tp) / (math.sqrt(3.0) * GAMMA_M0)
+            checks["division_plate_bending"] = _check(
+                q * a_, md, clause="IS 800:2007 8.2.1.2 (EOR method, VERIFY)",
+                cite="division plate %.0f mm: the upper wall line force q = %.0f N/mm (|P|/A + |Mz|/Zz + |My|/Zy) x "
+                     "t_wall %.0f mm, carried %.0f mm to the lower wall: q a <= fy t^2/4/gamma_m0 (fy %.0f MPa, "
+                     "IS 2062 band); plate UT-tested for laminations" % (float(tp), q, tw_, a_, fyp))
+            checks["division_plate_shear"] = _check(q, vd, clause="IS 800:2007 8.4.1 (EOR method, VERIFY)",
+                                                    cite="q <= fy t/(sqrt3 gamma_m0) per mm of wall")
+            notes.append("transition: %.0f mm division plate between the shafts (offset %.0f mm), both shafts CJP-welded "
+                         "to it" % (float(tp), a_))
+        else:
+            checks["division_plate_bending"] = _check(None, None, clause="IS 800:2007 8.2.1.2", cite="division plate",
+                                                      ok=None, reason="transition {t_mm, offset_mm} or the wall "
+                                                                      "thickness not given")
     tag_plate_fy(checks.get("plate_yield_6_2"), _pfy.get("plate"))
     for k_ in ("web_plate_6_2", "splice_shear_sumMp_Hc"):
         tag_plate_fy(checks.get(k_), _pfy.get("web_plate"))
-    caps = [c["limit"] for c in checks.values() if isinstance(c.get("limit"), (int, float))]
+    caps = [c["limit"] for k_, c in checks.items() if isinstance(c.get("limit"), (int, float))
+            and not k_.startswith("division_plate")]          # capacity_N: the force rows (the plate rows are per mm)
     oks = [c.get("ok") for c in checks.values()]
     return {"found": bool(caps) or any(c.get("gate") for c in checks.values()), "checks": checks, "demand_N": Ff_dem,
             "demand_components": comps, "governing_demand": gov, "capacity_N": min(caps) if caps else None,

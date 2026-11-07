@@ -726,7 +726,7 @@ def build_report_india(name, root):
     run = E.india_run_cached(cfg, name)
     parts = [f"<h1>{_title_name(name)} &mdash; structural analysis &amp; design report (IS 800 / IS 875 / IS 1893)</h1>",
              f"<p><b>{cfg.get('arch', '')}</b> &middot; generated {datetime.date.today()} &middot; units: kN, kN-m, "
-             "m, mm, MPa (engine N-mm)</p>", RS.framing_html(name, cfg), _toc()]
+             "m, mm, MPa (engine N-mm)</p>", RS.framing_html(name, cfg), RS.context_html(cfg), _toc()]
     RS.write_headline(root, pkg)              # second wave H1: design/headline.json for the site build / harness
     try:
         import plot_model as PM

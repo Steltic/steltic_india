@@ -133,6 +133,14 @@ def _is_india_cfg(cfg):
 INDIA_UNITS_OK = ("n-mm", "n-mm-s", "n-mm-sec", "m", "mm", "metric", "si", "india_si", "india_metric")
 
 
+def chs_brace_grade_declared(cfg):
+    """True unless the default brace is an IS 1161 tube and neither (brace_grade, brace_process) nor (tube_grade,
+    tube_process) is declared (third wave, 2026-11: the member grade lookup takes the tube pair first)."""
+    if not str(cfg.get("brace") or "").upper().startswith(("CHS", "NB")):
+        return True
+    return bool((cfg.get("brace_grade") and cfg.get("brace_process")) or (cfg.get("tube_grade") and cfg.get("tube_process")))
+
+
 def india_checks(cfg):
     """WP1.3-1.13 India preflight block (replaces every ASCE requirement on India jobs)."""
     out = []
@@ -307,8 +315,11 @@ def india_checks(cfg):
     if not cfg.get("steel_grade"):
         say("ERROR", "cfg['steel_grade'] (IS 2062 grade, e.g. 'E250BR' / 'E350') required -- no default fy (WP2.3)")
     if cfg.get("braces") or "brace" in str(cfg.get("system") or "").lower() or "bf" in str(cfg.get("system") or "").lower():
-        if str(cfg.get("brace") or "").upper().startswith(("CHS", "NB")) and not (cfg.get("brace_grade") and cfg.get("brace_process")):
-            say("ERROR", "CHS braces need cfg['brace_grade'] (IS 1161 YSt ...) and cfg['brace_process'] (HFS/CDS/ERW)")
+        # third wave (2026-11): tubes take cfg['tube_grade'] / cfg['tube_process'] first (design_pipeline.
+        # _member_input_record), so either pair declares the IS 1161 grade and process of CHS braces
+        if not chs_brace_grade_declared(cfg):
+            say("ERROR", "CHS braces need cfg['tube_grade'] / cfg['brace_grade'] (IS 1161 YSt ...) and "
+                         "cfg['tube_process'] / cfg['brace_process'] (HFS/CDS/ERW)")
     try:
         from india_wind_tables import wind_findings
         for sev, msg in wind_findings(cfg):

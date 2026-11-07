@@ -83,12 +83,19 @@ def make_gold(spec):
     def ebf_bays(k):
         return [tuple([d, int(i), int(j)]) for (d, i, j) in (_rng_pick(g.get("ebf_bays"), k) or [])]
 
-    mset = {(m[0], int(m[1])) for m in (g.get("moment_lines") or spec.get("moment_lines") or [])}
+    # third wave (2026-11, P3): the moment lines in their declared order (deduplicated) -- col_strong takes the FIRST
+    # declared moment line through a column, so the orientation of a column on both an X and a Y moment line no longer
+    # follows the hash order of a set (PYTHONHASHSEED); mset stays for membership tests
+    mlist = []
+    for m in (g.get("moment_lines") or spec.get("moment_lines") or []):
+        if (m[0], int(m[1])) not in mlist:
+            mlist.append((m[0], int(m[1])))
+    mset = set(mlist)
     lateral_cols = set()
     for k in range(1, NF + 1):
         for (d, i, j) in xbays(k) + ebf_bays(k):
             lateral_cols.add((i, j)); lateral_cols.add((i + 1, j) if d == "X" else (i, j + 1))
-    for (d, kk) in mset:
+    for (d, kk) in mlist:
         for q in range((NX if d == "X" else NY) + 1):
             lateral_cols.add((q, kk) if d == "X" else (kk, q))
 
@@ -109,7 +116,7 @@ def make_gold(spec):
         for (d, i, j) in xbays(k) + ebf_bays(k):
             for n in ((i, j), ((i + 1, j) if d == "X" else (i, j + 1))):
                 col_lines.setdefault(n, set()).add("X%d" % j if d == "X" else "Y%d" % i)
-    for (d, kk) in mset:
+    for (d, kk) in mlist:
         for q in range((NX if d == "X" else NY) + 1):
             col_lines.setdefault((q, kk) if d == "X" else (kk, q), set()).add("%s%d" % (d, kk))
 
@@ -149,7 +156,10 @@ def make_gold(spec):
         return str(base_decl.get("default", spec.get("base") or "fixed"))
 
     def col_strong(i, j):
-        for (d, kk) in mset:
+        """Column orientation rule (the strong axis resists direction d): the first DECLARED moment line through the
+        column, else the first braced (X or EBF) bay that uses it in the order listed (storey 1 upwards), else
+        gold.default_strong / spec.default_strong, else "X".  The same rule as the CFS runner (hr_vendor_runner)."""
+        for (d, kk) in mlist:
             if (d == "X" and j == kk) or (d == "Y" and i == kk):
                 return d
         for k in range(1, NF + 1):
