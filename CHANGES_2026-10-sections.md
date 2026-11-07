@@ -445,7 +445,7 @@ No rolled section passes for any welded group. The pattern:
   - HB450X92.19 fails KL/r.
 - **IN_Ex14** (five groups) and **IN_Ex15 brace_2_3 / brace_4_8:** the strength fails up to the deep WB / MB sizes,
   and those then fail Table 2 (WB550 / WB600) or KL/r.
-- **IN_Ex15 brace_1, IN_Ex19 (four of eight groups), the stem (most groups) and IN_Ex20 brace_1:** the storey
+- **IN_Ex15 brace_1, IN_Ex19 (five of eight groups), the stem (five of six) and IN_Ex20 brace_1:** the storey
   stiffness asks for 13,000–26,000 mm² of area. Only the deepest rolled sections reach it, and those fail Table 2 or
   the strength.
 - **The stem's brace_x_1:** HB450X92.19 passes its own checks (0.465) but fails the 12.3.2.2 brace axial row at the
