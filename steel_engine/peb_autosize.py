@@ -2311,17 +2311,24 @@ def base_demands(lm, x, base_counts):
                 vmin = max([1.2 * (I8.shear_capacity(p, fy, axis=ax).get("Vd_N") or 0.0) for ax in axes] or [0.0])
             fixed = bool(spec.get("fixed")) and sfrs
             use18 = sfrs and lm.is18
-            Hc = float(lm.dump[t]["member"].get("Lz_mm") or lm.dump[t]["member"].get("L_mm") or 0.0)
+            # the Hc of the engine's base check (india_is800_s12.base_checks): the base spec's Hc_mm, else the base
+            # column element's own length L_mm.  It took the column's buckling length Lz_mm first (13 m against a
+            # 6 m base element on IN_Ex2), which halved the IS 18168 9.3 shear 2.2 Ry Mpc / Hc: under the analysis-key
+            # reading the sizer then proposed keys that failed the full run at about 5x (IN_Ex4, PEB final review).
+            Hc = float(spec.get("Hc_mm") or lm.dump[t]["member"].get("L_mm") or 0.0)
             need = 0.0
             for lc in CD.base_load_cases(lm.envt[t].get("records") or {}):
                 V0 = float(lc["V_N"])
                 P = float(lc["P_N"])
                 V = max(V0, vmin)
-                if fixed and use18 and lc.get("seismic") and Hc:
+                if use18 and Hc and (lc.get("seismic") if fixed else True):
+                    # as the engine's base check: a fixed SFRS base takes the IS 18168 9.3 shear 2.2 Ry Mpc / Hc in
+                    # the seismic cases; a pinned SFRS base the 9.4 shear 1.1 Ry Mpc / Hc in every case (the sizer
+                    # had no 9.4 term: under the analysis-key reading it proposed keys for the analysis shear alone)
                     ry = S12._ry({"grade": cfg.get("steel_grade")}, p)[0]
                     for ax in axes:
                         Mpc = S12.mpc_9_3_1_2(p, fy, P, ax)[0]
-                        V = max(V, 2.2 * ry * Mpc / Hc)
+                        V = max(V, (2.2 if fixed else 1.1) * ry * Mpc / Hc)
                 need = max(need, V - 0.45 * max(P, 0.0))
             out[slot_of[key]] = max(out.get(slot_of[key], 0.0), need)
     return out

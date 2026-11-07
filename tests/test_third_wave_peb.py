@@ -523,3 +523,56 @@ def test_difference_text_prints_a_bracket_when_no_lighter_design_was_found():
     # a malformed range falls back to the signed figure
     cc["difference"]["range_kg_m2"] = [0.33]
     assert "between" not in RS.difference_text(cc).split("(")[0]
+
+
+def test_base_key_demand_takes_the_engines_hc_and_the_is18168_9_4_shear():
+    """PEB final review (2026-11-07): under the analysis-key reading the sizer shrank the IN_Ex4 SMRF base keys and every
+    full run failed the IS 18168 9.3 capacity shear at about 5x.  The key demand now takes the engine's Hc (the base
+    element's L_mm, not the column's buckling length Lz_mm) for 2.2 Ry Mpc / Hc on fixed SFRS bases in the seismic
+    cases, and the 9.4 shear 1.1 Ry Mpc / Hc on pinned SFRS bases in every case, as india_is800_s12.base_checks does."""
+    import peb_autosize as A
+    import peb_build as PB
+    import india_is800_s12 as S12
+    import sections as S
+    fx, pn = "WI500X250X16X10", "WI400X200X12X8"
+    for lab in (fx, pn):
+        PB.ensure(lab)
+
+    class LM:
+        pass
+    lm = LM()
+    lm.cfg = {"steel_grade": "E350", "peb_rules": {"base_shear_key": "analysis"},
+              "connections": {"column_base": {"lateral_col:" + fx: {"fixed": True, "shear_key": {"b_mm": 400}},
+                                              "brace_col:" + pn: {"fixed": False, "shear_key": {"b_mm": 300}}}}}
+    lm.pkg = {"capacity_design": {"section12": {"checks": [
+        {"id": "12.12_base", "member": "base-e1", "sfrs": True, "frame_axes": ["z"]},
+        {"id": "12.12_base", "member": "base-e2", "sfrs": True, "frame_axes": ["z"]}]}}}
+    lm.base_info = [1, 2]
+    lm.reg = {1: ("column", fx, 0, 0), 2: ("column", pn, 0, 0)}
+    lm.dump = {1: {"member": {"L_mm": 6000.0, "Lz_mm": 13000.0}}, 2: {"member": {"L_mm": 7700.0, "Lz_mm": 15400.0}}}
+    lm.members = {}
+    lm.is18 = True
+    import static_model as SM
+
+    def rec(N, Vmaj):
+        d = dict.fromkeys(SM.REC_FIELDS, 0.0)
+        d.update(N=N, Vmaj=Vmaj)
+        return [d[f] for f in SM.REC_FIELDS]
+    lm.envt = {1: {"records": {"1.2DL+1.2LL+1.2EQ_X": rec(-100e3, 50e3), "1.5DL+1.5LL": rec(-300e3, 20e3)}},
+               2: {"records": {"1.5DL+1.5LL": rec(-20e3, 10e3)}}}
+    out = A.base_demands(lm, {}, {})
+
+    def cap(sec, P, k, Hc):
+        p = S.props(sec)
+        fy = A.fy_of(sec, "E350")
+        return k * S12._ry({"grade": "E350"}, p)[0] * S12.mpc_9_3_1_2(p, fy, P, "z")[0] / Hc
+    want0 = max(cap(fx, 100e3, 2.2, 6000.0) - 0.45 * 100e3, 20e3 - 0.45 * 300e3)
+    want1 = cap(pn, 20e3, 1.1, 7700.0) - 0.45 * 20e3
+    assert want1 > 10e3 - 0.45 * 20e3                  # the 9.4 shear governs the non-seismic case
+    assert out["base#0"] == pytest.approx(want0, rel=1e-9)
+    assert out["base#1"] == pytest.approx(want1, rel=1e-9)
+    # the buckling length would have more than halved the fixed base's capacity shear
+    assert want0 > 2.0 * (cap(fx, 100e3, 2.2, 13000.0) - 0.45 * 100e3)
+    # the 1.2 Vd reading keeps its floor
+    lm.cfg["peb_rules"] = {}
+    assert A.base_demands(lm, {}, {})["base#1"] >= out["base#1"]
