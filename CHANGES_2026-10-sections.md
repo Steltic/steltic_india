@@ -288,7 +288,7 @@ connections are not included.
 | Job | kg/m² old → new | change | worst strength ratio old → new (governing, new) | drift / wind ratio, new | status old → new |
 |---|---|---|---|---|---|
 | IN_Ex7 | 73.79 → 64.90 | -12.0 % | 0.953 → 0.945 (lateral_col-BOX500X500X14, IS 800 9.3 interaction / mem) | 0.141 / 0.712 | complete → complete |
-| IN_Ex8 | 72.06 → 55.56 | -22.9 % | 0.804 → 0.861 (roof-WI550X275X18X14, IS 800 9.3 interaction / mem) | 0.084 / 0.261 | complete → complete |
+| IN_Ex8 | 72.06 → 55.56 | -22.9 % | 0.804 → 0.852 (roof-WI550X275X18X14, IS 800 9.3 interaction / mem) | 0.088 / 0.261 | complete → complete |
 | IN_Ex9 | 52.81 → 74.76 | +41.6 % | 0.810 → 0.811 (roof-WI500X325X22X12, IS 800 9.3 interaction / mem) | 0.062 / 0.073 | complete → complete |
 | IN_Ex10 | 29.56 → 26.33 | -10.9 % | 0.920 → 0.935 (roof-WI300X175X12X8, IS 800 9.3 interaction / mem) | 0.020 / 0.014 | complete → complete |
 | IN_Ex11 | 42.36 → 31.92 | -24.6 % | 0.947 → 0.943 (gravity_col-HB250, IS 800 9.3 interaction / mem) | 0.341 / 0.096 | complete → complete |
@@ -360,7 +360,8 @@ difference of 13.71 kg/m² (+32.8 %). Wind governs the shed.
 **Reports.** The leak scan (`report_public.leaks`) finds nothing in the 19 SECT reports (IN_Ex6–Ex20 and the four
 units). The published set has one hit, the IN_Ex17 raw dict, which is fixed here.
 
-**HR suite** (this branch, merged main 8cc56ec): **1,386 passed, 5 skipped** (`pytest -q tests/`, 6 min 42 s).
+**HR suite** (this branch, merged main 8cc56ec, after the review fixes): **1,391 passed, 5 skipped**
+(`pytest -q tests/`, 6 min 29 s). Before the review fixes it was 1,386 / 5.
 
 ## SECT review fixes (2026-11-07, `briefs/SECT_REVIEW.md`)
 
@@ -455,6 +456,9 @@ Each job's section-families box now names its welded groups, with the count and 
 check. SOLUTION.md has the full list.
 
 **Runs.**
-- Every gold ran again on this branch after the fixes (all COMPLETE, 0 reasons).
+- Every gold ran again on this branch after the fixes: all COMPLETE, 0 reasons, empty consistency lists, and no report
+  leaks.
+- The table above is the post-review one. Only IN_Ex8 moves: the heavier MB225 purlins add dead load, so the rafter
+  goes 0.861 → 0.852 under the uplift combination and the drift ratio 0.084 → 0.088.
 - The brace jobs ran once more with the new box text.
 - The 09:48 restart cut the suite off; it was run again.
