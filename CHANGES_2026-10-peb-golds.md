@@ -308,19 +308,25 @@ What changed, per job (from → to):
 
 ## The lever study on the new golds (full ladder)
 Run on the final engine with `--ladder full --control` (work folder in the PEB sandbox): each lever alone from the
-strict design, then one lever at a time cumulatively, then the market bundle, in resumable chunks under the shared
-heavy slots (a chunk cut off by the 2026-11-07 box restart was re-run from scratch). kg/m² of plan. "Strict" is the
-published design re-sized by the current sizer, which also sizes slab base plates and anchors. The control (the
-strict rules again, from the strict design) found nothing lighter on every job, so 0.00 means "nothing lighter
-found". **IN_Ex1, IN_Ex3 and IN_Ex4 are complete; IN_Ex2 continues as a follow-up** (owner order: the merge does not
-wait for it). The video numbers are in `/home/claude/briefs/VIDEO6_NUMBERS.md`.
+strict design, then one lever at a time cumulatively, then the market bundle, in resumable chunks. kg/m² of plan.
+"Strict" is the published design re-sized by the current sizer, which also sizes slab base plates and anchors. The
+control (the strict rules again, from the strict design) found nothing lighter on every job, so 0.00 means "nothing
+lighter found". **All four jobs are complete** (2026-11-25, main f0a83dd with CFS 6e43e58, on the 2026-11-07 gold
+inputs). IN_Ex1, IN_Ex3 and IN_Ex4 were re-run in full and reproduce the 2026-11-07 figures exactly. The video
+numbers are in `VIDEO6_NUMBERS.md`, delivered to the owner on 2026-11-25.
+
+IN_Ex2 ladder: H/150 with the dado-top check found no passing design, alone or as a step (8 full runs each). As
+scripted, the ladder carries that rule into every later step, and every later step also failed. So the IN_Ex2
+cumulative steps after "+ LTB" were re-run without the dado lever, with the strict sway rule, from the "+ LTB" design.
+This used a sandbox wrapper that only edits the variant list; `peb_lever_study.py` is unchanged. The scripted rows
+are kept in the sandbox.
 
 | job | published | strict (re-sized) | every compliant lever | R = 3 route | market bundle (not compliant) | solar-ready |
 |---|---|---|---|---|---|---|
 | IN_Ex1 | 33.11 | 32.70 | 31.48 (-1.22) | n/a | 27.24 (-5.46) | 35.99 (+2.88) on the published |
-| IN_Ex2 | 52.77 | 51.46 | not run yet | 51.72 (cost of compliance -0.26 to +0.33: nil) | not run yet |  |
+| IN_Ex2 | 52.77 | 51.46 | 50.95 (-0.51) | 51.72 (+0.26) alone; -1.69 as a step | 44.07 (-7.39) |  |
 | IN_Ex3 | 52.25 | 51.68 | 50.77 (-0.91) | n/a | 47.61 (-4.07) |  |
-| IN_Ex4 | 57.26 | 56.61 | 56.23 (-0.38) | 51.93 (-4.68) | 48.84 (-7.77) |  |
+| IN_Ex4 | 57.26 | 56.61 | 56.23 (-0.38) | 51.93 (-4.68) alone; -5.83 as a step | 48.84 (-7.77) |  |
 
 | lever alone (from the strict design) | IN_Ex1 | IN_Ex2 | IN_Ex3 | IN_Ex4 |
 |---|---|---|---|---|
@@ -328,35 +334,41 @@ wait for it). The video numbers are in `/home/claude/briefs/VIDEO6_NUMBERS.md`.
 | Joints for the deliverable moment (12.10.2.1) | 31.64 (-1.06) | n/a | 51.01 (-0.67) | n/a |
 | Sway H/150 + dado-top H/240 | 33.41 (+0.71) | no passing design (8 runs) | n/a | 56.61 (+0.00) |
 | Thin G350 purlins / girts | 31.69 (-1.01) | 50.95 (-0.51) | 51.72 (+0.04) | 56.50 (-0.11) |
-| Shear keys for the analysis base shear | 31.61 (-1.09) | not run yet | 51.06 (-0.62) | 56.54 (-0.07) |
+| Shear keys for the analysis base shear | 31.61 (-1.09) | 51.21 (-0.25) | 51.06 (-0.62) | 56.54 (-0.07) |
 | Collateral / PV counted in 0.9DL rows | 32.70 (+0.00) | 50.12 (-1.34) | 51.40 (-0.28) | 56.10 (-0.51) |
-| Seismic route: OMRF R 3, no IS 18168 | n/a | 51.72 (cost of compliance -0.26 to +0.33: nil) | n/a | 51.93 (-4.68) |
+| Seismic route: OMRF R 3, no IS 18168 | n/a | 51.72 (+0.26) | n/a | 51.93 (-4.68) |
 | Tension-rod X-bracing | 32.05 (-0.65) | n/a | no passing design (8 runs) | n/a |
 
 | cumulative (each step adds one lever; change against strict) | IN_Ex1 | IN_Ex2 | IN_Ex3 | IN_Ex4 |
 |---|---|---|---|---|
 | + LTB with the moment-gradient C1 | 32.70 (+0.00) | 51.46 (+0.00) | 51.68 (+0.00) | 56.34 (-0.27) |
 | + Joints for the deliverable moment (12.10.2.1) | 31.64 (-1.06) | n/a | 51.01 (-0.67) | n/a |
-| + Sway H/150 + dado-top H/240 | 33.26 (+0.56) | not run yet | n/a | 56.34 (-0.27) |
-| + Thin G350 purlins / girts | 31.48 (-1.22) | not run yet | 50.77 (-0.91) | 56.23 (-0.38) |
-| + Shear keys for the analysis base shear | 30.46 (-2.24) | not run yet | 50.08 (-1.60) | 56.15 (-0.46) |
-| + Collateral / PV counted in 0.9DL rows | 30.46 (-2.24) | not run yet | 48.76 (-2.92) | 56.15 (-0.46) |
-| + Seismic route: OMRF R 3, no IS 18168 | n/a | not run yet | n/a | 50.32 (-6.29) |
+| + Sway H/150 + dado-top H/240 | 33.26 (+0.56) | not adopted (no passing design) | n/a | 56.34 (-0.27) |
+| + Thin G350 purlins / girts | 31.48 (-1.22) | 50.95 (-0.51) | 50.77 (-0.91) | 56.23 (-0.38) |
+| + Shear keys for the analysis base shear | 30.46 (-2.24) | 50.70 (-0.76) | 50.08 (-1.60) | 56.15 (-0.46) |
+| + Collateral / PV counted in 0.9DL rows | 30.46 (-2.24) | 50.70 (-0.76) | 48.76 (-2.92) | 56.15 (-0.46) |
+| + Seismic route: OMRF R 3, no IS 18168 | n/a | 49.01 (-2.45) | n/a | 50.32 (-6.29) |
 | + Tension-rod X-bracing | 29.81 (-2.89) | n/a | no passing design (8 runs) | n/a |
+| market bundle (every lever + market loads) | 27.24 (-5.46) | 44.07 (-7.39) | 47.61 (-4.07) | 48.84 (-7.77) |
 
 Findings:
 - **IN_Ex1, H/150 with the dado-top check, is heavier (+0.71 alone):** the strict rules check the sway at the eave
   (H/240), but the strict design's dado top moves 1.17 times its own limit (dado height / 240).
+- **IN_Ex2, H/150 with the dado-top check, found no passing design:** this frame has fixed bases and a 13 m eave.
+  On the strict design the dado top moves 1.13 times dado height / 240. Each later proposal failed the IS 18168 7.2
+  column slenderness (1.31), a rafter splice or a base plate.
+- **IN_Ex2, the R = 3 route:** +0.26 alone, because from the strict design the sizer found no ordinary frame lighter
+  than the SMRF sizes. As a step from the lighter cumulative design it is -1.69 (-3.3 %), and that run was still getting
+  lighter at the 8-run cap. So the cost of compliance on IN_Ex2 lies between nil (the published report's bracket,
+  -0.26 to +0.33) and about 1.7 kg/m². On IN_Ex4 it is 4.68 alone and 5.83 as a step.
 - **IN_Ex3, rod bracing, found no passing design:** with the rods the building is torsionally irregular, so IS 1893
-  7.7.1 requires the scaled response-spectrum forces in the member demands, which the study's route does not apply.
-  Every strength ratio was at or below 0.999. The market bundle leaves the rods out.
-- **IN_Ex4, the analysis-key reading:** −0.07 alone and −0.08 as a step, after the sizer fix above. The fixed SMRF
-  bases keep the IS 18168 9.3 capacity shear. Before the fix every lighter proposal failed at about 5× and these rows
-  read 0.00; the earlier rows are kept in the sandbox (`scratch/ex4_study_before_keyfix.json`). The rows that depend
-  on the key reading (the key step, the collateral step, the R = 3 step and the market bundle) were re-run on the
-  fixed sizer.
-- **IN_Ex2 so far:** LTB gradient 0.00; thin purlins −0.51; collateral in uplift −1.34; H/150 with the dado-top check
-  found no passing design in 8 full runs. The R = 3 route is the cost-of-compliance bracket above.
+  7.7.1 requires the scaled response-spectrum forces in the member demands. The study's route does not apply those
+  forces. Every strength ratio was at or below 0.999, and the market bundle leaves the rods out.
+- **IN_Ex4, the analysis-key reading:** -0.07 alone and -0.08 as a step, after the sizer fix above. The fixed SMRF
+  bases keep the IS 18168 9.3 capacity shear. Before the fix, every lighter proposal failed at about 5x and these rows
+  read 0.00. The earlier rows are kept in the sandbox (`scratch/ex4_study_before_keyfix.json`). The rows that depend on
+  the key reading were re-run on the fixed sizer: the key step, the collateral step, the R = 3 step and the market
+  bundle.
 
 ## Tests
 Full suite on this branch (d5b1958, main 0559e56 merged, under heavy, 2026-11-07): **1,407 passed, 5 skipped,
