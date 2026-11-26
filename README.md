@@ -4,6 +4,18 @@
 [![Release](https://img.shields.io/github/v/release/Steltic/steltic_india?color=orange)](https://github.com/Steltic/steltic_india/releases)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
 
+### Export a saved India design for drawings and IFC
+
+After `design_and_report` or `design_units`, run
+`python -m steel_engine.openbim_handoff JOB PHYSICAL_DECLARATION.json`.
+The command writes `JOB/design/openbim_handoff.json` for [Steltic openBIM India](https://github.com/Steltic/steltic_openBIM_india).
+Use its metric physical handoff format for member occurrences, levels, dimensions, grades, orientations and connection parts.
+For a member taken directly from the analysis, set `"source_element": {"tag": 5}`. The exporter can fill its native section and endpoints.
+Include `unit` and the global `offset_mm` when a unit is displaced. A member formed by contiguous, collinear analysis segments
+can provide `source_elements`; each segment can name its original `source_profile` when the physical member is tapered.
+The writer checks the actual saved worklines and selected sections, fingerprints the native design artifacts, and forwards incomplete design statuses.
+Upload the sidecar to the India openBIM module or import the job directly in its local Hub interface.
+
 ![Steltic India HR](docs/img/social_hr.png)
 
 Free, open-source AI agent that designs hot-rolled steel buildings to **IS 800:2007** with **IS 875** loads,
