@@ -32,3 +32,15 @@ def test_native_occurrence_uses_saved_workline_and_partial_status(tmp_path):
     data["profiles"]={"MB300":{"family":"I","dimensions_mm":{"tw":99}}}
     with pytest.raises(ValueError,match="native section dimension"):
         export_handoff(tmp_path,data)
+
+    data["profiles"] = {}
+    calc = json.loads((tmp_path/"design/calc_package.json").read_bytes())
+    calc["members"] = [{"inputs":{"role":"lateral_col","section":"MB300","grade":"E350"}}]
+    (tmp_path/"design/calc_package.json").write_text(json.dumps(calc))
+    (tmp_path/"design/member_schedule.csv").write_text("ele_tag,role,section\n5,lateral_col,MB300\n")
+    data["members"][0]["material"] = "rolled"
+    data["materials"] = {"rolled":{"grade":"E250B0"}}
+    with pytest.raises(ValueError,match="grade disagrees with native"):
+        export_handoff(tmp_path,data)
+    data["materials"]["rolled"]["grade"] = "E350"
+    assert json.loads(export_handoff(tmp_path,data).read_bytes())["members"][0]["material"] == "rolled"

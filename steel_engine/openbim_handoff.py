@@ -76,6 +76,26 @@ def _verify_section(name, native, profiles):
             raise ValueError(f"{name}: {k} differs from native section dimension {v}")
 
 
+def _scheduled_grades(calc, schedule):
+    """Attach the calculation group's selected grade to each scheduled element."""
+    if not schedule.is_file():
+        return {}
+    selected = {}
+    for member in calc.get("members", []):
+        inputs = member.get("inputs", {})
+        key = inputs.get("role"), inputs.get("section")
+        grade = inputs.get("grade")
+        if grade and selected.setdefault(key, grade) != grade:
+            raise ValueError(f"Ambiguous native grade for {key}")
+    grades = {}
+    with schedule.open(encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            grade = selected.get((row.get("role"), row.get("section")))
+            if grade:
+                grades[int(row["ele_tag"])] = grade
+    return grades
+
+
 def _binding(row, views):
     refs = row.get("source_elements")
     if refs is None:
@@ -137,6 +157,7 @@ def export_handoff(job_root, declaration):
     if not members or len({m["id"] for m in members})!=len(members):
         raise ValueError("Supply individually identified physical occurrences")
     files, views, status, missing = {}, {}, {}, []
+    grades = {}
     if (job/"units_summary.json").is_file():
         files["units_summary.json"] = _sha(job/"units_summary.json")
     for label, directory in _units(job):
@@ -154,6 +175,7 @@ def export_handoff(job_root, declaration):
             if calc.get("units",{}).get("length")!="mm" or "800" not in str(calc.get("code","")):
                 raise ValueError(f"{label} has no native Indian SI calculation package")
             status[label] = str(calc.get("design_status",{}).get("status") or "unknown").lower()
+            grades[label] = _scheduled_grades(calc,directory/"design/member_schedule.csv")
         else:
             status[label]="unavailable"
         viewer = directory/"viewer_3d.html"
@@ -169,6 +191,11 @@ def export_handoff(job_root, declaration):
     verified=set()
     for row in members:
         tags=_binding(row,views)
+        selected_grade = data.get("materials",{}).get(row.get("material"),{}).get("grade")
+        for unit,tag in tags:
+            native_grade = grades.get(unit,{}).get(tag)
+            if native_grade and selected_grade != native_grade:
+                raise ValueError(f"{row['id']}: grade disagrees with native {unit}/{tag} ({native_grade})")
         mapped.update(tags)
         if len(tags)==1 and not row.get("end_profile"):
             unit,tag=next(iter(tags))
