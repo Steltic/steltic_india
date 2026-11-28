@@ -16,6 +16,17 @@ can provide `source_elements`; each segment can name its original `source_profil
 The writer checks the actual saved worklines and selected sections, fingerprints the native design artifacts, and forwards incomplete design statuses.
 Upload the sidecar to the India openBIM module or import the job directly in its local Hub interface.
 
+### Publish the analytical viewer of a saved India job
+
+From the checkout and its installed Python environment, run
+`python steel_engine/viewer3d.py JOB --output SITE/example/viewer_3d.html`.
+For a multi-unit job, run the command for each `JOB/units/UNIT`. Choose an output directory outside the
+saved job. The standalone HTML retains the original analytical geometry and modes and records source SHA-256
+hashes. It reads native member forces from `design/member_schedule.csv`, strength groups and controlling
+elements from `design/calc_package.json`, and support restraints from `model_opensees.py`. The installed
+India engine supplies the nodal gravity totals from the frozen configuration. Missing quantities appear as
+unavailable. The design report carries the complete engineering checks and the IFC carries the physical parts.
+
 ![Steltic India HR](docs/img/social_hr.png)
 
 Free, open-source AI agent that designs hot-rolled steel buildings to **IS 800:2007** with **IS 875** loads,
@@ -187,7 +198,7 @@ column splices, and an optional erection sequence (braces after the dead load).
 The engine is shared with the USA heritage code and still reads a few keys that India jobs must not use (the
 contract lint `tests/test_fix_D05_contract_lint.py` checks that they are named here): `sdc`, `rho`, `drift_relief_16_1_2`,
 `use_asce7_engine_loads`, `force_kip_in`, `metric` / `si_native`, `code_jurisdiction` / `code_region` (aliases of
-`jurisdiction`), `Fy` (the viewer's legacy yield default), `L_roof` (legacy report label; India uses `Lr`),
+`jurisdiction`), `Fy` (legacy material input), `L_roof` (legacy report label; India uses `Lr`),
 `Omega0` / `Om0` / `Omega0_source` / `Omega0_cite` / `Omega0_found` (the legacy overstrength provenance API — India
 jobs use the IS 18168 5.5 / IS 800 12.2.3 combinations and never declare it), `r_source` (alias of `R_source`),
 `imf_as_smrf` (maps an 'IMF' label; IMF has no Indian basis and is refused), `dual_check` / `softstorey_check` /
