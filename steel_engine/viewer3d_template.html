@@ -9,7 +9,8 @@
   #canvas { position:fixed; inset:0; }
   .panel { position:fixed; background:rgba(22,26,33,.92); border:1px solid #2c333e; border-radius:10px; padding:12px 14px; font-size:12.5px; backdrop-filter:blur(6px); }
   #left { top:12px; left:12px; width:252px; max-height:calc(100vh - 24px); overflow-y:auto; }
-  #info { bottom:12px; right:12px; width:290px; display:none; }
+  #info { bottom:12px; right:12px; width:310px; max-height:calc(100% - 24px); overflow:auto; display:none; }
+  #info td:last-child { overflow-wrap:anywhere; padding-left:7px; }
   #legend { bottom:12px; left:276px; max-width:340px; }
   h1 { font-size:14px; margin-bottom:2px; color:#fff; }
   .sub { color:#8b95a3; font-size:11px; }
@@ -30,11 +31,17 @@
   #info td, #legend td { padding:1.5px 0; font-size:11.5px; }
   #info td:last-child, #legend td:last-child { text-align:right; color:#9fb4cc; font-variant-numeric:tabular-nums; }
   .badge { display:inline-block; padding:1px 7px; border-radius:9px; font-size:10.5px; font-weight:600; }
-  .toplist div { display:flex; justify-content:space-between; padding:1px 0; font-size:11.5px; cursor:pointer; }
-  .toplist div:hover { color:#fff; }
+  .toplist button { background:none; border:0; width:100%; text-align:left; font:inherit; color:inherit; gap:8px; }
+  .toplist div, .toplist button { display:flex; justify-content:space-between; padding:1px 0; font-size:11.5px; cursor:pointer; }
+  .toplist button:hover { color:#fff; }
   button.reset { background:#26405e; color:#cfe3ff; border:none; border-radius:6px; padding:5px 10px; font-size:11.5px; cursor:pointer; margin-top:6px; width:100%; }
   button.reset:hover { background:#2f4f75; }
   .lgsec { margin-top:6px; border-top:1px solid #2c333e; padding-top:5px; font-size:11px; }
+  @media (max-width:710px) {
+    #left { width:min(220px,55vw); max-height:47vh; }
+    #legend { left:12px; max-width:calc(100vw - 24px); max-height:16vh; overflow:auto; }
+    #info { bottom:19vh; width:min(310px,82vw); max-height:31vh; }
+  }
 </style>
 </head>
 <body>
@@ -44,11 +51,12 @@
   <h1 id="title"></h1>
   <div class="sub" id="subtitle"></div>
   <div class="modelline" id="modelLine"></div>
+  <!-- native project actions -->
 
   <h2>Color by</h2>
   <select id="colorMode">
     <option value="type">Member type</option>
-    <option value="util">Utilization (D/C ratio)</option>
+    <option value="util">IS 800 strength by group</option>
     <option value="sec">Section</option>
     <option value="fe">Fixed-ended beams</option>
     <option value="web">Web depth orientation</option>
@@ -62,23 +70,23 @@
   <label><input type="checkbox" id="fCol" checked> Columns</label>
   <label><input type="checkbox" id="fBeam" checked> Beams</label>
   <label><input type="checkbox" id="fBrace" checked> Braces</label>
-  <label><input type="checkbox" id="fSlab" checked> Floor slabs</label>
+  <label><input type="checkbox" id="fSlab" checked> Schematic floor panels</label>
   <label><input type="checkbox" id="fSupp" checked> <span id="suppLabel">Supports</span></label>
   <label><input type="checkbox" id="fAxes" checked> Axes &amp; north indicator</label>
   <div id="lvlBoxes" style="margin-top:4px"></div>
 
   <h2>Loads</h2>
-  <label><input type="checkbox" id="lDLdyn"> Dead load (dynamic model)</label>
-  <label><input type="checkbox" id="lLLdyn"> Live load (dynamic model)</label>
-  <label><input type="checkbox" id="lDLstat"> Dead load (static model)</label>
-  <label><input type="checkbox" id="lLLstat"> Live load (static model)</label>
+  <label><input type="checkbox" id="lDLdyn"> <span id="dloadName">Dead load at grid nodes</span></label>
+  <label><input type="checkbox" id="lLLdyn"> Imposed load at grid nodes</label>
+  <label><input type="checkbox" id="lDLstat"> Dead pressure, tributary sketch</label>
+  <label><input type="checkbox" id="lLLstat"> Imposed pressure, tributary sketch</label>
   <label><input type="checkbox" id="lWind"> Wind load</label>
   <label><input type="checkbox" id="lSeis"> Horizontal seismic load</label>
 
   <h2>Model summary</h2>
   <div id="stats"></div>
 
-  <h2>Highest utilization</h2>
+  <h2>Highest group strength D/C</h2>
   <div class="toplist" id="toplist"></div>
   <button class="reset" id="resetCam">Reset camera</button>
 
@@ -99,6 +107,9 @@ __THREE__
 const DATA = __DATA__;
 
 // ---------- scene ----------
+const U = DATA.meta.units;
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const valueText = v => Number.isFinite(v) ? v.toLocaleString('en-US', {maximumFractionDigits:4, useGrouping:false}) : 'Unavailable';
 const W = () => window.innerWidth, H = () => window.innerHeight;
 const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(W(), H()); renderer.setPixelRatio(window.devicePixelRatio);
@@ -220,16 +231,22 @@ for (const e of DATA.elements) {
 }
 scene.add(finGrp);
 
-// supports: cones = pinned, cubes = fixed
+// Symbols show per-node native translational and rotational restraints.
 const suppGrp = new THREE.Group();
-const isFixedBase = /fixed/i.test(DATA.meta.support_label||'');
-const suppMat = new THREE.MeshLambertMaterial({color:0x2ecc71});
-for (const t of DATA.fixed) {
-  const [x,y,z] = nodeOf(t);
-  const c = isFixedBase ? new THREE.Mesh(new THREE.BoxGeometry(8*RB,4*RB,8*RB), suppMat)
-                        : new THREE.Mesh(new THREE.ConeGeometry(5.5*RB, 9*RB, 4), suppMat);
-  c.position.copy(map3(x,y,z)).add(new THREE.Vector3(0,-5*RB,0));
-  suppGrp.add(c);
+const supportMeshes = [];
+const symbols = {
+  fixed: [new THREE.BoxGeometry(8*RB, 4*RB, 8*RB), 0x2ecc71, 2*RB],
+  pinned: [new THREE.ConeGeometry(5.5*RB, 9*RB, 4), 0x2ecc71, 4.5*RB],
+  partial: [new THREE.OctahedronGeometry(4*RB), 0xffb65b, 4*RB],
+  unknown: [new THREE.SphereGeometry(3*RB, 8, 6), GREY, 3*RB]
+};
+for (const support of DATA.supports) {
+  const [geometry, color, offset] = symbols[support.kind];
+  const mark = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({color}));
+  mark.position.copy(map3(...nodeOf(support.tag))).add(new THREE.Vector3(0,-offset,0));
+  mark.userData.support = support;
+  supportMeshes.push(mark);
+  suppGrp.add(mark);
 }
 scene.add(suppGrp);
 
@@ -296,6 +313,7 @@ function gravArrowGroup(pts, color){
   if (!pts || !pts.length) return g;
   const pmax = Math.max(...pts.map(p=>p[3])) || 1;
   for (const [x,y,z,p] of pts) {
+    if (!Number.isFinite(p) || p <= 0) continue;
     const len = MAXD*0.03 + MAXD*0.06*(p/pmax);
     g.add(arrow(map3(x,y,z).add(new THREE.Vector3(0,len,0)), [0,0,-1], len, color, RB*0.55));
   }
@@ -332,19 +350,23 @@ function lateralGroup(kind){
   if (!d) return g;
   const cx = (bmin[0]+bmax[0])/2, cy = (bmin[1]+bmax[1])/2;
   const col = LOAD_COL[kind === 'wind' ? 'wind' : 'seis'];
-  const FXs = kind === 'wind' ? d.X : d.F, FYs = kind === 'wind' ? d.Y : d.F;
-  const fmax = Math.max(...FXs, ...FYs) || 1;
-  d.z.forEach((z,i)=>{
-    const lx = MAXD*0.05 + MAXD*0.1*(FXs[i]/fmax);
-    const ly = MAXD*0.05 + MAXD*0.1*(FYs[i]/fmax);
-    // X-direction arrow approaching the -X face; Y-direction arrow approaching the -Y face
-    g.add(arrow(map3(bmin[0]-lx-MAXD*0.02, cy, z), [1,0,0], lx, col, RB*0.8));
-    g.add(arrow(map3(cx, bmin[1]-ly-MAXD*0.02, z), [0,1,0], ly, col, RB*0.8));
+  const vectors = {X:d.X || d.F || [], Y:d.Y || []};
+  const fmax = Math.max(1e-10, ...Object.values(vectors).flat().filter(Number.isFinite).map(Math.abs));
+  d.z.forEach((z,i) => {
+    for (const [axis, values] of Object.entries(vectors)) {
+      const force = values[i];
+      if (!Number.isFinite(force) || force === 0) continue;
+      const sign = Math.sign(force), len = MAXD*.05 + MAXD*.1*Math.abs(force)/fmax;
+      const face = axis === 'X' ? (sign>0 ? bmin[0] : bmax[0]) : (sign>0 ? bmin[1] : bmax[1]);
+      const start = face - sign*(len+MAXD*.02);
+      const point = axis === 'X' ? map3(start,cy,z) : map3(cx,start,z);
+      g.add(arrow(point, axis === 'X' ? [sign,0,0] : [0,sign,0], len, col, RB*.8));
+    }
   });
   return g;
 }
 const LOAD_DEFS = {
-  lDLdyn:  () => gravArrowGroup((LD.DLdyn||{}).pts, LOAD_COL.DL),
+  lDLdyn:  () => gravArrowGroup((LD.DLdyn||LD.weight||{}).pts, LOAD_COL.DL),
   lLLdyn:  () => gravArrowGroup((LD.LLdyn||{}).pts, LOAD_COL.LL),
   lDLstat: () => statLoadGroup(((LD.stat||{}).D||{}).beams, LOAD_COL.DL),
   lLLstat: () => statLoadGroup(((LD.stat||{}).L||{}).beams, LOAD_COL.LL),
@@ -358,7 +380,12 @@ $('title').textContent = DATA.meta.title;
 $('subtitle').textContent = DATA.meta.subtitle;
 $('modelLine').textContent = DATA.meta.model_line || '';
 $('suppLabel').textContent = DATA.meta.support_label || 'Supports';
-$('caveat').innerHTML = '<b>Notes:</b> ' + DATA.meta.caveat;
+$('caveat').textContent = DATA.meta.caveat;
+if (LD.weight && !LD.DLdyn) $('dloadName').textContent = 'Effective seismic weight at grid nodes';
+const layers = {lDLdyn:LD.DLdyn || LD.weight, lLLdyn:LD.LLdyn, lDLstat:LD.stat?.D, lLLstat:LD.stat?.L, lWind:LD.wind, lSeis:LD.seis};
+Object.entries(layers).forEach(([id,layer]) => {
+  if (!layer) { $(id).disabled = true; $(id).parentElement.append(' — unavailable'); }
+});
 const modeSel = $('modeSel');
 DATA.modes.forEach((m,i)=>{
   const o = document.createElement('option'); o.value = i;
@@ -368,76 +395,112 @@ DATA.modes.forEach((m,i)=>{
 const lvlOn = LEV.map(()=>true);
 for (let k=1;k<LEV.length;k++){
   const l = document.createElement('label');
-  const nm = (k===LEV.length-1?'Roof':'L'+k) + ` (z=${LEV[k]}″)`;
+  const nm = `Elevation ${valueText(LEV[k])} ${U.length}`;
   l.innerHTML = `<input type="checkbox" checked> ${nm}`;
   l.querySelector('input').onchange = ev => { lvlOn[k] = ev.target.checked; refresh(); };
   $('lvlBoxes').appendChild(l);
 }
-$('stats').innerHTML = DATA.meta.stats.map(([a,b])=>`<div class="stat"><span>${a}</span><b>${b}</b></div>`).join('');
-const topEls = [...DATA.elements].filter(e=>e.util!==null && e.util!==undefined).sort((a,b)=>b.util-a.util).slice(0,8);
-$('toplist').innerHTML = topEls.length ? topEls.map(e=>`<div data-tag="${e.tag}"><span>#${e.tag} ${e.type} ${e.sec}</span><b style="color:${'#'+utilColor(e.util).getHexString()}">${e.util.toFixed(2)}</b></div>`).join('')
-  : '<div style="color:#79828e">no demand data found</div>';
-$('toplist').querySelectorAll('div[data-tag]').forEach(d => d.onclick = () => {
-  const mesh = meshes.find(mm => mm.userData.tag == d.dataset.tag);
+$('stats').innerHTML = DATA.meta.stats.map(([a,b])=>`<div class="stat"><span>${esc(a)}</span><b>${esc(b)}</b></div>`).join('');
+const topGroups = Object.values(DATA.strength_groups).sort((a,b)=>b.dc-a.dc).slice(0,8);
+$('toplist').innerHTML = topGroups.length ? topGroups.map(g=>`<button type="button" data-group="${esc(g.id)}"><span>${esc(g.id)}</span><b style="color:#${utilColor(g.dc).getHexString()}">${valueText(g.dc)}</b></button>`).join('')
+  : '<div>Native strength results unavailable</div>';
+$('toplist').querySelectorAll('button').forEach(button => button.onclick = () => {
+  const group = DATA.strength_groups[button.dataset.group];
+  const mesh = meshes.find(m => m.userData.tag === group.element) || meshes.find(m => m.userData.util_group === group.id);
   if (mesh) { select(mesh); target.copy(mesh.position); applyCam(); }
 });
 
 function loadLegend(){
   let h = '';
-  const sf = (arr) => arr.map((f,i)=>`<tr><td>Level ${i+1}</td><td>${f} k</td></tr>`).join('');
-  if ($('lDLdyn').checked && LD.DLdyn) h += `<div class="lgsec"><span class="swatch" style="background:#7aa2ff"></span>Dead (dynamic model): level totals at grid nodes — ΣD = <b>${LD.DLdyn.total}</b> k</div>`;
-  if ($('lLLdyn').checked && LD.LLdyn) h += `<div class="lgsec"><span class="swatch" style="background:#2ecc71"></span>Live (dynamic model): level totals at grid nodes — ΣL = <b>${LD.LLdyn.total}</b> k</div>`;
-  if ($('lDLstat').checked && LD.stat && LD.stat.D) h += `<div class="lgsec"><span class="swatch" style="background:#7aa2ff"></span>Dead (static model): two-way tributary ribbons, height ∝ w — ΣD = <b>${LD.stat.D.total}</b> k</div>`;
-  if ($('lLLstat').checked && LD.stat && LD.stat.L) h += `<div class="lgsec"><span class="swatch" style="background:#2ecc71"></span>Live (static model): two-way tributary ribbons — ΣL = <b>${LD.stat.L.total}</b> k</div>`;
-  const FU = LD.force_unit || '', SL = LD.seismic_label || 'Seismic story forces', CL = LD.coef_label || 'coef';
-  if ($('lWind').checked && LD.wind) h += `<div class="lgsec"><span class="swatch" style="background:#00bcd4"></span>Wind story forces (${FU}) X: ${LD.wind.X.join(', ')} · Y: ${LD.wind.Y.join(', ')}</div>`;
-  if ($('lSeis').checked && LD.seis) h += `<div class="lgsec"><span class="swatch" style="background:#c08bff"></span>${SL} (${FU}): ${LD.seis.F.join(', ')} — V = <b>${LD.seis.V}</b> ${FU} (${CL}=${LD.seis.Cs})</div>`;
+  const section = (label, body) => `<div class="lgsec"><b>${esc(label)}</b> · ${body}</div>`;
+  const total = (layer) => `${valueText(layer.total)} ${esc(U.force)}`;
+  if ($('lDLdyn').checked && layers.lDLdyn) h += section($('dloadName').textContent, total(layers.lDLdyn));
+  if ($('lLLdyn').checked && LD.LLdyn) h += section('Imposed load at grid nodes', total(LD.LLdyn));
+  if ($('lDLstat').checked && layers.lDLstat) h += section('Two-way tributary dead-pressure sketch', total(layers.lDLstat));
+  if ($('lLLstat').checked && layers.lLLstat) h += section('Two-way tributary imposed-pressure sketch', total(layers.lLLstat));
+  for (const [id,load,label] of [['lWind',LD.wind,'Wind story forces'],['lSeis',LD.seis,LD.seismic_label || 'Seismic story forces']]) {
+    if (!$(id).checked || !load) continue;
+    const values = ['X','Y'].filter(ax=>load[ax]).map(ax=>`${ax} ${load[ax].map(valueText).join(', ')}`);
+    if (!values.length && load.F) values.push(load.F.map(valueText).join(', '));
+    h += section(label, values.join(' · ') + ' ' + esc(U.force));
+  }
   return h;
 }
 function legendHTML(){
   const mode = $('colorMode').value;
   let h;
   if (mode === 'type') h = Object.entries(TYPE_COL).map(([k,v])=>`<span class="swatch" style="background:#${v.toString(16).padStart(6,'0')}"></span>${k}&nbsp;&nbsp;`).join('');
-  else if (mode === 'sec') h = SECS.map(s=>`<div><span class="swatch" style="background:#${SEC_COL[s].toString(16).padStart(6,'0')}"></span>${s}</div>`).join('');
+  else if (mode === 'sec') h = SECS.map(s=>`<div><span class="swatch" style="background:#${SEC_COL[s].toString(16).padStart(6,'0')}"></span>${esc(s)}</div>`).join('');
   else if (mode === 'fe') h = `<div><span class="swatch" style="background:#e67e22"></span>fixed-ended beam (moment connection both ends)</div><div><span class="swatch" style="background:#5a6472"></span>all other members</div>`;
   else if (mode === 'web') h = `<div><span class="swatch" style="background:#5b8dd9"></span>columns &nbsp;<span class="swatch" style="background:#9aa7b8"></span>beams &nbsp;<span class="swatch" style="background:#3f4854"></span>braces</div><div><span class="swatch" style="background:#e74c3c"></span>red fin = web plane / depth direction</div>`;
-  else h = `<div style="width:210px"><div style="display:flex;justify-content:space-between;font-size:10.5px"><span>D/C&nbsp;0</span><span>0.5</span><span>0.75</span><span>1.0+</span></div><div class="util-bar"></div><div style="font-size:10.5px;color:#8b95a3">${DATA.meta.demand_src}</div></div>`;
+  else h = `<div style="width:210px"><div style="display:flex;justify-content:space-between;font-size:10.5px"><span>D/C&nbsp;0</span><span>0.5</span><span>0.75</span><span>1.0+</span></div><div class="util-bar"></div><div style="font-size:10.5px;color:#8b95a3">${esc(DATA.meta.demand_src)}</div></div>`;
   return h + loadLegend();
 }
 
 // ---------- selection ----------
 const ray = new THREE.Raycaster(); const mouse = new THREE.Vector2();
 let selected = null, hovered = null;
-const FLAB = {P:'Axial P (k)', N:'Axial N (k)', Mx:'M major (k·ft)', My:'M minor (k·ft)', V:'Shear V (k)'};
+const forceLabels = {Pc:'Axial compression', Pt:'Axial tension', Mx:'Major-axis moment', My:'Minor-axis moment', V:'Shear'};
+const row = (name, value) => `<tr><td>${esc(name)}</td><td>${esc(value)}</td></tr>`;
 function select(mesh){
   selected = mesh;
   const e = mesh.userData;
-  const uc = '#'+utilColor(e.util).getHexString();
   $('info').style.display = 'block';
-  const ub = (e.util===null||e.util===undefined) ? '' : ` <span class="badge" style="background:${uc}22;color:${uc};border:1px solid ${uc}55">D/C ${e.util.toFixed(2)}</span>`;
-  $('iTitle').innerHTML = `Element #${e.tag}${ub}`;
-  let rows = `<tr><td>Type</td><td>${e.type}</td></tr><tr><td>Section</td><td>${e.sec}</td></tr>
-    <tr><td>Length</td><td>${(e.L/12).toFixed(1)} ft</td></tr><tr><td>Nodes</td><td>${e.n[0]} → ${e.n[1]}</td></tr>`;
-  if (e.rel) rows += `<tr><td>End releases</td><td>${e.rel}</td></tr>`;
-  else if (e.type === 'beam') rows += `<tr><td>End fixity</td><td>${e.fe ? 'fixed-ended' : 'released / mixed'}</td></tr>`;
-  if (e.wd) rows += `<tr><td>Web depth runs</td><td>${e.wd} (strong axis ⟂ ${e.wd})</td></tr>`;
-  if (e.combo) rows += `<tr><td>Governing combo</td><td>${e.combo}</td></tr>`;
-  for (const k in (e.f||{})) rows += `<tr><td>${FLAB[k]||k}</td><td>${e.f[k]}</td></tr>`;
+  $('iTitle').textContent = `Element #${e.tag}`;
+  let rows = row('Type', e.type) + row('Section', e.sec) + row('Design role', e.role || 'Unavailable')
+    + row('Length', `${valueText(e.L)} ${U.length}`) + row('Nodes', `${e.n[0]} → ${e.n[1]}`);
+  if (e.rel) rows += row('End releases', e.rel);
+  if (e.wd) rows += row('Web depth direction', e.wd);
+  rows += row('Schedule envelope combination', e.combo || 'Unavailable');
+  for (const [key, label] of Object.entries(forceLabels)) {
+    const unit = key === 'Mx' || key === 'My' ? U.moment : U.force;
+    rows += row(`${label} (${unit})`, valueText(e.f[key]));
+  }
+  const group = DATA.strength_groups[e.util_group];
+  if (group) {
+    const scope = e.util_scope === 'element' ? 'This element governs the group' : 'Maximum across this role and section';
+    rows += row('IS 800 group strength D/C', valueText(group.dc)) + row('Result scope', scope)
+      + row('Strength group', group.id) + row('Controlling element', group.element===null ? 'Unavailable' : '#'+group.element)
+      + row('Strength combination', group.combination || 'Unavailable') + row('Check provision', group.clause || 'Unavailable');
+  } else rows += row('IS 800 group strength D/C', 'Unavailable');
+  const exact = e.element_result;
+  if (exact) {
+    rows += row('This element · strength D/C', valueText(exact.dc))
+      + row('Element strength combination', exact.combination || 'Unavailable');
+    if (exact.station) rows += row('Strength check station', exact.station);
+    if (exact.governing_check) rows += row('This element · governing D/C', valueText(exact.overall_dc))
+      + row('Governing element check', exact.governing_check);
+  } else if (e.util_scope !== 'element') rows += row('This element · strength D/C', 'Unavailable');
   $('iBody').innerHTML = `<table>${rows}</table>`;
   refresh();
+}
+function selectSupport(mesh) {
+  selected = null;
+  const s = mesh.userData.support;
+  $('info').style.display = 'block';
+  $('iTitle').textContent = `Support at node #${s.tag}`;
+  let rows = row('Restraint', s.kind);
+  ['Ux','Uy','Uz','Rx','Ry','Rz'].forEach((name,i) => {
+    rows += row(name, s.dofs ? (s.dofs[i] ? 'Restrained' : 'Free') : 'Unknown');
+  });
+  $('iBody').innerHTML = `<table>${rows}</table>`;
+  refresh();
+}
+function pickObjects() {
+  return meshes.filter(m=>m.visible).concat(suppGrp.visible ? supportMeshes : []);
 }
 renderer.domElement.addEventListener('click', e => {
   if (drag && drag.moved > 4) return;
   mouse.set(e.clientX/W()*2-1, -(e.clientY/H())*2+1);
   ray.setFromCamera(mouse, camera);
-  const hits = ray.intersectObjects(meshes.filter(mm=>mm.visible));
-  if (hits.length) select(hits[0].object);
+  const hits = ray.intersectObjects(pickObjects());
+  if (hits.length) { const obj = hits[0].object; obj.userData.support ? selectSupport(obj) : select(obj); }
   else { selected = null; $('info').style.display = 'none'; refresh(); }
 });
 renderer.domElement.addEventListener('mousemove', e => {
   mouse.set(e.clientX/W()*2-1, -(e.clientY/H())*2+1);
   ray.setFromCamera(mouse, camera);
-  const hits = ray.intersectObjects(meshes.filter(mm=>mm.visible));
+  const hits = ray.intersectObjects(pickObjects());
   const h = hits.length ? hits[0].object : null;
   if (h !== hovered) { hovered = h; refresh(); }
   renderer.domElement.style.cursor = h ? 'pointer' : 'default';

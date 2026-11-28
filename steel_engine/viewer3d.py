@@ -5,23 +5,26 @@
   report_section(cfg, name, root)  -> writes <root>/viewer_3d.html and returns the orange
                                       "View model" button linking to it (new tab).
 
-Data sources (no NEW eigen solves -- adds a few seconds at most to a report build):
-  * geometry / sections / mode shapes : engine3d.mode_shapes() cached eigen snapshot
-  * end releases / column web dirs    : engine3d.build() info (beam_rel / col_dir snapshots)
-  * member demands + governing combos : <root>/design/member_schedule.csv
-  * capacities                        : sections.props() from the AISC Shapes DB
-  * loads: dynamic-model gravity (level totals at grid nodes, as static_lateral applies them),
-    static-model true tributary gravity per beam segment (apply_gravity math), wind story
-    forces (engine3d.wind_forces) and ELF seismic story forces (engine3d.elf)
-  * LLM model used: "_model=<x>" line in <root>/execution_log.md
-
-D/C is a screening check (AISC 360 E3 with K=1, phi*Mp bending without LTB, H1 interaction);
-the calc package is the check of record.  Vendored engine: vendor/three.min.js (r128, MIT).
+The rendered frame uses the native OpenSees geometry, modes and releases. Displayed member
+forces and strength results come from the saved schedule and IS 800 calculation package.
+Publish an existing run with JOB --output STAGING/viewer_3d.html.
 """
-import os, re, csv, json, math, html as _html
+import html as _html
+import hashlib
+import json
+import math
+import os
+from itertools import accumulate
+from pathlib import Path
+import re
+import tempfile
+
+if __package__:
+    from . import viewer_native as native
+else:
+    import viewer_native as native
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-_ES = 29000.0
 ORANGE = "#ff8a3d"   # matches frontend/styles.css accent
 
 
@@ -43,57 +46,6 @@ def _viewer_si(cfg):
 
 
 
-# --------------------------------------------------------------- capacities
-def _sec_props(sec):
-    import sections as S
-    try:
-        p = S.props(sec)
-        if p and p.get("A"):
-            return p
-    except Exception:
-        pass
-    try:
-        import engine3d as E, sections as S2
-        return {"A": E.HSS[sec], "ry": S2.brace_r(sec), "Zx": None, "Zy": None}
-    except Exception:
-        return None
-
-
-def _dc(kind, sec, L_in, Pc_k, Pt_k, Mx_kin, My_kin, Fy):
-    """Screening D/C: AISC E3 compression (K=1), phi*Fy*Z bending (no LTB), H1 interaction."""
-    p = _sec_props(sec)
-    if not p:
-        return None
-    A = p["A"]
-    ry = p.get("ry") or 2.5
-    slend = max(L_in / max(ry, 1e-6), 1.0)
-    Fe = math.pi ** 2 * _ES / slend ** 2
-    Fcr = (0.658 ** (Fy / Fe)) * Fy if Fy / Fe <= 2.25 else 0.877 * Fe
-    pPn_c, pPn_t = 0.9 * Fcr * A, 0.9 * Fy * A
-    if kind == "brace" or not p.get("Zx"):
-        return max(Pc_k / pPn_c, Pt_k / pPn_t)
-    pMnx = 0.9 * Fy * p["Zx"]
-    pMny = 0.9 * Fy * p["Zy"] if p.get("Zy") else None
-    P, Pcap = (Pc_k, pPn_c) if Pc_k >= Pt_k else (Pt_k, pPn_t)
-    pr = P / Pcap
-    mterm = Mx_kin / pMnx + ((My_kin / pMny) if pMny else 0.0)
-    return pr + 8.0 / 9.0 * mterm if pr >= 0.2 else pr / 2.0 + mterm
-
-
-def _demands(root):
-    path = os.path.join(root, "design", "member_schedule.csv")
-    if not os.path.exists(path):
-        return {}
-    out = {}
-    with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            try:
-                out[int(row["ele_tag"])] = row
-            except (KeyError, ValueError):
-                continue
-    return out
-
-
 def _model_used(root):
     """LLM model recorded by the run harness: '_model=<x>' in execution_log.md."""
     try:
@@ -107,8 +59,7 @@ def _model_used(root):
 
 # --------------------------------------------------------------- loads
 def _static_gravity(cfg, coords):
-    """Per-beam per-segment tributary w (N/mm on SI jobs, kip/in legacy) for D and L, replaying the gravity math
-    on the build_static model (subdivided beams, true two-way tributary)."""
+    """Illustrative two-way pressure ribbons, excluding point loads and alternate deck paths."""
     import engine3d as E, static_model as SM
     m = SM.build_static(cfg)
     NF = m["NF"]; SX, SY = cfg["SX"], cfg["SY"]
@@ -153,8 +104,64 @@ def _static_gravity(cfg, coords):
             D.append(seg + [wD])
         if any(wL):
             L.append(seg + [wL])
-    return {"D": {"beams": D, "total": round(totD, 0)},
-            "L": {"beams": L, "total": round(totL, 0)}}
+    force_scale = 1000 if _viewer_si(cfg) else 1
+    return {"D": {"beams": D, "total": round(totD / force_scale, 3)},
+            "L": {"beams": L, "total": round(totL / force_scale, 3)}}
+
+
+def _gravity_levels(engine, cfg, present, coords, si):
+    # Same unfactored floor totals and grid-node distribution as engine3d.static_lateral.
+    scale = 1000.0 if si else 1.0
+    result = {key: {"pts": [], "total": 0.0} for key in ("DLdyn", "LLdyn")}
+    for k in range(1, len(cfg["heights"]) + 1):
+        pts = sorted(present.get(k) or present.get(str(k)) or ())
+        if not pts:
+            continue
+        dead = engine.floor_dead(cfg, k) / scale
+        imposed = (engine.floor_live(cfg, k) + engine.floor_roofLrS(cfg, k)) / scale
+        for key, magnitude in (("DLdyn", dead), ("LLdyn", imposed)):
+            layer = result[key]
+            layer["total"] += magnitude
+            for i, j in pts:
+                xyz = coords.get(engine.ntag(i, j, k))
+                if xyz is not None:
+                    layer["pts"].append([*xyz[:3], round(magnitude / len(pts), 6)])
+    for layer in result.values():
+        layer["total"] = round(layer["total"], 3)
+    return result
+
+
+def _india_lateral(loads, plan, heights):
+    forces = plan.get("story_forces") or {}
+    if not forces or not heights:
+        # Original SI viewers recorded ESM X only. Leave Y explicitly unavailable.
+        if loads.get("seis") and "F" in loads["seis"]:
+            old = loads["seis"]
+            loads["seis"] = {"z": old["z"], "X": old["F"]}
+        return
+    loads.pop("wind", None)
+    loads.pop("seis", None)
+    unit = str(plan.get("story_forces_units") or "N").lower()
+    if unit not in ("n", "kn"):
+        return
+    scale = 1000.0 if unit == "n" else 1.0
+    for key, name in (("wind", "W"), ("seis", "EQ")):
+        layer = {"z": heights}
+        for i, axis in enumerate(("X", "Y")):
+            rows = forces.get(f"{name}_{axis}")
+            if not isinstance(rows, dict):
+                continue
+            values = []
+            for k in range(1, len(heights) + 1):
+                row = rows.get(str(k), rows.get(k))
+                component = row[i] if isinstance(row, (list, tuple)) and len(row) > i else None
+                value = native.number(component)
+                values.append(round(value / scale, 4) if value is not None else None)
+            if any(value is not None for value in values):
+                layer[axis] = values
+        if len(layer) > 1:
+            loads[key] = layer
+    loads["seismic_label"] = "IS 1893 characteristic ESM story forces"
 
 
 def _loads(cfg, info, coords, T1):
@@ -162,45 +169,11 @@ def _loads(cfg, info, coords, T1):
     out = {}
     NF = len(cfg["heights"]); z = E.zlevels(cfg)
     present = info.get("present") or {}
-    # ---- dynamic model gravity: level totals spread over the grid points
-    ptsD, ptsL, totD, totL = [], [], 0.0, 0.0
-    for k in range(1, NF + 1):
-        pts = list(present.get(k) or [])
-        if not pts:
-            continue
-        area = E.floor_area_ft2(cfg, k)
-        Dk = E.floor_w(cfg, k)
-        Lk = ((cfg.get("Lr") or 20.0) if k == NF else cfg.get("L_floor", 50.0)) * area / 1000.0
-        pD, pL = Dk / len(pts), Lk / len(pts)
-        totD += Dk; totL += Lk
-        for (i, j) in pts:
-            c = coords.get(E.ntag(i, j, k))
-            if c:
-                ptsD.append([round(c[0], 1), round(c[1], 1), round(c[2], 1), round(pD, 2)])
-                ptsL.append([round(c[0], 1), round(c[1], 1), round(c[2], 1), round(pL, 2)])
-    out["DLdyn"] = {"pts": ptsD, "total": round(totD, 0)}
-    out["LLdyn"] = {"pts": ptsL, "total": round(totL, 0)}
     si = _viewer_si(cfg)
+    out.update(_gravity_levels(E, cfg, present, coords, si))
     out["force_unit"] = "kN" if si else "kip"
-    out["seismic_label"] = "IS 1893 story forces (ESM, characteristic)" if si else "Seismic ELF story forces"
-    out["coef_label"] = "Ah" if si else "Cs"
     if si:
-        # India: story forces from load_plan (characteristic, N) -> kN; no ASCE wind_forces()/elf() on this path
-        try:
-            plan = cfg.get("load_plan") or {}
-            sf = plan.get("story_forces") or {}
-            def _vec(ref, comp):
-                v = sf.get(ref) or {}
-                return [round(float((v.get(str(k)) or v.get(k) or [0, 0, 0])[comp]) / 1000.0, 1) for k in range(1, NF + 1)]
-            if sf.get("W_X") or sf.get("W_Y"):
-                out["wind"] = {"z": [z[k] for k in range(1, NF + 1)], "X": _vec("W_X", 0), "Y": _vec("W_Y", 1)}
-            if sf.get("EQ_X"):
-                F = _vec("EQ_X", 0)
-                ss = plan.get("seismic_summary") or {}
-                out["seis"] = {"z": [z[k] for k in range(1, NF + 1)], "F": F, "V": round(sum(F), 1),
-                               "Cs": round(float(ss.get("Ah") or 0.0), 4)}
-        except Exception:
-            pass
+        _india_lateral(out, cfg.get("load_plan") or {}, z[1:])
     else:
         # ---- wind story forces (both directions)
         try:
@@ -218,7 +191,7 @@ def _loads(cfg, info, coords, T1):
                            "V": round(V, 1), "Cs": round(Cs, 4)}
         except Exception:
             pass
-    # ---- static model true tributary gravity (built LAST: build_static wipes the ops domain)
+    # Build the pressure sketch last because build_static replaces the OpenSees domain.
     try:
         out["stat"] = _static_gravity(cfg, coords)
     except Exception:
@@ -241,8 +214,14 @@ def _viewer_data(cfg, name, root):
 
     used = set()
     elements = []
-    dem = _demands(root)
-    Fy = float(cfg.get("Fy", 50.0))
+    # Save actual support fixities before the static-load sketch rebuilds the OpenSees domain.
+    try:
+        masks = {}
+        for tag in E.ops.getFixedNodes():
+            restrained = set(E.ops.getFixedDOFs(tag))
+            masks[tag] = [int(i in restrained) for i in range(1, 7)]
+    except (AttributeError, RuntimeError):
+        masks = None
     for (tag, kind, sec, n1, n2) in ms["ele"]:
         if n1 not in coords or n2 not in coords:
             continue
@@ -263,22 +242,6 @@ def _viewer_data(cfg, name, root):
             wd = col_dir.get(tag)
             if wd in ("X", "Y"):
                 rec["wd"] = wd
-        d = dem.get(tag)
-        if d:
-            Pc = float(d.get("P_comp_N") or d.get("P_comp_kip") or 0)
-            Pt = float(d.get("P_tens_N") or d.get("P_tens_kip") or 0)
-            Mx = float(d.get("Mx_kNm") or d.get("Mx_kipft") or 0)
-            My = float(d.get("My_kNm") or d.get("My_kipft") or 0)
-            u = _dc("col" if rec["type"] == "column" else rec["type"],
-                    sec, L, Pc, Pt, Mx * 12.0, My * 12.0, Fy)
-            if u is not None:
-                rec["util"] = round(u, 3)
-            rec["combo"] = d.get("governing_combo")
-            if rec["type"] == "brace":
-                rec["f"] = {"N": round(-Pc if Pc >= Pt else Pt, 1)}
-            else:
-                rec["f"] = {"P": round(max(Pc, Pt), 1), "Mx": round(Mx, 1),
-                            "My": round(My, 1), "V": round(float(d.get("V_N") or d.get("V_kip") or 0), 1)}
         elements.append(rec)
 
     zs = sorted({round(coords[t][2], 1) for t in used})
@@ -319,60 +282,145 @@ def _viewer_data(cfg, name, root):
 
     loads = _loads(cfg, info, coords, ms["T"][0])
 
-    base = str((cfg.get("model") or {}).get("bases") or cfg.get("base") or "pinned").lower()
-    support_label = "Supports (%s)" % ("fixed" if "fix" in base else "pinned")
     model_used = _model_used(root)
-
-    have_dem = sum(1 for e in elements if e["util"] is not None)
-    umax = max((e["util"] for e in elements if e["util"] is not None), default=None)
-    nfe = sum(1 for e in elements if e.get("fe"))
-    stats = [["Nodes / elements", "%d / %d" % (len(used), len(elements))],
+    stats = [["Nodes / elements", f"{len(used)} / {len(elements)}"],
              ["Periods T1-T3", " / ".join("%.3f" % t for t in ms["T"][:3]) + " s"],
-             ["Members with demands", "%d of %d" % (have_dem, len(elements))],
-             ["Fixed-ended beams", str(nfe)]]
-    if umax is not None:
-        stats.append(["Max D/C (screening)", "%.2f" % umax])
-    if loads.get("seis"):
-        _u = "kN" if _viewer_si(cfg) else "kip"
-        stats.append(["Seismic base shear VB" if _viewer_si(cfg) else "Seismic base shear V", "%.0f %s (%s=%.4f)" %
-                      (loads["seis"]["V"], _u, "Ah" if _viewer_si(cfg) else "Cs", loads["seis"]["Cs"])])
-    if loads.get("wind"):
-        _u = "kN" if _viewer_si(cfg) else "kip"
-        stats.append(["Wind base shear X / Y", "%.0f / %.0f %s" %
-                      (sum(loads["wind"]["X"]), sum(loads["wind"]["Y"]), _u)])
+             ["Fixed-ended beams", str(sum(bool(e.get("fe")) for e in elements))]]
 
-    return {
+    data = {
         "meta": {
             "title": "%s — %s" % (name, cfg.get("arch", "")),
             "subtitle": "%d nodes · %d elements · T₁=%.3f s · units: %s" %
                         (len(used), len(elements), ms["T"][0],
                          ("N, mm (N-mm-sec)" if _viewer_si(cfg) else "kip, in")),
             "model_line": ("designed with model: %s" % model_used) if model_used else "",
-            "support_label": support_label,
             "levels": levels, "stats": stats,
-            "demand_src": ("demands: design/member_schedule.csv (governing combos)" if dem
-                           else "no member_schedule.csv found — run the design pipeline"),
-            "caveat": ("Demands are the pipeline's governing-combo envelopes from "
-                       "design/member_schedule.csv; D/C here is a screening check only "
-                       "(not IS 800 capacity — agent RAG is check of record). "
-                       "North = +Y (report convention). "
-                       "Drag = orbit, scroll = zoom, right-drag = pan, click a member for details."),
         },
         "nodes": {str(t): [round(c, 1) for c in coords[t]] for t in used},
         "fixed": fixed, "elements": elements, "modes": modes, "slabs": slabs,
         "loads": loads,
     }
+    return native.enrich(data, root, _viewer_si(cfg), masks)
 
 
 # --------------------------------------------------------------- html assembly
 def standalone_html(cfg, name, root=None):
     root = root or os.getcwd()
     data = _viewer_data(cfg, name, root)
-    tpl = open(os.path.join(_DIR, "viewer3d_template.html"), encoding="utf-8").read()
-    three = open(os.path.join(_DIR, "vendor", "three.min.js"), encoding="utf-8").read()
-    return (tpl.replace("__TITLE__", _html.escape(str(name)))
-               .replace("__THREE__", three)
-               .replace("__DATA__", json.dumps(data, separators=(",", ":"))))
+    return _render(data, name)
+
+
+def _render(data, name):
+    directory = Path(_DIR)
+    template = (directory / "viewer3d_template.html").read_text(encoding="utf-8")
+    three = (directory / "vendor/three.min.js").read_text(encoding="utf-8")
+    payload = json.dumps(data, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c")
+    return (template.replace("__THREE__", three).replace("__TITLE__", _html.escape(str(name)))
+            .replace("__DATA__", payload))
+
+
+def _saved_geometry(source):
+    contents = source.read_text(encoding="utf-8-sig")
+    marker = re.search(r"^\s*const\s+DATA\s*=\s*", contents, re.MULTILINE)
+    if not marker:
+        raise ValueError(f"Missing native viewer geometry in {source.name}")
+    data, _ = json.JSONDecoder().raw_decode(contents, marker.end())
+    if not data.get("nodes") or not data.get("elements") or not isinstance(data.get("meta"), dict):
+        raise ValueError(f"Incomplete geometry in {source.name}")
+    return data
+
+
+def _saved_gravity(data, cfg, package):
+    """Use the native load arithmetic when installed. No cfg or replay program is executed."""
+    loads = data.setdefault("loads", {})
+    old_points = (loads.get("DLdyn") or {}).get("pts", [])
+    loads.pop("DLdyn", None)
+    loads.pop("LLdyn", None)
+    if cfg.get("present") and cfg.get("heights"):
+        try:
+            import engine3d as engine
+        except ImportError:
+            engine = None
+        if engine is not None:
+            previous = engine.unit_system()
+            try:
+                engine.activate_si_units()
+                # JSON object keys are strings. The solver accepts integers for these schedules.
+                cfg = dict(cfg)
+                for key in ("D_by_level", "L_by_level", "extra_mass_floors", "roof_regions"):
+                    if isinstance(cfg.get(key), dict):
+                        cfg[key] = {int(k): v for k, v in cfg[key].items()}
+                coords = {int(tag): xyz for tag, xyz in data["nodes"].items()}
+                loads.update(_gravity_levels(engine, cfg, cfg["present"], coords, True))
+                return
+            except (KeyError, TypeError, ValueError):
+                # Older snapshots can omit the footprint or rely on executable project callbacks.
+                pass
+            finally:
+                if previous == "kip-in":
+                    engine.activate_kip_in_units()
+    # The historical DL layer stored effective seismic weight in N. No native imposed-load
+    # totals can be recovered from the obsolete psf overlay without the project footprint.
+    weight = native.number((package.get("seismic_calc") or {}).get("W_engine_kN"))
+    if weight is not None and old_points:
+        loads["weight"] = {"pts": [[*pt[:3], round(pt[3] / 1000, 6)] for pt in old_points],
+                           "total": weight}
+
+
+def rebuild_saved(job, output, source_viewer=None):
+    """Create a derived standalone website viewer outside the immutable native job tree."""
+    root = Path(job).resolve(strict=True)
+    source = Path(source_viewer or root / "viewer_3d.html").resolve(strict=True)
+    target = Path(output).resolve()
+    if target == source or target.is_relative_to(root) or target.suffix.lower() not in (".html", ".htm"):
+        raise ValueError("Choose a separate staging HTML file outside the native job directory")
+    data = _saved_geometry(source)
+    cfg = native.read_json(root / "design/cfg_snapshot.json")
+    package = native.read_json(root / "design/calc_package.json")
+    system = str(package.get("unit_system") or cfg.get("units") or "").lower()
+    subtitle = str(data["meta"].get("subtitle") or "").lower()
+    if system in ("n-mm", "n-mm-s", "n-mm-sec", "si", "metric"):
+        si = True
+    elif system in ("kip-in", "kip-in-sec"):
+        si = False
+    elif "n-mm" in subtitle or "kip, in" in subtitle:
+        si = "n-mm" in subtitle
+    else:
+        raise ValueError("Saved job does not declare the analytical geometry length unit")
+    if si and data["meta"].get("revision") != 2:
+        _saved_gravity(data, cfg, package)
+        loads = data["loads"]
+        for layer in (loads.get("stat") or {}).values():
+            if isinstance(layer, dict) and native.number(layer.get("total")) is not None:
+                layer["total"] = round(float(layer["total"]) / 1000, 3)
+        plan = cfg.get("load_plan") or {}
+        if not plan.get("story_forces"):
+            plan = native.read_json(root / "load_plan.json") or package.get("load_plan") or {}
+        heights = cfg.get("heights") or []
+        _india_lateral(loads, plan, list(accumulate(heights)))
+        loads["force_unit"] = "kN"
+    native.enrich(data, root, si)
+    bindings = {}
+    for path in (source, root / "model_opensees.py", root / "design/member_schedule.csv",
+                 root / "design/calc_package.json", root / "design/cfg_snapshot.json", root / "load_plan.json"):
+        if path.is_file():
+            key = "geometry_viewer" if path == source else path.relative_to(root).as_posix()
+            with path.open("rb") as f:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                bindings[key] = digest.hexdigest()
+    data["meta"]["source_sha256"] = bindings
+    target.parent.mkdir(parents=True, exist_ok=True)
+    result = _render(data, data["meta"].get("title") or root.name)
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as f:
+        temp = Path(f.name)
+    try:
+        temp.write_bytes(result.encode("utf-8"))
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+    return target
 
 
 def report_section(cfg, name, root):
@@ -384,5 +432,18 @@ def report_section(cfg, name, root):
             "display:inline-block;background:%s;color:#fff;font-weight:600;"
             "padding:9px 22px;border-radius:8px;text-decoration:none\">"
             "View model</a> <span class='note' style='margin-left:8px'>interactive 3D viewer "
-            "(geometry, mode shapes, loads, member D&#8725;C) &mdash; opens in a new tab</span></p>"
+            "(analytical geometry, mode shapes, loads and native strength groups) &mdash; opens in a new tab</span></p>"
             % ORANGE)
+
+
+
+if __name__ == "__main__":
+    import argparse
+    if __package__:
+        import sys
+        sys.path.insert(0, _DIR)  # Existing engine modules import their siblings by top-level name.
+    parser = argparse.ArgumentParser(description="Rebuild a standalone viewer from an existing native job.")
+    parser.add_argument("job", help="saved job containing viewer_3d.html and design/")
+    parser.add_argument("--output", required=True, help="publication HTML outside the saved job")
+    args = parser.parse_args()
+    print(rebuild_saved(args.job, args.output))
